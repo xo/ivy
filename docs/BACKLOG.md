@@ -10,13 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-1. Phase 5, from 2026-11-17: `internal/gowemf`, `internal/metafile`,
-   `emf`, `fonts`, `internal/drawingml`, `internal/offcrypto`,
-   `internal/chart`, `rtf`, `csv`, `msdoc`, `msxls`, `msppt`, `vsdx`,
-   `pub`, `internal/msole`, `internal/sheet`, `internal/numfmt`,
-   `odf/internal/drawpage`, `internal/fontdb`, and the changes to `odf`, `docx`, `xlsx`, `pptx`,
-   `internal/ooxml`, `internal/layout` and the root package that D24 needs.
-   In magic: the public reader of Compound Files (D24).
+None.
 
 ## Before phases 2 and 3 are pushed
 
