@@ -10,9 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-1. The options of D22 and D23 and the encodings of `internal/charset`, from
-   2026-11-17: `internal/charset`, `internal/memfs`, `internal/layout`,
-   `internal/ebook`, `html`, `markdown`, `fb2` and `chm`.
+None.
 
 ## Before phases 2 and 3 are pushed
 
