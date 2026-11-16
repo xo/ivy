@@ -288,6 +288,9 @@ var fontNames = []string{"Carlito", "Caladea", "Liberation Sans", "Liberation Se
 // fonts of ivy. It returns a note for each family of fontNames that
 // fontconfig does not find.
 func toolEnv(ctx context.Context, opts RenderOptions, home string) (*refEnv, []string, error) {
+	if err := findWeasyPrint(opts.Cache); err != nil {
+		return nil, nil, err
+	}
 	profiles := filepath.Join(opts.Cache, "profiles")
 	if err := os.MkdirAll(profiles, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("making the folder of the profiles: %w", err)

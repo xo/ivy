@@ -28,6 +28,19 @@ finds the root of the repository from the current folder.
 The folder of `-out` must be new, empty, or the folder of an earlier report.
 The command refuses a folder that holds other files.
 
+The reference of HTML is WeasyPrint 70.0, whose layout ivy ports (D15). If
+`weasyprint` is not on the PATH, the command looks for it in a virtual
+environment of Python in the folder `weasyprint` of the cache. Make that
+environment once, with `uv` and Pango installed:
+
+```sh
+uv venv review/cache/weasyprint
+```
+
+```sh
+uv pip install --python review/cache/weasyprint/bin/python weasyprint==70.0
+```
+
 ## The flags
 
 `fetch [-cache DIR] [-manifest FILE] [-j N]` downloads each file that is not
@@ -77,7 +90,8 @@ kinds to PDF first, then draw each page:
 | --- | --- | --- |
 | pdf, ai | none | MuPDF, Poppler Splash, Poppler Cairo |
 | Office, OpenDocument, rtf, csv, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo |
-| epub, mobi, azw3, azw4, fb2, chm, html, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo |
+| html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo |
+| epub, mobi, azw3, azw4, fb2, chm, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo |
 | xps, oxps | none | libgxps (`xpstopng`) |
 | ps, eps | Ghostscript draws each page | Ghostscript |
 | emf, wmf | none | Inkscape |
@@ -102,10 +116,15 @@ magick 'file[0]' -background white -alpha remove -alpha off png24:out.png
 
 The options of `ebook-convert` give calibre the page and the font of ivy.
 An ebook takes a page of 6 by 9 inches and a serif font of 11 points. An
-HTML, Markdown or CHM file takes US Letter and a font of 12 points. A text
+Markdown or CHM file takes US Letter and a font of 12 points. A text
 file takes US Letter and a monospace font of 10 points. The layout of
 calibre still differs from the one of ivy, and calibre draws the cover of
 an ebook as a page.
+
+WeasyPrint gets the user style sheet that the package `html` of ivy gives
+an HTML file, `ebook.PaperStyle`: US Letter, margins of 0.75 inch, and a
+serif font of 12 points. The links of the file resolve from its folder in
+the cache, where the manifest puts its assets.
 
 With the anti-aliasing `best`, `pdftocairo` loses parts of the glyphs, so
 the command uses `gray`.

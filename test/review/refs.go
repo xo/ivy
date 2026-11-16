@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xo/ivy/internal/ebook"
 )
 
 // disagreeBlurred is the blurred difference above which two references
@@ -105,6 +108,10 @@ var (
 		prepare: sofficePDF, count: pdfCount, renderers: pdfRenderers}
 	calibreRoute = &route{id: "calibre", name: "calibre", tools: []string{"ebook-convert"},
 		prepare: calibrePDF, count: pdfCount, renderers: pdfRenderers}
+	// weasyprintRoute lays out HTML with WeasyPrint, whose layout ivy ports
+	// (D15), with the style sheet that ivy gives an HTML file.
+	weasyprintRoute = &route{id: "weasyprint", name: "WeasyPrint", tools: []string{"weasyprint"},
+		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers}
 	xpsRoute = &route{id: "xps", renderers: []pageRenderer{{id: "xpstopng", name: "libgxps", tools: []string{"xpstopng"}, render: xpstopng}}}
 	gsRoute  = &route{id: "gs", name: "Ghostscript", tools: []string{"gs"}, perDPI: true,
 		prepare: ghostscript, count: countPages,
@@ -134,13 +141,14 @@ var routeKinds = map[*route][]string{
 		"vsdx", "vsdm", "vstx", "vstm", "vsd", "vst", "vss",
 		"pub", "pages", "key", "numbers",
 	},
-	calibreRoute:  {"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "html", "htm", "xhtml", "md", "markdown", "txt", "text"},
-	xpsRoute:      {"xps", "oxps"},
-	gsRoute:       {"ps", "eps", "epsi", "epsf", "ept"},
-	inkscapeRoute: {"emf", "wmf", "emz", "wmz"},
-	djvuRoute:     {"djvu", "djv"},
-	magickRoute:   {"psd", "psb", "ora", "raw", "cr2", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "pef", "srw", "raf"},
-	rasterRoute:   {"kra", "cbz", "cbt"},
+	calibreRoute:    {"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "md", "markdown", "txt", "text"},
+	weasyprintRoute: {"html", "htm", "xhtml"},
+	xpsRoute:        {"xps", "oxps"},
+	gsRoute:         {"ps", "eps", "epsi", "epsf", "ept"},
+	inkscapeRoute:   {"emf", "wmf", "emz", "wmz"},
+	djvuRoute:       {"djvu", "djv"},
+	magickRoute:     {"psd", "psb", "ora", "raw", "cr2", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "pef", "srw", "raf"},
+	rasterRoute:     {"kra", "cbz", "cbt"},
 }
 
 // routeFor returns the route of kind.
@@ -257,7 +265,7 @@ func (e *refEnv) toolsKey(names []string) (string, error) {
 // versionArgs are the arguments that make each program print its version.
 var versionArgs = map[string][]string{
 	"mutool": {"-v"}, "pdftoppm": {"-v"}, "pdftocairo": {"-v"}, "pdfinfo": {"-v"},
-	"gs": {"--version"}, "soffice": {"--version"}, "ebook-convert": {"--version"},
+	"gs": {"--version"}, "soffice": {"--version"}, "ebook-convert": {"--version"}, "weasyprint": {"--version"},
 	"inkscape": {"--version"}, "magick": {"-version"}, "xpstopng": {"--version"},
 	"djvused": {"--help"},
 }
@@ -524,6 +532,44 @@ func calibrePDF(ctx context.Context, j *refJob, doc, dir string) (string, error)
 		return "", err
 	}
 	return "out.pdf", nil
+}
+
+// weasyprintPDF lays out the HTML file doc with WeasyPrint into a PDF file.
+// It gives WeasyPrint the user style sheet that the package html of ivy
+// gives an HTML file, ebook.PaperStyle, so that both lay out the same
+// input. The links of doc resolve from its folder.
+func weasyprintPDF(ctx context.Context, j *refJob, doc, dir string) (string, error) {
+	style := filepath.Join(dir, "paper.css")
+	if err := os.WriteFile(style, []byte(ebook.PaperStyle), 0o644); err != nil {
+		return "", fmt.Errorf("writing the style sheet: %w", err)
+	}
+	if _, err := runTool(ctx, j.env, "", "weasyprint", "--quiet", "-s", style, doc, filepath.Join(dir, "out.pdf")); err != nil {
+		return "", err
+	}
+	return "out.pdf", nil
+}
+
+// findWeasyPrint adds the folder bin of a virtual environment of Python in
+// cache/weasyprint to the PATH, when the PATH has no weasyprint. README.md
+// of cmd/review says how to make that environment.
+func findWeasyPrint(cache string) error {
+	if _, err := exec.LookPath("weasyprint"); err == nil {
+		return nil
+	}
+	bin, err := filepath.Abs(filepath.Join(cache, "weasyprint", "bin"))
+	if err != nil {
+		return fmt.Errorf("finding the folder of weasyprint: %w", err)
+	}
+	switch _, err := os.Stat(filepath.Join(bin, "weasyprint")); {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil
+	case err != nil:
+		return fmt.Errorf("finding weasyprint: %w", err)
+	}
+	if err := os.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
+		return fmt.Errorf("adding weasyprint to the PATH: %w", err)
+	}
+	return nil
 }
 
 // prepared is a reference that is ready to draw pages.
