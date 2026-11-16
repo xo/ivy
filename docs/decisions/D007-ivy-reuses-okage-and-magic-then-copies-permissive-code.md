@@ -53,15 +53,17 @@ package. Until okage exports a part, the format that needs it waits.
 
 The maintainers approved these packages from outside the `xo` repositories.
 okage requires each one already, and okage D6 approved it for okage, except
-`golang.org/x/text`, which `golang.org/x/image` requires:
+`golang.org/x/text`, which `golang.org/x/image` requires, and
+`golang.org/x/crypto`:
 
 | Package | ivy uses it for | Approved |
 | --- | --- | --- |
 | `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic`, the BMP, TIFF and WebP decoders of `internal/layout`, and the Go fonts, which the layout uses when a program gives no fonts | 2026-11-16 |
+| `golang.org/x/crypto` | Blowfish, for the encryption of OpenDocument before ODF 1.2 (D24) | 2026-11-17 |
 | `golang.org/x/text` | the encodings of the WHATWG Encoding Standard in `internal/charset`, such as windows-1251, KOI8-R and Shift_JIS | 2026-11-17 |
 | `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout` | 2026-11-16 |
 
-The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21).
+The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21), and a copy of gowemf in `internal/`, for EMF and WMF (D24).
 
 A port follows its source file by file, as okage does, and keeps a ledger of
 the commits of its source after a base commit. A copy also records its

@@ -70,8 +70,8 @@ func TestOpenErrors(t *testing.T) {
 		t.Errorf("expected ErrFormat, got: %v", err)
 	}
 	cfb := append([]byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}, make([]byte, 504)...)
-	if _, err := Open(t.Context(), bytes.NewReader(cfb)); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ErrUnsupported, got: %v", err)
+	if _, err := Open(t.Context(), bytes.NewReader(cfb)); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ErrFormat for a damaged compound file, got: %v", err)
 	}
 }
 
@@ -82,7 +82,8 @@ func FuzzOpen(f *testing.F) {
 	}
 	f.Add(buf)
 	f.Add(fixture.Zip(contentTypes, fixture.Entry{Name: "docProps/thumbnail.png", Data: fixture.PNG(4, 4, color.Black)}))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16}}
+	f.Add(richDocx())
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 14, MaxDepth: 32}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {
@@ -90,9 +91,16 @@ func FuzzOpen(f *testing.F) {
 		}
 		for p, err := range d.Previews(t.Context()) {
 			if err != nil {
-				return
+				break
 			}
 			_, _ = p.Decode(t.Context())
 		}
+		_, _ = d.Describe(t.Context())
+		// The first page is laid out and drawn at a small size.
+		p, err := d.Page(t.Context(), 0)
+		if err != nil {
+			return
+		}
+		_, _ = ivy.RenderImage(t.Context(), p, 9, nil)
 	})
 }

@@ -4,3 +4,7 @@ hayro	https://github.com/LaurenzV/hayro	port	Apache-2.0 OR MIT	61f50b42a7f7b1576
 moxcms	https://github.com/awxkee/moxcms	port	BSD-3-Clause OR Apache-2.0	1e2befc3042408f1f454db2d584b82db55014956	1e2befc3042408f1f454db2d584b82db55014956	internal/moxcms
 weasyprint	https://github.com/Kozea/WeasyPrint	port	BSD-3-Clause	69b19deb03ddf53907899ec450da03117c6a0a8c	69b19deb03ddf53907899ec450da03117c6a0a8c	internal/layout
 goldmark	https://github.com/yuin/goldmark	copy	MIT	d473f9516b6bba29f524dc0a1798890b8263674b	d473f9516b6bba29f524dc0a1798890b8263674b	internal/goldmark
+gowemf	https://github.com/mgilbir/gowemf	copy	MIT	377668cb7b134228459f7d732a27f1db936f5741	377668cb7b134228459f7d732a27f1db936f5741	internal/gowemf
+liberation-fonts	https://github.com/liberationfonts/liberation-fonts	copy	OFL-1.1	2.1.5	2.1.5	fonts/liberation
+carlito	https://github.com/googlefonts/carlito	copy	OFL-1.1	a46ae30787d4a0c9817afd4056c0042fbcfbafd6	a46ae30787d4a0c9817afd4056c0042fbcfbafd6	fonts/carlito
+caladea	https://github.com/huertatipografica/Caladea	copy	OFL-1.1	336a529cfad3d103d6527752686f8331d13e820a	336a529cfad3d103d6527752686f8331d13e820a	fonts/caladea

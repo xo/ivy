@@ -1,0 +1,426 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "autosize": {
+    "contains": "padding",
+    "type": "fit"
+  },
+  "config": {
+    "axis": {
+      "domainColor": "#bfbfbf",
+      "gridColor": "#d9d9d9",
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "tickColor": "#bfbfbf",
+      "titleColor": "#595959",
+      "titleFont": "Carlito",
+      "titleFontSize": 10,
+      "titleFontWeight": "normal"
+    },
+    "axisBand": {
+      "domainColor": "#bfbfbf",
+      "gridColor": "#d9d9d9",
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "tickColor": "#bfbfbf",
+      "titleColor": "#595959",
+      "titleFont": "Carlito",
+      "titleFontSize": 10,
+      "titleFontWeight": "normal"
+    },
+    "background": "transparent",
+    "font": "Carlito",
+    "legend": {
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "symbolSize": 64.8,
+      "symbolType": "square",
+      "titleFont": "Carlito"
+    },
+    "style": {
+      "arc": {
+        "zuzu.hierarchy": false,
+        "zuzu.total": false
+      },
+      "bar": {
+        "zuzu.hierarchy": false
+      },
+      "line": {
+        "zuzu.endLabel": false
+      },
+      "point": {
+        "zuzu.hierarchy": false
+      },
+      "rect": {
+        "zuzu.hierarchy": false,
+        "zuzu.sankey": false
+      },
+      "text": {
+        "font": "Carlito"
+      },
+      "zuzu.area": {
+        "zuzu.gradient": false,
+        "zuzu.markHigh": false,
+        "zuzu.topLine": 0
+      },
+      "zuzu.area.stacked": {
+        "fillOpacity": 1,
+        "strokeWidth": 0
+      },
+      "zuzu.bar.horizontal": {
+        "zuzu.cornerRadiusEnd": 0,
+        "zuzu.hierarchy": false,
+        "zuzu.stackGap": 0
+      },
+      "zuzu.bar.vertical": {
+        "zuzu.cornerRadiusEnd": 0,
+        "zuzu.hierarchy": false,
+        "zuzu.stackGap": 0
+      },
+      "zuzu.curve": {
+        "interpolate": "linear"
+      },
+      "zuzu.point": {
+        "strokeWidth": 0
+      }
+    },
+    "title": {
+      "font": "Carlito",
+      "subtitleFont": "Carlito"
+    },
+    "view": {
+      "stroke": null
+    }
+  },
+  "height": 300,
+  "layer": [
+    {
+      "data": {
+        "values": [
+          {
+            "c": "Mon",
+            "i": 0,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 5
+          },
+          {
+            "c": "Tue",
+            "i": 1,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 7
+          },
+          {
+            "c": "Wed",
+            "i": 2,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": null
+          },
+          {
+            "c": "Thu",
+            "i": 3,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 6
+          },
+          {
+            "c": "Fri",
+            "i": 4,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 9
+          },
+          {
+            "c": "Mon",
+            "i": 0,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 1
+          },
+          {
+            "c": "Tue",
+            "i": 1,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 3
+          },
+          {
+            "c": "Wed",
+            "i": 2,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 4
+          },
+          {
+            "c": "Thu",
+            "i": 3,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 2
+          },
+          {
+            "c": "Fri",
+            "i": 4,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 5
+          }
+        ]
+      },
+      "encoding": {
+        "color": {
+          "field": "s",
+          "legend": {
+            "orient": "top",
+            "title": null
+          },
+          "scale": {
+            "domain": [
+              "Visits",
+              "Sales"
+            ],
+            "range": [
+              "#ff0000",
+              "#00c000"
+            ]
+          },
+          "type": "nominal"
+        },
+        "order": {
+          "field": "k",
+          "type": "quantitative"
+        },
+        "x": {
+          "axis": {
+            "domain": true,
+            "grid": false,
+            "labelAngle": 0,
+            "labelPadding": 3,
+            "orient": "bottom",
+            "ticks": true
+          },
+          "field": "c",
+          "scale": {
+            "domain": [
+              "Mon",
+              "Tue",
+              "Wed",
+              "Thu",
+              "Fri"
+            ],
+            "paddingInner": 0.6,
+            "paddingOuter": 0.3
+          },
+          "title": null,
+          "type": "nominal"
+        },
+        "y": {
+          "axis": {
+            "domain": false,
+            "grid": true,
+            "labelPadding": 4,
+            "orient": "left",
+            "ticks": false
+          },
+          "field": "v",
+          "scale": {
+            "zero": true
+          },
+          "stack": null,
+          "title": null,
+          "type": "quantitative"
+        }
+      },
+      "mark": {
+        "interpolate": "linear",
+        "invalid": null,
+        "strokeCap": "round",
+        "strokeJoin": "round",
+        "strokeWidth": 2.25,
+        "type": "line"
+      }
+    },
+    {
+      "data": {
+        "values": [
+          {
+            "c": "Mon",
+            "i": 0,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 5
+          },
+          {
+            "c": "Tue",
+            "i": 1,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 7
+          },
+          {
+            "c": "Wed",
+            "i": 2,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": null
+          },
+          {
+            "c": "Thu",
+            "i": 3,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 6
+          },
+          {
+            "c": "Fri",
+            "i": 4,
+            "k": 0,
+            "p": 0,
+            "s": "Visits",
+            "v": 9
+          },
+          {
+            "c": "Mon",
+            "i": 0,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 1
+          },
+          {
+            "c": "Tue",
+            "i": 1,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 3
+          },
+          {
+            "c": "Wed",
+            "i": 2,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 4
+          },
+          {
+            "c": "Thu",
+            "i": 3,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 2
+          },
+          {
+            "c": "Fri",
+            "i": 4,
+            "k": 1,
+            "p": 0,
+            "s": "Sales",
+            "v": 5
+          }
+        ]
+      },
+      "encoding": {
+        "color": {
+          "field": "s",
+          "legend": {
+            "orient": "top",
+            "title": null
+          },
+          "scale": {
+            "domain": [
+              "Visits",
+              "Sales"
+            ],
+            "range": [
+              "#ff0000",
+              "#00c000"
+            ]
+          },
+          "type": "nominal"
+        },
+        "opacity": {
+          "value": 1
+        },
+        "order": {
+          "field": "k",
+          "type": "quantitative"
+        },
+        "x": {
+          "axis": {
+            "domain": true,
+            "grid": false,
+            "labelAngle": 0,
+            "labelPadding": 3,
+            "orient": "bottom",
+            "ticks": true
+          },
+          "field": "c",
+          "scale": {
+            "domain": [
+              "Mon",
+              "Tue",
+              "Wed",
+              "Thu",
+              "Fri"
+            ],
+            "paddingInner": 0.6,
+            "paddingOuter": 0.3
+          },
+          "title": null,
+          "type": "nominal"
+        },
+        "y": {
+          "axis": {
+            "domain": false,
+            "grid": true,
+            "labelPadding": 4,
+            "orient": "left",
+            "ticks": false
+          },
+          "field": "v",
+          "scale": {
+            "zero": true
+          },
+          "stack": null,
+          "title": null,
+          "type": "quantitative"
+        }
+      },
+      "mark": {
+        "filled": true,
+        "size": 30,
+        "type": "point"
+      }
+    }
+  ],
+  "padding": 7.5,
+  "title": {
+    "anchor": "middle",
+    "color": "#595959",
+    "fontSize": 14,
+    "fontWeight": "bold",
+    "offset": 7,
+    "text": "Trend"
+  },
+  "width": 400
+}

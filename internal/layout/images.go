@@ -56,7 +56,8 @@ type IntrinsicSize struct {
 }
 
 // Image is an image of weasyprint/images.py: a *RasterImage, an *SVGImage,
-// a *LinearGradient or a *RadialGradient.
+// a *LinearGradient or a *RadialGradient. The port adds a *MetafileImage and
+// an *ObjectImage, in objects.go.
 type Image interface {
 	// GetIntrinsicSize is get_intrinsic_size: the intrinsic size of the
 	// image, for a resolution in dots per pixel and a font size.
@@ -516,6 +517,10 @@ func (il *imageLoader) load(url, forcedMimeType string, orientation Value) (img 
 		// Port: upstream has no limit.
 		return nil, fmt.Errorf("%w: %w: too many images", errImageLoading, ivy.ErrLimit)
 	}
+	// Port: upstream has no objects.
+	if name, ok := strings.CutPrefix(url, ObjectScheme+":"); ok {
+		return il.object(name)
+	}
 	response, err := il.fetcher.Fetch(url)
 	if err != nil {
 		return nil, err
@@ -538,6 +543,11 @@ func (il *imageLoader) load(url, forcedMimeType string, orientation Value) (img 
 	// Try the decoders of raster images, or for failing SVG
 	_, _, rasterErr := image.DecodeConfig(bytes.NewReader(bytestring))
 	if rasterErr != nil {
+		// Port: upstream reads no metafile. A metafile of Windows comes
+		// before the last chance of SVG.
+		if img, ok := il.metafile(url, bytestring); ok {
+			return img, nil
+		}
 		if mimeType == "image/svg+xml" {
 			// Tried SVGImage then the raster decoders for a SVG, abort
 			return nil, fmt.Errorf("%w: %w", errImageLoading, svgErr)
@@ -1294,6 +1304,10 @@ func paintImage(s *stream, img Image, concreteWidth, concreteHeight float64, sty
 		img.draw(s, concreteWidth, concreteHeight, style)
 	case *RadialGradient:
 		img.draw(s, concreteWidth, concreteHeight, style)
+	case *MetafileImage:
+		img.draw(s, concreteWidth, concreteHeight)
+	case *ObjectImage:
+		img.draw(s, concreteWidth, concreteHeight)
 	}
 }
 

@@ -2,6 +2,7 @@ package ivy
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 )
 
@@ -31,6 +32,14 @@ type Config struct {
 	// the fonts that ivy bundles. Without it, ivy reads no font of the
 	// system, and a page looks the same on each machine (D23).
 	SystemFonts bool
+	// Fonts holds font files that a format that lays out text uses after
+	// the fonts that the document embeds, and before the fonts of the
+	// system, such as fonts.FS of the module github.com/xo/ivy/fonts. A
+	// font of Fonts also replaces a font of Microsoft Office with the same
+	// metrics that the document names and does not embed, such as Carlito
+	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
+	// WOFF2 files within Limits, and ignores the other files.
+	Fonts fs.FS
 }
 
 // Log returns the logger of the configuration. It returns a logger that

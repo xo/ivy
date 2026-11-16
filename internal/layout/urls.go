@@ -200,6 +200,11 @@ type URLFetcher struct {
 	// reads, from ivy.Limits.MaxMemory. Zero or less is the default of
 	// ivy.Limits.
 	MaxSize int64
+	// Objects are the objects of the Source, which the images load by their
+	// URL, ObjectURL(name). The fetcher itself reads no object.
+	//
+	// Port: upstream has no objects.
+	Objects map[string]Object
 }
 
 // URLFetcherResponse is URLFetcherResponse in weasyprint/urls.py: a resource

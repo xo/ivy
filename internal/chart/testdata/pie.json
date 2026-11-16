@@ -1,0 +1,194 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "autosize": {
+    "contains": "padding",
+    "type": "fit"
+  },
+  "config": {
+    "axis": {
+      "domainColor": "#bfbfbf",
+      "gridColor": "#d9d9d9",
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "tickColor": "#bfbfbf",
+      "titleColor": "#595959",
+      "titleFont": "Carlito",
+      "titleFontSize": 10,
+      "titleFontWeight": "normal"
+    },
+    "axisBand": {
+      "domainColor": "#bfbfbf",
+      "gridColor": "#d9d9d9",
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "tickColor": "#bfbfbf",
+      "titleColor": "#595959",
+      "titleFont": "Carlito",
+      "titleFontSize": 10,
+      "titleFontWeight": "normal"
+    },
+    "background": "transparent",
+    "font": "Carlito",
+    "legend": {
+      "labelColor": "#595959",
+      "labelFont": "Carlito",
+      "labelFontSize": 9,
+      "symbolSize": 64.8,
+      "symbolType": "square",
+      "titleFont": "Carlito"
+    },
+    "style": {
+      "arc": {
+        "zuzu.hierarchy": false,
+        "zuzu.total": false
+      },
+      "bar": {
+        "zuzu.hierarchy": false
+      },
+      "line": {
+        "zuzu.endLabel": false
+      },
+      "point": {
+        "zuzu.hierarchy": false
+      },
+      "rect": {
+        "zuzu.hierarchy": false,
+        "zuzu.sankey": false
+      },
+      "text": {
+        "font": "Carlito"
+      },
+      "zuzu.area": {
+        "zuzu.gradient": false,
+        "zuzu.markHigh": false,
+        "zuzu.topLine": 0
+      },
+      "zuzu.area.stacked": {
+        "fillOpacity": 1,
+        "strokeWidth": 0
+      },
+      "zuzu.bar.horizontal": {
+        "zuzu.cornerRadiusEnd": 0,
+        "zuzu.hierarchy": false,
+        "zuzu.stackGap": 0
+      },
+      "zuzu.bar.vertical": {
+        "zuzu.cornerRadiusEnd": 0,
+        "zuzu.hierarchy": false,
+        "zuzu.stackGap": 0
+      },
+      "zuzu.curve": {
+        "interpolate": "linear"
+      },
+      "zuzu.point": {
+        "strokeWidth": 0
+      }
+    },
+    "title": {
+      "font": "Carlito",
+      "subtitleFont": "Carlito"
+    },
+    "view": {
+      "stroke": null
+    }
+  },
+  "data": {
+    "values": [
+      {
+        "c": "a",
+        "i": 0,
+        "k": 0,
+        "l": "7%",
+        "p": 0,
+        "v": 10
+      },
+      {
+        "c": "b",
+        "i": 1,
+        "k": 0,
+        "l": "13%",
+        "p": 0,
+        "v": 20
+      },
+      {
+        "c": "c",
+        "i": 2,
+        "k": 0,
+        "l": "20%",
+        "p": 0,
+        "v": 30
+      },
+      {
+        "c": "d",
+        "i": 3,
+        "k": 0,
+        "l": "27%",
+        "p": 0,
+        "v": 40
+      },
+      {
+        "c": "e",
+        "i": 4,
+        "k": 0,
+        "l": "33%",
+        "p": 0,
+        "v": 50
+      }
+    ]
+  },
+  "encoding": {
+    "color": {
+      "field": "c",
+      "legend": {
+        "orient": "right",
+        "title": null
+      },
+      "scale": {
+        "domain": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "range": [
+          "#ff0000",
+          "#00c000",
+          "#0000ff",
+          "#ffc000",
+          "#c000c0"
+        ]
+      },
+      "type": "nominal"
+    },
+    "order": {
+      "field": "i",
+      "type": "quantitative"
+    },
+    "theta": {
+      "field": "v",
+      "stack": true,
+      "type": "quantitative"
+    }
+  },
+  "height": 300,
+  "mark": {
+    "cornerRadius": 0,
+    "padAngle": 0,
+    "stroke": "#ffffff",
+    "strokeWidth": 1,
+    "type": "arc"
+  },
+  "padding": 7.5,
+  "title": {
+    "anchor": "middle",
+    "color": "#595959",
+    "fontSize": 14,
+    "fontWeight": "bold",
+    "offset": 7,
+    "text": "Share"
+  },
+  "width": 400
+}

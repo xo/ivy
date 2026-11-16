@@ -59,13 +59,16 @@ the program that made the document.
 
 ## Status
 
-Phases 1 to 4 are done. These packages open a file and give its previews,
+Phases 1 to 5 are done. These packages open a file and give its previews,
 its pages or both:
 
 | Package | Formats |
 | --- | --- |
-| `github.com/xo/ivy/odf` | OpenDocument: the thumbnail |
-| `github.com/xo/ivy/docx`, `xlsx`, `pptx` | Word, Excel and PowerPoint: the thumbnail |
+| `github.com/xo/ivy/odf` | OpenDocument, with a password: the pages of the texts, the spreadsheets, the presentations and the drawings, and the thumbnail |
+| `github.com/xo/ivy/docx` | Word, with a password: the pages, the thumbnail and the properties |
+| `github.com/xo/ivy/xlsx` | Excel, with a password: every sheet on pages, as printing does, the thumbnail and the properties. The cells show the values that the file holds, and no formula is computed |
+| `github.com/xo/ivy/pptx` | PowerPoint, with a password: one page for each slide that is not hidden, the thumbnail and the properties |
+| `github.com/xo/ivy/rtf` | RTF: the pages, and the title, the author and the dates of `\info` |
 | `github.com/xo/ivy/iwork` | Pages, Keynote and Numbers: the previews |
 | `github.com/xo/ivy/ora` | OpenRaster and Krita: the image and the thumbnail |
 | `github.com/xo/ivy/ps` | EPS: the TIFF and EPSI previews, and the title and the creator |
@@ -80,6 +83,13 @@ its pages or both:
 | `github.com/xo/ivy/chm` | Compiled HTML Help: the pages, the title and the language |
 | `github.com/xo/ivy/html` | HTML and HTMLZ: the pages, the cover of an HTMLZ file, and the title |
 | `github.com/xo/ivy/text` | Text and TXTZ: the pages, the cover of a TXTZ file, and the metadata of a TXTZ file |
+| `github.com/xo/ivy/msdoc` | Word 97 to 2003, .doc and .dot, with a password: the pages, the thumbnail, and the title, the author and the dates |
+| `github.com/xo/ivy/msxls` | Excel 97 to 2003 and Excel 5, .xls and .xlt, with a password: every sheet on pages, the thumbnail and the properties |
+| `github.com/xo/ivy/msppt` | PowerPoint 97 to 2003, .ppt, .pps and .pot, with a password: one page for each slide, with its texts, the thumbnail and the properties |
+| `github.com/xo/ivy/vsdx` | Visio, .vsdx and .vsd: the thumbnail and the properties |
+| `github.com/xo/ivy/pub` | Publisher: the thumbnail and the properties |
+| `github.com/xo/ivy/csv` | CSV, TSV and TAB: the rows as one table on pages |
+| `github.com/xo/ivy/emf` | EMF, EMF+ and WMF, also compressed as EMZ and WMZ: the page, and the program and the title of an EMF file |
 | `github.com/xo/ivy/markdown` | Markdown, with the extensions of GitHub: the pages and the title |
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
@@ -107,6 +117,13 @@ if err != nil {
 }
 img, err := ivy.RenderImage(ctx, page, 72, color.White)
 ```
+
+A program that renders Office documents can import the module
+`github.com/xo/ivy/fonts` and set `ivy.Config{Fonts: fonts.FS()}`. The module
+holds Liberation Sans, Serif and Mono, Carlito and Caladea, which have the
+metrics of Arial, Times New Roman, Courier New, Calibri and Cambria. Lines
+and pages then break as they do in Office. The module adds about 7.4 MB to a
+program.
 
 A document that has no pages, such as an EPS file, gives its preview:
 

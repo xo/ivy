@@ -76,6 +76,15 @@ jobs:
           GOEXPERIMENT: simd
         run: go test -count=1 ./...
 
+      # The fonts of D24 are a module of their own.
+      - name: Test the fonts module
+        if: ${{ matrix.name == 'linux/amd64' }}
+        working-directory: fonts
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+          golangci-lint run ./...
+
   # A program that imports ivy builds for every target of Go. This builds the
   # packages for targets that have no runner.
   cross:

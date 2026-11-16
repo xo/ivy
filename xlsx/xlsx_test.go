@@ -65,13 +65,32 @@ func TestThumbnailEMF(t *testing.T) {
 	}
 }
 
+func TestDescribe(t *testing.T) {
+	book := testBook()
+	book.Extra = append(book.Extra, fixture.Entry{Name: "docProps/core.xml", Data: []byte(`<?xml version="1.0" encoding="UTF-8"?>` +
+		`<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/">` +
+		`<dc:title>Budget</dc:title><dc:creator>A writer</dc:creator></cp:coreProperties>`)})
+	d := open(t, fixture.XLSX(book), ivy.Config{})
+	info, err := d.Describe(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Title != "Budget" || len(info.Authors) != 1 || info.Authors[0] != "A writer" {
+		t.Errorf("expected the title and the creator, got: %+v", info)
+	}
+	// a file without core properties says nothing
+	if info, err := open(t, fixture.XLSX(testBook()), ivy.Config{}).Describe(t.Context()); err != nil || info.Title != "" {
+		t.Errorf("expected no information and no error, got: %+v, %v", info, err)
+	}
+}
+
 func TestOpenErrors(t *testing.T) {
 	if _, err := Open(t.Context(), bytes.NewReader(fixture.Zip(fixture.Entry{Name: "a"}))); !errors.Is(err, ivy.ErrFormat) {
 		t.Errorf("expected ErrFormat, got: %v", err)
 	}
 	cfb := append([]byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}, make([]byte, 504)...)
-	if _, err := Open(t.Context(), bytes.NewReader(cfb)); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ErrUnsupported, got: %v", err)
+	if _, err := Open(t.Context(), bytes.NewReader(cfb)); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ErrFormat for a damaged compound file, got: %v", err)
 	}
 }
 
@@ -82,7 +101,9 @@ func FuzzOpen(f *testing.F) {
 	}
 	f.Add(buf)
 	f.Add(fixture.Zip(contentTypes, fixture.Entry{Name: "docProps/thumbnail.png", Data: fixture.PNG(4, 4, color.Black)}))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16}}
+	f.Add(fixture.XLSX(testBook()))
+	f.Add(fixture.XLSX(chartSheetBook("FF0000")))
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 14}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {
@@ -90,9 +111,15 @@ func FuzzOpen(f *testing.F) {
 		}
 		for p, err := range d.Previews(t.Context()) {
 			if err != nil {
-				return
+				break
 			}
 			_, _ = p.Decode(t.Context())
 		}
+		// the first page of the sheets
+		page, err := d.Page(t.Context(), 0)
+		if err != nil {
+			return
+		}
+		_, _ = ivy.RenderImage(t.Context(), page, 8, color.White)
 	})
 }

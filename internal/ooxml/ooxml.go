@@ -1,9 +1,10 @@
-// Package ooxml opens the Office Open XML packages of Word, Excel and
-// PowerPoint, for the packages docx, xlsx and pptx.
+// Package ooxml opens the Office Open XML packages of Word, Excel,
+// PowerPoint and Visio, for the packages docx, xlsx, pptx and vsdx.
 //
-// On 2026-11-16 it finds the thumbnail of a package, in
-// docProps/thumbnail.*. A thumbnail in EMF or WMF waits for the reader of
-// phase 5.
+// It finds the thumbnail of a package, in docProps/thumbnail.*. A thumbnail
+// in EMF or WMF is drawn with internal/metafile. It reads the core
+// properties of a package, in docProps/core.xml. It opens a package that a
+// password protects with internal/offcrypto (D12, D24).
 package ooxml
 
 import (
@@ -11,8 +12,11 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/msole"
 	"github.com/xo/ivy/internal/zipdoc"
 )
 
@@ -20,7 +24,8 @@ import (
 // that a password protects is such a file (D12).
 var cfbSignature = []byte{0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1}
 
-// thumbnails are the names that a package uses for its thumbnail.
+// thumbnails are the names that a package uses for a thumbnail in a raster
+// image.
 var thumbnails = []string{
 	"docProps/thumbnail.jpeg",
 	"docProps/thumbnail.jpg",
@@ -28,21 +33,40 @@ var thumbnails = []string{
 	"docProps/thumbnail.gif",
 }
 
+// metafileThumbnails are the names that a package uses for a thumbnail in a
+// metafile. Visio writes one in EMF.
+var metafileThumbnails = []string{
+	"docProps/thumbnail.emf",
+	"docProps/thumbnail.wmf",
+}
+
+// The types of the relationships of the parts of the core and the
+// extended properties, in the transitional and the strict forms.
+const (
+	relCore       = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+	relCoreStrict = "http://schemas.openxmlformats.org/officedocument/2006/relationships/metadata/core-properties"
+)
+
 // Document is an open Office Open XML package.
 type Document struct {
 	archive *zipdoc.Archive
+	cfg     ivy.Config
 }
 
 // Open opens the package in src. It returns an error that wraps
-// ivy.ErrFormat if src is not a package, and ivy.ErrUnsupported if a
-// password protects it, until the encryption of phase 5.
+// ivy.ErrFormat if src is not a package. If a password protects the
+// package, Open asks for the password as D12 says, and returns an error
+// that wraps ivy.ErrPassword if no password is right.
 func Open(ctx context.Context, src ivy.Source, cfg ivy.Config) (*Document, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("opening office open xml: %w", err)
 	}
-	head := make([]byte, len(cfbSignature))
-	if _, err := src.ReadAt(head, 0); err == nil && bytes.Equal(head, cfbSignature) {
-		return nil, fmt.Errorf("office file that a password protects: %w", ivy.ErrUnsupported)
+	if isCompoundFile(src) {
+		plain, err := decrypt(ctx, src, cfg)
+		if err != nil {
+			return nil, err
+		}
+		src = bytes.NewReader(plain)
 	}
 	archive, err := zipdoc.Open(src, cfg.Limits)
 	if err != nil {
@@ -51,14 +75,98 @@ func Open(ctx context.Context, src ivy.Source, cfg ivy.Config) (*Document, error
 	if archive.Find("[Content_Types].xml") == nil {
 		return nil, fmt.Errorf("zip archive without [Content_Types].xml: %w", ivy.ErrFormat)
 	}
-	return &Document{archive: archive}, nil
+	return &Document{archive: archive, cfg: cfg}, nil
 }
 
-// Previews lists the thumbnail.
+// Previews lists the thumbnails: first one in a raster image, then one in a
+// metafile. A metafile that the package cannot read is left out, and
+// logged.
 func (d *Document) Previews(ctx context.Context) iter.Seq2[ivy.Preview, error] {
 	candidates := make([]zipdoc.Candidate, len(thumbnails))
 	for i, name := range thumbnails {
 		candidates[i] = zipdoc.Candidate{Kind: ivy.Thumbnail, Name: name}
 	}
-	return d.archive.Previews(ctx, candidates...)
+	return func(yield func(ivy.Preview, error) bool) {
+		for p, err := range d.archive.Previews(ctx, candidates...) {
+			if !yield(p, err) || err != nil {
+				return
+			}
+		}
+		for _, name := range metafileThumbnails {
+			if err := ctx.Err(); err != nil {
+				yield(ivy.Preview{}, fmt.Errorf("listing the previews: %w", err))
+				return
+			}
+			f := d.archive.Find(name)
+			if f == nil {
+				continue
+			}
+			data, err := d.archive.Read(f)
+			if err == nil {
+				var p ivy.Preview
+				if p, err = msole.MetafilePreview(data, d.cfg); err == nil {
+					if !yield(p, nil) {
+						return
+					}
+					continue
+				}
+			}
+			d.cfg.Log().Debug("ooxml: thumbnail left out", "name", name, "err", err)
+		}
+	}
+}
+
+// Describe returns the core properties of the package: the title, the
+// creator, the subject, the language and the dates. A package without them
+// says nothing. The core properties are a help, so a part that is damaged
+// says nothing too, and the fault is logged.
+func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
+	if err := ctx.Err(); err != nil {
+		return ivy.Info{}, fmt.Errorf("describing office open xml: %w", err)
+	}
+	name := "docProps/core.xml"
+	if rels, err := d.Relationships("", d.cfg.Limits); err == nil {
+		for _, r := range rels {
+			if !r.External && (r.Type == relCore || r.Type == relCoreStrict) {
+				name = r.Target
+				break
+			}
+		}
+	}
+	if !d.HasPart(name) {
+		return ivy.Info{}, nil
+	}
+	buf, err := d.ReadPart(name)
+	if err != nil {
+		return ivy.Info{}, err
+	}
+	doc, err := ParseXML(buf, d.cfg.Limits)
+	if err != nil {
+		d.cfg.Log().Debug("ooxml: core properties left out", "err", err)
+		return ivy.Info{}, nil
+	}
+	var info ivy.Info
+	for n := range doc.RootElement().Children() {
+		if !n.IsElement() {
+			continue
+		}
+		text := strings.TrimSpace(ebook.NodeText(n))
+		switch n.TagName().Name() {
+		case "title":
+			info.Title = text
+		case "creator":
+			if text != "" {
+				info.Authors = []string{text}
+			}
+		case "subject":
+			info.Subject = text
+		case "language":
+			info.Language = text
+		case "created":
+			info.Created = ebook.ParseDate(text)
+		case "modified":
+			info.Modified = ebook.ParseDate(text)
+		}
+	}
+	return info, nil
 }

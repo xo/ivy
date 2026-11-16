@@ -76,3 +76,18 @@ git -C upstream/psd checkout a5d50ec0acac
    ivy.
 4. Move `matched` in `upstream/upstreams.tsv` to the newest commit that ivy
    has.
+
+## Data from other projects
+
+ivy also keeps files that are data, not code:
+
+1. The module `fonts` keeps the font files of Liberation, Carlito and
+   Caladea as they are, under the SIL Open Font License (D24). Each one has
+   a row in `upstream/upstreams.tsv` of the kind `copy`, and its folder
+   keeps its license. `fonts/README.md` holds the URL, the version and the
+   SHA-256 of each file. The license forbids a change to a font that keeps
+   its name, so ivy does not change them.
+2. `internal/drawingml/testdata/ecma` keeps `presetShapeDefinitions.xml` of
+   ECMA-376, with the copyright notice of Ecma, and the package generates
+   its tables from it (D24). A standard is not a project, so it has no row
+   in `upstream/upstreams.tsv`.

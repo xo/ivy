@@ -1,0 +1,3 @@
+# The fonts are binary files. Git must not change their bytes, because
+# README.md gives the SHA-256 of each one.
+*.ttf binary

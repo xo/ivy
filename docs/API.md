@@ -45,14 +45,17 @@ github.com/xo/ivy                the root package: the document API (D11)
 ├── docx/  xlsx/  pptx/          Office Open XML
 ├── odf/  rtf/                   OpenDocument, RTF
 ├── msdoc/  msxls/  msppt/       the binary Office formats
+├── vsdx/  pub/                  the previews of Visio and Publisher
 ├── dmg/  ipa/  apk/  msi/       the containers with an icon or a preview
 ├── camera/  iwork/              camera RAW, iWork
 ├── drm/                         a module of its own, for DRM that needs a key (D12)
+├── fonts/                       a module of its own: the fonts with the metrics of Office (D24)
 ├── internal/
 │   ├── display/                 the display list and the okage device (D10)
 │   ├── font/                    the fonts (D10)
 │   ├── layout/                  the port of WeasyPrint (D15)
-│   ├── cfb/  offcrypto/  ...    the code that more than one format shares
+│   ├── drawingml/               the shapes of DrawingML, from ECMA-376 (D24)
+│   ├── msole/  offcrypto/  ...  the code that more than one format shares
 │   ├── ccitt/  jbig2/  jpeg2000/ the codecs of the port of hayro (D14, D17)
 │   └── moxcms/                  the subset of moxcms that hayro uses (D16)
 └── test/                        a module of its own: the oracles (D13)
@@ -233,6 +236,14 @@ type Config struct {
 	// the fonts that ivy bundles. Without it, ivy reads no font of the
 	// system, and a page looks the same on each machine (D23).
 	SystemFonts bool
+	// Fonts holds font files that a format that lays out text uses after
+	// the fonts that the document embeds, and before the fonts of the
+	// system, such as fonts.FS of the module github.com/xo/ivy/fonts. A
+	// font of Fonts also replaces a font of Microsoft Office with the same
+	// metrics that the document names and does not embed, such as Carlito
+	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
+	// WOFF2 files within Limits, and ignores the other files.
+	Fonts fs.FS
 }
 
 // Log returns the logger of the configuration, or a logger that discards
@@ -395,10 +406,12 @@ a program needs one, the maintainers decide to export it.
    `xps` draws through it, and the port of hayro and the layout will. A path
    of okage changes in place when it transforms, so a shared path, such as
    the outline of a glyph, is cloned first with `display.Clone`.
-2. `internal/font` holds the fonts. It reads the fonts of the system and the
-   web fonts with okage, the TrueType, OpenType and CFF fonts with go-text,
-   and Type 1 and Type 3 with the port of hayro-font. It keeps its fonts in
-   the `ivy.Cache`.
+2. `internal/font` reads the faces: the TrueType, OpenType and CFF fonts with
+   go-text, and Type 1 and Type 3 with the port of hayro-font. It gives the
+   substitute of a font of Office, such as Carlito for Calibri.
+   `internal/fontdb` builds the font database of a program from
+   `ivy.Config.Fonts`, the Go fonts and the fonts of the system (D23, D24),
+   and the layout, the metafiles and the charts share it.
 3. `internal/layout` holds the port of WeasyPrint (D15). It takes a tree of
    HTML from the parser of okage, the style sheets and an `fs.FS` of the
    resources, such as the files in an EPUB. It returns a document that is a

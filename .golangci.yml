@@ -52,3 +52,4 @@ linters:
       # (docs/UPSTREAM.md).
       - psd/internal/oovpsd
       - internal/goldmark
+      - internal/gowemf

@@ -8,22 +8,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"math"
 	"sync"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/svg"
-	"golang.org/x/image/font/gofont/gobold"
-	"golang.org/x/image/font/gofont/gobolditalic"
-	"golang.org/x/image/font/gofont/goitalic"
-	"golang.org/x/image/font/gofont/gomono"
-	"golang.org/x/image/font/gofont/gomonobold"
-	"golang.org/x/image/font/gofont/gomonobolditalic"
-	"golang.org/x/image/font/gofont/gomonoitalic"
-	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // maxLoadedDocuments is the number of documents of a book whose layout a
@@ -34,44 +29,20 @@ const maxLoadedDocuments = 4
 // pointsPerPixel converts the CSS pixels of a page to points.
 const pointsPerPixel = 0.75
 
-// defaultFonts is the font database of a book when the program gives none.
-// It holds the Go fonts of golang.org/x/image, because okage bundles no font
-// and ivy does not read the fonts of the system unless the program asks for
-// them. Go is the serif, the sans-serif, the cursive and the fantasy family,
-// and Go Mono the monospace family.
-var defaultFonts = sync.OnceValue(func() *svg.FontDatabase {
-	db := svg.NewFontDatabase()
-	for _, data := range [][]byte{
-		goregular.TTF, gobold.TTF, goitalic.TTF, gobolditalic.TTF,
-		gomono.TTF, gomonobold.TTF, gomonoitalic.TTF, gomonobolditalic.TTF,
-	} {
-		db.LoadFontData(data)
-	}
-	db.SetSerifFamily("Go")
-	db.SetSansSerifFamily("Go")
-	db.SetCursiveFamily("Go")
-	db.SetFantasyFamily("Go")
-	db.SetMonospaceFamily("Go Mono")
-	return db
-})
-
-// systemFonts is the font database of the default fonts with the fonts of
-// the system. It reads the system once.
-var systemFonts = sync.OnceValue(func() *svg.FontDatabase {
-	db := defaultFonts().Clone()
-	db.LoadOSFonts()
-	return db
-})
-
 // BookOptions are the options of NewBook.
 type BookOptions struct {
 	// Limits bound the work on the book. A zero field takes its default.
 	Limits ivy.Limits
 	// Logger receives the log of the book, or nil.
 	Logger *slog.Logger
-	// Fonts are the fonts of the book, or nil for the default fonts: the Go
-	// fonts, with the fonts of the system when SystemFonts is set.
+	// Fonts are the fonts of the book, or nil for the default fonts: the
+	// fonts of FontFiles, then the Go fonts, then the fonts of the system
+	// when SystemFonts is set.
 	Fonts *svg.FontDatabase
+	// FontFiles holds font files that come before the Go fonts, such as the
+	// fonts of the module github.com/xo/ivy/fonts, or nil. A program gives
+	// them with ivy.Config.Fonts (D24). It is ignored when Fonts is set.
+	FontFiles fs.FS
 	// SystemFonts adds the fonts of the system to the default fonts. It is
 	// ignored when Fonts is set.
 	SystemFonts bool
@@ -133,19 +104,20 @@ func NewBook(src Source, opts BookOptions) *Book {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	db := opts.Fonts
+	db, first := opts.Fonts, 0
 	if db == nil {
-		db = defaultFonts()
-		if opts.SystemFonts {
-			db = systemFonts()
-		}
+		db, first = fontdb.Load(opts.FontFiles, opts.SystemFonts, lim, log)
 	}
 	b := &Book{
 		src:  src,
 		opts: opts,
 		lim:  lim,
 		log:  log,
-		fc:   NewFontConfiguration(db, FontConfigurationOptions{Limits: lim, Logger: opts.Logger}),
+		fc: NewFontConfiguration(db, FontConfigurationOptions{
+			Limits:     lim,
+			Logger:     opts.Logger,
+			FirstFaces: first,
+		}),
 	}
 	docs := src.Documents
 	// The documents are bounded as the pages are: each one has a page at
@@ -469,7 +441,32 @@ func (p *bookPage) Size() (float32, float32) {
 
 // Render satisfies the ivy.Page interface. It returns an *ivy.PartialError
 // when it drew the page in part.
-func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
+func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.draw(ctx, display.NewOkage(dst, okage.IdentityTransform()), t, 1)
+}
+
+// Draw draws page n of the book, from 0, onto dev. t maps the points of the
+// page onto the user space of dev. scale is the number of pixels of the
+// device for a unit of its user space: the drawing renders the SVG images
+// and the patterns of the page at that resolution. A scale that is not
+// positive is 1.
+//
+// Draw sends the text, the paths and the images to dev as commands of the
+// display list, so a device that records the commands holds the glyphs of
+// the text. The clip and the groups of dev apply to the page. Draw saves
+// and restores the state of dev. It returns an *ivy.PartialError when it
+// drew the page in part, and an error that wraps ivy.ErrPageRange past the
+// last page.
+func (b *Book) Draw(ctx context.Context, n int, dev display.Device, t okage.Transform, scale float64) error {
+	page, err := b.Page(ctx, n)
+	if err != nil {
+		return err
+	}
+	return page.(*bookPage).draw(ctx, dev, t, scale)
+}
+
+// draw draws the page onto dev, as Book.Draw does.
+func (p *bookPage) draw(ctx context.Context, dev display.Device, t okage.Transform, scale float64) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
 	}
@@ -480,8 +477,18 @@ func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transf
 			err = &ivy.PartialError{Err: fmt.Errorf("rendering page %d: panic: %v: %w", p.n+1, r, ivy.ErrFormat)}
 		}
 	}()
-	dev := display.NewOkage(dst, okage.IdentityTransform())
-	err = DrawPage(ctx, dev, p.box, t.PreScale(pointsPerPixel, pointsPerPixel), DrawOptions{
+	if !(scale > 0) || math.IsInf(scale, 0) {
+		scale = 1
+	}
+	// DrawPage takes the transform onto the pixels, so the device first
+	// undoes the scale.
+	dev.Save()
+	defer dev.Restore()
+	if scale != 1 {
+		dev.Concat(okage.TransformFromScale(float32(1/scale), float32(1/scale)))
+	}
+	toDevice := t.PostScale(float32(scale), float32(scale)).PreScale(pointsPerPixel, pointsPerPixel)
+	err = DrawPage(ctx, dev, p.box, toDevice, DrawOptions{
 		FontConfig: p.book.fc,
 		Limits:     p.book.lim,
 		Logger:     p.book.opts.Logger,

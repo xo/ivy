@@ -53,7 +53,7 @@ one of its functions.
 | `formatting_structure/build.py` | 1333 | `formatting_structure_build.go` | 1739 | Ported |
 | `formatting_structure/text.py` | 131 | `formatting_structure_text.go` | 628 | Ported, with the special casing of the methods `upper` and `lower` of Python |
 | `text/constants.py` | 542 | `text_constants.go` | 498 | Ported, without the constants of Pango and Fontconfig |
-| `text/fonts.py` | 398 | `text_fonts.go` | 841 | Ported on the fonts of okage and go-text. See "The fonts" |
+| `text/fonts.py` | 398 | `text_fonts.go` | 929 | Ported on the fonts of okage and go-text. See "The fonts" |
 | `text/line_break.py` | 665 | `text_line_break.go` | 1415 | Ported on the fonts of okage and go-text. See "The text" |
 | `text/ffi.py` | 547 | none | | Not ported: it binds Pango, Fontconfig and HarfBuzz |
 | `layout/__init__.py` | 396 | `layout.go` | 1143 | Ported. `layout_document` is the type `Document`. The file also holds the types that the layout shares. See "The layout" |
@@ -86,7 +86,8 @@ one of its functions.
 | none | | `value.go` | 329 | The Go types of the values of the styles |
 | none | | `tree.go` | 342 | The document tree and its adapter for `cssselect2` |
 | none | | `source.go` | 37 | `Source`, the input of a format |
-| none | | `book.go` | 496 | `Book`, the pages of a whole `Source`. See "The book" |
+| none | | `book.go` | 503 | `Book`, the pages of a whole `Source`. See "The book" |
+| none | | `objects.go` | 156 | The metafiles of Windows and the objects of a `Source`. See "The metafiles and the objects" |
 | `tests/testing_utils.py` | | `testing_utils_test.go` | 641 | Ported, without `tree_position` |
 | `tests/test_boxes.py` | 1280 | `formatting_structure_build_test.go` | 649 | Ported. The tests that need the layout are in `layout_page_test.go` |
 | `tests/test_text.py` | 1671 | `text_line_break_test.go`, `layout_text_test.go` | 1533 | The tests that split lines and the tests of `text-transform`, then the tests that need the layout |
@@ -109,7 +110,8 @@ one of its functions.
 | `tests/draw/__init__.py` | 137 | `draw_test.go` | 476 | Ported: `assert_pixels` and the other helpers, with `document_write_png` of `tests/conftest.py` |
 | `tests/draw/test_x.py`, 23 files | 11854 | `draw_x_test.go` | 14111 | Ported. See "The tests" |
 | `tests/test_stacking.py`, `test_acid2.py`, `test_unicode.py`, `test_api.py` | | `stacking_test.go`, `acid2_test.go`, `unicode_test.go`, `api_test.go` | 444 | The tests that draw pixels. The other tests of `test_api.py` test the API of Python, the command line and the PDF file |
-| none | | `book_test.go` | 185 | The tests of `Book` |
+| none | | `book_test.go` | 242 | The tests of `Book` |
+| none | | `book_fonts_test.go` | 158 | The tests of the font files of a book |
 
 The other files of `weasyprint/` write PDF, which ivy does not write, or
 are the port of SVG of `svg/`, which D15 leaves out. The test resources
@@ -302,7 +304,13 @@ database of another one. Give the configuration to
    style and the stretch with the query of okage, family by family. The
    generic families, such as `serif` and `monospace`, are the generic
    families of the database. The default family `serif` comes last, as in
-   the font selector of okage.
+   the font selector of okage. A family is looked up in the faces of the
+   `@font-face` rules first, then in the first faces of the program
+   (`FontConfigurationOptions.FirstFaces`), then in the other faces of the
+   program. If the first faces have no face of the family, they give the
+   substitute of the family before the other faces do, such as Carlito for
+   Calibri. `Substitute` of `internal/font` gives the substitute (D24). The
+   names of the families match without regard to case, as in Fontconfig.
 2. A character that no face of the families draws takes the fallback face
    of okage, `svg.DefaultFallbackSelector`, from the whole database.
 3. An `@font-face` rule loads its font with the fetcher of the document.
@@ -340,6 +348,34 @@ of upstream.
 
 `get_image_from_uri` is the method `get` of an `imageLoader`, which holds
 the cache of the images of a document.
+
+## The metafiles and the objects
+
+`objects.go` is not a port. It adds two kinds of images to `Image`, for
+the Office formats of phase 5 (D24). Upstream has neither of them.
+
+1. `MetafileImage` is an image in EMF, EMF+ or WMF. The loader reads a
+   metafile with `internal/metafile` when the decoders of raster images
+   do not read the data, and before the last try as SVG. The size of the
+   metafile in points is its intrinsic size. The drawing plays the records
+   of the metafile onto the display list, as vectors, with the fonts of the
+   document.
+2. `ObjectImage` is an object that a format draws itself, such as a chart.
+   A format gives its objects by name in `Source.Objects`. An `<img>`
+   element whose `src` is `ObjectURL(name)`, such as `ivy-object:chart1`,
+   or an `<object>` element whose `data` is that URL, shows the object.
+   The scheme `ivy-object` cannot name a file of the FS, whose URLs have
+   the scheme `file`, and the fetcher reads no object. The loader gives a
+   name that `Source.Objects` does not hold as an image that cannot be
+   loaded.
+
+The interface `Object` of `source.go` has two methods. `Size` returns the
+intrinsic size of the object in points, or zero for none. `Draw` draws
+the object onto a `display.Device`, into a rectangle of the user space of
+the device, whose y axis points down. The drawing records a call to
+`Draw`, and the stream makes the call when it replays its commands. An
+error of `Draw` is logged, and the page is drawn in part. The package
+`internal/chart` gives its charts as objects.
 
 ## The layout
 
@@ -499,14 +535,56 @@ out the whole book.
    `OkageDevice`. One mutex serializes the layout and the drawing, so the
    book and its pages are safe for concurrent use. A page drawn in part
    returns an `*ivy.PartialError`.
+7. `Draw(ctx, n, dev, t, scale)` draws page `n` onto any `display.Device`.
+   `t` maps the points of the page onto the user space of the device, and
+   `scale` is the number of pixels of the device for a unit of its user
+   space. The drawing renders the SVG images and the patterns at that
+   resolution. The text, the paths and the images go to the device as
+   commands of the display list, so a `display.List` holds the glyphs, and
+   the clip and the groups of the device apply to the page. A format that
+   draws a page of a book inside a page of its own uses it, such as the
+   text of a shape of a slide in `internal/drawingml`.
 
 The fonts of a book are the fonts of `BookOptions.Fonts`. By default, they
-are the Go fonts of `golang.org/x/image/font/gofont`, as in the tests: Go is
-the serif, the sans-serif, the cursive and the fantasy family, and Go Mono
-the monospace family. okage bundles no font, and ivy reads the fonts of the
-system only when a program asks. `BookOptions.SystemFonts` adds the fonts
-of the system, which `LoadOSFonts` of okage reads once. A program sets it
-for every format with `ivy.Config.SystemFonts` (D23).
+are the database that `Load` of `internal/fontdb` gives for
+`BookOptions.FontFiles` and `BookOptions.SystemFonts`. The metafiles and
+the charts use the same database, so their text looks like the text of the
+book. Without font files, the database holds the Go fonts of
+`golang.org/x/image/font/gofont`, as in the tests: Go is the serif, the
+sans-serif, the cursive and the fantasy family, and Go Mono the monospace
+family. okage bundles no font, and ivy reads the fonts of the system only
+when a program asks. `BookOptions.SystemFonts` adds the fonts of the
+system, which `LoadOSFonts` of okage reads once. A program sets it for
+every format with `ivy.Config.SystemFonts` (D23).
+
+`BookOptions.FontFiles` holds font files that come before the Go fonts. A
+program gives them for every format with `ivy.Config.Fonts`, such as the
+fonts of the module `github.com/xo/ivy/fonts` (D24). The book looks for a
+family in this order:
+
+1. The faces of the `@font-face` rules of the document.
+2. The faces of `FontFiles`.
+3. The faces of `FontFiles` for the substitute of a font of Office that
+   the document names, such as Carlito for Calibri or Liberation Sans for
+   Arial. `Substitute` of `internal/font` holds the table.
+4. The Go fonts.
+5. The fonts of the system, when `SystemFonts` is set.
+
+`internal/fontdb` reads TrueType, OpenType and their collections, and
+WOFF and WOFF2, from each folder of `FontFiles`. It reads at most
+`Limits.MaxObjects` files, of at most `Limits.MaxMemory` bytes each, in
+folders at most `Limits.MaxDepth` deep, and it logs each file that it
+leaves out. It reads the names and the styles of the faces first, and the
+whole file of a face when the text uses the face. The books, the metafiles
+and the charts share the faces of the same `FontFiles`, when its value is
+comparable, as the `embed.FS` of `github.com/xo/ivy/fonts` is. They share
+at most 16 such sets. The tests of `internal/fontdb` check the limits and
+the shared sets.
+
+`book_fonts_test.go` checks that a book with the files of `fonts/` draws
+Calibri with Carlito and Arial with Liberation Sans, and the order of the
+lookup. It reads the files from the folder, because the main module cannot
+import the module of the fonts.
 
 ## The hooks for the later stages
 

@@ -12,9 +12,9 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-16 phases 1 to 4 are done: the document API, the previews and
+On 2026-11-17 phases 1 to 5 are done: the document API, the previews and
 pages of the formats of phase 1, the display list, the fonts, XPS, PDF, the
-layout of HTML and CSS, and the ebooks. The survey of the formats is in
+layout of HTML and CSS, the ebooks, and the Office formats. The survey of the formats is in
 `docs/FORMATS.md`, and the open questions are at the end of `docs/PLAN.md`.
 
 [okage]: https://github.com/xo/okage
@@ -75,8 +75,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 24, and the next question is
-question 5.
+repeat. The next decision has the number 25, and the next question is
+question 6.
 
 ## Hard rules
 
@@ -168,15 +168,29 @@ On 2026-11-16 the repository holds these files:
 | `docs/decisions/` | the decisions, one file each, with an index |
 | `.golangci.yml`, `.github/workflows/test.yml` | the linters and CI |
 | `*.go` in the root | the package `ivy`: the document API of D11, and the tests of the documents, the skills and the imports |
-| `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/` |
+| `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/`. Phase 5 gives the pages of `odf`, `docx`, `xlsx` and `pptx`: the texts and the sheets through the layout, and the slides and the drawings on the display list |
+| `rtf/` | RTF, as RTF 1.9.1 describes it, converted into HTML and CSS for the layout |
 | `xps/` | XPS and OpenXPS, the format of phase 2 |
 | `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3. `pdf/internal/` holds the ports of the crates of hayro (D14, D16, D20) |
 | `epub/`, `html/`, `text/`, `fb2/`, `markdown/`, `mobi/`, `chm/` | the ebooks and the documents of text of phase 4, each with its tests and its `testdata/` |
 | `internal/layout/` | the port of the layout and the drawing of WeasyPrint (D15, D21), and the book that puts a whole ebook on pages |
 | `internal/ebook/`, `internal/memfs/`, `internal/charset/` | the code that the ebooks share: the style sheets, the metadata, the text encodings and the pages, a file system in memory, and the encodings of the WHATWG Encoding Standard |
 | `internal/goldmark/` | the copy of goldmark, for Markdown (D7, D21) |
+| `emf/` | EMF, EMF+ and WMF, with EMZ and WMZ, the first format of phase 5 |
+| `internal/gowemf/`, `internal/metafile/` | the copy of github.com/mgilbir/gowemf (D7, D24), and the playback of a metafile onto the display list, which the Office formats call for an embedded EMF or WMF image |
+| `internal/drawingml/` | the shapes of DrawingML and the slides: the tables of the preset shapes, made from `presetShapeDefinitions.xml` of ECMA-376, which `testdata/ecma` holds with the copyright notice of Ecma (D24), the colors, fills, lines, pictures and text bodies, and the scene that draws a page of fixed positions, with its text through `internal/layout` |
+| `odf/internal/drawpage/` | the pages of the presentations and the drawings of OpenDocument, on the display list |
+| `msdoc/`, `msxls/`, `msppt/` | Word, Excel and PowerPoint 97 to 2003: the text and the sheets on pages, the summary information and its thumbnail, and RC4 encryption (D12, D24) |
+| `vsdx/`, `pub/` | Visio and Publisher: the thumbnail and the properties |
+| `internal/msole/` | the code that the binary Office formats share: the Compound File within the limits, the summary information, the thumbnails in WMF, EMF, DIB, PNG or JPEG, and the password |
+| `csv/` | CSV, TSV and TAB files, as one table on pages |
+| `internal/sheet/`, `internal/numfmt/` | the sheets of a spreadsheet as HTML tables on pages, for `xlsx`, `odf`, `csv` and `msxls`, the sizes of the papers, the widths of the columns and the headers and footers that they share, and the number formats of Excel |
+| `internal/fontdb/` | the font database of a program, from `ivy.Config.Fonts`, the Go fonts and the fonts of the system, which the layout, the metafiles and the charts share (D23, D24) |
+| `internal/chart/` | the charts of DrawingML and OpenDocument: a chart becomes a spec of Vega-Lite, zuzu lays it out, and ivy draws the scene of zuzu onto the display list (D24) |
+| `internal/offcrypto/`, `odf/internal/odfcrypt/` | the encryption of MS-OFFCRYPTO (Agile, Standard, RC4 CryptoAPI and RC4), and the encryption of OpenDocument (D12, D24) |
+| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17) |
-| `internal/display/`, `internal/font/` | the display list and the fonts of D10 |
+| `internal/display/`, `internal/font/` | the display list and the fonts of D10. The layout also reads EMF and WMF, and draws the objects of a format, such as the charts |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
 | `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |
 | `internal/fixture/` | the files that the tests build in memory |
@@ -205,7 +219,7 @@ next to it, at `../okage` and `../magic`. okage must tag the release that
 makes `roxmltree` public (okage D47) and holds the parsers of phase 4 (okage
 D49, okage D50 and okage D51). magic must tag the release that holds the
 decoders of phase 4 (magic D61). Until then, ivy needs the `go.work`. Git
-ignores `go.work`. Make it with `go work init . ./test ../okage ../magic`.
+ignores `go.work`. Make it with `go work init . ./test ./fonts ../okage ../magic`.
 
 These commands must pass before you stage a change to Go code. They cover
 the scalar build, the SIMD build (D9), the race detector (D11) and the test
@@ -218,6 +232,7 @@ go test -race -count=1 ./...
 GOEXPERIMENT=simd go test -count=1 ./...
 golangci-lint run ./...
 (cd test && go vet ./... && go test -count=1 ./... && golangci-lint run ./...)
+(cd fonts && go vet ./... && go test -count=1 ./... && golangci-lint run ./...)
 ```
 
 Before you stage a change to a decoder, run its fuzz test for a minute, such

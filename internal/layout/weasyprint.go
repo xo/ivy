@@ -96,7 +96,7 @@ func NewHTML(root *Element, url string, fetcher *URLFetcher, opts HTMLOptions) *
 // ivy.ErrFormat for a document that cannot be parsed.
 func LoadHTML(src Source, path string, opts HTMLOptions) (*HTML, error) {
 	limits := opts.Limits.WithDefaults()
-	fetcher := &URLFetcher{FS: src.FS, MaxSize: limits.MaxMemory}
+	fetcher := &URLFetcher{FS: src.FS, MaxSize: limits.MaxMemory, Objects: src.Objects}
 	url := pathToURL(path)
 	response, err := fetcher.Fetch(url)
 	if err != nil {

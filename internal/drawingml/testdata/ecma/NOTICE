@@ -1,0 +1,75 @@
+presetShapeDefinitions.xml in this folder is a file of ECMA-376, Office Open
+XML File Formats, Part 1, 5th edition (December 2016). Ecma International
+holds its copyright. ivy keeps the file byte for byte, and it does not change
+it. The package drawingml generates its tables of the preset shapes from it
+(D24).
+
+Source:
+  https://ecma-international.org/publications-and-standards/standards/ecma-376/
+  https://ecma-international.org/wp-content/uploads/ECMA-376-1_5th_edition_december_2016.zip
+  The ZIP holds OfficeOpenXML-DrawingMLGeometries.zip, and that ZIP holds
+  presetShapeDefinitions.xml.
+
+SHA-256:
+  9d0bcad9cf06054785b03762fcfadbf6bab7e54a5f9d69434e34b7fd464d4129  ECMA-376-1_5th_edition_december_2016.zip
+  a8517838a3a60492d267d1ff92e1ebd831adc04584de79a38a5532a68902abf6  OfficeOpenXML-DrawingMLGeometries.zip
+  2f7c868d857c1e3c4b5a6068759fe0e07d77ad58377a6618d1b02ba3507b6939  presetShapeDefinitions.xml
+
+The text of Part 1 does not print a copyright notice. The Ecma text copyright
+policy, version 3 (approved in December 2025), says that the default notice
+below applies to the older standards too. The policy is at
+https://ecma-international.org/wp-content/uploads/Ecma_text_copyright_policy_version_3.pdf
+and its SHA-256 is
+2dcbec958059c8b512b6798ee1f0b8416c33d507a21f5bd9a20c19e68218776f.
+
+The file has these errors that ivy knows of:
+
+1. It holds the shape upDownArrow twice, with the same text. The generator
+   of the package keeps one.
+2. It does not hold the shape upArrow. The generator adds an upArrow that
+   ivy wrote as the mirror image of downArrow.
+3. The text rectangle of pie has t="ir" and r="it". The generator swaps
+   them.
+4. Eight guides of circularArrow, leftCircularArrow and
+   leftRightCircularArrow have one argument too many, such as
+   "+- xH 0 dxB 0". The package skips the extra argument.
+
+The default copyright notice of Ecma, from that policy:
+
+COPYRIGHT NOTICE
+© Ecma International
+
+By obtaining and/or copying this work, you (the licensee) agree that you have
+read, understood, and will comply with the following terms and conditions.
+
+This document may be copied, published and distributed to others, and certain
+derivative works of it may be prepared, copied, published, and distributed, in
+whole or in part, provided that the above copyright notice and this Copyright
+License and Disclaimer are included on all such copies and derivative works.
+The only derivative works that are permissible under this Copyright License
+and Disclaimer are:
+(i)   works which incorporate all or portion of this document for the purpose
+      of providing commentary or explanation (such as an annotated version of
+      the document),
+(ii)  works which incorporate all or portion of this document for the purpose
+      of incorporating features that provide accessibility,
+(iii) translations of this document into languages other than English and
+      into different formats and
+(iv)  works by making use of this specification in standard conformant
+      products by implementing (e.g. by copy and paste wholly or partly) the
+      functionality therein.
+However, the content of this document itself may not be modified in any way,
+including by removing the copyright notice or references to Ecma
+International, except as required to translate it into languages other than
+English or into a different format.
+The official version of an Ecma International document is the English
+language version on the Ecma International website. In the event of
+discrepancies between a translated version and the official version, the
+official version shall govern.
+The limited permissions granted above are perpetual and will not be revoked by
+Ecma International or its successors or assigns.
+This document and the information contained herein is provided on an "AS IS"
+basis and ECMA INTERNATIONAL DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO ANY WARRANTY THAT THE USE OF THE INFORMATION
+HEREIN WILL NOT INFRINGE ANY OWNERSHIP RIGHTS OR ANY IMPLIED WARRANTIES OF
+MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.

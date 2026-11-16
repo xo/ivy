@@ -34,6 +34,7 @@ import (
 	"github.com/xo/okage/webfont"
 
 	"github.com/xo/ivy"
+	ivyfont "github.com/xo/ivy/internal/font"
 )
 
 // FontConfiguration is FontConfiguration in weasyprint/text/fonts.py: the
@@ -53,6 +54,11 @@ type FontConfiguration struct {
 	db     *svg.FontDatabase
 	limits ivy.Limits
 	log    *logger
+	// first is the number of the faces at the start of db that come before
+	// the other faces of the program, and base is the number of the faces
+	// of the program. The faces from base on are the faces of the @font-face
+	// rules.
+	first, base int
 
 	// rules holds the @font-face rules that are loaded, by the key of their
 	// descriptors. It is the folder of the fonts of upstream, whose files
@@ -112,6 +118,12 @@ type FontConfigurationOptions struct {
 	Limits ivy.Limits
 	// Logger receives the log of the fonts, or nil.
 	Logger *slog.Logger
+	// FirstFaces is the number of the faces at the start of db that come
+	// before the other faces of db, such as the fonts of ivy.Config.Fonts.
+	// For a family that font-family names, these faces also give the
+	// substitute of ivy/internal/font.Substitute, such as Carlito for
+	// Calibri, before the other faces of db give the family (D24).
+	FirstFaces int
 
 	// log is the logger of a document, for the configurations that the
 	// package makes.
@@ -138,6 +150,8 @@ func NewFontConfiguration(db *svg.FontDatabase, opts FontConfigurationOptions) *
 		db:           db.Clone(),
 		limits:       opts.Limits.WithDefaults(),
 		log:          log,
+		first:        min(max(opts.FirstFaces, 0), db.Len()),
+		base:         db.Len(),
 		rules:        map[string]bool{},
 		faceRules:    map[svg.FontID]*faceRule{},
 		faces:        map[faceKey]*font.Face{},
@@ -627,7 +641,8 @@ const maxFamilies = 64
 // Port: Fontconfig sorts all the fonts of the system for a pattern. The
 // port takes the best face of each family of font-family, with the query of
 // okage, and then the default serif family, as the font selector of okage
-// does.
+// does. The query looks for each family in the faces in the order of
+// FontConfiguration.query.
 func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
 	key := fontKey(style)
 	if ids, ok := fc.chains[key]; ok {
@@ -651,13 +666,9 @@ func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
 	// Use the default font as fallback.
 	families = append(families, svg.FontFamily{Kind: svg.FontFamilySerif})
 	var ids []svg.FontID
+	query := svg.FontQuery{Weight: weight, Stretch: stretch, Style: fstyle}
 	for _, family := range families {
-		id, ok := fc.db.Query(svg.FontQuery{
-			Families: []svg.FontFamily{family},
-			Weight:   weight,
-			Stretch:  stretch,
-			Style:    fstyle,
-		})
+		id, ok := fc.query(family, query)
 		if ok && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
@@ -671,6 +682,71 @@ func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
 	}
 	fc.chains[key] = ids
 	return ids
+}
+
+// query returns the best face of a family for the weight, the stretch and
+// the style of q. It looks for the family in these faces, in this order:
+//
+//  1. The faces of the @font-face rules of the document.
+//  2. The first faces of the program, FontConfigurationOptions.FirstFaces,
+//     such as the fonts of ivy.Config.Fonts.
+//  3. The first faces of the program again, for the substitute of the family
+//     that ivy/internal/font.Substitute gives, such as Carlito for Calibri.
+//  4. The other faces of the program, such as the Go fonts and the fonts of
+//     the system.
+//
+// A family of the faces of a step hides the same family in the faces of the
+// later steps, as the fonts of @font-face rules do in CSS.
+//
+// Port: Fontconfig matches the names of the families without regard to
+// case, and so does the query. The query of okage matches the case.
+func (fc *FontConfiguration) query(family svg.FontFamily, q svg.FontQuery) (svg.FontID, bool) {
+	name := fc.db.FamilyName(family)
+	if id, ok := fc.queryRange(fc.base, fc.db.Len(), name, q); ok {
+		return id, true
+	}
+	if id, ok := fc.queryRange(0, fc.first, name, q); ok {
+		return id, true
+	}
+	if sub, ok := ivyfont.Substitute(name); ok && family.Kind == svg.FontFamilyNamed {
+		if id, ok := fc.queryRange(0, fc.first, sub, q); ok {
+			return id, true
+		}
+	}
+	return fc.queryRange(fc.first, fc.base, name, q)
+}
+
+// queryRange returns the best face of the family name among the faces from
+// lo to hi of the database, with the query of okage.
+func (fc *FontConfiguration) queryRange(lo, hi int, name string, q svg.FontQuery) (svg.FontID, bool) {
+	var sub *svg.FontDatabase
+	var ids []svg.FontID
+	for id := lo; id < hi; id++ {
+		face, ok := fc.db.Face(svg.FontID(id))
+		if !ok || !slices.ContainsFunc(face.Families, func(f svg.FontFamilyName) bool {
+			return strings.EqualFold(f.Name, name)
+		}) {
+			continue
+		}
+		if sub == nil {
+			sub = svg.NewFontDatabase()
+		}
+		// The copy shares the bytes of the face. It has one family, so that
+		// the query of okage matches it whatever the case.
+		info := *face
+		info.Families = []svg.FontFamilyName{{Name: name, Language: svg.FontLanguageEnglishUnitedStates}}
+		sub.PushFaceInfo(info)
+		ids = append(ids, face.ID)
+	}
+	if sub == nil {
+		return 0, false
+	}
+	q.Families = []svg.FontFamily{{Kind: svg.FontFamilyNamed, Name: name}}
+	i, ok := sub.Query(q)
+	if !ok || int(i) >= len(ids) {
+		return 0, false
+	}
+	return ids[i], true
 }
 
 // face returns the face of go-text of a font, with the variations of a

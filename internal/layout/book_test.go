@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"github.com/xo/okage"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // bookStyle sets a small page, as the style sheet of a format does.
@@ -188,7 +191,7 @@ func TestBookPages(t *testing.T) {
 // its text with a database of its own, which holds the default fonts.
 func TestBookSystemFonts(t *testing.T) {
 	b := NewBook(testBook(1, nil), BookOptions{SystemFonts: true})
-	if b.fc == nil || systemFonts() == defaultFonts() {
+	if b.fc == nil || fontdb.System() == fontdb.Default() {
 		t.Fatal("expected the database of the fonts of the system")
 	}
 	p, err := b.Page(context.Background(), 0)
@@ -197,5 +200,43 @@ func TestBookSystemFonts(t *testing.T) {
 	}
 	if !inked(t, p) {
 		t.Error("expected ink on the page")
+	}
+}
+
+// TestBookDraw checks that Book.Draw sends the glyphs of the text to the
+// device, and that the commands draw the same pixels as Render, at a scale
+// of the device.
+func TestBookDraw(t *testing.T) {
+	b := NewBook(testBook(2, nil), BookOptions{})
+	var l display.List
+	if err := b.Draw(context.Background(), 1, &l, okage.IdentityTransform(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(l.String(), "glyphs ") {
+		t.Errorf("expected the glyphs of the text, got:\n%s", l.String())
+	}
+	if err := b.Draw(context.Background(), 2, &l, okage.IdentityTransform(), 1); !errors.Is(err, ivy.ErrPageRange) {
+		t.Errorf("expected ivy.ErrPageRange past the last page, got %v", err)
+	}
+	// Render at 2 pixels a point, and Draw onto a device that scales its
+	// user space of points by 2.
+	p, err := b.Page(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, h := p.Size()
+	want, _ := okage.NewPixmap(uint32(2*w), uint32(2*h))
+	want.Fill(okage.ColorWhite)
+	if err := p.Render(context.Background(), want, okage.TransformFromScale(2, 2)); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := okage.NewPixmap(uint32(2*w), uint32(2*h))
+	got.Fill(okage.ColorWhite)
+	dev := display.NewOkage(got, okage.TransformFromScale(2, 2))
+	if err := b.Draw(context.Background(), 1, dev, okage.IdentityTransform(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got.Data(), want.Data()) {
+		t.Error("Draw does not draw the pixels of Render")
 	}
 }

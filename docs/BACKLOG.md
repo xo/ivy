@@ -10,7 +10,13 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-None.
+1. Phase 5, from 2026-11-17: `internal/gowemf`, `internal/metafile`,
+   `emf`, `fonts`, `internal/drawingml`, `internal/offcrypto`,
+   `internal/chart`, `rtf`, `csv`, `msdoc`, `msxls`, `msppt`, `vsdx`,
+   `pub`, `internal/msole`, `internal/sheet`, `internal/numfmt`,
+   `odf/internal/drawpage`, `internal/fontdb`, and the changes to `odf`, `docx`, `xlsx`, `pptx`,
+   `internal/ooxml`, `internal/layout` and the root package that D24 needs.
+   In magic: the public reader of Compound Files (D24).
 
 ## Before phases 2 and 3 are pushed
 
@@ -23,6 +29,70 @@ None.
    with `compress/palmdoc`, `compress/huffcdic` and `compress/lzx` (magic
    D61). Then the `go.mod` of ivy requires both releases. Until then `mobi`
    and `chm` build only through the `go.work`. Source: phase 4.
+
+## Left by phase 5
+
+1. Decode the XOR obfuscation of Excel, a weak protection of `.xls` files
+   that needs no password (D12). Source: the encryption of phase 5.
+2. Read an OpenDocument file of old StarOffice whose password hash takes
+   the bytes of windows-1252, or has the fault of SHA-1 for some lengths.
+   `odf` hashes the password as UTF-8. Source: the encryption of phase 5.
+3. Draw the bitwise raster operations of a metafile that combine the
+   source, the brush and the page. They need a device that can read its own
+   pixels. `internal/metafile` draws only the pair SRCAND and SRCPAINT.
+   Source: `internal/metafile`.
+4. Draw the text of EMF+ DrawString, which gowemf reports as not supported,
+   and the text of a metafile that names glyphs by index in a font that ivy
+   replaces. Source: `internal/metafile`.
+5. Draw the end cap of an EMF+ line apart from its start cap, and its custom
+   caps. Source: `internal/metafile`.
+6. Shape the text of complex scripts in a metafile. Bidi mirroring covers
+   brackets only. Source: `internal/metafile`.
+7. Read the lists, the headers and footers, the footnotes, the text boxes
+   and the pictures of a `.doc` file. Source: `msdoc`.
+8. Read the fonts, sizes and colors of the runs of a `.ppt` file, from
+   StyleTextPropAtom, and its pictures, masters and backgrounds. Source:
+   `msppt`.
+9. Read the print areas and the print titles of a `.xls` file, which are
+   NAME records, and its charts and pictures. Source: `msxls`.
+10. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
+    the test module. Source: `msdoc`, `msxls` and `msppt`.
+11. Decode the XOR obfuscation of Word. It gives ErrUnsupported now.
+    Source: `msdoc`.
+12. Lay out a long sheet in parts, so that page 0 does not wait for the
+    whole sheet. A sheet of 20,000 rows takes about 4 seconds before its
+    first page. Source: `internal/sheet`.
+13. Let the text of a cell overflow to the left, or to both sides, as Excel
+    does for text that is aligned right or centered. The layout overflows to
+    the right only. Source: `internal/sheet`.
+14. Read the conditional formats, the comments and the shapes of `xlsx` and
+    of the spreadsheets of `odf`, and print in the order over then down.
+    Source: `xlsx` and `odf`.
+15. Read the dates of a CSV file. An option for the separator of `csv`
+    changes the API, so it is a decision first (D11). Source: `csv`.
+16. Draw the effects of DrawingML other than the outer shadow, the blur of
+    a shadow, and a compound line as more than one line. Source:
+    `internal/drawingml`.
+17. Read `fo:clip` of the pictures of OpenDocument, the objects that only an
+    SVM picture shows, and the fields of the header and the footer of a
+    master page. Source: `odf/internal/drawpage`.
+18. Test the SmartArt drawings and a `.pptx` file that a password protects.
+    Source: `pptx`.
+19. Lay out the custom tab stops of Word, such as a right tab with dot
+    leaders. The layout has only `tab-size`. Source: `docx`.
+20. Read the vertical merges of cells and the nested tables of RTF, and
+    apply its style sheet. Source: `rtf`.
+21. Number the headings of OpenDocument by their outline, and draw the
+    shapes in a text. Source: `odf`.
+22. Draw the SmartArt and the canvases of a `.docx` file. Source: `docx`.
+23. Push the body of a page below a header that is taller than its space.
+    The converters estimate one line for each paragraph of the header.
+    Source: `docx`, `odf` and `rtf`.
+24. Lay out the text body of a shape as one `layout.Document` instead of a
+    `layout.Book`, if that is cheaper. Source: `internal/drawingml`.
+25. Keep the font database of a document for its charts. `fontdb.Of` reads
+    an `fs.FS` that is not comparable again for each chart. Source:
+    `internal/fontdb`.
 
 ## Left by phase 4
 
@@ -156,6 +226,34 @@ repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
 6. A spread mode of a gradient that paints nothing before the first stop
    and after the last stop, for the gradients of the layout. Source: stage
    D of the layout.
+7. Make the antialiased `FillPath` and `StrokePath` safe with huge
+   coordinates. With points near 1e12 device pixels, they panic with "slice
+   bounds out of range" in `subPixmapMut.slice16AtXY`. A quadrilateral with
+   points near 1.5e13 under `TransformFromScale(0.09, 0.09)` on a pixmap of
+   32 by 32 shows it. `internal/metafile` leaves out such paths. Source:
+   the fuzz test of `emf`.
+
+## Work for zuzu
+
+Each item is a request to zuzu, which draws the charts of ivy (D24). Do not
+edit zuzu from this repository. Ask a maintainer.
+
+1. Keep the anchor of the title of a chart of Vega-Lite. The compiler sets
+   it to "start" (`vegalite/compile.go`), and ivy centers the title in the
+   scene again. Source: `internal/chart`.
+2. Put the first value of a band scale on y at the top, as vega-lite.js
+   does. ivy depends on the current order for horizontal bars, so a change
+   in zuzu must come with a change in ivy. Source: `internal/chart`.
+3. Keep the `opacity` that a point mark sets. zuzu gives every point mark
+   an opacity of 0.7 (`vegalite/marks.go`). Source: `internal/chart`.
+4. Support `labelExpr` for axes and legends, text with theta and radius,
+   positions from `expr`, and an `innerRadius` that is not a number.
+   Source: `internal/chart`.
+5. Give a public way to draw a scene onto another device, such as a walker
+   that turns a scene into paths. ivy now writes the scene as SVG and reads
+   it again with okage. Source: `internal/chart`.
+6. Measure text with the fonts that draw it, which `WithFonts` plans, and
+   give one switch for a plain look. Source: `internal/chart`.
 
 ## Work for iv
 
@@ -175,6 +273,9 @@ repository. Ask a maintainer or the `iv` peer.
 5. Replace the decoders of iv that run `ebook-convert` or use `blitz` with
    the packages `epub`, `mobi`, `fb2`, `chm`, `html`, `text` and `markdown`
    of ivy. Source: phase 4.
+6. Replace the decoders of iv that run `soffice` with the packages of
+   phase 5: `docx`, `xlsx`, `pptx`, `odf`, `rtf`, `csv`, `msdoc`, `msxls`,
+   `msppt`, `vsdx`, `pub` and `emf`. Source: phase 5.
 
 ## Work for magic
 

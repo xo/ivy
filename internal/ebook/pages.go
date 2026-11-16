@@ -37,7 +37,12 @@ func (p *Pages) Book(ctx context.Context, src Source, cfg ivy.Config) (*layout.B
 		p.err = err
 		return nil, err
 	}
-	p.book = layout.NewBook(s, layout.BookOptions{Limits: cfg.Limits, Logger: cfg.Logger, SystemFonts: cfg.SystemFonts})
+	p.book = layout.NewBook(s, layout.BookOptions{
+		Limits:      cfg.Limits,
+		Logger:      cfg.Logger,
+		FontFiles:   cfg.Fonts,
+		SystemFonts: cfg.SystemFonts,
+	})
 	return p.book, nil
 }
 
