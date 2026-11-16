@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 
+	"golang.org/x/crypto/argon2"
 	// ODF 1.1 encrypts with Blowfish, which the maintainers approved (D24).
 	"golang.org/x/crypto/blowfish" //nolint:staticcheck // the format needs it
 
@@ -26,8 +27,8 @@ import (
 const checksumLen = 1024
 
 // Keyring decrypts the entries of one file with one password. It keeps the
-// key of each salt, because PBKDF2 takes time, and each entry can have a
-// salt of its own. It is safe for concurrent use.
+// key of each salt, because PBKDF2 and Argon2id take time, and each entry
+// can have a salt of its own. It is safe for concurrent use.
 type Keyring struct {
 	password string
 
@@ -40,25 +41,13 @@ func NewKeyring(password string) *Keyring {
 	return &Keyring{password: password, keys: make(map[string][]byte)}
 }
 
-// Supported returns an error that wraps ivy.ErrUnsupported if the package
-// cannot decrypt the entry, such as for the key derivation Argon2id.
-func (enc *Encryption) Supported() error {
-	if enc.Derivation == Argon2id {
-		return fmt.Errorf("key derivation argon2id: %w", ivy.ErrUnsupported)
-	}
-	return nil
-}
-
 // Decrypt decrypts the bytes data of an entry, makes sure that the
 // checksum matches, and inflates the result. It returns an error that
 // wraps ivy.ErrPassword if the password is empty or wrong, and one that
 // wraps ivy.ErrLimit if the entry is larger than lim.MaxMemory.
 func (kr *Keyring) Decrypt(ctx context.Context, enc *Encryption, data []byte, lim ivy.Limits) ([]byte, error) {
-	if err := enc.Supported(); err != nil {
-		return nil, err
-	}
 	lim = lim.WithDefaults()
-	key, err := kr.key(ctx, enc)
+	key, err := kr.key(ctx, enc, lim)
 	if err != nil {
 		return nil, err
 	}
@@ -96,12 +85,13 @@ func (kr *Keyring) Decrypt(ctx context.Context, enc *Encryption, data []byte, li
 
 // key derives the key of enc from the password, or returns the key that the
 // keyring derived before for the same parameters.
-func (kr *Keyring) key(ctx context.Context, enc *Encryption) ([]byte, error) {
+func (kr *Keyring) key(ctx context.Context, enc *Encryption, lim ivy.Limits) ([]byte, error) {
 	if kr.password == "" {
 		return nil, fmt.Errorf("odf key: %w", ivy.ErrPassword)
 	}
-	id := strconv.FormatBool(enc.StartSHA256) + "\x00" + strconv.Itoa(enc.Iterations) + "\x00" +
-		strconv.Itoa(enc.KeySize) + "\x00" + string(enc.Salt)
+	id := strconv.FormatBool(enc.StartSHA256) + "\x00" + strconv.Itoa(int(enc.Derivation)) + "\x00" +
+		strconv.Itoa(enc.Iterations) + "\x00" + strconv.FormatUint(uint64(enc.Memory), 10) + "\x00" +
+		strconv.Itoa(int(enc.Lanes)) + "\x00" + strconv.Itoa(enc.KeySize) + "\x00" + string(enc.Salt)
 	kr.mu.Lock()
 	key, ok := kr.keys[id]
 	kr.mu.Unlock()
@@ -122,9 +112,19 @@ func (kr *Keyring) key(ctx context.Context, enc *Encryption) ([]byte, error) {
 	if enc.KeySize < 1 || enc.KeySize > 64 {
 		return nil, fmt.Errorf("odf key of %d bytes: %w", enc.KeySize, ivy.ErrFormat)
 	}
-	key, err := pbkdf2.Key(sha1.New, string(start), enc.Salt, enc.Iterations, enc.KeySize)
-	if err != nil {
-		return nil, fmt.Errorf("odf key: %w: %w", ivy.ErrFormat, err)
+	switch enc.Derivation {
+	case Argon2id:
+		// The file sets the memory of Argon2id, so MaxMemory bounds it.
+		if int64(enc.Memory)*1024 > lim.MaxMemory {
+			return nil, fmt.Errorf("argon2 memory of %d KiB: %w", enc.Memory, ivy.ErrLimit)
+		}
+		key = argon2.IDKey(start, enc.Salt, uint32(enc.Iterations), enc.Memory, enc.Lanes, uint32(enc.KeySize))
+	default:
+		var err error
+		key, err = pbkdf2.Key(sha1.New, string(start), enc.Salt, enc.Iterations, enc.KeySize)
+		if err != nil {
+			return nil, fmt.Errorf("odf key: %w: %w", ivy.ErrFormat, err)
+		}
 	}
 	kr.mu.Lock()
 	kr.keys[id] = key
@@ -176,7 +176,12 @@ func decrypt(enc *Encryption, key, data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("aes gcm iv of %d bytes: %w", len(enc.IV), ivy.ErrFormat)
 		}
-		plain, err := gcm.Open(nil, enc.IV, data, nil)
+		// XML Encryption 1.1 puts the IV before the cipher text of AES-GCM,
+		// and LibreOffice writes the IV of the manifest there too.
+		if !bytes.HasPrefix(data, enc.IV) {
+			return nil, fmt.Errorf("aes gcm data without its iv: %w", ivy.ErrFormat)
+		}
+		plain, err := gcm.Open(nil, enc.IV, data[len(enc.IV):], nil)
 		if err != nil {
 			return nil, fmt.Errorf("aes gcm: %w", ivy.ErrPassword)
 		}

@@ -153,7 +153,9 @@ func encryptODFEntry(enc ODFEncryption, e Entry) ([]byte, string) {
 		if err != nil {
 			panic(err)
 		}
-		data = gcm.Seal(nil, iv, plain, nil)
+		// XML Encryption 1.1 puts the IV before the cipher text, as
+		// LibreOffice does.
+		data = gcm.Seal(append([]byte{}, iv...), iv, plain, nil)
 		meta = fmt.Sprintf(`  <manifest:encryption-data>
    <manifest:algorithm manifest:algorithm-name="http://www.w3.org/2009/xmlenc11#aes256-gcm" manifest:initialisation-vector="%s"/>
    <manifest:start-key-generation manifest:start-key-generation-name="http://www.w3.org/2001/04/xmlenc#sha256" manifest:key-size="32"/>

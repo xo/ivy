@@ -302,13 +302,12 @@ Phase 5 delivered these packages, on 2026-11-17:
 | `internal/offcrypto`, `odf/internal/odfcrypt` | the encryption of MS-OFFCRYPTO and of OpenDocument |
 | `internal/msole`, `internal/fontdb` | the code of the binary formats, and the font database of a program |
 
-magic holds the public reader of Compound Files, `magic/cfb` (magic D62,
-which waits for the maintainers). The layout reads EMF and WMF, draws the
+magic holds the public reader of Compound Files, `magic/cfb` (magic D62).
+The layout reads EMF and WMF, draws the
 objects of a format such as a chart, and draws a page of a book onto a
 device. The test module compares the pages of each kind with LibreOffice.
 The work that is left is under "Left by phase 5" in `BACKLOG.md`. An
-OpenDocument file that LibreOffice encrypts with Argon2id waits for
-question 5.
+OpenDocument file that LibreOffice encrypts with Argon2id opens (D25).
 
 ### Phase 6. DjVu (1 to 2 months)
 
@@ -330,8 +329,8 @@ format of each kind before the maintainers commit to phases 3 to 5.
 
 A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
-decisions were consolidated (D4). D22 answers question 3 and D23 answers
-question 4. The next question is question 6.
+decisions were consolidated (D4). D22 answers question 3, D23 answers
+question 4, and D25 answers question 5. The next question is question 6.
 
 ### Question 1. Is a build with TinyGo a goal that CI tests?
 
@@ -340,12 +339,3 @@ which builds with TinyGo (D7), so the largest obstacle is gone. A goal in CI
 also forbids `reflect` and `encoding/json` in the packages that a user
 imports, and each outside package must build with TinyGo. No phase waits for
 the answer.
-
-### Question 5. Can ivy use golang.org/x/crypto/argon2?
-
-LibreOffice 26.8 writes ODF 1.4 by default, and it encrypts the whole
-package with AES-256-GCM and a key from Argon2id. D12 lists Argon2id for
-OpenDocument. D24 approves `golang.org/x/crypto` for Blowfish only, and the
-standard library has no Argon2. `odf` reads the rest of such a file, and it
-returns `ErrUnsupported` for it. `golang.org/x/crypto/argon2` is in the same
-module, under the same license. Can ivy use it?

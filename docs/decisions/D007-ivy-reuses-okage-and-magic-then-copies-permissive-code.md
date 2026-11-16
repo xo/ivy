@@ -59,7 +59,7 @@ okage requires each one already, and okage D6 approved it for okage, except
 | Package | ivy uses it for | Approved |
 | --- | --- | --- |
 | `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic`, the BMP, TIFF and WebP decoders of `internal/layout`, and the Go fonts, which the layout uses when a program gives no fonts | 2026-11-16 |
-| `golang.org/x/crypto` | Blowfish, for the encryption of OpenDocument before ODF 1.2 (D24) | 2026-11-17 |
+| `golang.org/x/crypto` | Blowfish, for the encryption of OpenDocument before ODF 1.2 (D24), and Argon2id, for the encryption of ODF 1.4 (D25) | 2026-11-17 |
 | `golang.org/x/text` | the encodings of the WHATWG Encoding Standard in `internal/charset`, such as windows-1251, KOI8-R and Shift_JIS | 2026-11-17 |
 | `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout` | 2026-11-16 |
 

@@ -20,9 +20,9 @@
 //
 // A file that a password protects opens with the password of ivy.Config, or
 // with the function PasswordFunc of ivy.Config (D12). The package reads
-// Blowfish, the cipher of OpenOffice, and AES with PBKDF2, the cipher of ODF
-// 1.2 and 1.3. It does not read Argon2id, the key derivation that
-// LibreOffice writes by default for ODF 1.4.
+// Blowfish, the cipher of OpenOffice, AES with PBKDF2, the cipher of ODF 1.2
+// and 1.3, and AES-GCM with Argon2id, which LibreOffice writes by default
+// for ODF 1.4 (D25).
 package odf
 
 import (
@@ -239,9 +239,6 @@ func (d *Document) probe() (*zip.File, *odfcrypt.Encryption, error) {
 	}
 	if best == nil {
 		return nil, nil, fmt.Errorf("odf: the manifest encrypts no entry of the file: %w", ivy.ErrFormat)
-	}
-	if err := enc.Supported(); err != nil {
-		return nil, nil, fmt.Errorf("opening odf: %w", err)
 	}
 	return best, enc, nil
 }

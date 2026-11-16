@@ -165,18 +165,29 @@ func TestEncryptedLibreOffice(t *testing.T) {
 }
 
 // TestEncryptedArgon2id opens the file that LibreOffice encrypts by
-// default for ODF 1.4. It does not ask for a password that it cannot use.
+// default for ODF 1.4, with AES-GCM and a key from Argon2id (D25).
 func TestEncryptedArgon2id(t *testing.T) {
 	buf, err := os.ReadFile(filepath.Join("testdata", "encrypted_argon2id.odt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ivy.Config{PasswordFunc: func(context.Context, int) (string, error) {
-		t.Error("expected no call of PasswordFunc")
+	if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: "wrong"})); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ivy.ErrPassword, got: %v", err)
+	}
+	attempts := 0
+	cfg := ivy.Config{PasswordFunc: func(_ context.Context, attempt int) (string, error) {
+		attempts = attempt
 		return "secret", nil
 	}}
-	if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg)); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ivy.ErrUnsupported, got: %v", err)
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || d.Mime() != "application/vnd.oasis.opendocument.text" {
+		t.Errorf("expected a text after one attempt, got: %d, %q", attempts, d.Mime())
+	}
+	if n, err := d.PageCount(t.Context()); err != nil || n != 1 {
+		t.Errorf("expected 1 page, got: %d, %v", n, err)
 	}
 }
 

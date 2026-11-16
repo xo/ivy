@@ -5,12 +5,9 @@
 //   - The ciphers Blowfish in the mode CFB, AES in the mode CBC, and AES in
 //     the mode GCM.
 //   - The start key, the SHA-1 or the SHA-256 of the password.
-//   - The key derivation PBKDF2 with HMAC-SHA1.
+//   - The key derivation PBKDF2 with HMAC-SHA1, and Argon2id, which ODF 1.4
+//     adds and LibreOffice writes by default (D25).
 //   - The checksum of the first 1024 bytes, with SHA-1 or SHA-256.
-//
-// The key derivation Argon2id, which LibreOffice writes by default since
-// ODF 1.4, waits for a decision of the maintainers. An entry that uses it
-// returns ivy.ErrUnsupported.
 package odfcrypt
 
 import (
@@ -30,6 +27,35 @@ import (
 // PackageName is the entry that holds the whole document, encrypted, when
 // the file encrypts the whole package. LibreOffice writes it for ODF 1.4.
 const PackageName = "encrypted-package"
+
+// MaxArgon2Passes is the largest number of passes of Argon2id that the
+// package runs. LibreOffice writes 3. The memory of Argon2id is bounded by
+// ivy.Limits.MaxMemory when the key is derived.
+const MaxArgon2Passes = 64
+
+// parseArgon2 reads the parameters of Argon2id from the element
+// key-derivation: the passes, the memory in KiB and the lanes. ODF 1.4 puts
+// them in the namespace of the manifest, and LibreOffice in its own
+// namespace loext, with the same local names.
+func parseArgon2(n roxmltree.Node, enc *Encryption) error {
+	passes, err := strconv.Atoi(attr(n, "argon2-iterations"))
+	if err != nil || passes < 1 {
+		return fmt.Errorf("argon2 iterations %q: %w", attr(n, "argon2-iterations"), ivy.ErrFormat)
+	}
+	if passes > MaxArgon2Passes {
+		return fmt.Errorf("argon2 iterations %d: %w", passes, ivy.ErrLimit)
+	}
+	memory, err := strconv.ParseUint(attr(n, "argon2-memory"), 10, 32)
+	if err != nil || memory < 8 {
+		return fmt.Errorf("argon2 memory %q: %w", attr(n, "argon2-memory"), ivy.ErrFormat)
+	}
+	lanes, err := strconv.ParseUint(attr(n, "argon2-lanes"), 10, 8)
+	if err != nil || lanes < 1 {
+		return fmt.Errorf("argon2 lanes %q: %w", attr(n, "argon2-lanes"), ivy.ErrFormat)
+	}
+	enc.Iterations, enc.Memory, enc.Lanes = passes, uint32(memory), uint8(lanes)
+	return nil
+}
 
 // MaxIterations is the largest iteration count of PBKDF2 that the package
 // accepts. LibreOffice writes 100000. The context bounds the time between
@@ -96,7 +122,8 @@ type Derivation int
 const (
 	// PBKDF2 is PBKDF2 with HMAC-SHA1.
 	PBKDF2 Derivation = iota + 1
-	// Argon2id is Argon2id, which the package does not read.
+	// Argon2id is Argon2id (RFC 9106), which ODF 1.4 adds and which
+	// LibreOffice writes by default (D25).
 	Argon2id
 )
 
@@ -123,10 +150,15 @@ type Encryption struct {
 	// and false for SHA-1.
 	StartSHA256 bool
 	Derivation  Derivation
-	Iterations  int
-	Salt        []byte
-	Checksum    Checksum
-	Sum         []byte
+	// Iterations is the iteration count of PBKDF2, or the number of passes
+	// of Argon2id.
+	Iterations int
+	// Memory is the memory of Argon2id, in KiB, and Lanes its parallelism.
+	Memory   uint32
+	Lanes    uint8
+	Salt     []byte
+	Checksum Checksum
+	Sum      []byte
 }
 
 // The names of the manifest (ODF 1.2 part 3, section 4).
@@ -157,6 +189,7 @@ var (
 	derivations = map[string]Derivation{
 		"PBKDF2": PBKDF2,
 		"urn:org:documentfoundation:names:experimental:office:manifest:argon2id": Argon2id,
+		"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0#argon2id":            Argon2id,
 	}
 )
 
@@ -291,6 +324,11 @@ func parseEncryption(n roxmltree.Node) (*Encryption, error) {
 				}
 				if enc.Iterations > MaxIterations {
 					return nil, fmt.Errorf("iteration count %d: %w", enc.Iterations, ivy.ErrLimit)
+				}
+			}
+			if d == Argon2id {
+				if err := parseArgon2(c, enc); err != nil {
+					return nil, err
 				}
 			}
 			if enc.Salt, err = base64Attr(c, "salt"); err != nil {

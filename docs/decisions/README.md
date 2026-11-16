@@ -44,3 +44,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D22 | [A program can give the folder of a Markdown or HTML file](D022-a-program-can-give-the-folder-of-a-markdown-or-html-file.md) | Decided |
 | D23 | [A program can ask for the fonts of the system](D023-a-program-can-ask-for-the-fonts-of-the-system.md) | Decided |
 | D24 | [Phase 5 copies gowemf and draws charts with zuzu](D024-phase-5-copies-gowemf-and-draws-charts-with-zuzu.md) | Decided |
+| D25 | [ivy derives the keys of OpenDocument with Argon2id](D025-ivy-derives-the-keys-of-opendocument-with-argon2id.md) | Decided |

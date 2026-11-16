@@ -105,8 +105,8 @@ func TestLibreOffice(t *testing.T) {
 	}
 }
 
-// TestArgon2id reads the manifest that LibreOffice writes by default for
-// ODF 1.4, and makes sure that its key derivation is not supported.
+// TestArgon2id decrypts the package that LibreOffice encrypts by default
+// for ODF 1.4, with AES-GCM and a key from Argon2id.
 func TestArgon2id(t *testing.T) {
 	entries := readZip(t, readFile(t, "encrypted_argon2id.odt"))
 	m, err := ParseManifest(entries["META-INF/manifest.xml"], ivy.Limits{})
@@ -117,8 +117,21 @@ func TestArgon2id(t *testing.T) {
 	if enc == nil || enc.Algorithm != AESGCM || enc.Derivation != Argon2id {
 		t.Fatalf("expected the package encrypted with aes gcm and argon2id, got: %+v", enc)
 	}
-	if _, err := NewKeyring("secret").Decrypt(t.Context(), enc, entries[PackageName], ivy.Limits{}); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ivy.ErrUnsupported, got: %v", err)
+	if enc.Iterations != 3 || enc.Memory != 65536 || enc.Lanes != 4 {
+		t.Errorf("expected 3 passes, 65536 KiB and 4 lanes, got: %d, %d, %d", enc.Iterations, enc.Memory, enc.Lanes)
+	}
+	plain, err := NewKeyring("secret").Decrypt(t.Context(), enc, entries[PackageName], ivy.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner := readZip(t, plain); inner["content.xml"] == nil {
+		t.Error("expected content.xml in the package")
+	}
+	if _, err := NewKeyring("wrong").Decrypt(t.Context(), enc, entries[PackageName], ivy.Limits{}); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ivy.ErrPassword, got: %v", err)
+	}
+	if _, err := NewKeyring("secret").Decrypt(t.Context(), enc, entries[PackageName], ivy.Limits{MaxMemory: 1 << 20}); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ivy.ErrLimit for 64 MiB of memory, got: %v", err)
 	}
 }
 
