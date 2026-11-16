@@ -59,7 +59,7 @@ the program that made the document.
 
 ## Status
 
-Phases 1, 2 and 3 are done. These packages open a file and give its previews,
+Phases 1 to 4 are done. These packages open a file and give its previews,
 its pages or both:
 
 | Package | Formats |
@@ -74,6 +74,13 @@ its pages or both:
 | `github.com/xo/ivy/psd` | Photoshop: the image and the thumbnail |
 | `github.com/xo/ivy/xps` | XPS and OpenXPS: the pages, the thumbnail, and the title and the authors |
 | `github.com/xo/ivy/pdf` | PDF, with its password, and Illustrator compatible with PDF: the pages, the thumbnails, and the document information |
+| `github.com/xo/ivy/epub` | EPUB 2, EPUB 3 and kepub: the pages, the cover, and the title and the authors |
+| `github.com/xo/ivy/mobi` | MOBI, PRC, AZW, AZW3 and AZW4: the pages, the cover, and the title and the authors |
+| `github.com/xo/ivy/fb2` | FictionBook 2, also in a zip archive: the pages, the cover, and the title and the authors |
+| `github.com/xo/ivy/chm` | Compiled HTML Help: the pages, the title and the language |
+| `github.com/xo/ivy/html` | HTML and HTMLZ: the pages, the cover of an HTMLZ file, and the title |
+| `github.com/xo/ivy/text` | Text and TXTZ: the pages, the cover of a TXTZ file, and the metadata of a TXTZ file |
+| `github.com/xo/ivy/markdown` | Markdown, with the extensions of GitHub: the pages and the title |
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
 

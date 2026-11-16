@@ -51,3 +51,4 @@ linters:
       # The copies of D7 keep the style of their project
       # (docs/UPSTREAM.md).
       - psd/internal/oovpsd
+      - internal/goldmark

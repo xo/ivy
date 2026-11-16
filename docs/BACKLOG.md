@@ -10,7 +10,10 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-None.
+1. Phase 4, from 2026-11-16: `internal/layout`, `internal/goldmark`, `epub`,
+   `html`, `text`, `fb2`, `markdown`, `mobi` and `chm`. In okage: the parser
+   of HTML, the CSS package and the public readers of web fonts. In magic: the
+   decoders of PalmDoc, HUFF/CDIC and LZX (D21).
 
 ## Before phases 2 and 3 are pushed
 
@@ -19,6 +22,52 @@ None.
    `go.work` that points at a checkout of okage is no longer needed. Until
    then CI fails, because okage v0.9.0 has neither package. Source: phases 2
    and 3.
+2. okage tags a release with okage D49, okage D50 and okage D51, and magic tags a release
+   with `compress/palmdoc`, `compress/huffcdic` and `compress/lzx` (magic
+   D61). Then the `go.mod` of ivy requires both releases. Until then `mobi`
+   and `chm` build only through the `go.work`. Source: phase 4.
+
+## Left by phase 4
+
+1. Replace the scan of tags in `internal/ebook` with the parser of HTML of
+   okage, which okage holds since okage D49. The scan finds the title and the
+   first image of a page in linear time. It is not a parser, but a second way
+   to read HTML must not stay (D7). Source: phase 4.
+2. Lay out an EPUB of fixed layout, with `rendition:layout` set to
+   `pre-paginated` and a viewport on each page. Source: the package `epub`.
+3. Return the publisher and the identifier of a book. `internal/ebook` reads
+   them, and `ivy.Info` has no field for them. A new field changes the API,
+   so it is a decision first (D11). Source: the package `epub`.
+4. Read FictionBook files in KOI8-R and the other encodings of Cyrillic.
+   Source: the package `fb2`.
+5. Decode the code pages of older documents: windows-1250 to windows-1258
+   other than 1252, shift_jis, gbk, big5 and euc-kr. A CHM file names its
+   code page, and nothing in ivy or okage decodes most of them. The tables
+   can come from golang.org/x/text, which needs the approval of the
+   maintainers (D7), or they can go in okage. Source: the package `chm`.
+6. Read the NCX and the guide of a MOBI file, and name a font resource by its
+   real type. Source: the package `mobi`.
+7. Bound the time of the selector matcher of okage. A `:has()` selector
+   costs time in the square of the number of elements. Source: stage A of
+   the layout.
+8. Number the pages of a book across its documents. In a `layout.Book`,
+   `counter(page)` and `counter(pages)` restart in each document, because
+   each document of the spine is one document of WeasyPrint. Source: stage
+   D of the layout.
+9. Give a page that a program asks for early the fixed boxes and the
+   target counters of the later pages. `Document.Page` lays out only the
+   pages up to the one that a program asks for. Source: stage C of the
+   layout.
+10. Find why `test_page_counters` breaks the text of a margin box into three
+    lines where WeasyPrint gives one. Source: stage C of the layout.
+11. Draw the color glyphs of SVG, PNG and COLR, and the bitmap glyphs of a
+    font. `internal/font` gives the outlines of the glyphs only. Source:
+    stage D of the layout.
+12. Read the profiles of colors when the layout draws. DeviceCMYK, Lab and
+    `@color-profile` become sRGB without a profile. Source: stage D of the
+    layout.
+13. Give the pages of every PDF of an AZW4 file. `mobi` gives the pages of
+    the first one only. Source: the package `mobi`.
 
 ## Left by phase 3
 
@@ -74,8 +123,8 @@ None.
 6. Add oracles to the test module for EPS, with Ghostscript, and for the
    previews of OpenDocument, with LibreOffice (D13). Source: phase 1.
 7. Add each package of `docs/upstream/upstreams.tsv` that a phase copies or
-   ports, with its base commit, before its first commit: hayro, moxcms and
-   WeasyPrint (D14, D15), mscfb, and the codecs of dejapdf. Source: D7.
+   ports, with its base commit, before its first commit: mscfb, and the
+   codecs of dejapdf. Source: D7.
 
 ## Sources to examine
 
@@ -104,15 +153,19 @@ repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
    as PDF and XPS need. Source: `docs/FORMATS.md`.
 3. Add a note to okage `docs/FORMATS.md` that the PDF reader, EPS and
    Illustrator go to ivy, and that okage draws their pages. Source: D14.
-4. Export as public packages the parts of okage that ivy reuses: the CSS
-   parser in `internal/simplecss`,
-   kurbo in `internal/kurbo`, WOFF, WOFF2 and EOT in `internal/webfont`, and
-   brotli in `internal/brotli`. Source: D7.
-5. Extend `html` with a parser of the HTML of web pages and ebooks, as okage
-   D38 allows, with tinyhtml5 (MIT) as the reference. Source: D15.
-6. Extend the CSS parser with what the layout of D15 needs, such as `@page`,
-   `@media`, `@font-face` and the selectors of CSS 3, with tinycss2 and
-   cssselect2 (BSD-3-Clause) as the reference. Source: D15.
+4. Give the text API of okage what the layout needs: the advance and the
+   byte offset of each cluster, the features, the language and the spacing of
+   a run, the parsed face and its metrics, and the map from a weight to the
+   axes of a variable font. The layout shapes with go-text itself, and it
+   parses each face a second time. Source: stage B of the layout.
+5. Let `svg` read the width, the height and the viewBox of an SVG image
+   before it parses the image, take an element that is already parsed, and
+   accept an image of size zero. The layout reads the size again with
+   `roxmltree`, and it writes an inline `<svg>` back to XML. Source: stage B
+   of the layout.
+6. A spread mode of a gradient that paints nothing before the first stop
+   and after the last stop, for the gradients of the layout. Source: stage
+   D of the layout.
 
 ## Work for iv
 
@@ -129,6 +182,9 @@ repository. Ask a maintainer or the `iv` peer.
    `xps` of ivy. Source: phase 2.
 4. Replace the decoders of iv that read PDF with libvips and `pdftoppm` with
    the package `pdf` of ivy. Source: phase 3.
+5. Replace the decoders of iv that run `ebook-convert` or use `blitz` with
+   the packages `epub`, `mobi`, `fb2`, `chm`, `html`, `text` and `markdown`
+   of ivy. Source: phase 4.
 
 ## Work for magic
 
@@ -139,5 +195,5 @@ Each item is a request to magic (D8).
    other Compound Files, AZW3 from MOBI, CBZ from zip, APK and IPA from zip,
    and Krita and OpenRaster from zip. Source: iv, which tells several of them
    apart by their extension today.
-2. The decoders of LZX, LZFSE, ADC, PalmDoc and HUFF/CDIC in
-   `magic/compress`. Source: D8.
+2. The decoders of LZFSE and ADC in `magic/compress`. magic holds the
+   decoders of LZX, PalmDoc and HUFF/CDIC since magic D61. Source: D8.

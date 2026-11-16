@@ -12,11 +12,10 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-16 phases 1, 2 and 3 are done: the document API, the previews and
-pages of the formats of phase 1, the display list, the fonts, XPS, and PDF.
-The survey of the
-formats is in `docs/FORMATS.md`, and the open questions are at the end of
-`docs/PLAN.md`.
+On 2026-11-16 phases 1 to 4 are done: the document API, the previews and
+pages of the formats of phase 1, the display list, the fonts, XPS, PDF, the
+layout of HTML and CSS, and the ebooks. The survey of the formats is in
+`docs/FORMATS.md`, and the open questions are at the end of `docs/PLAN.md`.
 
 [okage]: https://github.com/xo/okage
 [magic]: https://github.com/xo/magic
@@ -76,8 +75,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 21, and the next question is
-question 3.
+repeat. The next decision has the number 22, and the next question is
+question 5.
 
 ## Hard rules
 
@@ -172,6 +171,10 @@ On 2026-11-16 the repository holds these files:
 | `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/` |
 | `xps/` | XPS and OpenXPS, the format of phase 2 |
 | `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3. `pdf/internal/` holds the ports of the crates of hayro (D14, D16, D20) |
+| `epub/`, `html/`, `text/`, `fb2/`, `markdown/`, `mobi/`, `chm/` | the ebooks and the documents of text of phase 4, each with its tests and its `testdata/` |
+| `internal/layout/` | the port of the layout and the drawing of WeasyPrint (D15, D21), and the book that puts a whole ebook on pages |
+| `internal/ebook/`, `internal/memfs/` | the code that the ebooks share: the style sheets, the metadata, the text encodings and the pages, and a file system in memory |
+| `internal/goldmark/` | the copy of goldmark, for Markdown (D7, D21) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10 |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
@@ -197,9 +200,12 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-ivy builds with a `go.work` that points at a checkout of okage next to it, at
-`../okage`, until okage tags the release that makes `roxmltree` public (okage
-D47). Git ignores `go.work`. Make it with `go work init . ./test ../okage`.
+ivy builds with a `go.work` that points at the checkouts of okage and magic
+next to it, at `../okage` and `../magic`. okage must tag the release that
+makes `roxmltree` public (okage D47) and holds the parsers of phase 4 (okage
+D49, okage D50 and okage D51). magic must tag the release that holds the
+decoders of phase 4 (magic D61). Until then, ivy needs the `go.work`. Git
+ignores `go.work`. Make it with `go work init . ./test ../okage ../magic`.
 
 These commands must pass before you stage a change to Go code. They cover
 the scalar build, the SIMD build (D9), the race detector (D11) and the test

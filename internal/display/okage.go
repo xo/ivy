@@ -31,6 +31,8 @@ type OkageDevice struct {
 	images sync.Map // image.Image -> *okage.Pixmap
 	masks  map[maskKey]*okage.Mask
 	free   []*okage.Pixmap
+	// aliased draws the paths and the clips without antialiasing.
+	aliased bool
 }
 
 // state is the part of the device that Save pushes.
@@ -82,11 +84,19 @@ func (d *OkageDevice) Concat(t okage.Transform) {
 	d.state.t = d.state.t.PreConcat(t)
 }
 
+// SetAntiAlias turns the antialiasing of the paths, the glyphs and the clips
+// on or off. It is on by default. Without it, a pixel is covered or not, as
+// in Ghostscript with -dGraphicsAlphaBits=1, which the tests of the layout
+// compare with.
+func (d *OkageDevice) SetAntiAlias(on bool) {
+	d.aliased = !on
+}
+
 // paint returns a paint of okage with the shader.
-func paint(shader okage.Shader) okage.Paint {
+func (d *OkageDevice) paint(shader okage.Shader) okage.Paint {
 	p := okage.DefaultPaint()
 	p.Shader = shader
-	p.AntiAlias = true
+	p.AntiAlias = !d.aliased
 	return p
 }
 
@@ -95,7 +105,7 @@ func (d *OkageDevice) FillPath(p *okage.Path, rule okage.FillRule, shader okage.
 	if p == nil || shader == nil {
 		return
 	}
-	pt := paint(shader)
+	pt := d.paint(shader)
 	d.dst.FillPath(p, &pt, rule, d.state.t, d.state.clip)
 }
 
@@ -104,7 +114,7 @@ func (d *OkageDevice) StrokePath(p *okage.Path, stroke okage.Stroke, shader okag
 	if p == nil || shader == nil {
 		return
 	}
-	pt := paint(shader)
+	pt := d.paint(shader)
 	d.dst.StrokePath(p, &pt, &stroke, d.state.t, d.state.clip)
 }
 
@@ -116,10 +126,10 @@ func (d *OkageDevice) ClipPath(p *okage.Path, rule okage.FillRule) {
 	}
 	if p != nil {
 		if d.state.clip == nil {
-			clip.FillPath(p, rule, true, d.state.t)
+			clip.FillPath(p, rule, !d.aliased, d.state.t)
 		} else {
 			clip = d.state.clip.Clone()
-			clip.IntersectPath(p, rule, true, d.state.t)
+			clip.IntersectPath(p, rule, !d.aliased, d.state.t)
 		}
 	}
 	d.state.clip = clip
@@ -201,7 +211,7 @@ func (d *OkageDevice) FillMask(mask *image.Alpha, t okage.Transform, opts ImageO
 	if !ok {
 		return
 	}
-	pt := paint(shader.Transform(d.state.t))
+	pt := d.paint(shader.Transform(d.state.t))
 	d.dst.FillRect(r, &pt, okage.IdentityTransform(), cover)
 }
 
@@ -302,6 +312,7 @@ func (d *OkageDevice) softMask(m *Mask) *okage.Mask {
 		return nil
 	}
 	child := NewOkage(pix, d.state.t)
+	child.aliased = d.aliased
 	backdrop := m.Backdrop.Alpha() > 0 && m.Backdrop != okage.ColorBlack
 	if backdrop {
 		pix.Fill(m.Backdrop)

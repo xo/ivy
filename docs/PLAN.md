@@ -8,9 +8,11 @@ are in [`decisions/`](decisions/README.md). The design of the API is in
 
 ## Status
 
-On 2026-11-16 phases 1 and 2 are done. The root package holds the document
+On 2026-11-16 phases 1 to 4 are done. The root package holds the document
 API of `API.md`, the display list and the fonts of D10 hold the drawing of a
-page description, and XPS renders, as the section of phase 2 below says. These
+page description, and XPS renders, as the section of phase 2 below says. PDF
+renders, as the section of phase 3 says. The layout of HTML and CSS puts the
+ebooks on pages, as the section of phase 4 says. These
 formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
@@ -233,12 +235,43 @@ way, and the other pages match pdftoppm within the tolerance of a review in
 the test module. The work that is left is under "Left by phase 3" in
 `BACKLOG.md`.
 
-### Phase 4. The layout and the ebooks (8 to 10.5 months)
+### Phase 4. The layout and the ebooks (8 to 10.5 months, done)
 
 `internal/layout`, the port of WeasyPrint (D15), and the work in okage that
 it needs. Then EPUB, FictionBook, Markdown, HTML and text, then MOBI, AZW3,
 AZW4 and CHM. MOBI and CHM wait for their decompression in magic (D8). iv
 drops `ebook-convert` and `blitz`.
+
+Phase 4 delivered these packages, on 2026-11-16:
+
+| Package | What it holds |
+| --- | --- |
+| `epub` | EPUB 2, EPUB 3 and kepub: the pages, the cover and the metadata. It undoes the obfuscation of fonts |
+| `mobi` | MOBI, PRC, AZW and AZW3 through the layout, and AZW4 through `pdf`: the pages, the cover and the metadata |
+| `fb2` | FictionBook 2, as XML or in a zip archive: the pages, the cover and the metadata |
+| `chm` | Compiled HTML Help: the pages, the title and the language |
+| `html` | HTML and HTMLZ: the pages, the cover of an HTMLZ file and the metadata |
+| `text` | text and TXTZ: the pages, the cover of a TXTZ file and the metadata of a TXTZ file |
+| `markdown` | Markdown, with the extensions of GitHub, footnotes and definition lists: the pages and the title |
+| `internal/layout` | the port of the cascade, the boxes, the text, the layout, the drawing and the stacking of WeasyPrint 70.0, and the book that puts a whole ebook on pages (D15, D21) |
+| `internal/ebook`, `internal/memfs` | the code that the ebooks share, and a file system in memory |
+| `internal/goldmark` | the copy of goldmark (D7, D21) |
+
+okage holds the parsers that the layout needs: a port of tinyhtml5 (okage
+D49), ports of tinycss2 and cssselect2 (okage D50), and the readers of
+WOFF, WOFF2 and EOT (okage D51). magic holds the decoders of PalmDoc,
+HUFF/CDIC and LZX (magic D61). The layout shapes text with go-text
+directly, because the text API of okage does not give the clusters that
+the breaks of the lines need. The layout puts a page on the display list,
+and okage draws it. A book lays out its documents only as far as the page
+that a program asks for.
+
+The port runs 1333 of the test functions of WeasyPrint, and 1271 of them
+pass. The skipped tests need hyphenation, color glyphs, profiles of CMYK,
+small capitals in the test fonts, or the PDF file of upstream. The pages
+of an EPUB file match the pages of calibre within the tolerance of a
+review in the test module. The work that is left is under "Left by phase 4"
+in `BACKLOG.md` and under "Open problems" in `internal/layout/README.md`.
 
 ### Phase 5. The Office formats (11 to 18 months)
 
@@ -266,7 +299,7 @@ format of each kind before the maintainers commit to phases 3 to 5.
 
 A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
-decisions were consolidated (D4). The next question is question 2.
+decisions were consolidated (D4). The next question is question 5.
 
 ### Question 1. Is a build with TinyGo a goal that CI tests?
 
@@ -275,3 +308,21 @@ which builds with TinyGo (D7), so the largest obstacle is gone. A goal in CI
 also forbids `reflect` and `encoding/json` in the packages that a user
 imports, and each outside package must build with TinyGo. No phase waits for
 the answer.
+
+### Question 3. Can a program give the folder of a Markdown file?
+
+A Markdown file links to its images by paths relative to its folder. An
+`ivy.Source` gives the bytes of a file and not its folder, so `markdown`
+draws the alternative text of each image. An option such as `WithDir(fs.FS)`
+can give the folder, and `markdown` holds it unexported on 2026-11-16. A
+public option changes the API, so it needs a decision (D11). The same
+question holds for a plain HTML file.
+
+### Question 4. Can a program ask an ebook to use the fonts of the system?
+
+The layout draws an ebook with the Go fonts of `golang.org/x/image`, unless
+the ebook embeds its own fonts. okage bundles no font, and ivy reads the
+fonts of the system only when a program asks. `internal/layout` can read
+them with `LoadOSFonts` of okage, but no format has an option for it yet.
+A public option changes the API, so it needs a decision (D11). The same
+option can give fonts that the program holds.

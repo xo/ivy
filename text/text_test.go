@@ -1,0 +1,278 @@
+package text
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"image"
+	"image/color"
+	"io/fs"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/ebook/ebooktest"
+	"github.com/xo/ivy/internal/fixture"
+)
+
+func TestToHTML(t *testing.T) {
+	for _, tt := range []struct {
+		name, text, title, lang, want string
+	}{
+		{"empty", "", "", "", ""},
+		{"blank", " \n\t\n", "", "", ""},
+		{"one", "Hello", "", "", "<p>Hello</p>\n"},
+		{
+			"paragraphs", "Line one\n  line two\n\n\n\nNext <b> & \"q\"\n",
+			"", "",
+			"<p>Line one\n  line two</p>\n<p>Next &lt;b&gt; &amp; &#34;q&#34;</p>\n",
+		},
+		{"crlf", "a\r\nb\r\n\r\nc\rd", "", "", "<p>a\nb</p>\n<p>c\nd</p>\n"},
+		{"tabs and nul", "\ta\x00b\n \t \nc", "", "", "<p>\ta�b</p>\n<p>c</p>\n"},
+		{"form feed", "a\n\f\nb", "", "", "<p>a</p>\n<p>b</p>\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(toHTML(tt.text, tt.title, tt.lang))
+			body := got[strings.Index(got, "<body>\n")+len("<body>\n") : strings.Index(got, "</body>")]
+			if body != tt.want {
+				t.Errorf("expected %q, got: %q", tt.want, body)
+			}
+		})
+	}
+	got := string(toHTML("x", "A <Title>", `e"n`))
+	for _, want := range []string{`<html lang="e&#34;n">`, "<title>A &lt;Title&gt;</title>", `<meta charset="utf-8">`, "<!DOCTYPE html>"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in %q", want, got)
+		}
+	}
+	if got := string(toHTML("x", "", "")); strings.Contains(got, "<title>") || strings.Contains(got, "lang=") {
+		t.Errorf("expected no title and no lang, got: %q", got)
+	}
+}
+
+// document returns the document of HTML of d.
+func document(t *testing.T, d *Document) string {
+	t.Helper()
+	src := d.source()
+	if len(src.Documents) != 1 {
+		t.Fatalf("expected one document, got: %q", src.Documents)
+	}
+	data, err := fs.ReadFile(src.FS, src.Documents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func TestText(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		buf  []byte
+		want string
+	}{
+		{"utf-8", []byte("caf\xc3\xa9"), "<p>café</p>"},
+		{"utf-8 bom", []byte("\xef\xbb\xbfcaf\xc3\xa9"), "<p>café</p>"},
+		{"utf-16le", []byte{0xff, 0xfe, 'h', 0, 'i', 0, '\n', 0, '\n', 0, '<', 0}, "<p>hi</p>\n<p>&lt;</p>"},
+		{"utf-16be", []byte{0xfe, 0xff, 0, 'h', 0, 'i'}, "<p>hi</p>"},
+		{"windows-1252", []byte("\x93caf\xe9\x94"), "<p>“café”</p>"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(tt.buf))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := document(t, d); !strings.Contains(got, tt.want) {
+				t.Errorf("expected %q in %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestSource(t *testing.T) {
+	d, err := Format.Open(t.Context(), strings.NewReader("Title\n\nBody text."), ivy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := d.(*Document)
+	src := doc.source()
+	if !slices.Equal(src.Documents, []string{"text.html"}) || src.Title != "" {
+		t.Errorf("expected the document without a title, got: %q %q", src.Documents, src.Title)
+	}
+	if len(src.StyleSheets) != 1 || !strings.Contains(src.StyleSheets[0], "white-space: pre-wrap") ||
+		!strings.Contains(src.StyleSheets[0], "monospace") || !strings.Contains(src.StyleSheets[0], "size: letter") {
+		t.Errorf("expected the style sheet of text, got: %q", src.StyleSheets)
+	}
+	info, err := doc.Describe(t.Context())
+	if err != nil || info.Title != "" || info.Authors != nil {
+		t.Errorf("expected no metadata, got: %+v %v", info, err)
+	}
+	if _, err := ivy.BestPreview(t.Context(), d, image.Point{}); !errors.Is(err, ivy.ErrNoPreview) {
+		t.Errorf("expected no preview, got: %v", err)
+	}
+	if err := doc.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+// metadata is the metadata.opf of a TXTZ file.
+const metadata = `<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Plain &amp; Simple</dc:title>
+    <dc:creator>Ann Author</dc:creator>
+    <dc:language>en</dc:language>
+  </metadata>
+  <guide><reference type="cover" href="images/cover.png"/></guide>
+</package>`
+
+func TestTXTZ(t *testing.T) {
+	buf := fixture.Zip(
+		fixture.Entry{Name: "index.txt", Data: []byte("First paragraph\nstill first.\n\nSecond.")},
+		fixture.Entry{Name: "metadata.opf", Data: []byte(metadata)},
+		fixture.Entry{Name: "images/cover.png", Data: fixture.PNG(30, 45, color.White)},
+		fixture.Entry{Name: "other.txt", Data: []byte("not this one")},
+	)
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := d.source()
+	if !slices.Equal(src.Documents, []string{"index.txt.html"}) || src.Title != "Plain & Simple" {
+		t.Errorf("expected the document next to the text and the title, got: %q %q", src.Documents, src.Title)
+	}
+	if len(src.StyleSheets) != 2 || !strings.Contains(src.StyleSheets[0], "size: 6in 9in") || !strings.Contains(src.StyleSheets[1], "pre-wrap") {
+		t.Errorf("expected the style sheets of an ebook and of text, got: %q", src.StyleSheets)
+	}
+	got := document(t, d)
+	for _, want := range []string{"<p>First paragraph\nstill first.</p>\n<p>Second.</p>", "<title>Plain &amp; Simple</title>", `lang="en"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in %q", want, got)
+		}
+	}
+	if _, err := fs.ReadFile(src.FS, "images/cover.png"); err != nil {
+		t.Errorf("expected the images in the file system, got: %v", err)
+	}
+	info, err := d.Describe(t.Context())
+	if err != nil || info.Title != "Plain & Simple" || !slices.Equal(info.Authors, []string{"Ann Author"}) {
+		t.Errorf("expected the metadata, got: %+v %v", info, err)
+	}
+	cover, err := ivy.BestPreview(t.Context(), d, image.Point{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cover.Bounds().Size() != image.Pt(30, 45) {
+		t.Errorf("expected the cover, got: %v", cover.Bounds().Size())
+	}
+}
+
+func TestTXTZWithoutIndex(t *testing.T) {
+	buf := fixture.Zip(
+		fixture.Entry{Name: "deep/a.txt", Data: []byte("deep")},
+		fixture.Entry{Name: "b.TEXT", Data: []byte("shallow")},
+		fixture.Entry{Name: "a.text/", Data: nil},
+	)
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src := d.source(); !slices.Equal(src.Documents, []string{"b.TEXT.html"}) {
+		t.Errorf("expected the text nearest to the root, got: %q", src.Documents)
+	}
+	if got := document(t, d); !strings.Contains(got, "<p>shallow</p>") {
+		t.Errorf("expected the shallow text, got: %q", got)
+	}
+}
+
+func TestErrors(t *testing.T) {
+	if _, err := Open(t.Context(), bytes.NewReader(fixture.Zip(fixture.Entry{Name: "a.png"}))); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ivy.ErrFormat for a txtz without text, got: %v", err)
+	}
+	if _, err := Open(t.Context(), strings.NewReader("PK\x03\x04 broken")); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ivy.ErrFormat for a broken zip, got: %v", err)
+	}
+	buf := fixture.Zip(fixture.Entry{Name: "index.txt", Data: []byte("x")}, fixture.Entry{Name: "index.txt.html/a", Data: []byte("x")})
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ivy.ErrFormat for a folder in the way, got: %v", err)
+	}
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 10}}
+	if _, err := Open(t.Context(), strings.NewReader(strings.Repeat("a", 11)), WithConfig(cfg)); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ivy.ErrLimit for the text, got: %v", err)
+	}
+	cfg = ivy.Config{Limits: ivy.Limits{MaxMemory: 200}}
+	if _, err := Open(t.Context(), strings.NewReader(strings.Repeat("<", 100)), WithConfig(cfg)); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ivy.ErrLimit for the document of html, got: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := Open(ctx, strings.NewReader("x")); !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+func FuzzOpen(f *testing.F) {
+	f.Add([]byte("Hello\n\nworld"))
+	f.Add([]byte{0xff, 0xfe, 'h', 0})
+	f.Add(fixture.Zip(
+		fixture.Entry{Name: "index.txt", Data: []byte("text")},
+		fixture.Entry{Name: "metadata.opf", Data: []byte(metadata)},
+		fixture.Entry{Name: "images/cover.png", Data: fixture.PNG(3, 3, color.White)},
+	))
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
+	f.Fuzz(func(t *testing.T, buf []byte) {
+		check := func(err error) {
+			if err != nil && strings.Contains(err.Error(), "panic:") {
+				t.Fatal(err)
+			}
+		}
+		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+		check(err)
+		if err != nil {
+			return
+		}
+		_, err = d.Describe(t.Context())
+		check(err)
+		_, err = ivy.BestPreview(t.Context(), d, image.Point{})
+		check(err)
+		src := d.source()
+		_, err = fs.ReadFile(src.FS, src.Documents[0])
+		check(err)
+		ebooktest.RenderFirstPage(t, d)
+	})
+}
+
+func TestPages(t *testing.T) {
+	text := "First paragraph\n\n" + strings.Repeat("A line of the long text.\n", 200)
+	d, err := Open(t.Context(), strings.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := d.PageCount(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 10pt lines on a page of 9.5 inches give about 50 lines a page.
+	if n < 3 {
+		t.Errorf("expected 3 pages or more, got: %d", n)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, h := p.Size(); w != 612 || h != 792 {
+		t.Errorf("expected a page of US Letter, got: %g by %g", w, h)
+	}
+	img := ebooktest.RenderPage(t, d, 0)
+	if ink := ebooktest.Ink(img, image.Rect(72, 72, 250, 90)); ink < 20 {
+		t.Errorf("expected the ink of the first line, got %d pixels", ink)
+	}
+	if ink := ebooktest.Ink(img, image.Rect(400, 72, 816, 1056)); ink != 0 {
+		t.Errorf("expected no ink right of the short lines, got %d pixels", ink)
+	}
+	last := ebooktest.RenderPage(t, d, n-1)
+	if ink := ebooktest.Ink(last, image.Rect(72, 72, 300, 90)); ink < 20 {
+		t.Errorf("expected the ink of a line on the last page, got %d pixels", ink)
+	}
+	if _, err := d.Page(t.Context(), n); !errors.Is(err, ivy.ErrPageRange) {
+		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
+	}
+}

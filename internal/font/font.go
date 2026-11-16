@@ -61,6 +61,18 @@ func Load(data []byte, index int) (f *Face, err error) {
 	return &Face{face: face, upem: upem, outlines: make(map[GID]*okage.Path)}, nil
 }
 
+// FromFace returns the font of a face of go-text that is already parsed,
+// with its variations, such as a face that the layout shaped its text with.
+// The caller must not use the face of go-text at the same time as the
+// returned font.
+func FromFace(face *gofont.Face) *Face {
+	upem := float32(face.Upem())
+	if upem <= 0 {
+		upem = 1000
+	}
+	return &Face{face: face, upem: upem, outlines: make(map[GID]*okage.Path)}
+}
+
 // clampDirectory returns data, with the length of each table of each font cut
 // to the end of data. go-text reserves the length that the directory gives
 // for a table before it reads the table, so a table of a declared length of

@@ -7,7 +7,9 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	"os/exec"
+	"testing"
 )
 
 // run runs the oracle name with args, and decodes the PNG image that it writes
@@ -61,4 +63,17 @@ func overWhite(c color.Color) [3]float64 {
 	r, g, b, a := c.RGBA()
 	white := float64(0xffff - a)
 	return [3]float64{(float64(r) + white) / 257, (float64(g) + white) / 257, (float64(b) + white) / 257}
+}
+
+// writePNG writes img to the file path, for a person who looks at the pages
+// of a comparison.
+func writePNG(t *testing.T, path string, img image.Image) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }

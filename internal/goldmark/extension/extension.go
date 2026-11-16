@@ -1,0 +1,49 @@
+// Copied from github.com/yuin/goldmark, file extension/extension.go, at commit d473f9516b6b
+// (D7, docs/UPSTREAM.md). Its MIT license is in internal/goldmark/LICENSE.
+// ivy: the imports name the copy, github.com/xo/ivy/internal/goldmark.
+
+package extension
+
+import "github.com/xo/ivy/internal/goldmark/renderer/html"
+
+type withXHTML struct {
+	value bool
+}
+
+func (o *withXHTML) applyTableHTMLRendererOption(c *tableHTMLRendererConfig) {
+	c.XHTML = o.value
+}
+
+func (o *withXHTML) applyTaskListItemHTMLRendererOption(c *taskListItemHTMLRendererConfig) {
+	c.XHTML = o.value
+}
+
+func (o *withXHTML) applyFootnoteHTMLRendererOption(c *footnoteHTMLRendererConfig) {
+	c.XHTML = true
+}
+
+// WithXHTML is a functional option that indicates that table, task list, and
+// footnote elements should be rendered as XHTML.
+func WithXHTML() interface {
+	TableHTMLRendererOption
+	TaskListItemHTMLRendererOption
+	FootnoteHTMLRendererOption
+} {
+	return &withXHTML{value: true}
+}
+
+type withIsInTightBlockFunc struct {
+	IsInTightBlockFunc html.IsInTightBlockFunc
+}
+
+func (o *withIsInTightBlockFunc) applyTaskListItemHTMLRendererOption(c *taskListItemHTMLRendererConfig) {
+	c.IsInTightBlockFunc = o.IsInTightBlockFunc
+}
+
+// WithIsInTightBlockFunc is a functional option that sets the function to determine
+// whether the list item is in a tight block.
+func WithIsInTightBlockFunc(f html.IsInTightBlockFunc) interface {
+	TaskListItemHTMLRendererOption
+} {
+	return &withIsInTightBlockFunc{IsInTightBlockFunc: f}
+}

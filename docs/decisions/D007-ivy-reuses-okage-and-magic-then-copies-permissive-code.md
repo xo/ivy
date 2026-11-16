@@ -56,8 +56,10 @@ okage requires each one already, and okage D6 approved it for okage:
 
 | Package | ivy uses it for | Approved |
 | --- | --- | --- |
-| `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic` | 2026-11-16 |
-| `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances | 2026-11-16 |
+| `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic`, the BMP, TIFF and WebP decoders of `internal/layout`, and the Go fonts, which the layout uses when a program gives no fonts | 2026-11-16 |
+| `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout` | 2026-11-16 |
+
+The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21).
 
 A port follows its source file by file, as okage does, and keeps a ledger of
 the commits of its source after a base commit. A copy also records its
