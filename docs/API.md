@@ -53,7 +53,8 @@ github.com/xo/ivy                the root package: the document API (D11)
 │   ├── font/                    the fonts (D10)
 │   ├── layout/                  the port of WeasyPrint (D15)
 │   ├── cfb/  offcrypto/  ...    the code that more than one format shares
-│   └── jbig2/  jpx/  ccitt/ ... the codecs of the port of hayro (D14)
+│   ├── ccitt/  jbig2/  jpeg2000/ the codecs of the port of hayro (D14, D17)
+│   └── moxcms/                  the subset of moxcms that hayro uses (D16)
 └── test/                        a module of its own: the oracles (D13)
 ```
 

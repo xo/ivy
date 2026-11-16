@@ -9,6 +9,7 @@ package font
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sync"
 
@@ -33,7 +34,18 @@ type Face struct {
 // Load reads the font in data, which is TrueType, OpenType or CFF in an
 // OpenType wrapper. For a collection, index selects the font. It returns an
 // error that wraps ivy.ErrFormat if data is not such a font.
-func Load(data []byte, index int) (*Face, error) {
+func Load(data []byte, index int) (f *Face, err error) {
+	data, err = clampDirectory(data)
+	if err != nil {
+		return nil, err
+	}
+	// go-text can panic on a malformed font, and a font is input from a
+	// stranger (D5, D18)
+	defer func() {
+		if r := recover(); r != nil {
+			f, err = nil, fmt.Errorf("reading font: %v: %w", r, ivy.ErrFormat)
+		}
+	}()
 	faces, err := gofont.ParseTTC(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("reading font: %w: %w", ivy.ErrFormat, err)
@@ -47,6 +59,54 @@ func Load(data []byte, index int) (*Face, error) {
 		upem = 1000
 	}
 	return &Face{face: face, upem: upem, outlines: make(map[GID]*okage.Path)}, nil
+}
+
+// clampDirectory returns data, with the length of each table of each font cut
+// to the end of data. go-text reserves the length that the directory gives
+// for a table before it reads the table, so a table of a declared length of
+// 4 GB in a small file makes it reserve 4 GB. A writer of fonts can also
+// declare a last table a few bytes longer than the file, so a table past the
+// end is cut, not refused. data is copied before a change.
+func clampDirectory(data []byte) ([]byte, error) {
+	bad := fmt.Errorf("reading font: bad table directory: %w", ivy.ErrFormat)
+	if len(data) < 12 {
+		return nil, bad
+	}
+	size := uint64(len(data))
+	offsets := []uint64{0}
+	if string(data[:4]) == "ttcf" {
+		n := uint64(binary.BigEndian.Uint32(data[8:]))
+		if 12+4*n > size {
+			return nil, bad
+		}
+		offsets = offsets[:0]
+		for i := range n {
+			offsets = append(offsets, uint64(binary.BigEndian.Uint32(data[12+4*i:])))
+		}
+	}
+	copied := false
+	for _, off := range offsets {
+		if off+12 > size {
+			return nil, bad
+		}
+		n := uint64(binary.BigEndian.Uint16(data[off+4:]))
+		if off+12+16*n > size {
+			return nil, bad
+		}
+		for i := range n {
+			rec := off + 12 + 16*i
+			start := uint64(binary.BigEndian.Uint32(data[rec+8:]))
+			length := uint64(binary.BigEndian.Uint32(data[rec+12:]))
+			if start+length <= size {
+				continue
+			}
+			if !copied {
+				data, copied = bytes.Clone(data), true
+			}
+			binary.BigEndian.PutUint32(data[rec+12:], uint32(size-min(start, size)))
+		}
+	}
+	return data, nil
 }
 
 // Glyph returns the glyph of the character r, and false if the font has none.

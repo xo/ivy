@@ -1,12 +1,13 @@
 // Package display is the display list of D10. A page description, such as
-// XPS, or later PDF, emits commands to a Device. The device that draws with
-// okage is the main one, and a List records the commands for the tests.
+// XPS or PDF, emits commands to a Device. The device that draws with okage is
+// the main one, and a List records the commands for the tests.
 //
 // The commands follow the operators of PDF: save and restore the state,
 // concatenate a transform, fill and stroke a path, clip, draw an image, fill
-// a run of glyphs, and begin and end a group with an opacity. A path, a clip
-// and a shader are in the coordinates of the user space at the call: the
-// device maps them with the current transform.
+// a stencil mask, fill a run of glyphs, and begin and end a group. A group
+// has an opacity, a blend mode and a soft mask. A path, a clip, an image and
+// a shader are in the coordinates of the user space at the call: the device
+// maps them with the current transform.
 package display
 
 import (
@@ -33,14 +34,75 @@ type Device interface {
 	StrokePath(p *okage.Path, stroke okage.Stroke, shader okage.Shader)
 	// ClipPath intersects the clip with p.
 	ClipPath(p *okage.Path, rule okage.FillRule)
-	// DrawImage draws img into the rectangle dst, with the opacity.
-	DrawImage(img image.Image, dst okage.Rect, opacity float32)
+	// DrawImage draws img. t maps the pixels of img, counted from the corner
+	// of its bounds, onto the user space. The pixel (x, y) covers the unit
+	// square from (x, y) to (x+1, y+1).
+	DrawImage(img image.Image, t okage.Transform, opts ImageOptions)
+	// FillMask fills the shader through a stencil mask. t places the pixels
+	// of mask as DrawImage does. The alpha of each pixel is the coverage.
+	FillMask(mask *image.Alpha, t okage.Transform, opts ImageOptions, shader okage.Shader)
 	// FillGlyphs fills the outlines of a run of glyphs with the shader.
 	FillGlyphs(run GlyphRun, shader okage.Shader)
 	// BeginGroup starts a group, which draws to a layer of its own.
-	BeginGroup(opacity float32)
-	// EndGroup draws the layer of the group with its opacity.
+	BeginGroup(g Group)
+	// EndGroup draws the layer of the group onto its parent, with the
+	// opacity, the blend mode and the soft mask of the group.
 	EndGroup()
+}
+
+// ImageOptions are the options of DrawImage and FillMask.
+type ImageOptions struct {
+	// Opacity multiplies the alpha of the image, from 0 to 1.
+	Opacity float32
+	// Smooth samples the image with bilinear filtering. Without it, the
+	// device takes the nearest pixel, and the pixels of a scaled image stay
+	// sharp.
+	Smooth bool
+}
+
+// Group is a group that BeginGroup starts.
+//
+// The zero Group draws its layer at an opacity of 0. A caller sets Opacity
+// to 1 for a group without transparency.
+type Group struct {
+	// Opacity is the opacity of the layer, from 0 to 1.
+	Opacity float32
+	// Blend is the blend mode of the layer onto its parent. The zero value,
+	// okage.BlendModeClear, is not a mode of PDF, and a device draws it as
+	// okage.BlendModeSourceOver.
+	Blend okage.BlendMode
+	// Isolated starts the layer transparent, without the backdrop of the
+	// parent. OkageDevice draws every group as isolated, as hayro does. The
+	// result differs from PDF only for a blend mode inside a group that is
+	// not isolated.
+	Isolated bool
+	// Knockout makes each object of the group draw over the backdrop of the
+	// group, not over the earlier objects. OkageDevice draws a knockout group
+	// as a group that is not knockout.
+	Knockout bool
+	// Mask is the soft mask of the group, or nil.
+	Mask *Mask
+}
+
+// Mask is a soft mask. Its content is drawn through a device, and each pixel
+// gives the coverage of the group: its alpha, or its luminosity over a
+// backdrop.
+type Mask struct {
+	// Type is okage.MaskTypeAlpha or okage.MaskTypeLuminance.
+	Type okage.MaskType
+	// Backdrop is the color under the content of a luminosity mask. The
+	// zero Color is transparent, which gives the same mask as black.
+	Backdrop okage.Color
+	// Transfer changes the values of the mask in place, one byte for each
+	// pixel, or is nil.
+	Transfer func(mask []byte)
+	// Content draws the content of the mask onto d. The user space of d is
+	// the user space at BeginGroup.
+	Content func(d Device)
+	// Key identifies the content, or is nil. A device can reuse the mask that
+	// it drew for an earlier mask with the same key and the same transform.
+	// A Key must be comparable.
+	Key any
 }
 
 // GlyphRun is a run of glyphs of one font and one size.
@@ -95,6 +157,24 @@ func Clone(p *okage.Path) *okage.Path {
 		return p
 	}
 	return c
+}
+
+// RectTransform returns the transform that DrawImage takes to draw an image
+// of size into the rectangle dst.
+func RectTransform(size image.Point, dst okage.Rect) okage.Transform {
+	if size.X <= 0 || size.Y <= 0 {
+		return okage.TransformFromTranslate(dst.X(), dst.Y())
+	}
+	return okage.TransformFromTranslate(dst.X(), dst.Y()).
+		PreScale(dst.Width()/float32(size.X), dst.Height()/float32(size.Y))
+}
+
+// blendMode returns the blend mode that a device draws for b.
+func blendMode(b okage.BlendMode) okage.BlendMode {
+	if b == okage.BlendModeClear {
+		return okage.BlendModeSourceOver
+	}
+	return b
 }
 
 // List records the commands that it receives, and replays them onto another
@@ -156,9 +236,15 @@ func (l *List) ClipPath(p *okage.Path, rule okage.FillRule) {
 }
 
 // DrawImage satisfies the Device interface.
-func (l *List) DrawImage(img image.Image, dst okage.Rect, opacity float32) {
-	l.record(fmt.Sprintf("image %v %v %g", img.Bounds().Size(), dst, opacity),
-		func(d Device) { d.DrawImage(img, dst, opacity) })
+func (l *List) DrawImage(img image.Image, t okage.Transform, opts ImageOptions) {
+	l.record(fmt.Sprintf("image %v %v %g", img.Bounds().Size(), t, opts.Opacity),
+		func(d Device) { d.DrawImage(img, t, opts) })
+}
+
+// FillMask satisfies the Device interface.
+func (l *List) FillMask(mask *image.Alpha, t okage.Transform, opts ImageOptions, shader okage.Shader) {
+	l.record(fmt.Sprintf("mask %v %v %g", mask.Bounds().Size(), t, opts.Opacity),
+		func(d Device) { d.FillMask(mask, t, opts, shader) })
 }
 
 // FillGlyphs satisfies the Device interface.
@@ -167,8 +253,18 @@ func (l *List) FillGlyphs(run GlyphRun, shader okage.Shader) {
 }
 
 // BeginGroup satisfies the Device interface.
-func (l *List) BeginGroup(opacity float32) {
-	l.record(fmt.Sprintf("group %g", opacity), func(d Device) { d.BeginGroup(opacity) })
+func (l *List) BeginGroup(g Group) {
+	op := fmt.Sprintf("group %g %v", g.Opacity, blendMode(g.Blend))
+	if g.Isolated {
+		op += " isolated"
+	}
+	if g.Knockout {
+		op += " knockout"
+	}
+	if g.Mask != nil {
+		op += " mask " + g.Mask.Type.String()
+	}
+	l.record(op, func(d Device) { d.BeginGroup(g) })
 }
 
 // EndGroup satisfies the Device interface.

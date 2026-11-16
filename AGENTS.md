@@ -12,8 +12,9 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-16 phases 1 and 2 are done: the document API, the previews and
-pages of the formats of phase 1, the display list, the fonts, and XPS. The survey of the
+On 2026-11-16 phases 1, 2 and 3 are done: the document API, the previews and
+pages of the formats of phase 1, the display list, the fonts, XPS, and PDF.
+The survey of the
 formats is in `docs/FORMATS.md`, and the open questions are at the end of
 `docs/PLAN.md`.
 
@@ -46,7 +47,7 @@ every other agent read the same rules. Edit this file, not `CLAUDE.md`.
 | writing or changing the public API, or naming a type or a function | [docs/API.md](docs/API.md), then D11 |
 | adding a format, or starting work on one | `docs/FORMATS.md`, then "The layout of the packages" in `docs/API.md`, then D6, D10 and D11 |
 | naming a package, or giving a package a module of its own | D6 |
-| working on PDF, EPS or Illustrator | D14 |
+| working on PDF, EPS or Illustrator | D14, then the decisions that amend it: D16, D17 and D20. Then D18 and D19 |
 | working on the layout of HTML and CSS | D15, then D7 |
 | reading XML, HTML or CSS, or about to port or copy any code | D7. Use what okage or magic has first |
 | needing a decoder of compressed data | D8 |
@@ -75,8 +76,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 16, and the next question is
-question 2.
+repeat. The next decision has the number 21, and the next question is
+question 3.
 
 ## Hard rules
 
@@ -170,6 +171,8 @@ On 2026-11-16 the repository holds these files:
 | `*.go` in the root | the package `ivy`: the document API of D11, and the tests of the documents, the skills and the imports |
 | `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/` |
 | `xps/` | XPS and OpenXPS, the format of phase 2 |
+| `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3. `pdf/internal/` holds the ports of the crates of hayro (D14, D16, D20) |
+| `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10 |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
 | `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |

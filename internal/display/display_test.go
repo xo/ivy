@@ -80,7 +80,7 @@ func TestClip(t *testing.T) {
 
 func TestGroup(t *testing.T) {
 	dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
-	d.BeginGroup(0.5)
+	d.BeginGroup(Group{Opacity: 0.5})
 	d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(255, 0, 0, 255))
 	d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(0, 0, 255, 255))
 	d.EndGroup()
@@ -98,8 +98,8 @@ func TestDrawImage(t *testing.T) {
 	dst, d := newDevice(t, 20, 20, okage.IdentityTransform())
 	img := fixture.Image(2, 2, color.NRGBA{0, 128, 0, 255})
 	r, _ := okage.RectFromXYWH(10, 10, 10, 10)
-	d.DrawImage(img, r, 1)
-	d.DrawImage(img, r, 1)
+	d.DrawImage(img, RectTransform(img.Bounds().Size(), r), ImageOptions{Opacity: 1})
+	d.DrawImage(img, RectTransform(img.Bounds().Size(), r), ImageOptions{Opacity: 1})
 	if c := at(dst, 15, 15); c != (color.NRGBA{0, 128, 0, 255}) {
 		t.Errorf("expected green, got: %v", c)
 	}
@@ -149,12 +149,13 @@ func TestList(t *testing.T) {
 	l.FillPath(rect(1, 1, 2, 2), okage.FillRuleWinding, solid(1, 2, 3, 255))
 	l.StrokePath(rect(1, 1, 2, 2), okage.DefaultStroke(), solid(1, 2, 3, 255))
 	r, _ := okage.RectFromXYWH(0, 0, 1, 1)
-	l.DrawImage(image.NewGray(image.Rect(0, 0, 3, 3)), r, 0.5)
-	l.BeginGroup(0.25)
+	l.DrawImage(image.NewGray(image.Rect(0, 0, 3, 3)), RectTransform(image.Pt(3, 3), r), ImageOptions{Opacity: 0.5})
+	l.FillMask(image.NewAlpha(image.Rect(0, 0, 2, 2)), okage.IdentityTransform(), ImageOptions{Opacity: 1}, solid(0, 0, 0, 255))
+	l.BeginGroup(Group{Opacity: 0.25, Blend: okage.BlendModeMultiply, Isolated: true, Mask: &Mask{Type: okage.MaskTypeLuminance}})
 	l.EndGroup()
 	l.Restore()
 	got := l.String()
-	for _, want := range []string{"save", "clip [0 0 4 4]", "fill [1 1 3 3]", "stroke [1 1 3 3] 1", "image (3,3)", "group 0.25", "end group", "restore"} {
+	for _, want := range []string{"save", "clip [0 0 4 4]", "fill [1 1 3 3]", "stroke [1 1 3 3] 1", "image (3,3)", "mask (2,2)", "group 0.25 Multiply isolated mask Luminance", "end group", "restore"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected %q in:\n%s", want, got)
 		}
@@ -172,4 +173,105 @@ func TestRestoreWithoutSave(t *testing.T) {
 	d.EndGroup()
 	d.ClipPath(nil, okage.FillRuleWinding)
 	d.FillPath(rect(0, 0, 2, 2), okage.FillRuleWinding, solid(0, 0, 0, 255))
+}
+
+func TestDrawImageTransform(t *testing.T) {
+	dst, d := newDevice(t, 20, 20, okage.IdentityTransform())
+	img := fixture.Image(2, 1, color.NRGBA{0, 0, 255, 255})
+	// the image of 2 by 1 pixels covers 10 by 20 pixels, turned by 90
+	// degrees
+	tr := okage.TransformFromRow(0, 10, 10, 0, 0, 0)
+	d.DrawImage(img, tr, ImageOptions{Opacity: 1})
+	if c := at(dst, 5, 15); c != (color.NRGBA{0, 0, 255, 255}) {
+		t.Errorf("expected blue at (5, 15), got: %v", c)
+	}
+	if c := at(dst, 15, 5); c.A != 0 {
+		t.Errorf("expected nothing at (15, 5), got: %v", c)
+	}
+}
+
+func TestFillMask(t *testing.T) {
+	mask := image.NewAlpha(image.Rect(0, 0, 2, 2))
+	mask.SetAlpha(0, 0, color.Alpha{255})
+	mask.SetAlpha(1, 1, color.Alpha{255})
+	tr := okage.TransformFromScale(5, 5)
+	stops := []okage.GradientStop{
+		okage.NewGradientStop(0, okage.ColorFromRGBA8(255, 0, 0, 255)),
+		okage.NewGradientStop(1, okage.ColorFromRGBA8(255, 0, 0, 255)),
+	}
+	gradient, ok := okage.NewLinearGradient(okage.PointFromXY(0, 0), okage.PointFromXY(10, 0), stops, okage.SpreadModePad, okage.IdentityTransform())
+	if !ok {
+		t.Fatal("expected a gradient")
+	}
+	for _, shader := range []okage.Shader{solid(255, 0, 0, 255), gradient} {
+		dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+		d.FillMask(mask, tr, ImageOptions{Opacity: 1}, shader)
+		if c := at(dst, 2, 2); c != (color.NRGBA{255, 0, 0, 255}) {
+			t.Errorf("%T: expected red at (2, 2), got: %v", shader, c)
+		}
+		if c := at(dst, 7, 2); c.A != 0 {
+			t.Errorf("%T: expected nothing at (7, 2), got: %v", shader, c)
+		}
+	}
+}
+
+func TestGroupBlend(t *testing.T) {
+	dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(255, 255, 0, 255))
+	d.BeginGroup(Group{Opacity: 1, Blend: okage.BlendModeMultiply})
+	d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(0, 255, 255, 255))
+	d.EndGroup()
+	if c := at(dst, 5, 5); c != (color.NRGBA{0, 255, 0, 255}) {
+		t.Errorf("expected green from the multiply of yellow and cyan, got: %v", c)
+	}
+}
+
+func TestSoftMask(t *testing.T) {
+	var drawn int
+	mask := &Mask{
+		Type: okage.MaskTypeLuminance,
+		Content: func(d Device) {
+			drawn++
+			d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+		},
+		Key: 1,
+	}
+	dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+	for range 2 {
+		d.BeginGroup(Group{Opacity: 1, Mask: mask})
+		d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(255, 0, 0, 255))
+		d.EndGroup()
+	}
+	if drawn != 1 {
+		t.Errorf("expected the mask drawn once for its key, got %d", drawn)
+	}
+	if c := at(dst, 2, 5); c != (color.NRGBA{255, 0, 0, 255}) {
+		t.Errorf("expected red under the white of the mask, got: %v", c)
+	}
+	if c := at(dst, 7, 5); c.A != 0 {
+		t.Errorf("expected nothing under the black of the mask, got: %v", c)
+	}
+	// a white backdrop and a transfer function that inverts the mask
+	inverted := &Mask{
+		Type:     okage.MaskTypeLuminance,
+		Backdrop: okage.ColorWhite,
+		Transfer: func(m []byte) {
+			for i := range m {
+				m[i] = 255 - m[i]
+			}
+		},
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(0, 0, 0, 255))
+		},
+	}
+	dst, d = newDevice(t, 10, 10, okage.IdentityTransform())
+	d.BeginGroup(Group{Opacity: 1, Mask: inverted})
+	d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(0, 0, 255, 255))
+	d.EndGroup()
+	if c := at(dst, 2, 5); c != (color.NRGBA{0, 0, 255, 255}) {
+		t.Errorf("expected blue where the inverted mask is white, got: %v", c)
+	}
+	if c := at(dst, 7, 5); c.A != 0 {
+		t.Errorf("expected nothing where the inverted mask is black, got: %v", c)
+	}
 }

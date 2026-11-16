@@ -59,7 +59,7 @@ the program that made the document.
 
 ## Status
 
-Phases 1 and 2 are done. These packages open a file and give its previews,
+Phases 1, 2 and 3 are done. These packages open a file and give its previews,
 its pages or both:
 
 | Package | Formats |
@@ -73,6 +73,7 @@ its pages or both:
 | `github.com/xo/ivy/comic` | CBZ and CBT: the pages and the cover |
 | `github.com/xo/ivy/psd` | Photoshop: the image and the thumbnail |
 | `github.com/xo/ivy/xps` | XPS and OpenXPS: the pages, the thumbnail, and the title and the authors |
+| `github.com/xo/ivy/pdf` | PDF, with its password, and Illustrator compatible with PDF: the pages, the thumbnails, and the document information |
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
 

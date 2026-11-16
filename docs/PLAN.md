@@ -208,11 +208,30 @@ review in the test module. A VisualBrush, an OpacityMask, a sideways run of
 glyphs and an image in JPEG XR are left out, and their page returns an
 `*ivy.PartialError`.
 
-### Phase 3. PDF (6.5 to 10 months)
+### Phase 3. PDF (6.5 to 10 months, done)
 
 The port of hayro onto the display list, with its encryption, its fonts, its
 image decoders and moxcms (D14). Illustrator files that are compatible with
 PDF. iv drops libvips and `pdftoppm` for PDF.
+
+Phase 3 delivered these packages, on 2026-11-16:
+
+| Package | What it holds |
+| --- | --- |
+| `pdf` | PDF and Illustrator compatible with PDF: each page, the thumbnails, the document information and the password (D12) |
+| `pdf/internal/syntax`, `postscript`, `cmap`, `pdffont`, `interpret` | the ports of hayro-syntax, hayro-postscript, hayro-cmap, hayro-font and hayro-interpret (D16) |
+| `pdf/internal/render` | the port of the crate hayro, which draws onto the display list (D20) |
+| `pdf/internal/kurboext` | the parts of kurbo that the port needs and that okage does not port |
+| `internal/ccitt`, `internal/jbig2`, `internal/jpeg2000` | the ports of hayro-ccitt, hayro-jbig2 and hayro-jpeg2000 (D17) |
+| `internal/moxcms` | the subset of moxcms that hayro uses (D16) |
+
+`internal/display` grew groups with a blend mode and a soft mask, images that
+a transform places, and image masks. `pdffont` reads TrueType and CFF with
+go-text, and it does not hint glyphs (D19). The pages match the pages of hayro within a
+mean difference of 1.5. pdftoppm draws 11 of the 63 test pages in another
+way, and the other pages match pdftoppm within the tolerance of a review in
+the test module. The work that is left is under "Left by phase 3" in
+`BACKLOG.md`.
 
 ### Phase 4. The layout and the ebooks (8 to 10.5 months)
 

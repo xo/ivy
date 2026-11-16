@@ -1,6 +1,6 @@
 # D14. ivy reads PDF as a port of hayro and moxcms
 
-Status: Decided.
+Status: Decided. Amended by D16. Amended by D20.
 
 okage `docs/FORMATS.md` surveyed a PDF reader, EPS and Adobe Illustrator as
 work for okage. They belong in ivy, and okage draws their pages:

@@ -194,6 +194,7 @@ func TestEveryDecisionReferenceExists(t *testing.T) {
 		filepath.Join("docs", "decisions", "*.md"),
 		filepath.Join("*", "*.go"),
 		filepath.Join("internal", "*", "*.go"),
+		filepath.Join("*", "internal", "*", "*.go"),
 	} {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -202,7 +203,13 @@ func TestEveryDecisionReferenceExists(t *testing.T) {
 		paths = append(paths, matches...)
 	}
 	for _, path := range paths {
-		for _, m := range decisionRef.FindAllStringSubmatch(read(t, path), -1) {
+		text := read(t, path)
+		// a file that ports upstream code keeps the names of upstream, such as
+		// the illuminants D50 and D65 of moxcms, which are not decisions
+		if strings.HasSuffix(path, ".go") && strings.Contains(text, "This file ports ") {
+			continue
+		}
+		for _, m := range decisionRef.FindAllStringSubmatch(text, -1) {
 			// A file name such as D005-... writes the number in three digits.
 			num, _ := strconv.Atoi(m[2])
 			if repos[m[1]] || written[num] {

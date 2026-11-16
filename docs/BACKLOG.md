@@ -10,14 +10,41 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-None.
+1. Phase 3, from 2026-11-16: `pdf`, `pdf/internal/render`, and the changes to
+   `internal/display` and `xps` that PDF needs.
 
-## Before phase 2 is pushed
+## Before phases 2 and 3 are pushed
 
-1. okage tags a release with okage D47, the public `roxmltree`. Then the `go.mod` of
-   ivy requires that release, and the `go.work` that points at a checkout of
-   okage is no longer needed. Until then CI fails, because okage v0.9.0 has no
-   public `roxmltree`. Source: phase 2.
+1. okage tags a release with okage D47, the public `roxmltree`, and okage D48,
+   the public `kurbo`. Then the `go.mod` of ivy requires that release, and the
+   `go.work` that points at a checkout of okage is no longer needed. Until
+   then CI fails, because okage v0.9.0 has neither package. Source: phases 2
+   and 3.
+
+## Left by phase 3
+
+1. Draw the accented glyphs of a CFF font that the operator seac of a Type 2
+   charstring builds. go-text draws nothing for them, so those characters are
+   missing. Source: the port of hayro-font.
+2. Read the Expert and ExpertSubset charsets of CFF, and the FontMatrix of each
+   font dictionary of a CID-keyed CFF font and of a CFF table in OpenType.
+   Source: the port of hayro-font.
+3. Decode a JPEG that `image/jpeg` refuses: truncated, of 12 bits, or with
+   arithmetic coding (D17). Source: the port of hayro-syntax.
+4. If the maintainers decide again on hinting (D19), the measurement can run
+   again: a small Rust program renders each page with hayro in
+   `upstream/hayro`, with `RenderSettings.hinting` on and off, and a small Go
+   program counts the pixels of ink that differ. Source: D19.
+5. Draw a group that is not isolated onto its backdrop, and draw a knockout
+   group. The device of okage draws each group as isolated, and not as
+   knockout. hayro does the same. Source: the port of the crate hayro.
+6. Read a PDF file through the `io.ReaderAt` of its source. `pdf.Open` reads
+   the whole file into memory. Source: the package `pdf`.
+7. Compare the pages of ivy with the pages of hayro in the test module. On
+   2026-11-16, a scratch program rendered the 63 test files of
+   `pdf/internal/interpret` with hayro, and ivy matched each page within a
+   mean difference of 1.5. pdftoppm draws 11 of those pages in another way,
+   so `TestPDF` does not compare them. Source: phase 3.
 
 ## Left by phase 2
 
@@ -101,6 +128,8 @@ repository. Ask a maintainer or the `iv` peer.
    `soffice`, `ebook-convert` or libvips. Source: phase 1.
 3. Replace the decoder `gxps` of iv, which runs `xpstopng`, with the package
    `xps` of ivy. Source: phase 2.
+4. Replace the decoders of iv that read PDF with libvips and `pdftoppm` with
+   the package `pdf` of ivy. Source: phase 3.
 
 ## Work for magic
 

@@ -33,5 +33,10 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D11 | [The document API is a small document with capabilities](D011-the-document-api-is-a-small-document-with-capabilities.md) | Decided |
 | D12 | [Encrypted files take a password, and DRM is decoded where it is possible](D012-encrypted-files-take-a-password-and-drm-is-decoded-where-it-is-possible.md) | Decided |
 | D13 | [The test module holds the oracles, and runs by hand](D013-the-test-module-holds-the-oracles-and-runs-by-hand.md) | Decided |
-| D14 | [ivy reads PDF as a port of hayro and moxcms](D014-ivy-reads-pdf-as-a-port-of-hayro-and-moxcms.md) | Decided |
+| D14 | [ivy reads PDF as a port of hayro and moxcms](D014-ivy-reads-pdf-as-a-port-of-hayro-and-moxcms.md) | Decided. Amended by D16. Amended by D20 |
 | D15 | [The layout is a port of WeasyPrint on the parsers of okage](D015-the-layout-is-a-port-of-weasyprint-on-the-parsers-of-okage.md) | Decided |
+| D16 | [The port of hayro uses Go, and ports a subset of moxcms](D016-the-port-of-hayro-uses-go-and-ports-a-subset-of-moxcms.md) | Decided. Amends D14. Amended by D17. Amended by D20 |
+| D17 | [ivy ports all of hayro-ccitt, and decodes JPEG with Go](D017-ivy-ports-all-of-hayro-ccitt-and-decodes-jpeg-with-go.md) | Decided. Amends D16 |
+| D18 | [A port can guard against hostile input](D018-a-port-can-guard-against-hostile-input.md) | Decided |
+| D19 | [ivy does not hint glyphs, for now](D019-ivy-does-not-hint-glyphs-for-now.md) | Decided |
+| D20 | [The crate hayro is ported onto the display list](D020-the-crate-hayro-is-ported-onto-the-display-list.md) | Decided. Amends D14. Amends D16 |

@@ -1,6 +1,8 @@
 package font
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"sync"
 	"testing"
@@ -63,4 +65,32 @@ func TestLoadErrors(t *testing.T) {
 	if _, err := Load(goregular.TTF, 1); !errors.Is(err, ivy.ErrFormat) {
 		t.Errorf("expected ErrFormat, got: %v", err)
 	}
+	// a table that claims 4 GB in a small file is cut to the end of the
+	// file, before go-text reserves its memory
+	huge := bytes.Clone(goregular.TTF)
+	binary.BigEndian.PutUint32(huge[12+12:], 0xffffffff)
+	clamped, err := clampDirectory(huge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := binary.BigEndian.Uint32(clamped[12+8:])
+	if got := binary.BigEndian.Uint32(clamped[12+12:]); uint64(start)+uint64(got) != uint64(len(clamped)) {
+		t.Errorf("expected the table cut to the end of the file, got a length of %d", got)
+	}
+	if binary.BigEndian.Uint32(huge[12+12:]) != 0xffffffff {
+		t.Error("expected the data of the caller unchanged")
+	}
+}
+
+func FuzzLoad(f *testing.F) {
+	f.Add(goregular.TTF)
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		face, err := Load(data, 0)
+		if err != nil {
+			return
+		}
+		gid, _ := face.Glyph('a')
+		_ = face.Outline(gid)
+		_ = face.Advance(gid)
+	})
 }

@@ -156,7 +156,7 @@ func (r *renderer) canvas(n roxmltree.Node, res *resources, depth int) {
 	r.begin(n, res)
 	defer r.dev.Restore()
 	if op := opacityOf(n); op < 1 {
-		r.dev.BeginGroup(op)
+		r.dev.BeginGroup(display.Group{Opacity: op})
 		defer r.dev.EndGroup()
 	}
 	r.children(n, res, depth)
@@ -195,7 +195,7 @@ func (r *renderer) fill(p *okage.Path, rule okage.FillRule, b *brush) {
 	r.dev.ClipPath(p, rule)
 	r.dev.Concat(b.t)
 	r.dev.ClipPath(okage.PathFromRect(b.viewport), okage.FillRuleWinding)
-	r.dev.DrawImage(b.img, b.dst, b.opacity)
+	r.dev.DrawImage(b.img, display.RectTransform(b.img.Bounds().Size(), b.dst), display.ImageOptions{Opacity: b.opacity, Smooth: true})
 }
 
 // strokeOf returns the stroke of a Path.

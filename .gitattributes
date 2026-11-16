@@ -4,6 +4,4 @@
 
 # A test file is a copy of a real file, byte for byte. Git must not change
 # it. A document format can hold CRLF line ends or binary data on purpose.
-testdata/** -text
-*/testdata/** -text
-internal/*/testdata/** -text
+**/testdata/** -text
