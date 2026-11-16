@@ -1,0 +1,9 @@
+# Every text file is LF on every checkout, including a checkout on Windows.
+# Git for Windows writes CRLF by default. See dbmeta D89 and D110.
+* text=auto eol=lf
+
+# A test file is a copy of a real file, byte for byte. Git must not change
+# it. A document format can hold CRLF line ends or binary data on purpose.
+testdata/** -text
+*/testdata/** -text
+internal/*/testdata/** -text
