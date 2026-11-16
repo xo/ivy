@@ -10,8 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-1. Phase 3, from 2026-11-16: `pdf`, `pdf/internal/render`, and the changes to
-   `internal/display` and `xps` that PDF needs.
+None.
 
 ## Before phases 2 and 3 are pushed
 
