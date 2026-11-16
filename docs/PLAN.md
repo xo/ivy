@@ -8,8 +8,10 @@ are in [`decisions/`](decisions/README.md). The design of the API is in
 
 ## Status
 
-On 2026-11-16 phase 1 is done. The root package holds the document API of
-`API.md`, and these formats open, as the section of phase 1 below says:
+On 2026-11-16 phases 1 and 2 are done. The root package holds the document
+API of `API.md`, the display list and the fonts of D10 hold the drawing of a
+page description, and XPS renders, as the section of phase 2 below says. These
+formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
 archives in zip and in tar, and Photoshop. The maintainers decided D1 to D15,
@@ -187,10 +189,24 @@ phase, after phase 1. DMG comes first, because the maintainers named it. It
 waits for LZFSE and ADC in magic (D8). An icon of APK in vector XML waits for
 the display list of phase 2.
 
-### Phase 2. The display list, the fonts and XPS (3.5 to 5 months)
+### Phase 2. The display list, the fonts and XPS (3.5 to 5 months, done)
 
 `internal/display`, the okage device, the first part of `internal/font`, and
-`xps`. iv drops `xpstopng`.
+`xps`. iv can drop `xpstopng`.
+
+Phase 2 delivered these packages, on 2026-11-16:
+
+| Package | What it holds |
+| --- | --- |
+| `internal/display` | the `Device` of the display list, a `List` that records it, and the device that draws with okage, with its clips and its groups |
+| `internal/font` | the fonts of go-text: the map from characters to glyphs, the advances, and the outlines |
+| `xps` | XPS and OpenXPS: each page, the thumbnail, and the core properties |
+
+`xps` reads its parts with `roxmltree` of okage, which phase 2 made public in
+okage (okage D47). Its pages match `xpstopng` within the tolerance of a
+review in the test module. A VisualBrush, an OpacityMask, a sideways run of
+glyphs and an image in JPEG XR are left out, and their page returns an
+`*ivy.PartialError`.
 
 ### Phase 3. PDF (6.5 to 10 months)
 

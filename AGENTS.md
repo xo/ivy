@@ -12,8 +12,8 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-16 phase 1 is done: the document API, and the previews and pages
-of the formats that `docs/PLAN.md` lists under phase 1. The survey of the
+On 2026-11-16 phases 1 and 2 are done: the document API, the previews and
+pages of the formats of phase 1, the display list, the fonts, and XPS. The survey of the
 formats is in `docs/FORMATS.md`, and the open questions are at the end of
 `docs/PLAN.md`.
 
@@ -169,6 +169,8 @@ On 2026-11-16 the repository holds these files:
 | `.golangci.yml`, `.github/workflows/test.yml` | the linters and CI |
 | `*.go` in the root | the package `ivy`: the document API of D11, and the tests of the documents, the skills and the imports |
 | `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/` |
+| `xps/` | XPS and OpenXPS, the format of phase 2 |
+| `internal/display/`, `internal/font/` | the display list and the fonts of D10 |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
 | `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |
 | `internal/fixture/` | the files that the tests build in memory |
@@ -191,6 +193,10 @@ Before you stage a change to a document, make sure of these facts:
 2. A new document is in the table of this file and in the list of `README.md`.
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
+
+ivy builds with a `go.work` that points at a checkout of okage next to it, at
+`../okage`, until okage tags the release that makes `roxmltree` public (okage
+D47). Git ignores `go.work`. Make it with `go work init . ./test ../okage`.
 
 These commands must pass before you stage a change to Go code. They cover
 the scalar build, the SIMD build (D9), the race detector (D11) and the test

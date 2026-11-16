@@ -18,3 +18,8 @@
 # The corpus of test files that a script downloads for the comparisons of the
 # test module (D13). The corpus is fetched, not source.
 /test/corpus
+
+# The workspace that points at a checkout of okage next to ivy, until okage
+# tags the release that ivy needs. Each maintainer keeps their own.
+/go.work
+/go.work.sum

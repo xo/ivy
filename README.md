@@ -59,8 +59,8 @@ the program that made the document.
 
 ## Status
 
-Phase 1 is done. These packages open a file and give its previews, its pages
-or both:
+Phases 1 and 2 are done. These packages open a file and give its previews,
+its pages or both:
 
 | Package | Formats |
 | --- | --- |
@@ -72,6 +72,7 @@ or both:
 | `github.com/xo/ivy/camera` | The RAW files of cameras: the JPEG images, the camera and the date |
 | `github.com/xo/ivy/comic` | CBZ and CBT: the pages and the cover |
 | `github.com/xo/ivy/psd` | Photoshop: the image and the thumbnail |
+| `github.com/xo/ivy/xps` | XPS and OpenXPS: the pages, the thumbnail, and the title and the authors |
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
 

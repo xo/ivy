@@ -12,18 +12,29 @@ delete the claim.
 
 None.
 
-## Approvals
+## Before phase 2 is pushed
 
-1. Approve `golang.org/x/image` as a dependency of ivy (D7). Phase 1 imports
-   its TIFF decoder in `ps` and its WebP decoder in `comic`. okage already
-   requires the module, and okage D6 approved it for okage. Source: phase 1.
+1. okage tags a release with okage D47, the public `roxmltree`. Then the `go.mod` of
+   ivy requires that release, and the `go.work` that points at a checkout of
+   okage is no longer needed. Until then CI fails, because okage v0.9.0 has no
+   public `roxmltree`. Source: phase 2.
+
+## Left by phase 2
+
+1. Draw a VisualBrush and an OpacityMask of XPS. Source: phase 2.
+2. Draw a sideways run of glyphs of XPS, `IsSideways`. Source: phase 2.
+3. Decode the images of XPS in JPEG XR. No permissive decoder in Go is known.
+   Source: phase 2.
+4. Read the resolution of an image of an ImageBrush, from the pHYs of a PNG or
+   the density of a JPEG. `xps` takes 96 dots per inch, unless the Viewbox
+   starts at the origin. Source: phase 2.
 
 ## Left by phase 1
 
 1. Describe the documents whose facts are in XML: the meta.xml of
    OpenDocument, the docProps/core.xml of Office Open XML, the stack.xml of
-   OpenRaster, and the ComicInfo.xml of a comic. It waits for the XML parser
-   of okage (D7). Source: phase 1.
+   OpenRaster, and the ComicInfo.xml of a comic. The XML parser of okage is
+   public since phase 2, so this work can start. Source: phase 1.
 2. Decode a TIFF preview of EPS with a palette of 2 or 4 bits, which
    ImageMagick writes and `golang.org/x/image/tiff` does not decode. `ps`
    returns `ErrUnsupported` for it. Source: phase 1.
@@ -67,8 +78,8 @@ repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
    as PDF and XPS need. Source: `docs/FORMATS.md`.
 3. Add a note to okage `docs/FORMATS.md` that the PDF reader, EPS and
    Illustrator go to ivy, and that okage draws their pages. Source: D14.
-4. Export as public packages the parts of okage that ivy reuses: the XML
-   parser in `internal/roxmltree`, the CSS parser in `internal/simplecss`,
+4. Export as public packages the parts of okage that ivy reuses: the CSS
+   parser in `internal/simplecss`,
    kurbo in `internal/kurbo`, WOFF, WOFF2 and EOT in `internal/webfont`, and
    brotli in `internal/brotli`. Source: D7.
 5. Extend `html` with a parser of the HTML of web pages and ebooks, as okage
@@ -88,6 +99,8 @@ repository. Ask a maintainer or the `iv` peer.
 2. Add decoders for the previews of phase 1: `odf`, `docx`, `xlsx`, `pptx`,
    `iwork`, `ora`, `ps`, `camera` and `comic`, before the decoders that run
    `soffice`, `ebook-convert` or libvips. Source: phase 1.
+3. Replace the decoder `gxps` of iv, which runs `xpstopng`, with the package
+   `xps` of ivy. Source: phase 2.
 
 ## Work for magic
 

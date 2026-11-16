@@ -386,7 +386,9 @@ a program needs one, the maintainers decide to export it.
 1. `internal/display` holds the interface `Device`, with the commands of the
    display list (D10). It holds a `List`, which records the commands and
    replays them onto another device, and the device that draws with okage.
-   The port of hayro and the layout draw through it.
+   `xps` draws through it, and the port of hayro and the layout will. A path
+   of okage changes in place when it transforms, so a shared path, such as
+   the outline of a glyph, is cloned first with `display.Clone`.
 2. `internal/font` holds the fonts. It reads the fonts of the system and the
    web fonts with okage, the TrueType, OpenType and CFF fonts with go-text,
    and Type 1 and Type 3 with the port of hayro-font. It keeps its fonts in
