@@ -10,14 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-1. Phase 6, from 2026-11-17: `djvu` and `djvu/internal/`, and the row of
-   DjVu in the review command (D26).
-2. The fixes of the visual review, from 2026-11-17: the covers and the
-   faults of `epub`, `mobi` and `fb2`; `msdoc`, `msppt` and `msxls`;
-   `internal/gowemf` and `internal/metafile`; the pictures of `pptx`,
-   `xlsx` and `docx` with `internal/drawingml`; the substitute fonts of
-   `pdf`; `internal/chart` without zuzu (D27); and the copy of
-   go-text/typesetting into okage, for the glyphs of the text.
+None.
 
 ## Before phases 2 and 3 are pushed
 
