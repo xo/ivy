@@ -17,6 +17,7 @@ import (
 	"github.com/xo/ivy/internal/ebook/ebooktest"
 	"github.com/xo/ivy/internal/fixture"
 	"github.com/xo/okage/roxmltree"
+	"golang.org/x/text/encoding/charmap"
 )
 
 // book returns a FictionBook file with a cover, a poem, a table, a note and
@@ -91,6 +92,16 @@ func toWindows1251(t testing.TB, s string) []byte {
 	return buf
 }
 
+// toKOI8R converts UTF-8 text to KOI8-R.
+func toKOI8R(t testing.TB, s string) []byte {
+	t.Helper()
+	buf, err := charmap.KOI8R.NewEncoder().Bytes([]byte(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return buf
+}
+
 // toUTF16 converts UTF-8 text to UTF-16LE with a byte order mark.
 func toUTF16(s string) []byte {
 	units := utf16.Encode([]rune(s))
@@ -107,6 +118,7 @@ func TestOpen(t *testing.T) {
 		"utf-8":        []byte(book("UTF-8")),
 		"windows-1251": toWindows1251(t, book("windows-1251")),
 		"utf-16":       toUTF16(book("UTF-16")),
+		"koi8-r":       toKOI8R(t, book("KOI8-R")),
 		"zip":          fixture.Zip(fixture.Entry{Name: "book.fb2", Data: []byte(book("utf-8"))}),
 	} {
 		t.Run(name, func(t *testing.T) {

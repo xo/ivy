@@ -67,6 +67,9 @@ type Document struct {
 	// lcid is the LCID of the help file: the one of #SYSTEM, or else the one
 	// of the ITSF header.
 	lcid uint32
+	// charset is the code page of lcid, as the WHATWG Encoding Standard
+	// names it. The text of the help file that is not UTF-8 is in it.
+	charset string
 	// fsys holds the files of the help file, which decode when they open.
 	// The size that Stat gives for an HTML file is its size in the help
 	// file, before withCharset adds its meta element.
@@ -107,7 +110,8 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if d.system.hasLCID {
 		d.lcid = d.system.lcid
 	}
-	charset := ebook.LCIDCharset(d.lcid)
+	d.charset = ebook.LCIDCharset(d.lcid)
+	charset := d.charset
 	for _, name := range a.files() {
 		clean, ok := zipdoc.CleanName(name)
 		if !ok {
@@ -186,12 +190,12 @@ func (d *Document) Describe(ctx context.Context) (info ivy.Info, err error) {
 
 // title returns the title of the help file.
 func (d *Document) title() string {
-	if title := strings.TrimSpace(ebook.Text(d.system.title)); title != "" {
+	if title := strings.TrimSpace(ebook.TextIn(d.system.title, d.charset)); title != "" {
 		return title
 	}
 	if topic, ok := d.topic(); ok {
 		if buf, err := d.fsys.ReadFile(topic); err == nil {
-			return ebook.ScanHead(ebook.Text(buf)).Title
+			return ebook.ScanHead(ebook.TextIn(buf, d.charset)).Title
 		}
 	}
 	return ""
@@ -205,7 +209,7 @@ func (d *Document) lookup(name string) (string, bool) {
 
 // topic returns the path of the default topic.
 func (d *Document) topic() (string, bool) {
-	link := strings.TrimSpace(ebook.Text(d.system.topic))
+	link := strings.TrimSpace(ebook.TextIn(d.system.topic, d.charset))
 	if link == "" {
 		return "", false
 	}
@@ -218,7 +222,7 @@ func (d *Document) topic() (string, bool) {
 
 // contents returns the files of the table of contents, in its order.
 func (d *Document) contents() []string {
-	name := strings.TrimSpace(ebook.Text(d.system.contents))
+	name := strings.TrimSpace(ebook.TextIn(d.system.contents, d.charset))
 	clean, ok := "", false
 	if name != "" {
 		if resolved, okResolve := resolveLink(".", name); okResolve {
@@ -243,7 +247,7 @@ func (d *Document) contents() []string {
 		d.log.Debug("chm: table of contents left out", "name", clean, "err", err)
 		return nil
 	}
-	return contentsOrder(hhc, path.Dir(clean))
+	return contentsOrder(hhc, path.Dir(clean), d.charset)
 }
 
 // source returns the help file as a source for the layout: its files, the

@@ -8,9 +8,9 @@
 // puts the document on the pages of an ebook, and Page lays it out only as
 // far as the page that a program asks for.
 //
-// The package reads UTF-8, UTF-16, windows-1251 and windows-1252, which also
-// reads ISO-8859-1. It reads a file of another encoding as UTF-8, and logs a
-// warning. It does not apply the style sheet that a file can carry, because
+// The package reads UTF-8, UTF-16 and each encoding of the WHATWG Encoding
+// Standard, such as windows-1251 and KOI8-R. It reads a file of another
+// encoding as UTF-8, and logs a warning. It does not apply the style sheet that a file can carry, because
 // that style sheet names the elements of FictionBook, and not those of the
 // XHTML document.
 package fb2

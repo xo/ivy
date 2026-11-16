@@ -75,7 +75,7 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 22, and the next question is
+repeat. The next decision has the number 24, and the next question is
 question 5.
 
 ## Hard rules
@@ -173,7 +173,7 @@ On 2026-11-16 the repository holds these files:
 | `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3. `pdf/internal/` holds the ports of the crates of hayro (D14, D16, D20) |
 | `epub/`, `html/`, `text/`, `fb2/`, `markdown/`, `mobi/`, `chm/` | the ebooks and the documents of text of phase 4, each with its tests and its `testdata/` |
 | `internal/layout/` | the port of the layout and the drawing of WeasyPrint (D15, D21), and the book that puts a whole ebook on pages |
-| `internal/ebook/`, `internal/memfs/` | the code that the ebooks share: the style sheets, the metadata, the text encodings and the pages, and a file system in memory |
+| `internal/ebook/`, `internal/memfs/`, `internal/charset/` | the code that the ebooks share: the style sheets, the metadata, the text encodings and the pages, a file system in memory, and the encodings of the WHATWG Encoding Standard |
 | `internal/goldmark/` | the copy of goldmark, for Markdown (D7, D21) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10 |

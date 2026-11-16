@@ -112,10 +112,11 @@ func cString(b []byte) []byte {
 // contentsOrder returns the links of the local files of a table of
 // contents, in its order, resolved from the folder dir. A table of contents
 // is a sitemap of HTML: each entry is an object element whose param element
-// with the name Local gives the file.
-func contentsOrder(hhc []byte, dir string) []string {
+// with the name Local gives the file. Text that is not UTF-8 is in the
+// encoding charset.
+func contentsOrder(hhc []byte, dir, charset string) []string {
 	var out []string
-	for tag := range ebook.Tags(ebook.Text(hhc)) {
+	for tag := range ebook.Tags(ebook.TextIn(hhc, charset)) {
 		if tag.Name != "param" {
 			continue
 		}

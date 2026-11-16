@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
@@ -293,5 +294,44 @@ func TestPagesHTMLZ(t *testing.T) {
 	// corner of the page area, inside the margins of 0.5 and 0.6 inches.
 	if ink := ebooktest.Ink(img, image.Rect(48, 57, 54, 80)); ink < 20 {
 		t.Errorf("expected the image, got %d pixels", ink)
+	}
+}
+
+// TestWithDir checks that the layout reads a style sheet that an HTML file
+// links to from the folder of WithDir, and that it reads none without it.
+func TestWithDir(t *testing.T) {
+	doc := `<html><head><link rel="stylesheet" href="css/red.css"></head><body><p>Hello</p></body></html>`
+	dir := fstest.MapFS{"css/red.css": {Data: []byte("p { background: #f00 }")}}
+	for _, test := range []struct {
+		name string
+		opts []Option
+		red  bool
+	}{
+		{"with a folder", []Option{WithDir(dir)}, true},
+		{"without a folder", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), strings.NewReader(doc), test.opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := d.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			img := ebooktest.RenderPage(t, d, 0)
+			bounds, n := img.Bounds(), 0
+			for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+				for x := bounds.Min.X; x < bounds.Max.X; x++ {
+					if r, g, b, _ := img.At(x, y).RGBA(); r > 0xf000 && g < 0x1000 && b < 0x1000 {
+						n++
+					}
+				}
+			}
+			if red := n > 0; red != test.red {
+				t.Errorf("expected a red paragraph: %t, got %d red pixels", test.red, n)
+			}
+		})
 	}
 }

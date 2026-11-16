@@ -8,7 +8,8 @@
 // The layout of phase 4 puts the document on pages (D10, D15): a page of US
 // Letter for an HTML file, and the page of an ebook, 6 by 9 inches, for an
 // HTMLZ file. Page lays out the document only as far as the page that a
-// program asks for.
+// program asks for. An HTML file reads the files that it links to from the
+// folder of WithDir (D22).
 //
 // The package html of ivy has the same name as the package html of okage
 // and of the standard library. A program that imports two of them renames
@@ -54,6 +55,7 @@ type Option func(*options)
 
 type options struct {
 	cfg ivy.Config
+	dir fs.FS
 }
 
 // WithConfig sets the configuration that every format shares.
@@ -63,12 +65,25 @@ func WithConfig(cfg ivy.Config) Option {
 	}
 }
 
+// WithDir gives the folder of an HTML file. The layout reads the style
+// sheets, the images and the fonts that the file links to from it. The file
+// is at the root of the folder, so a link out of the folder is not read, and
+// a file of the folder with the name index.html or index.xhtml is hidden.
+// An HTMLZ file holds its own files, and it ignores the folder. Without a
+// folder, the layout reads no file that an HTML file links to (D22).
+func WithDir(dir fs.FS) Option {
+	return func(o *options) {
+		o.dir = dir
+	}
+}
+
 // Document is an open HTML or HTMLZ file.
 type Document struct {
 	lim ivy.Limits
 	log *slog.Logger
 	// fsys holds the document and its resources. For an HTML file, it holds
-	// only the document, because an ivy.Source has no folder.
+	// the document over the folder of WithDir, or only the document, because
+	// an ivy.Source has no folder.
 	fsys fs.FS
 	// index is the path of the document in fsys.
 	index string
@@ -106,7 +121,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
 		err = d.openHTMLZ(src)
 	} else {
-		err = d.openHTML(src)
+		err = d.openHTML(src, o.dir)
 	}
 	if err != nil {
 		return nil, err
@@ -115,7 +130,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 }
 
 // openHTML reads an HTML file into memory.
-func (d *Document) openHTML(src ivy.Source) error {
+func (d *Document) openHTML(src ivy.Source, dir fs.FS) error {
 	if size := src.Size(); size > d.lim.MaxMemory {
 		return fmt.Errorf("html of %d bytes: %w", size, ivy.ErrLimit)
 	}
@@ -132,6 +147,9 @@ func (d *Document) openHTML(src ivy.Source) error {
 	var fsys memfs.FS
 	fsys.Add(d.index, data)
 	d.fsys = &fsys
+	if dir != nil {
+		d.fsys = fsys.Over(dir)
+	}
 	return nil
 }
 

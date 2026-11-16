@@ -438,3 +438,35 @@ func splitAllLines(t *testing.T, root *Box) {
 		return true
 	})
 }
+
+// TestLoadHTMLCharset checks that a document of HTML in an encoding that
+// the parser of okage does not decode itself, such as the code page of a
+// CHM file, is decoded with internal/charset.
+func TestLoadHTMLCharset(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		exp  string
+	}{
+		{"windows-1251", []byte("<meta charset=\"windows-1251\"><p>\xcf\xf0\xe8\xe2\xe5\xf2"), "Привет"},
+		{"koi8-r", []byte("<meta http-equiv=\"Content-Type\" content=\"text/html; charset=koi8-r\"><p>\xf0\xd2\xc9\xd7\xc5\xd4"), "Привет"},
+		{"shift_jis", []byte("<meta charset=\"shift_jis\"><p>\x82\xa0"), "あ"},
+		{"windows-1252", []byte("<p>caf\xe9"), "café"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			src := Source{FS: fstest.MapFS{"a.html": {Data: test.data}}}
+			html, err := LoadHTML(src, "a.html", HTMLOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := findElement(html.EtreeElement, "p")
+			if p == nil {
+				t.Fatal("expected a p element")
+			}
+			if p.Text != test.exp {
+				t.Errorf("expected %q, got: %q", test.exp, p.Text)
+			}
+		})
+	}
+}

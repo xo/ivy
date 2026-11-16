@@ -254,7 +254,7 @@ Phase 4 delivered these packages, on 2026-11-16:
 | `text` | text and TXTZ: the pages, the cover of a TXTZ file and the metadata of a TXTZ file |
 | `markdown` | Markdown, with the extensions of GitHub, footnotes and definition lists: the pages and the title |
 | `internal/layout` | the port of the cascade, the boxes, the text, the layout, the drawing and the stacking of WeasyPrint 70.0, and the book that puts a whole ebook on pages (D15, D21) |
-| `internal/ebook`, `internal/memfs` | the code that the ebooks share, and a file system in memory |
+| `internal/ebook`, `internal/memfs`, `internal/charset` | the code that the ebooks share, a file system in memory, and the encodings of the Encoding Standard |
 | `internal/goldmark` | the copy of goldmark (D7, D21) |
 
 okage holds the parsers that the layout needs: a port of tinyhtml5 (okage
@@ -299,7 +299,8 @@ format of each kind before the maintainers commit to phases 3 to 5.
 
 A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
-decisions were consolidated (D4). The next question is question 5.
+decisions were consolidated (D4). D22 answers question 3 and D23 answers
+question 4. The next question is question 5.
 
 ### Question 1. Is a build with TinyGo a goal that CI tests?
 
@@ -308,21 +309,3 @@ which builds with TinyGo (D7), so the largest obstacle is gone. A goal in CI
 also forbids `reflect` and `encoding/json` in the packages that a user
 imports, and each outside package must build with TinyGo. No phase waits for
 the answer.
-
-### Question 3. Can a program give the folder of a Markdown file?
-
-A Markdown file links to its images by paths relative to its folder. An
-`ivy.Source` gives the bytes of a file and not its folder, so `markdown`
-draws the alternative text of each image. An option such as `WithDir(fs.FS)`
-can give the folder, and `markdown` holds it unexported on 2026-11-16. A
-public option changes the API, so it needs a decision (D11). The same
-question holds for a plain HTML file.
-
-### Question 4. Can a program ask an ebook to use the fonts of the system?
-
-The layout draws an ebook with the Go fonts of `golang.org/x/image`, unless
-the ebook embeds its own fonts. okage bundles no font, and ivy reads the
-fonts of the system only when a program asks. `internal/layout` can read
-them with `LoadOSFonts` of okage, but no format has an option for it yet.
-A public option changes the API, so it needs a decision (D11). The same
-option can give fonts that the program holds.

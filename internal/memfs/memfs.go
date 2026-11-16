@@ -6,6 +6,7 @@ package memfs
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
@@ -226,4 +227,31 @@ func (d *dir) ReadDir(n int) ([]fs.DirEntry, error) {
 	n = min(n, len(rest))
 	d.off += n
 	return slices.Clone(rest[:n]), nil
+}
+
+// Over returns a file system of the files of m over the files of under. A
+// name that m holds opens from m, and any other name opens from under. A
+// format gives the layout a document that it holds in memory over the
+// folder that a program gives, so that the links of the document resolve in
+// that folder.
+func (m *FS) Over(under fs.FS) fs.FS {
+	return overlay{top: m, under: under}
+}
+
+// overlay is the file system of Over.
+type overlay struct {
+	top   *FS
+	under fs.FS
+}
+
+// Open satisfies the fs.FS interface.
+func (o overlay) Open(name string) (fs.File, error) {
+	if _, ok := o.top.files[name]; ok {
+		return o.top.Open(name)
+	}
+	f, err := o.under.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s in the folder: %w", name, err)
+	}
+	return f, nil
 }

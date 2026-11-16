@@ -9,9 +9,10 @@
 // lays it out only as far as the page that a program asks for.
 //
 // An image of the text is a file next to the Markdown file. An ivy.Source
-// gives no path, so the package cannot read such a file, and it puts the
-// alternate text of the image in its place. An image with a URL of the
-// scheme data stays in the document.
+// gives no folder, so a program gives it with WithDir (D22). Without it, or
+// for an image that the package cannot read, the package puts the alternate
+// text of the image in its place. An image with a URL of the scheme data
+// stays in the document.
 package markdown
 
 import (
@@ -57,12 +58,11 @@ func WithConfig(cfg ivy.Config) Option {
 	}
 }
 
-// withDir sets the folder of the Markdown file, from which the document
-// reads its images.
-//
-// TODO: a program cannot give the folder yet. Making this option public is
-// a change to the API, and it waits for a decision of the maintainers.
-func withDir(dir fs.FS) Option {
+// WithDir gives the folder of the Markdown file. The document reads its
+// images from it, within the limits of the configuration. A link out of the
+// folder, an absolute path and a URL with a scheme are not read. Without a
+// folder, the document shows the alternate text of each image (D22).
+func WithDir(dir fs.FS) Option {
 	return func(o *options) {
 		o.dir = dir
 	}

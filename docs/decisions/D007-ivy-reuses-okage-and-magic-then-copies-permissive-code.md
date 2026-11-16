@@ -52,11 +52,13 @@ package. Until okage exports a part, the format that needs it waits.
 ## Approved outside packages
 
 The maintainers approved these packages from outside the `xo` repositories.
-okage requires each one already, and okage D6 approved it for okage:
+okage requires each one already, and okage D6 approved it for okage, except
+`golang.org/x/text`, which `golang.org/x/image` requires:
 
 | Package | ivy uses it for | Approved |
 | --- | --- | --- |
 | `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic`, the BMP, TIFF and WebP decoders of `internal/layout`, and the Go fonts, which the layout uses when a program gives no fonts | 2026-11-16 |
+| `golang.org/x/text` | the encodings of the WHATWG Encoding Standard in `internal/charset`, such as windows-1251, KOI8-R and Shift_JIS | 2026-11-17 |
 | `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout` | 2026-11-16 |
 
 The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21).

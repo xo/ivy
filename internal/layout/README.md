@@ -505,8 +505,8 @@ are the Go fonts of `golang.org/x/image/font/gofont`, as in the tests: Go is
 the serif, the sans-serif, the cursive and the fantasy family, and Go Mono
 the monospace family. okage bundles no font, and ivy reads the fonts of the
 system only when a program asks. `BookOptions.SystemFonts` adds the fonts
-of the system, which `LoadOSFonts` of okage reads once. No format sets it
-yet: a public option of the formats is a change of the API (D11).
+of the system, which `LoadOSFonts` of okage reads once. A program sets it
+for every format with `ivy.Config.SystemFonts` (D23).
 
 ## The hooks for the later stages
 
@@ -777,6 +777,11 @@ Each guard is marked with `Port:` in the code.
     empty glyph.
 34. `text-overflow: ellipsis` searches for the longest start of the text
     that fits with the ellipsis, for the `PANGO_ELLIPSIZE_END` of Pango.
+35. html5lib of upstream decodes each encoding of the Encoding Standard.
+    The parser of okage decodes UTF-8, UTF-16 and windows-1252, and
+    `LoadHTML` gives it `charset.Reader` of `internal/charset` for the other
+    encodings, such as the code pages of a CHM file. `LoadHTML` passes the
+    charset of a response, as the `transport_encoding` of upstream.
 
 ## What the port leaves out
 
@@ -916,8 +921,6 @@ return an `*ivy.PartialError` that wraps `ivy.ErrLimit` or `ivy.ErrFormat`. Run 
    whole layout. A program that needs them calls `Count` first.
 5. `counter(page)` and `counter(pages)` restart in each document of a
    `Book`.
-6. No format can ask for the fonts of the system yet. A public option for
-   it needs a decision of the maintainers (D11).
-7. A gradient without `extend`, such as a repeating gradient, paints its
+6. A gradient without `extend`, such as a repeating gradient, paints its
    first and its last colors past its domain. okage has no spread mode that
    paints nothing.

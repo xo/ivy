@@ -26,6 +26,11 @@ type Config struct {
 	// Cache shares the fonts and the ICC profiles between documents. A nil
 	// Cache gives each document a cache of its own.
 	Cache *Cache
+	// SystemFonts lets a format that lays out text, such as an ebook, use
+	// the fonts of the system, after the fonts that the document embeds and
+	// the fonts that ivy bundles. Without it, ivy reads no font of the
+	// system, and a page looks the same on each machine (D23).
+	SystemFonts bool
 }
 
 // Log returns the logger of the configuration. It returns a logger that

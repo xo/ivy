@@ -21,6 +21,7 @@ import (
 	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/charset"
 )
 
 // DefaultMaxTreeDepth is the default depth of the elements that a tree
@@ -113,8 +114,15 @@ func LoadHTML(src Source, path string, opts HTMLOptions) (*HTML, error) {
 		}
 		root = TreeFromXML(doc, limits.MaxObjects, DefaultMaxTreeDepth)
 	} else {
-		doc, err := html.ParseDocument(bytes.NewReader(response.Body),
-			html.WithMaxNodes(limits.MaxObjects))
+		// Port: html5lib of upstream decodes every encoding of the Encoding
+		// Standard. The parser of okage decodes UTF-8, UTF-16 and
+		// windows-1252, and charset.Reader decodes the others, such as the
+		// code pages of a CHM file.
+		parseOpts := []html.DocumentOption{html.WithMaxNodes(limits.MaxObjects), html.WithCharsetReader(charset.Reader)}
+		if response.Charset != "" {
+			parseOpts = append(parseOpts, html.WithCharset(response.Charset))
+		}
+		doc, err := html.ParseDocument(bytes.NewReader(response.Body), parseOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("%w: parsing %s: %w", ivy.ErrFormat, path, err)
 		}

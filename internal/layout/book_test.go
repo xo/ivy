@@ -183,3 +183,19 @@ func TestBookPages(t *testing.T) {
 		t.Error("the last page has no ink")
 	}
 }
+
+// TestBookSystemFonts checks that a book with BookOptions.SystemFonts draws
+// its text with a database of its own, which holds the default fonts.
+func TestBookSystemFonts(t *testing.T) {
+	b := NewBook(testBook(1, nil), BookOptions{SystemFonts: true})
+	if b.fc == nil || systemFonts() == defaultFonts() {
+		t.Fatal("expected the database of the fonts of the system")
+	}
+	p, err := b.Page(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inked(t, p) {
+		t.Error("expected ink on the page")
+	}
+}

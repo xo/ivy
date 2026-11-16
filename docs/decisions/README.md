@@ -41,3 +41,5 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D19 | [ivy does not hint glyphs, for now](D019-ivy-does-not-hint-glyphs-for-now.md) | Decided |
 | D20 | [The crate hayro is ported onto the display list](D020-the-crate-hayro-is-ported-onto-the-display-list.md) | Decided. Amends D14. Amends D16 |
 | D21 | [Phase 4 builds its parsers in okage and its decoders in magic](D021-phase-4-builds-its-parsers-in-okage-and-its-decoders-in-magic.md) | Decided |
+| D22 | [A program can give the folder of a Markdown or HTML file](D022-a-program-can-give-the-folder-of-a-markdown-or-html-file.md) | Decided |
+| D23 | [A program can ask for the fonts of the system](D023-a-program-can-ask-for-the-fonts-of-the-system.md) | Decided |

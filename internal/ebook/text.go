@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/xo/ivy/internal/charset"
 )
 
 // Text returns buf as UTF-8 text, without a byte order mark. It reads UTF-8
@@ -12,6 +14,25 @@ import (
 // with "<" and a zero byte, as an XML file in UTF-16 does. Other text is
 // UTF-8, or windows-1252 if it is not valid UTF-8.
 func Text(buf []byte) string {
+	return text(buf, Windows1252)
+}
+
+// TextIn returns buf as UTF-8 text, as Text does. It decodes text that is
+// not valid UTF-8 from the encoding that label names, such as
+// "windows-1251", and from windows-1252 when the WHATWG Encoding Standard
+// does not name label.
+func TextIn(buf []byte, label string) string {
+	return text(buf, func(buf []byte) string {
+		if s, ok := charset.Decode(buf, label); ok {
+			return s
+		}
+		return Windows1252(buf)
+	})
+}
+
+// text returns buf as UTF-8 text, and decodes text that is not valid UTF-8
+// with legacy.
+func text(buf []byte, legacy func([]byte) string) string {
 	switch {
 	case bytes.HasPrefix(buf, []byte{0xef, 0xbb, 0xbf}):
 		return validUTF8(buf[3:])
@@ -26,7 +47,7 @@ func Text(buf []byte) string {
 	case utf8.Valid(buf):
 		return string(buf)
 	}
-	return Windows1252(buf)
+	return legacy(buf)
 }
 
 // validUTF8 returns buf as a string, with U+FFFD in the place of each byte

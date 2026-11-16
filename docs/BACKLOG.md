@@ -10,10 +10,9 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-1. Phase 4, from 2026-11-16: `internal/layout`, `internal/goldmark`, `epub`,
-   `html`, `text`, `fb2`, `markdown`, `mobi` and `chm`. In okage: the parser
-   of HTML, the CSS package and the public readers of web fonts. In magic: the
-   decoders of PalmDoc, HUFF/CDIC and LZX (D21).
+1. The options of D22 and D23 and the encodings of `internal/charset`, from
+   2026-11-17: `internal/charset`, `internal/memfs`, `internal/layout`,
+   `internal/ebook`, `html`, `markdown`, `fb2` and `chm`.
 
 ## Before phases 2 and 3 are pushed
 
@@ -38,35 +37,28 @@ delete the claim.
 3. Return the publisher and the identifier of a book. `internal/ebook` reads
    them, and `ivy.Info` has no field for them. A new field changes the API,
    so it is a decision first (D11). Source: the package `epub`.
-4. Read FictionBook files in KOI8-R and the other encodings of Cyrillic.
-   Source: the package `fb2`.
-5. Decode the code pages of older documents: windows-1250 to windows-1258
-   other than 1252, shift_jis, gbk, big5 and euc-kr. A CHM file names its
-   code page, and nothing in ivy or okage decodes most of them. The tables
-   can come from golang.org/x/text, which needs the approval of the
-   maintainers (D7), or they can go in okage. Source: the package `chm`.
-6. Read the NCX and the guide of a MOBI file, and name a font resource by its
+4. Read the NCX and the guide of a MOBI file, and name a font resource by its
    real type. Source: the package `mobi`.
-7. Bound the time of the selector matcher of okage. A `:has()` selector
+5. Bound the time of the selector matcher of okage. A `:has()` selector
    costs time in the square of the number of elements. Source: stage A of
    the layout.
-8. Number the pages of a book across its documents. In a `layout.Book`,
+6. Number the pages of a book across its documents. In a `layout.Book`,
    `counter(page)` and `counter(pages)` restart in each document, because
    each document of the spine is one document of WeasyPrint. Source: stage
    D of the layout.
-9. Give a page that a program asks for early the fixed boxes and the
+7. Give a page that a program asks for early the fixed boxes and the
    target counters of the later pages. `Document.Page` lays out only the
    pages up to the one that a program asks for. Source: stage C of the
    layout.
-10. Find why `test_page_counters` breaks the text of a margin box into three
-    lines where WeasyPrint gives one. Source: stage C of the layout.
-11. Draw the color glyphs of SVG, PNG and COLR, and the bitmap glyphs of a
-    font. `internal/font` gives the outlines of the glyphs only. Source:
-    stage D of the layout.
-12. Read the profiles of colors when the layout draws. DeviceCMYK, Lab and
+8. Find why `test_page_counters` breaks the text of a margin box into three
+   lines where WeasyPrint gives one. Source: stage C of the layout.
+9. Draw the color glyphs of SVG, PNG and COLR, and the bitmap glyphs of a
+   font. `internal/font` gives the outlines of the glyphs only. Source:
+   stage D of the layout.
+10. Read the profiles of colors when the layout draws. DeviceCMYK, Lab and
     `@color-profile` become sRGB without a profile. Source: stage D of the
     layout.
-13. Give the pages of every PDF of an AZW4 file. `mobi` gives the pages of
+11. Give the pages of every PDF of an AZW4 file. `mobi` gives the pages of
     the first one only. Source: the package `mobi`.
 
 ## Left by phase 3

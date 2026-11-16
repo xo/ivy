@@ -76,7 +76,7 @@ func TestOpen(t *testing.T) {
 }
 
 func TestSource(t *testing.T) {
-	d, err := Open(t.Context(), strings.NewReader(sample), withDir(dir()))
+	d, err := Open(t.Context(), strings.NewReader(sample), WithDir(dir()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func FuzzOpen(f *testing.F) {
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 10000, MaxDepth: 16}}
 	files := dir()
 	f.Fuzz(func(t *testing.T, buf []byte) {
-		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), withDir(files))
+		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), WithDir(files))
 		if err != nil {
 			return
 		}
@@ -254,7 +254,7 @@ func FuzzOpen(f *testing.F) {
 }
 
 func TestPages(t *testing.T) {
-	d, err := Open(t.Context(), strings.NewReader(sample), withDir(dir()))
+	d, err := Open(t.Context(), strings.NewReader(sample), WithDir(dir()))
 	if err != nil {
 		t.Fatal(err)
 	}
