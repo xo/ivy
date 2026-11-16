@@ -8,11 +8,14 @@ are in [`decisions/`](decisions/README.md). The design of the API is in
 
 ## Status
 
-On 2026-11-16 the repository holds the plan and the rules, and no code. This
-is phase 0 (D3). The maintainers decided D1 to D15, and the decisions were
-consolidated before the first commit (D4). No question blocks phase 1, and
-phase 1 starts when this plan is committed. The open questions are at the end
-of this document.
+On 2026-11-16 phase 1 is done. The root package holds the document API of
+`API.md`, and these formats open, as the section of phase 1 below says:
+OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
+OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
+archives in zip and in tar, and Photoshop. The maintainers decided D1 to D15,
+and the decisions were consolidated before the first commit (D4). The work
+that phase 1 left is in `BACKLOG.md`. The open questions are at the end of
+this document.
 
 ## Purpose
 
@@ -149,15 +152,31 @@ containers add up to the 41 to 59 months of the core in `FORMATS.md`.
 This document, the design of the API, the decisions, the survey and the
 setup of D2. Phase 0 ends when this plan is committed.
 
-### Phase 1. The harness and the previews (3 to 4 months)
+### Phase 1. The harness and the previews (3 to 4 months, done)
 
-The root package of `API.md`, `docs_test.go`, `skills_test.go`, the CI
-workflow and the test module. Then the previews of D11 that are PNG, JPEG or
-TIFF: OpenDocument, Office Open XML, iWork, OpenRaster, Krita, the TIFF and
-EPSI previews of EPS, camera RAW, and the comic book archives in zip. PSD,
-with the 16-bit files fixed. iv drops `oov/psd` and gets new formats. A
+The root package of `API.md`, `docs_test.go`, `skills_test.go`, a test of
+the imports of D6, the CI workflow and the test module. Then the previews of
+D11 that are PNG, JPEG or TIFF: OpenDocument, Office Open XML, iWork,
+OpenRaster, Krita, the TIFF and EPSI previews of EPS, camera RAW, and the
+comic book archives in zip and in tar. PSD, with the 16-bit files fixed. A
 preview in EMF or WMF waits for phase 5, and CBR and CB7 wait for the
 approval of their outside packages (D6, D7).
+
+Phase 1 delivered these packages, on 2026-11-16:
+
+| Package | What a document gives |
+| --- | --- |
+| `odf` | the thumbnail of an OpenDocument file |
+| `docx`, `xlsx`, `pptx` | the thumbnail of an Office Open XML file, in PNG, JPEG or GIF |
+| `iwork` | the previews of Pages, Keynote and Numbers |
+| `ora` | the merged image of OpenRaster and Krita as one page, the thumbnail, and `image.Decode` |
+| `ps` | the TIFF preview of DOS EPS, the EPSI preview, and the DSC comments |
+| `camera` | the JPEG images of CR2, CR3, NEF, ARW, DNG, ORF, RW2, PEF, SRW and RAF, the make, the model and the date, and `image.Decode` for the formats with a magic of their own |
+| `comic` | each image of a CBZ or a CBT file as a page, and the first page as the cover |
+| `psd` | the image of PSD and PSB as one page, the layers of a file without a merged image, the thumbnail, and `image.Decode` |
+
+The test module compares `psd` with ImageMagick. iv can now drop `oov/psd`.
+That change is work for iv, in `BACKLOG.md`.
 
 ### The containers with icons (7 to 10 months, beside the phases)
 

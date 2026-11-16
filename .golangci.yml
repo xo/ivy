@@ -1,0 +1,53 @@
+version: "2"
+
+# The linters of the go-pedantry skill, for golangci-lint 2, as in magic.
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - revive
+    - errorlint
+    - nilerr
+    - wrapcheck
+    - prealloc
+    - unconvert
+    - usetesting
+  settings:
+    # An error of a package of this module needs no wrap to cross into
+    # another one. okage returns the errors of the drawing.
+    wrapcheck:
+      # The defaults of wrapcheck, and the error of a context, which a caller
+      # tests with errors.Is.
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+        - .WithMessage(
+        - .WithMessagef(
+        - .WithStack(
+        - (context.Context).Err()
+      ignore-package-globs:
+        - github.com/xo/ivy*
+        - github.com/xo/okage*
+    staticcheck:
+      checks:
+        - all
+        # The defaults of staticcheck leave these out.
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+  exclusions:
+    paths:
+      # The copies of D7 keep the style of their project
+      # (docs/UPSTREAM.md).
+      - psd/internal/oovpsd

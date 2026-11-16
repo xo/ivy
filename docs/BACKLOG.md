@@ -12,12 +12,33 @@ delete the claim.
 
 None.
 
-## Before the first port
+## Approvals
 
-1. Write `docs/UPSTREAM.md`, the rules for a port and for a copy, before the
-   first port or copy (D7). okage `docs/UPSTREAM.md` is the model. It lists
-   hayro, moxcms and WeasyPrint, with a base commit for each, and the copies,
-   such as oov/psd, mscfb and the codecs of dejapdf (D14, D15). Source: D7.
+1. Approve `golang.org/x/image` as a dependency of ivy (D7). Phase 1 imports
+   its TIFF decoder in `ps` and its WebP decoder in `comic`. okage already
+   requires the module, and okage D6 approved it for okage. Source: phase 1.
+
+## Left by phase 1
+
+1. Describe the documents whose facts are in XML: the meta.xml of
+   OpenDocument, the docProps/core.xml of Office Open XML, the stack.xml of
+   OpenRaster, and the ComicInfo.xml of a comic. It waits for the XML parser
+   of okage (D7). Source: phase 1.
+2. Decode a TIFF preview of EPS with a palette of 2 or 4 bits, which
+   ImageMagick writes and `golang.org/x/image/tiff` does not decode. `ps`
+   returns `ErrUnsupported` for it. Source: phase 1.
+3. Read the entries of a zip archive that ZipCrypto or the AES of WinZip
+   encrypts, for a comic book archive (D12). `zipdoc` returns
+   `ErrUnsupported` for such an entry. Source: phase 1.
+4. Give `ivy.Cache` a way for a format package to store and load a value, for
+   the fonts of phase 2. Source: phase 1.
+5. Read the previews that ORF files keep in the maker notes of Olympus.
+   `camera` reads only the previews of the IFDs. Source: phase 1.
+6. Add oracles to the test module for EPS, with Ghostscript, and for the
+   previews of OpenDocument, with LibreOffice (D13). Source: phase 1.
+7. Add each package of `docs/upstream/upstreams.tsv` that a phase copies or
+   ports, with its base commit, before its first commit: hayro, moxcms and
+   WeasyPrint (D14, D15), mscfb, and the codecs of dejapdf. Source: D7.
 
 ## Sources to examine
 
@@ -55,6 +76,18 @@ repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
 6. Extend the CSS parser with what the layout of D15 needs, such as `@page`,
    `@media`, `@font-face` and the selectors of CSS 3, with tinycss2 and
    cssselect2 (BSD-3-Clause) as the reference. Source: D15.
+
+## Work for iv
+
+Each item is a change to iv that ivy makes possible. Do not edit iv from this
+repository. Ask a maintainer or the `iv` peer.
+
+1. Replace the decoder `psd` of iv, which uses `oov/psd` and falls back to
+   libvips, with the package `psd` of ivy, which decodes the files of 16 bits.
+   Source: phase 1.
+2. Add decoders for the previews of phase 1: `odf`, `docx`, `xlsx`, `pptx`,
+   `iwork`, `ora`, `ps`, `camera` and `comic`, before the decoders that run
+   `soffice`, `ebook-convert` or libvips. Source: phase 1.
 
 ## Work for magic
 

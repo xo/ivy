@@ -12,10 +12,10 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-16 the repository holds the plan, the design of the API and the
-rules, and no code. This is phase 0 (D3), and phase 1 starts when the plan is
-committed. The survey of the formats is in `docs/FORMATS.md`, and the open
-questions are at the end of `docs/PLAN.md`.
+On 2026-11-16 phase 1 is done: the document API, and the previews and pages
+of the formats that `docs/PLAN.md` lists under phase 1. The survey of the
+formats is in `docs/FORMATS.md`, and the open questions are at the end of
+`docs/PLAN.md`.
 
 [okage]: https://github.com/xo/okage
 [magic]: https://github.com/xo/magic
@@ -51,11 +51,11 @@ every other agent read the same rules. Edit this file, not `CLAUDE.md`.
 | reading XML, HTML or CSS, or about to port or copy any code | D7. Use what okage or magic has first |
 | needing a decoder of compressed data | D8 |
 | adding an encoder, or a format of the long tail | D1, then D6 |
-| adding an outside package, or copying or porting code from another project | D7. Then `docs/UPSTREAM.md`, when it exists |
+| adding an outside package, or copying or porting code from another project | D7. Then [docs/UPSTREAM.md](docs/UPSTREAM.md) and `docs/upstream/upstreams.tsv` |
+| adding a comparison with an oracle, or running one | D13, then `test/doc.go` |
 | needing a feature of okage or of magic | D8, then "Work for okage" or "Work for magic" in [docs/BACKLOG.md](docs/BACKLOG.md), then "Peer sessions" below |
 | writing generic code, or a hot loop that can use SIMD | D9 |
 | working on a file that a password protects, or on DRM | D12 |
-| adding a comparison with an outside program | D13 |
 | looking for work that is known and not done | [docs/BACKLOG.md](docs/BACKLOG.md) |
 | writing a document, a code comment, an error message or a commit message | the `simple-english` skill. Load it first. Then "Writing documentation" below |
 | writing or reviewing Go code | the `go-pedantry` skill. Load it first. Then "Hard rules" below |
@@ -75,7 +75,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision is D16, and the next question is question 2.
+repeat. The next decision has the number 16, and the next question is
+question 2.
 
 ## Hard rules
 
@@ -161,11 +162,19 @@ On 2026-11-16 the repository holds these files:
 | `docs/PLAN.md` | the plan and the open questions |
 | `docs/API.md` | the design of the public API and the expected layout of the packages |
 | `docs/FORMATS.md` | the survey of the formats, with the estimates of the outside models |
-| `docs/BACKLOG.md` | the work that is known and not done, and the work for okage and magic |
+| `docs/BACKLOG.md` | the work that is known and not done, and the work for okage, magic and iv |
+| `docs/UPSTREAM.md` | the rules for code that ivy copies or ports |
+| `docs/upstream/upstreams.tsv` | the projects that ivy copies or ports, with their commits |
 | `docs/decisions/` | the decisions, one file each, with an index |
+| `.golangci.yml`, `.github/workflows/test.yml` | the linters and CI |
+| `*.go` in the root | the package `ivy`: the document API of D11, and the tests of the documents, the skills and the imports |
+| `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/` |
+| `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
+| `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |
+| `internal/fixture/` | the files that the tests build in memory |
+| `test/` | the test module, with the oracles (D13) |
 
-When code exists, it goes where "The layout of the packages" in
-`docs/API.md` says (D6).
+Code goes where "The layout of the packages" in `docs/API.md` says (D6).
 
 ## Before you stage
 
@@ -183,15 +192,21 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-When Go code exists, these commands must pass before you stage a change to
-it. Phase 1 adds the commands for the SIMD build and the test module:
+These commands must pass before you stage a change to Go code. They cover
+the scalar build, the SIMD build (D9), the race detector (D11) and the test
+module, which needs the oracles (D13):
 
 ```sh
 test -z "$(gofmt -l $(git ls-files -co --exclude-standard '*.go'))"
-go vet ./...
+go vet ./... && GOEXPERIMENT=simd go vet ./...
 go test -race -count=1 ./...
+GOEXPERIMENT=simd go test -count=1 ./...
 golangci-lint run ./...
+(cd test && go vet ./... && go test -count=1 ./... && golangci-lint run ./...)
 ```
+
+Before you stage a change to a decoder, run its fuzz test for a minute, such
+as `go test -run '^$' -fuzz FuzzOpen -fuzztime 1m ./psd`.
 
 ## Writing documentation
 

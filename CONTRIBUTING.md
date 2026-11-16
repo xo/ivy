@@ -13,8 +13,8 @@ Before you change anything, read three things:
 Do not decide an open question on your own. Add it to the end of
 `docs/PLAN.md`, and ask a maintainer.
 
-On 2026-11-16 ivy holds the plan and no code. The survey of the formats is
-in [`docs/FORMATS.md`](docs/FORMATS.md), and the design of the API is in
+On 2026-11-16 phase 1 is done. The survey of the formats is in
+[`docs/FORMATS.md`](docs/FORMATS.md), and the design of the API is in
 [`docs/API.md`](docs/API.md).
 
 ## Four rules that a change can break
@@ -31,8 +31,19 @@ in [`docs/FORMATS.md`](docs/FORMATS.md), and the design of the API is in
 
 ivy ports or copies code from other projects. The work is made from a
 checkout of each project in `upstream/<repository>/`, in the root of the
-repository. Git ignores the folder. `docs/UPSTREAM.md` will list each project
-and say how to port or copy it. Do not edit a file in a checkout.
+repository. Git ignores the folder. [`docs/UPSTREAM.md`](docs/UPSTREAM.md)
+says how to port or copy a project, and `docs/upstream/upstreams.tsv` lists
+each one. Do not edit a file in a checkout.
+
+## The oracles
+
+The folder `test/` is a Go module of its own. Its tests compare ivy with
+outside programs, such as ImageMagick (D13). CI does not run them. Run them
+on a machine that has the programs:
+
+```bash
+cd test && go test ./...
+```
 
 ## Agent skills
 

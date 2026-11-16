@@ -21,7 +21,7 @@ ivy needs:
 | WOFF, WOFF2 and EOT | `okage/internal/webfont` | the fonts of EPUB and of web pages |
 | brotli | `okage/internal/brotli` | WOFF2 |
 | SVG images | `okage/svg` | EPUB and Office files that hold SVG |
-| Text, fonts and the fonts of the system | `okage/svg` (okage D36, D37 and D46) | the layout and the font layer (D10) |
+| Text, fonts and the fonts of the system | `okage/svg` (okage D36, okage D37 and okage D46) | the layout and the font layer (D10) |
 | xz and zstd | `magic/compress` | the Linux packages and other containers |
 
 ivy reads XML with the XML parser of okage, and it does not import

@@ -229,19 +229,36 @@ type Config struct {
 	Cache *Cache
 }
 
+// Log returns the logger of the configuration, or a logger that discards
+// each record when Logger is nil.
+func (cfg Config) Log() *slog.Logger
+
 // Limits bound the work on one document, because each file is input from a
-// stranger (D5). A zero field takes the default of the format. The context
+// stranger (D5). A field that is zero or less takes its default. The context
 // bounds the time.
 type Limits struct {
-	MaxMemory  int64 // the bytes that the document can allocate
+	MaxMemory  int64 // the bytes of one decoded part, such as an image or an entry
 	MaxPixels  int64 // the pixels of the largest image that it decodes
 	MaxObjects int   // the objects, entries or records that it reads
 	MaxDepth   int   // the depth of nesting that it follows
 }
 
+// The defaults of the limits.
+const (
+	DefaultMaxMemory  = 512 << 20
+	DefaultMaxPixels  = 1 << 28
+	DefaultMaxObjects = 1 << 20
+	DefaultMaxDepth   = 64
+)
+
+// WithDefaults returns the limits, with the default in each field that is
+// zero or less.
+func (lim Limits) WithDefaults() Limits
+
 // Cache holds the fonts of the system, the fonts that documents embed, and
 // the transforms of ICC profiles. It is safe for concurrent use. There is no
-// global cache.
+// global cache. The formats of phase 1 use no fonts, so it is empty until
+// phase 2.
 type Cache struct{ /* unexported */ }
 
 // NewCache returns an empty cache.
@@ -341,7 +358,9 @@ The form of the options repeats in each package. A generic helper in
 `Option` type, so that an option of one format does not compile for another.
 
 A format that holds one image, such as `psd`, also has `Decode` and
-`DecodeConfig`, and registers with the package `image` from `init` (D11).
+`DecodeConfig`, and registers with the package `image` from `init` (D11). A
+format can add a method of its own to its `Document`, such as `Mime` of `odf`
+and `ora`, which returns the mime type that the file declares.
 
 A container, such as `dmg`, has the same `Open`, and its `Document` is a
 `Previewer` and a `Describer`, but not a `Pager`.
