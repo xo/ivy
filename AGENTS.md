@@ -215,12 +215,13 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-ivy builds with a `go.work` that points at the checkouts of okage and magic
-next to it, at `../okage` and `../magic`. okage must tag the release that
-makes `roxmltree` public (okage D47) and holds the parsers of phase 4 (okage
-D49, okage D50 and okage D51). magic must tag the release that holds the
-decoders of phase 4 (magic D61). Until then, ivy needs the `go.work`. Git
-ignores `go.work`. Make it with `go work init . ./test ./fonts ../okage ../magic`.
+The `go.mod` of ivy requires commits of okage and magic that are pushed and
+not yet tagged, as pseudo-versions. When okage and magic tag those commits,
+require the tags. A change that needs a commit of okage or magic that is not
+pushed builds through a `go.work` that points at the checkouts next to ivy.
+Git ignores `go.work`. Make it with
+`go work init . ./test ./fonts ../okage ../magic`. Run the checks without it,
+with `GOWORK=off`, before you push, as CI does.
 
 These commands must pass before you stage a change to Go code. They cover
 the scalar build, the SIMD build (D9), the race detector (D11) and the test

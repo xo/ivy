@@ -12,17 +12,12 @@ delete the claim.
 
 None.
 
-## Before phases 2 and 3 are pushed
+## Before a release of ivy
 
-1. okage tags a release with okage D47, the public `roxmltree`, and okage D48,
-   the public `kurbo`. Then the `go.mod` of ivy requires that release, and the
-   `go.work` that points at a checkout of okage is no longer needed. Until
-   then CI fails, because okage v0.9.0 has neither package. Source: phases 2
-   and 3.
-2. okage tags a release with okage D49, okage D50 and okage D51, and magic tags a release
-   with `compress/palmdoc`, `compress/huffcdic` and `compress/lzx` (magic
-   D61). Then the `go.mod` of ivy requires both releases. Until then `mobi`
-   and `chm` build only through the `go.work`. Source: phase 4.
+1. okage and magic tag the commits that the `go.mod` of ivy and of its test
+   module require as pseudo-versions: okage at `73730383e33c` and magic at
+   `5bda5bb2eaed`. Then the `go.mod` files require the tags. Source: the
+   push of phases 1 to 6.
 
 ## Found by the visual review
 
