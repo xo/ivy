@@ -24,6 +24,36 @@ None.
    D61). Then the `go.mod` of ivy requires both releases. Until then `mobi`
    and `chm` build only through the `go.work`. Source: phase 4.
 
+## Found by the visual review
+
+The review command in `test/cmd/review` renders the corpus of
+`test/review/corpus.tsv` beside reference programs. Its run of 2026-11-17
+found these faults. Each item names a file of the corpus.
+
+1. Read a FictionBook file that uses a namespace prefix that it does not
+   declare, as readers of FictionBook do. `fbreaderj/fb2/whiteguard.fb2`
+   fails with "an unknown namespace prefix". Source: `fb2`.
+2. Read an EPUB whose spine holds SVG documents.
+   `idpf/epub/svg-in-spine.epub` fails with "epub without a document".
+   Source: `epub`.
+3. Return ErrUnsupported, not ErrFormat, for Word 6, Word 95 and PowerPoint
+   95 files, or read them. Source: `msdoc` and `msppt`.
+4. Read the metafiles that gowemf refuses: `aspose/emf/enhanced-metafile.emf`
+   (the record count), `aspose/wmf/windows-metafile.wmf` (the end of the
+   file) and `poi/wmf/60677.wmf` (an object reference). Windows draws them.
+   Source: `internal/gowemf`.
+5. Find why `poi/pptx/grouping-issues.pptx` and `poi/ppt/defense-final.ppt`
+   draw pages unlike LibreOffice's, with differences near 145, and why the
+   pictures of `poi/xlsx/picture.xlsx` and `poi/docx/picture-watermark.docx`
+   differ. Source: `pptx`, `msppt`, `xlsx` and `docx`.
+6. Substitute a font for CJK text that a PDF does not embed.
+   `pdfjs/pdf/text-cjk-nonembedded.pdf` differs by 19.9. Source: `pdf`.
+7. Decide whether a MOBI or AZW3 book shows its cover as its first page, as
+   calibre does. Source: `mobi`.
+8. Give PostScript and EPS files their pages, which needs the interpreter
+   of the long tail (D1). Five files of the corpus give no page. Source:
+   `ps`.
+
 ## Left by phase 5
 
 1. Decode the XOR obfuscation of Excel, a weak protection of `.xls` files
@@ -186,12 +216,7 @@ Each source below was named in the survey and was not examined past its
 license and its size. Examine each one before a decision names it. Source:
 `docs/FORMATS.md`.
 
-1. [sergev/dejapdf](https://github.com/sergev/dejapdf) (MIT). It holds DjVu
-   decoders, and packages named `jbig2`, `jpx`, `ccitt` and `pdfread`. Find
-   out which of them decode, and which only encode.
-2. [mgilbir/gowemf](https://github.com/mgilbir/gowemf) (MIT). A pure Go
-   reader of EMF, EMF+ and WMF from 2026-10. Find out how complete it is.
-3. [blacktop/go-apfs](https://github.com/blacktop/go-apfs) (Apache-2.0) and
+1. [blacktop/go-apfs](https://github.com/blacktop/go-apfs) (Apache-2.0) and
    [diskfs/go-diskfs](https://github.com/diskfs/go-diskfs) (MIT). Find out
    if they read from an `io.ReaderAt` without a file on disk.
 

@@ -19,6 +19,10 @@
 # test module (D13). The corpus is fetched, not source.
 /test/corpus
 
+# The cache of the command test/cmd/review: the files of the corpus that it
+# downloads, and the pages that the reference programs render.
+/test/review/cache
+
 # The workspace that points at a checkout of okage next to ivy, until okage
 # tags the release that ivy needs. Each maintainer keeps their own.
 /go.work
