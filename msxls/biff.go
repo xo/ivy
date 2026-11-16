@@ -136,35 +136,55 @@ func records(wb []byte, start int) iter.Seq[record] {
 // at the offset filePass. It leaves in the clear the headers of the
 // records, the records that MS-XLS 2.2.10 names, and the first 4 bytes of
 // BOUNDSHEET.
+//
+// The XOR obfuscation starts each record at the element of the
+// obfuscation array of the end of the record: the byte at the position p of
+// a record of n bytes takes the element p+n modulo 16 (MS-XLS 2.2.10).
 func decrypt(ctx context.Context, wb []byte, filePass []byte, cfg ivy.Config, end int) error {
-	if len(filePass) < 2 || le.Uint16(filePass) != 1 {
-		return fmt.Errorf("workbook with xor obfuscation: %w", ivy.ErrUnsupported)
+	if len(filePass) < 2 {
+		return fmt.Errorf("filepass of %d bytes: %w", len(filePass), ivy.ErrFormat)
 	}
-	info, err := offcrypto.ParseEncryptionInfo(filePass[2:])
-	if err != nil {
-		return err
-	}
-	if info.Scheme != offcrypto.RC4 && info.Scheme != offcrypto.RC4CryptoAPI {
-		return fmt.Errorf("workbook with %v encryption: %w", info.Scheme, ivy.ErrUnsupported)
+	var info *offcrypto.Info
+	switch le.Uint16(filePass) {
+	case 0:
+		if len(filePass) < 6 {
+			return fmt.Errorf("filepass of the xor obfuscation of %d bytes: %w", len(filePass), ivy.ErrFormat)
+		}
+		info = offcrypto.XORMethod1(le.Uint16(filePass[2:]), le.Uint16(filePass[4:]))
+	case 1:
+		var err error
+		if info, err = offcrypto.ParseEncryptionInfo(filePass[2:]); err != nil {
+			return err
+		}
+		if info.Scheme != offcrypto.RC4 && info.Scheme != offcrypto.RC4CryptoAPI {
+			return fmt.Errorf("workbook with %v encryption: %w", info.Scheme, ivy.ErrUnsupported)
+		}
+	default:
+		return fmt.Errorf("workbook with the encryption type %d: %w", le.Uint16(filePass), ivy.ErrUnsupported)
 	}
 	key, err := msole.Key(ctx, info, cfg, defaultPassword)
 	if err != nil {
 		return fmt.Errorf("opening excel workbook: %w", err)
 	}
+	xor := info.Scheme == offcrypto.XOR
 	for off := end; off+4 <= len(wb); {
 		typ := le.Uint16(wb[off:])
 		n := int(le.Uint16(wb[off+2:]))
 		data := wb[off+4 : min(off+4+n, len(wb))]
+		shift := 0
+		if xor {
+			shift = n
+		}
 		switch typ {
 		case recBOF, recFilePass, recUsrExcl, recFileLock, recInterfaceHdr, recRRDInfo, recRRDHead:
 		case recBoundSheet:
 			if len(data) > 4 {
-				if err := key.DecryptAt(data[4:], int64(off+8), blockSize); err != nil {
+				if err := key.DecryptAt(data[4:], int64(off+8+shift), blockSize); err != nil {
 					return err
 				}
 			}
 		default:
-			if err := key.DecryptAt(data, int64(off+4), blockSize); err != nil {
+			if err := key.DecryptAt(data, int64(off+4+shift), blockSize); err != nil {
 				return err
 			}
 		}

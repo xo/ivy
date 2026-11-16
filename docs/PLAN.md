@@ -8,12 +8,13 @@ are in [`decisions/`](decisions/README.md). The design of the API is in
 
 ## Status
 
-On 2026-11-17 phases 1 to 5 are done. The root package holds the document
+On 2026-11-17 phases 1 to 6 are done. The root package holds the document
 API of `API.md`, the display list and the fonts of D10 hold the drawing of a
 page description, and XPS renders, as the section of phase 2 below says. PDF
 renders, as the section of phase 3 says. The layout of HTML and CSS puts the
 ebooks on pages, as the section of phase 4 says. The Office formats give
-their pages, as the section of phase 5 says. These
+their pages, as the section of phase 5 says, and DjVu gives its pages, as
+the section of phase 6 says. These
 formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
@@ -119,7 +120,7 @@ into HTML, with a style sheet that sets the default fonts and the page size.
 
 The layout is a port of the layout of WeasyPrint (D15). It paginates with
 `@page`. It parses XML, HTML and CSS with the parsers of okage, and it shapes
-text with the text API of okage, on go-text (D7). Where a parser of okage
+text with the text API of okage, on the copy of go-text in okage (D7, D28). Where a parser of okage
 lacks something, the work goes to okage (D8).
 
 ### Go 1.27
@@ -281,7 +282,8 @@ previews and the text of the binary formats, and the encryption of
 MS-OFFCRYPTO and OpenDocument. iv drops `soffice`. D24 holds the choices:
 a copy of gowemf for EMF and WMF, a public reader of Compound Files in
 magic, a module of fonts with the metrics of the Office fonts, the preset
-shapes of ECMA-376, Blowfish from `golang.org/x/crypto`, charts with zuzu,
+shapes of ECMA-376, Blowfish from `golang.org/x/crypto`, charts with zuzu
+(which D27 replaced with charts that ivy draws itself),
 and every sheet of a spreadsheet.
 
 Phase 5 delivered these packages, on 2026-11-17:
@@ -292,12 +294,12 @@ Phase 5 delivered these packages, on 2026-11-17:
 | `docx`, `odf`, `rtf` | the pages of Word, OpenDocument text and RTF, through the layout |
 | `xlsx`, `odf`, `csv` | every sheet of Excel and OpenDocument, and CSV, as tables on pages |
 | `pptx`, `odf` | one page for each slide or drawing, on the display list |
-| `msdoc`, `msxls`, `msppt` | the text, the sheets and the slides of the binary formats, their thumbnails and their RC4 encryption |
+| `msdoc`, `msxls`, `msppt` | the text and the sheets of the binary formats through the layout, the slides on the display list with `internal/drawingml`, their thumbnails, and their RC4 and XOR encryption |
 | `vsdx`, `pub` | the thumbnails and the properties of Visio and Publisher |
 | `fonts` | a module of fonts with the metrics of the fonts of Office (D24) |
 | `internal/gowemf`, `internal/metafile` | the copy of gowemf, and the playback of a metafile onto the display list |
 | `internal/drawingml`, `odf/internal/drawpage` | the shapes, the colors, the fills, the pictures and the text of slides |
-| `internal/chart` | the charts, drawn with zuzu |
+| `internal/chart` | the charts, which ivy lays out and draws as Office does (D27) |
 | `internal/sheet`, `internal/numfmt` | the sheets as HTML tables, and the number formats of Excel |
 | `internal/offcrypto`, `odf/internal/odfcrypt` | the encryption of MS-OFFCRYPTO and of OpenDocument |
 | `internal/msole`, `internal/fontdb` | the code of the binary formats, and the font database of a program |
@@ -309,10 +311,21 @@ device. The test module compares the pages of each kind with LibreOffice.
 The work that is left is under "Left by phase 5" in `BACKLOG.md`. An
 OpenDocument file that LibreOffice encrypts with Argon2id opens (D25).
 
-### Phase 6. DjVu (1 to 2 months)
+### Phase 6. DjVu (1 to 2 months, done)
 
 A copy of the decoders of DjVu from dejapdf, after the backlog examines
-them.
+them (D26).
+
+Phase 6 delivered these packages, on 2026-11-17:
+
+| Package | What it holds |
+| --- | --- |
+| `djvu` | the pages of single and bundled DjVu documents, with shared dictionaries, G4 masks, JPEG layers, palettes, rotation and gamma, the thumbnails and the metadata |
+| `djvu/internal` | the copy of the decoders of dejapdf: `iff`, `zp`, `bzz`, `jb2`, `iw44` and the document model `doc` |
+
+The test module compares each page with ddjvu of DjVuLibre, within a mean
+difference of 1.6. An indirect document returns `ErrUnsupported` (D26).
+The work that is left is under "Left by phase 6" in `BACKLOG.md`.
 
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.

@@ -64,7 +64,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 Each other format of [`FORMATS.md`](FORMATS.md) gets a package named after
 its main extension, such as `deb`, `rpm`, `appimage` and `iso`. Code that only
 one format uses stays inside that format, such as `pdf/internal/syntax` or the
-IW44 wavelets in `djvu`.
+IW44 wavelets in `djvu/internal`.
 
 The package `html` of ivy has the same name as the package `html` of okage. A
 program that imports both renames one.
@@ -407,7 +407,8 @@ a program needs one, the maintainers decide to export it.
    of okage changes in place when it transforms, so a shared path, such as
    the outline of a glyph, is cloned first with `display.Clone`.
 2. `internal/font` reads the faces: the TrueType, OpenType and CFF fonts with
-   go-text, and Type 1 and Type 3 with the port of hayro-font. It gives the
+   the copy of go-text in okage (D28), and Type 1 and Type 3 with the port
+   of hayro-font. It gives the
    substitute of a font of Office, such as Carlito for Calibri.
    `internal/fontdb` builds the font database of a program from
    `ivy.Config.Fonts`, the Go fonts and the fonts of the system (D23, D24),

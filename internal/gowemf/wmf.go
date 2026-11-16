@@ -46,10 +46,12 @@ func (p *parser) wmf(placeable bool) error {
 	}
 	w := &WMFHeader{Type: u16(h), Version: u16(h[4:]), SizeWords: u32(h[6:]), Objects: u16(h[10:]), MaxRecordWords: u32(h[12:])}
 	p.header.WMF = w
-	if uint64(w.SizeWords)*2 != uint64(len(h)) {
+	// ivy: Windows plays a file with bytes after its last record, so a size
+	// smaller than the data is not an error. A larger size means that the
+	// file is cut short.
+	if uint64(w.SizeWords)*2 > uint64(len(h)) {
 		return malformed(start+6, "WMF file size")
 	}
-	var max uint32
 	for off := start + 18; off < len(b); {
 		if len(b)-off < 6 {
 			return malformed(off, "WMF record header")
@@ -59,17 +61,12 @@ func (p *parser) wmf(placeable bool) error {
 		if err := p.record(off, n, len(b)-off, 6, 2); err != nil {
 			return err
 		}
-		if words > max {
-			max = words
-		}
 		end := off + int(n)
-		if typ == 0 {
-			if n != 6 || end != len(b) {
-				return malformed(off, "WMF EOF")
-			}
-			if max != w.MaxRecordWords {
-				return malformed(start+12, "WMF maximum record size")
-			}
+		// ivy: the bytes after the EOF record are not read, and the
+		// maximum record size of the header is not checked, as Windows
+		// does not use them.
+		if typ == 0 && n != 6 {
+			return malformed(off, "WMF EOF")
 		}
 		if err := p.emit(WMF, uint32(typ), 0, off, -1, b[off:end], b[off+6:end]); err != nil {
 			return err
@@ -79,5 +76,7 @@ func (p *parser) wmf(placeable bool) error {
 		}
 		off = end
 	}
-	return malformed(len(b), "missing WMF EOF")
+	// ivy: Windows plays a file without an EOF record when its last record
+	// ends at the end of the file.
+	return nil
 }

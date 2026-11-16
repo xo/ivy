@@ -63,7 +63,9 @@ type Document struct {
 	archive *archive
 	lim     ivy.Limits
 	log     *slog.Logger
-	system  system
+	// fonts are the fonts of the configuration, for the layout.
+	fonts  ebook.Fonts
+	system system
 	// lcid is the LCID of the help file: the one of #SYSTEM, or else the one
 	// of the ITSF header.
 	lcid uint32
@@ -104,7 +106,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if err != nil {
 		return nil, err
 	}
-	d = &Document{archive: a, lim: lim, log: o.cfg.Log(), fsys: zipdoc.NewFS(), lower: make(map[string]string)}
+	d = &Document{archive: a, lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), fsys: zipdoc.NewFS(), lower: make(map[string]string)}
 	d.system = a.readSystem()
 	d.lcid = a.lcid
 	if d.system.hasLCID {
@@ -168,7 +170,7 @@ func (d *Document) layoutSource(context.Context) (layout.Source, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Previews satisfies the ivy.Previewer interface. A help file has no

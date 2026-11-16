@@ -17,6 +17,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/offcrypto"
 )
 
 // The passwords of the test files.
@@ -226,7 +227,7 @@ func TestOpenErrors(t *testing.T) {
 		{"no fib", word(func(w []byte) { w[0] = 0 }), ivy.ErrFormat},
 		{"word 95", word(func(w []byte) { binary.LittleEndian.PutUint16(w[2:], 0x0065) }), ivy.ErrUnsupported},
 		{"no table stream", fixture.CFB(fixture.CFBEntry{Name: "WordDocument", Data: s["WordDocument"]}), ivy.ErrFormat},
-		{"xor obfuscation", word(func(w []byte) { w[11] |= 0x81 }), ivy.ErrUnsupported},
+		{"xor obfuscation", word(func(w []byte) { w[11] |= 0x81 }), ivy.ErrPassword},
 		{"no piece table", word(func(w []byte) {
 			off := 34 + 2*int(binary.LittleEndian.Uint16(w[32:]))
 			off += 2 + 4*int(binary.LittleEndian.Uint16(w[off:])) + 2
@@ -245,6 +246,123 @@ func TestOpenErrors(t *testing.T) {
 	if _, err := Open(ctx, bytes.NewReader(readFile(t, "text.doc"))); !errors.Is(err, context.Canceled) {
 		t.Errorf("expected context.Canceled, got: %v", err)
 	}
+}
+
+// obfuscate applies the XOR obfuscation of Word to the streams of text.doc
+// with the password, as Word does (MS-DOC 2.2.6.1). The obfuscation of
+// method 2 is its own inverse, so the key decrypts and encrypts.
+func obfuscate(t *testing.T, password string) []byte {
+	t.Helper()
+	s := streamsOf(t, "text.doc")
+	verifier := offcrypto.XORVerifier2(password)
+	key, err := offcrypto.XORMethod2(verifier).Key(t.Context(), password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, table := bytes.Clone(s["WordDocument"]), bytes.Clone(s["1Table"])
+	binary.LittleEndian.PutUint16(w[10:], binary.LittleEndian.Uint16(w[10:])|flagEncrypted|flagObfuscated)
+	binary.LittleEndian.PutUint32(w[14:], verifier)
+	if err := key.DecryptAt(w[clearBytes:], clearBytes, blockSizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := key.DecryptAt(table, 0, blockSizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	return fixture.CFB(
+		fixture.CFBEntry{Name: "WordDocument", Data: w},
+		fixture.CFBEntry{Name: "1Table", Data: table},
+	)
+}
+
+func TestXOR(t *testing.T) {
+	const password = "Ivy test"
+	buf := obfuscate(t, password)
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ivy.ErrPassword without a password, got: %v", err)
+	}
+	if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: "wrong"})); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ivy.ErrPassword for a wrong password, got: %v", err)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: password}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := htmlOf(t, d); !strings.Contains(got, "bold text") || !strings.Contains(got, "After the table.") {
+		t.Errorf("expected the text of the document:\n%s", got)
+	}
+}
+
+func TestWord6(t *testing.T) {
+	// a FIB of Word 6 and its text, which Word did not save fast
+	text := "First paragraph.\rSecond \xe9t\xe9.\r\x0cNew section.\r"
+	w := make([]byte, 0x300+len(text), 0x400)
+	le := binary.LittleEndian
+	le.PutUint16(w, wIdentWord6)
+	le.PutUint16(w[2:], 0x0065)
+	le.PutUint16(w[6:], 0x0409)
+	le.PutUint32(w[word6FcMinOffset:], 0x300)
+	le.PutUint32(w[word6FcMacOffset:], uint32(0x300+len(text)))
+	le.PutUint32(w[word6CcpOffset:], uint32(len(text)))
+	copy(w[0x300:], text)
+	// two sections, the second continuous, with the sprms of Word 6
+	sepx := []byte{5, 0, 164, 0x82, 0x2e, 142, 2}
+	sepx2 := []byte{2, 0, 142, 0}
+	sepxAt := len(w)
+	w = append(w, sepx...)
+	w = append(w, sepx2...)
+	plc := u32s(0, 30, uint32(len(text)))
+	plc = append(plc, sed(uint32(sepxAt))...)
+	plc = append(plc, sed(uint32(sepxAt+len(sepx)))...)
+	le.PutUint32(w[word6PlcfSed:], uint32(len(w)))
+	le.PutUint32(w[word6PlcfSed+4:], uint32(len(plc)))
+	w = append(w, plc...)
+	buf := fixture.CFB(fixture.CFBEntry{Name: "WordDocument", Data: w})
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := htmlOf(t, d)
+	for _, want := range []string{">First paragraph.<", ">Second été.<", ">New section.<"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in the html:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `class="page"`) {
+		t.Errorf("expected no page break before a continuous section:\n%s", got)
+	}
+	if n, err := d.PageCount(t.Context()); err != nil || n != 1 {
+		t.Errorf("expected 1 page, got: %d, %v", n, err)
+	}
+	if pg := d.parser.firstPage(); pg.width != 0x2e82 {
+		t.Errorf("expected the width of the page from the section, got: %d", pg.width)
+	}
+	// a Word 6 document that a password protects
+	le.PutUint16(w[10:], flagEncrypted)
+	buf = fixture.CFB(fixture.CFBEntry{Name: "WordDocument", Data: w})
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrUnsupported) {
+		t.Errorf("expected ivy.ErrUnsupported, got: %v", err)
+	}
+	// a FIB that the stream cuts
+	buf = fixture.CFB(fixture.CFBEntry{Name: "WordDocument", Data: w[:0x100]})
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ivy.ErrFormat, got: %v", err)
+	}
+}
+
+// u32s returns the values in 4 bytes each, little endian.
+func u32s(vs ...uint32) []byte {
+	var out []byte
+	for _, v := range vs {
+		out = binary.LittleEndian.AppendUint32(out, v)
+	}
+	return out
+}
+
+// sed returns a SED of 12 bytes whose Sepx is at fc.
+func sed(fc uint32) []byte {
+	b := make([]byte, 12)
+	binary.LittleEndian.PutUint32(b[2:], fc)
+	return b
 }
 
 func TestOperandSize(t *testing.T) {
@@ -307,4 +425,28 @@ func FuzzOpen(f *testing.F) {
 			t.Fatal(err)
 		}
 	})
+}
+
+func TestLineSpacing(t *testing.T) {
+	tests := []struct {
+		dya, mult uint16
+		want      string
+	}{
+		{480, 1, "line-height: 2.300"},
+		{0xFFFF - 359, 0, "line-height: 18pt"},
+		{240, 1, ""},
+	}
+	p := &parser{styles: parseStyles(nil, 0)}
+	for _, tt := range tests {
+		var pp pap
+		operand := binary.LittleEndian.AppendUint16(nil, tt.dya)
+		operand = binary.LittleEndian.AppendUint16(operand, tt.mult)
+		applyPap(&pp, sprm{op: sprmPDyaLine, operand: operand})
+		var b strings.Builder
+		p.writeParagraph(&b, paragraph{pap: pp, runs: []run{{text: "x", chp: defaultChp()}}})
+		got := b.String()
+		if tt.want != "" && !strings.Contains(got, tt.want) || tt.want == "" && strings.Contains(got, "line-height") {
+			t.Errorf("expected %q for %d, %d, got: %s", tt.want, tt.dya, tt.mult, got)
+		}
+	}
 }

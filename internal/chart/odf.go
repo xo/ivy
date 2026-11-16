@@ -32,7 +32,7 @@ var libreColors = []color.NRGBA{
 // that draws it.
 var odfKinds = map[string]kind{
 	"bar": kindBar, "line": kindLine, "area": kindArea, "circle": kindPie, "ring": kindPie,
-	"scatter": kindScatter, "bubble": kindScatter, "radar": kindLine, "filled-radar": kindArea,
+	"scatter": kindScatter, "bubble": kindScatter, "radar": kindRadar, "filled-radar": kindRadar,
 	"stock": kindLine,
 }
 
@@ -71,15 +71,19 @@ func ParseODF(buf []byte, opts Options) (c *Chart, err error) {
 		return nil, fmt.Errorf("chart object without chart:chart: %w", ivy.ErrFormat)
 	}
 	c = newChart(opts)
+	c.look = lookLibre
 	c.colors = libreColors
 	c.font = "Liberation Sans"
-	c.text.color = color.NRGBA{0, 0, 0, 255}
+	// The size of the chart in its file, which the boxes of its parts
+	// refer to.
+	w, h := length(ooxml.Attr(chart, "width")), length(ooxml.Attr(chart, "height"))
 	if c.width <= 0 || c.height <= 0 {
-		c.width, c.height = length(ooxml.Attr(chart, "width")), length(ooxml.Attr(chart, "height"))
+		c.width, c.height = w, h
 	}
-	p := &odfParser{c: c, styles: styles, budget: min(lim.MaxObjects, maxPoints)}
+	p := &odfParser{c: c, styles: styles, budget: min(lim.MaxObjects, maxPoints), w: w, h: h}
 	p.chart(chart)
 	c.finish()
+	c.styleText()
 	return c, nil
 }
 
@@ -88,7 +92,13 @@ type odfParser struct {
 	c      *Chart
 	styles map[string]roxmltree.Node
 	table  [][]odfCell
+	// ranges maps a range of cells of a sheet to the cell of the local
+	// table that holds its first value. LibreOffice writes the range of
+	// each column of the table in svg:desc.
+	ranges map[string][2]int
 	budget int
+	// w and h are the size of the chart in its file, in points.
+	w, h float64
 }
 
 // odfCell is a cell of the table of a chart.
@@ -107,18 +117,45 @@ func isElem(n roxmltree.Node, ns, local string) bool {
 	return got == ns
 }
 
+// box returns the box of an element, svg:x, svg:y, svg:width and
+// svg:height, as fractions of the size of the chart. The width and the
+// height are NaN when the element has no size.
+func (p *odfParser) box(n roxmltree.Node) ([4]float64, bool) {
+	if !(p.w > 0) || !(p.h > 0) {
+		return nan4(), false
+	}
+	x, y := ooxml.Attr(n, "x"), ooxml.Attr(n, "y")
+	if x == "" || y == "" {
+		return nan4(), false
+	}
+	b := [4]float64{length(x) / p.w, length(y) / p.h, math.NaN(), math.NaN()}
+	if w, h := length(ooxml.Attr(n, "width")), length(ooxml.Attr(n, "height")); w > 0 && h > 0 {
+		b[2], b[3] = w/p.w, h/p.h
+	}
+	for _, v := range b[:2] {
+		if v < -1 || v > 2 {
+			return nan4(), false
+		}
+	}
+	return b, true
+}
+
 // chart reads chart:chart.
 func (p *odfParser) chart(n roxmltree.Node) {
 	c := p.c
 	class := strings.TrimPrefix(ooxml.Attr(n, "class"), "chart:")
-	if st := p.props(ooxml.Attr(n, "style-name")); st.text.size > 0 || st.text.font != "" {
+	st := p.props(ooxml.Attr(n, "style-name"))
+	if st.text.size > 0 || st.text.font != "" {
 		c.text = st.text.merge(c.text)
 		if st.text.font != "" {
 			c.font = st.text.font
 		}
 	}
-	if fill, ok := p.props(ooxml.Attr(n, "style-name")).fill(); ok {
+	if fill, ok := st.fill(); ok {
 		c.fill = fill
+	}
+	if line, ok := st.stroke(); ok {
+		c.border = line
 	}
 	for e := range elements(n) {
 		if isElem(e, nsTable, "table") && p.table == nil {
@@ -131,6 +168,9 @@ func (p *odfParser) chart(n roxmltree.Node) {
 			if isElem(e, nsChart, "title") {
 				c.title = clip(paragraphs(e))
 				c.titleText = p.props(ooxml.Attr(e, "style-name")).text
+				if b, ok := p.box(e); ok {
+					c.titleAt = [2]float64{b[0], b[1]}
+				}
 			}
 		case "legend":
 			if isElem(e, nsChart, "legend") {
@@ -142,6 +182,9 @@ func (p *odfParser) chart(n roxmltree.Node) {
 					c.legend = "right"
 				}
 				c.legendText = p.props(ooxml.Attr(e, "style-name")).text
+				if b, ok := p.box(e); ok {
+					c.legendAt = b
+				}
 			}
 		case "plot-area":
 			if isElem(e, nsChart, "plot-area") {
@@ -152,15 +195,6 @@ func (p *odfParser) chart(n roxmltree.Node) {
 	if len(c.plots) == 0 && odfKinds[class] == 0 {
 		c.unsupported = class + " chart"
 	}
-	if c.titleText.size <= 0 {
-		c.titleText.size = math.Round(c.text.size * 1.3)
-	}
-	c.titleText = c.titleText.merge(c.text)
-	c.legendText = c.legendText.merge(c.text)
-	c.cat.text = c.cat.text.merge(c.text)
-	c.val.text = c.val.text.merge(c.text)
-	c.cat.titleText = c.cat.titleText.merge(c.text)
-	c.val.titleText = c.val.titleText.merge(c.text)
 }
 
 // paragraphs returns the text of each text:p of n.
@@ -178,36 +212,63 @@ func paragraphs(n roxmltree.Node) []string {
 func (p *odfParser) plotArea(n roxmltree.Node, class string) {
 	c := p.c
 	st := p.props(ooxml.Attr(n, "style-name"))
+	if b, ok := p.box(n); ok && !math.IsNaN(b[2]) {
+		c.plotAt = b
+	}
 	var cats []string
 	for e := range elements(n) {
-		if !isElem(e, nsChart, "axis") {
-			continue
-		}
-		a := p.axis(e)
-		switch ooxml.Attr(e, "dimension") {
-		case "x":
-			if !c.cat.present {
-				c.cat = a
+		switch {
+		case e.TagName().Name() == "coordinate-region":
+			if b, ok := p.box(e); ok && !math.IsNaN(b[2]) {
+				c.plotAt, c.plotInner = b, true
 			}
-			for cat := range elements(e) {
-				if isElem(cat, nsChart, "categories") {
-					for _, cell := range p.cells(ooxml.Attr(cat, "cell-range-address")) {
-						cats = append(cats, cell.label())
+		case isElem(e, nsChart, "wall"):
+			ws := p.props(ooxml.Attr(e, "style-name"))
+			if fill, ok := ws.fill(); ok {
+				c.plotFill = fill
+			}
+			if line, ok := ws.stroke(); ok {
+				c.plotBorder = line
+			}
+		case isElem(e, nsChart, "axis"):
+			a := p.axis(e)
+			secondary := strings.HasPrefix(ooxml.Attr(e, "name"), "secondary")
+			switch ooxml.Attr(e, "dimension") {
+			case "x":
+				switch {
+				case secondary && !c.cat2.present:
+					c.cat2 = a
+				case !secondary && !c.cat.present:
+					c.cat = a
+				}
+				for cat := range elements(e) {
+					if isElem(cat, nsChart, "categories") && cats == nil {
+						for _, cell := range p.cells(ooxml.Attr(cat, "cell-range-address")) {
+							cats = append(cats, cell.label())
+						}
 					}
 				}
-			}
-		case "y":
-			if !c.val.present {
-				c.val = a
+			case "y":
+				switch {
+				case secondary && !c.val2.present:
+					c.val2 = a
+				case !secondary && !c.val.present:
+					c.val = a
+				}
 			}
 		}
 	}
-	plots := map[kind]*plot{}
-	addSeries := func(k kind, s *series) {
-		pl, ok := plots[k]
+	plots := map[[2]int]*plot{}
+	addSeries := func(k kind, secondary bool, s *series) {
+		key := [2]int{int(k), 0}
+		if secondary {
+			key[1] = 1
+		}
+		pl, ok := plots[key]
 		if !ok {
 			pl = p.newPlot(k, class, st)
-			plots[k] = pl
+			pl.secondary = secondary
+			plots[key] = pl
 			c.plots = append(c.plots, pl)
 		}
 		s.index = len(pl.series)
@@ -226,15 +287,15 @@ func (p *odfParser) plotArea(n roxmltree.Node, class string) {
 		}
 		seen = true
 		k := defaultKind
-		if sc := strings.TrimPrefix(ooxml.Attr(e, "class"), "chart:"); sc != "" {
-			if kk, ok := odfKinds[sc]; ok {
-				k = kk
-			}
+		sc := strings.TrimPrefix(ooxml.Attr(e, "class"), "chart:")
+		if kk, ok := odfKinds[sc]; ok {
+			k = kk
 		}
 		if k == 0 {
 			continue
 		}
-		addSeries(k, p.series(e, cats, k))
+		secondary := ooxml.Attr(e, "attached-axis") == "secondary-y"
+		addSeries(k, secondary, p.series(e, cats, k))
 	}
 	if !seen && defaultKind != 0 {
 		// A chart without series draws the columns of its table.
@@ -256,13 +317,25 @@ func (p *odfParser) plotArea(n roxmltree.Node, class string) {
 				}
 				s.cats = append(s.cats, label)
 			}
-			addSeries(defaultKind, s)
+			addSeries(defaultKind, false, s)
 		}
 	}
+	n2 := 0
 	for _, pl := range c.plots {
-		for i, s := range pl.series {
+		for _, s := range pl.series {
 			if !s.hasColor {
-				s.color, s.hasColor = c.palette(i), true
+				s.color, s.hasColor = c.palette(n2), true
+			}
+			n2++
+		}
+	}
+	// LibreOffice draws the points of a line on the tick marks, and the
+	// bars between them.
+	if !c.cat.betweenSet {
+		c.cat.between, c.cat.betweenSet = false, true
+		for _, pl := range c.plots {
+			if pl.kind == kindBar {
+				c.cat.between = true
 			}
 		}
 	}
@@ -271,7 +344,8 @@ func (p *odfParser) plotArea(n roxmltree.Node, class string) {
 // newPlot returns a plot of a kind with the properties of the style of the
 // plot area.
 func (p *odfParser) newPlot(k kind, class string, st odfProps) *plot {
-	pl := &plot{kind: k, gap: 100, grouping: "clustered", markers: k == kindLine && class != "radar"}
+	pl := &plot{kind: k, gap: 100, overlap: math.NaN(), grouping: "clustered", bubbleScale: 100,
+		markers: k == kindLine && class != "radar"}
 	if k != kindBar {
 		pl.grouping = "standard"
 	}
@@ -285,21 +359,45 @@ func (p *odfParser) newPlot(k kind, class string, st odfProps) *plot {
 	if g, ok := parseNumber(st.attr("gap-width")); ok && g >= 0 && g <= 500 {
 		pl.gap = g
 	}
+	if o, ok := parseNumber(st.attr("overlap")); ok && o >= -100 && o <= 100 {
+		pl.overlap = o
+	}
 	switch class {
-	case "circle":
+	case "circle", "ring":
 		pl.varyColors = true
-	case "ring":
-		pl.varyColors, pl.hole = true, 0.5
+		pl.ccw = true
+		if class == "ring" {
+			pl.hole = 0.5
+		}
+		pl.firstAngle = 0
+		if a, ok := parseNumber(st.attr("angle-offset")); ok {
+			// The angle of OpenDocument is counterclockwise from three
+			// o'clock.
+			pl.firstAngle = math.Mod(90-a+720, 360)
+		}
 	case "bubble":
 		pl.bubbles = true
 	case "scatter":
 		pl.lines = st.attr("lines") != "false"
 		pl.markers = st.attr("symbol-type") != "none"
+	case "filled-radar":
+		pl.filled = true
+	case "stock":
+		pl.hiLow = true
+		pl.upDown = st.attr("japanese-candle-stick") == "true"
 	}
 	if st.attr("symbol-type") == "none" {
 		pl.markers = false
 	}
-	if in := st.attr("interpolation"); in != "" && in != "none" {
+	switch in := st.attr("interpolation"); in {
+	case "", "none":
+	case "step-start":
+		pl.step = "start"
+	case "step-end":
+		pl.step = "end"
+	case "step-center-x", "step-center-y":
+		pl.step = "center"
+	default:
 		pl.smooth = true
 	}
 	return pl
@@ -311,6 +409,9 @@ func (p *odfParser) axis(n roxmltree.Node) axis {
 	a.present = true
 	st := p.props(ooxml.Attr(n, "style-name"))
 	a.deleted = st.attr("display-label") == "false" && st.attr("visible") == "false"
+	if st.attr("display-label") == "false" {
+		a.labelPos = "none"
+	}
 	a.reverse = st.attr("reverse-direction") == "true"
 	if v, ok := parseNumber(st.attr("minimum")); ok {
 		a.min = v
@@ -321,11 +422,38 @@ func (p *odfParser) axis(n roxmltree.Node) axis {
 	if v, ok := parseNumber(st.attr("interval-major")); ok && v > 0 {
 		a.major = v
 	}
+	if v, ok := parseNumber(st.attr("interval-minor-divisor")); ok && v >= 1 && v <= 100 && !math.IsNaN(a.major) {
+		a.minor = a.major / v
+	}
+	if st.attr("logarithmic") == "true" {
+		a.logBase = 10
+	}
+	if v, ok := parseNumber(st.attr("origin")); ok {
+		a.crossesAt = v
+	}
+	inner, outer := st.attr("tick-marks-major-inner"), st.attr("tick-marks-major-outer")
+	a.majorTick = ticks(inner, outer)
+	a.minorTick = ticks(st.attr("tick-marks-minor-inner"), st.attr("tick-marks-minor-outer"))
+	if line, ok := st.stroke(); ok {
+		a.line, a.hasLine = line, true
+	}
+	a.noLine = st.graphic("stroke") == "none"
 	a.text = st.text
+	if st.text.hasRotation {
+		a.rotation, a.hasRotation = st.text.rotation, true
+	}
 	for e := range elements(n) {
 		switch {
 		case isElem(e, nsChart, "grid"):
-			a.grid = a.grid || ooxml.Attr(e, "class") != "minor"
+			gs := p.props(ooxml.Attr(e, "style-name"))
+			col, ok := gs.stroke()
+			if ooxml.Attr(e, "class") == "minor" {
+				a.minorGrid = true
+				a.minorColor, a.hasMinorColor = col, ok
+			} else {
+				a.grid = true
+				a.gridColor, a.hasGridColor = col, ok
+			}
 		case isElem(e, nsChart, "title"):
 			a.title = strings.Join(paragraphs(e), " ")
 			a.titleText = p.props(ooxml.Attr(e, "style-name")).text
@@ -334,11 +462,35 @@ func (p *odfParser) axis(n roxmltree.Node) axis {
 	return a
 }
 
+// ticks returns the tick marks of the attributes inner and outer of an
+// axis of OpenDocument, or empty for the default.
+func ticks(inner, outer string) string {
+	switch {
+	case inner == "" && outer == "":
+		return ""
+	case inner == "true" && outer == "true":
+		return "cross"
+	case inner == "true":
+		return "in"
+	case outer == "true":
+		return "out"
+	}
+	return "none"
+}
+
+// odfSymbols maps the symbols of OpenDocument to the markers of DrawingML.
+var odfSymbols = map[string]string{
+	"square": "square", "diamond": "diamond", "arrow-down": "triangle", "arrow-up": "triangle",
+	"arrow-right": "triangle", "arrow-left": "triangle", "bow-tie": "x", "hourglass": "x",
+	"circle": "circle", "star": "star", "x": "x", "plus": "plus", "asterisk": "star",
+	"horizontal-bar": "dash", "vertical-bar": "dash",
+}
+
 // series reads chart:series.
 func (p *odfParser) series(n roxmltree.Node, cats []string, k kind) *series {
 	s := &series{}
 	st := p.props(ooxml.Attr(n, "style-name"))
-	if c, ok := st.fill(); ok && k != kindLine && k != kindScatter {
+	if c, ok := st.fill(); ok && k != kindLine && k != kindScatter && k != kindRadar {
 		s.color, s.hasColor = c, true
 	} else if c, ok := st.stroke(); ok {
 		s.color, s.hasColor = c, true
@@ -346,7 +498,18 @@ func (p *odfParser) series(n roxmltree.Node, cats []string, k kind) *series {
 		s.color, s.hasColor = c, true
 	}
 	s.noLine = st.graphic("stroke") == "none"
-	s.noMarker = st.attr("symbol-type") == "none"
+	if w := length(st.graphic("stroke-width")); w > 0 && w < 100 {
+		s.lineWidth = w
+	}
+	switch st.attr("symbol-type") {
+	case "none":
+		s.noMarker = true
+	case "named-symbol":
+		s.marker = odfSymbols[st.attr("symbol-name")]
+	}
+	if w := length(st.attr("symbol-width")); w > 0 && w < 72 {
+		s.markerSize = w
+	}
 	if cells := p.cells(ooxml.Attr(n, "label-cell-address")); len(cells) > 0 {
 		s.name = cells[0].label()
 	}
@@ -423,6 +586,7 @@ func (c odfCell) label() string {
 func (p *odfParser) readTable(n roxmltree.Node) {
 	const maxColumns = 1 << 10
 	var rows [][]odfCell
+	p.ranges = map[string][2]int{}
 	var walk func(n roxmltree.Node, depth int)
 	walk = func(n roxmltree.Node, depth int) {
 		for e := range elements(n) {
@@ -450,6 +614,7 @@ func (p *odfParser) readTable(n roxmltree.Node) {
 					case "float", "percentage", "currency":
 						v.num, v.isNum = parseNumber(ooxml.Attr(cell, "value"))
 					}
+					p.cellRange(cell, len(rows), len(row))
 					for range min(repeat, maxColumns-len(row)) {
 						row = append(row, v)
 					}
@@ -471,9 +636,64 @@ func (p *odfParser) readTable(n roxmltree.Node) {
 	}
 }
 
+// cellRange keeps the range of a sheet that a cell of the local table
+// starts, from the svg:desc of its draw:g.
+func (p *odfParser) cellRange(cell roxmltree.Node, row, col int) {
+	if len(p.ranges) >= 1<<10 {
+		return
+	}
+	for g := range elements(cell) {
+		if g.TagName().Name() != "g" {
+			continue
+		}
+		if d, ok := child(g, "desc"); ok {
+			for _, r := range splitRanges(text(d)) {
+				p.ranges[normRange(r)] = [2]int{row, col}
+			}
+		}
+	}
+}
+
+// splitRanges splits a list of ranges at the spaces that are not in the
+// quotes of the name of a sheet.
+func splitRanges(s string) []string {
+	var out []string
+	quoted := false
+	start := 0
+	for i, r := range s {
+		switch {
+		case r == '\'':
+			quoted = !quoted
+		case r == ' ' && !quoted:
+			if i > start {
+				out = append(out, s[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+// normRange returns a range without its dollar signs and its quotes, so
+// that two writings of a range compare equal.
+func normRange(s string) string {
+	return strings.NewReplacer("$", "", "'", "").Replace(s)
+}
+
 // cells returns the cells of a range of the local table, such as
-// "local-table.$B$2:.$B$5", in the order of its rows, then its columns.
+// "local-table.$B$2:.$B$5", in the order of its rows, then its columns. A
+// range of a sheet reads the cells of the local table that LibreOffice
+// copied it into.
 func (p *odfParser) cells(ref string) []odfCell {
+	if ref == "" {
+		return nil
+	}
+	if f := splitRanges(ref); len(f) > 0 {
+		ref = f[0]
+	}
 	start, end, ok := strings.Cut(ref, ":")
 	r0, c0, ok0 := cellRef(start)
 	if !ok0 {
@@ -491,6 +711,12 @@ func (p *odfParser) cells(ref string) []odfCell {
 	}
 	if c1 < c0 {
 		c0, c1 = c1, c0
+	}
+	if !strings.HasPrefix(normRange(start), "local-table.") {
+		if at, ok := p.ranges[normRange(ref)]; ok {
+			r1, c1 = at[0]+r1-r0, at[1]+c1-c0
+			r0, c0 = at[0], at[1]
+		}
 	}
 	var out []odfCell
 	for r := r0; r <= r1 && r < len(p.table); r++ {
@@ -540,7 +766,7 @@ func length(s string) float64 {
 	}{{"cm", 72 / 2.54}, {"mm", 72 / 25.4}, {"in", 72}, {"pt", 1}, {"pc", 12}, {"px", 0.75}}
 	for _, u := range units {
 		if v, ok := strings.CutSuffix(s, u.suffix); ok {
-			if n, ok := parseNumber(v); ok && n > 0 && n < 1e5 {
+			if n, ok := parseNumber(v); ok && n >= 0 && n < 1e5 {
 				return n * u.points
 			}
 			return 0
@@ -576,11 +802,31 @@ func (p *odfParser) props(name string) odfProps {
 			if c, ok := drawingml.ParseHex(ooxml.Attr(e, "color")); ok {
 				out.text.color, out.text.hasColor = c, true
 			}
-			out.text.bold = ooxml.Attr(e, "font-weight") == "bold"
+			if w := ooxml.Attr(e, "font-weight"); w != "" {
+				out.text.bold, out.text.hasBold = w == "bold" || w == "700" || w == "800" || w == "900", true
+			}
 			if f := ooxml.Attr(e, "font-family"); f != "" && len(f) < 128 {
 				out.text.font = strings.Trim(f, `'"`)
 			} else if f := ooxml.Attr(e, "font-name"); f != "" && len(f) < 128 {
 				out.text.font = f
+			}
+		}
+	}
+	if out.hasChart {
+		// LibreOffice writes the rotation of a text in the chart properties
+		// or in the text properties.
+		for _, n := range []roxmltree.Node{out.chartNode} {
+			if a, ok := parseNumber(ooxml.Attr(n, "rotation-angle")); ok && a >= -360 && a <= 360 {
+				out.text.rotation, out.text.hasRotation = a, true
+			}
+		}
+	}
+	if !out.text.hasRotation {
+		for e := range elements(st) {
+			if e.TagName().Name() == "text-properties" {
+				if a, ok := parseNumber(ooxml.Attr(e, "rotation-angle")); ok && a >= -360 && a <= 360 {
+					out.text.rotation, out.text.hasRotation = a, true
+				}
 			}
 		}
 	}
@@ -632,6 +878,10 @@ func (o odfProps) labels() labels {
 	}
 	l.category = o.attr("data-label-text") == "true"
 	l.seriesOf = o.attr("data-label-series") == "true"
+	l.position = map[string]string{
+		"avoid-overlap": "bestFit", "center": "ctr", "top": "t", "bottom": "b", "left": "l", "right": "r",
+		"inside": "inEnd", "outside": "outEnd", "near-origin": "inBase",
+	}[o.attr("label-position")]
 	l.text = o.text
 	return l
 }

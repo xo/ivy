@@ -2,6 +2,7 @@ package display
 
 import (
 	"image"
+	"math"
 	"sync"
 
 	"github.com/xo/ivy/internal/raster"
@@ -16,6 +17,27 @@ const (
 	// maxLayers is the number of free layers that a device keeps for the
 	// next group.
 	maxLayers = 4
+)
+
+// The finer coverage of the glyphs of an OkageDevice. okage computes the
+// coverage of a pixel from a grid of 4 by 4 samples, as tiny-skia does, so
+// the coverage of an edge moves in steps of a quarter. FreeType, MuPDF,
+// Poppler and Cairo compute it more finely. At the size of body text the
+// steps give a pixel of a stem or of a serif another gray than these
+// renderers give. A device draws the outlines of small glyphs at fineScale
+// times the size into a mask, and averages each block of fineScale by
+// fineScale samples into the coverage of one pixel: a grid of 8 by 8
+// samples. On 2026-11-17 a grid of 16 by 16 samples was closer to the other
+// renderers by a small amount only, and added twice the time.
+const (
+	fineScale = 2
+	// maxFineEm is the largest size of a glyph, an em in pixels, that a
+	// device fills with the finer coverage. On a larger glyph, a step of a
+	// quarter of a pixel is a smaller part of a stem.
+	maxFineEm = 48
+	// maxFineMask is the largest mask, in bytes, that a fill with the
+	// finer coverage draws into.
+	maxFineMask = 1 << 22
 )
 
 // OkageDevice draws the commands onto a pixmap with okage. It is not safe for
@@ -56,7 +78,10 @@ type maskKey struct {
 }
 
 // The interfaces that an OkageDevice implements.
-var _ Device = (*OkageDevice)(nil)
+var (
+	_ Device     = (*OkageDevice)(nil)
+	_ TextFiller = (*OkageDevice)(nil)
+)
 
 // NewOkage returns a device that draws onto dst, with the transform t from
 // the user space to the pixels of dst.
@@ -257,9 +282,123 @@ func intersect(a, b *okage.Mask) *okage.Mask {
 	return a
 }
 
-// FillGlyphs satisfies the Device interface.
+// FillGlyphs satisfies the Device interface. It fills a run of small
+// glyphs with the finer coverage, as FillText does.
 func (d *OkageDevice) FillGlyphs(run GlyphRun, shader okage.Shader) {
-	d.FillPath(run.Path(), okage.FillRuleWinding, shader)
+	p := run.Path()
+	if p == nil || shader == nil {
+		return
+	}
+	t := d.state.t.PreConcat(run.Transform)
+	em := float64(run.Size) * math.Sqrt(math.Abs(float64(t.SX)*float64(t.SY)-float64(t.KX)*float64(t.KY)))
+	if em <= maxFineEm && d.fillFine(p, okage.FillRuleWinding, shader) {
+		return
+	}
+	d.FillPath(p, okage.FillRuleWinding, shader)
+}
+
+// FillText satisfies the TextFiller interface. It fills the outlines with
+// the finer coverage when they are small, when the shader is a solid color,
+// and when the antialiasing is on. Otherwise it fills them as FillPath does.
+func (d *OkageDevice) FillText(p *okage.Path, rule okage.FillRule, shader okage.Shader) {
+	if p == nil || shader == nil {
+		return
+	}
+	if b, ok := p.Bounds().Transform(d.state.t); ok && min(b.Width(), b.Height()) <= maxFineEm &&
+		d.fillFine(p, rule, shader) {
+		return
+	}
+	d.FillPath(p, rule, shader)
+}
+
+// fillFine fills p with a solid color and the finer coverage, inside the
+// clip, with the blend mode source over. It returns false, and draws
+// nothing, when it cannot: for a shader that is not a solid color, without
+// antialiasing, or for a mask larger than maxFineMask.
+func (d *OkageDevice) fillFine(p *okage.Path, rule okage.FillRule, shader okage.Shader) bool {
+	c, ok := shader.(okage.SolidColor)
+	if !ok || d.aliased {
+		return false
+	}
+	b, ok := p.Bounds().Transform(d.state.t)
+	if !ok {
+		return false
+	}
+	width, height := int(d.dst.Width()), int(d.dst.Height())
+	// the pixels that the outlines can touch, inside the target
+	x0 := max(floor(b.Left()), 0)
+	y0 := max(floor(b.Top()), 0)
+	x1 := min(floor(b.Right())+1, width)
+	y1 := min(floor(b.Bottom())+1, height)
+	if x0 >= x1 || y0 >= y1 {
+		return true
+	}
+	w, h := x1-x0, y1-y0
+	if w*h > maxFineMask/(fineScale*fineScale) {
+		return false
+	}
+	mask, ok := okage.NewMask(uint32(w*fineScale), uint32(h*fineScale))
+	if !ok {
+		return false
+	}
+	t := d.state.t.PostTranslate(-float32(x0), -float32(y0)).PostScale(fineScale, fineScale)
+	mask.FillPath(p, rule, true, t)
+	pc := okage.Color(c).Premultiply().ToColorU8()
+	cr, cg, cb, ca := uint32(pc.Red()), uint32(pc.Green()), uint32(pc.Blue()), uint32(pc.Alpha())
+	var clip []byte
+	if d.state.clip != nil {
+		clip = d.state.clip.Data()
+	}
+	samples, data := mask.Data(), d.dst.DataMut()
+	stride := w * fineScale
+	for y := range h {
+		for x := range w {
+			var sum uint32
+			for sy := range fineScale {
+				row := samples[(y*fineScale+sy)*stride+x*fineScale:]
+				for sx := range fineScale {
+					sum += uint32(row[sx])
+				}
+			}
+			cover := (sum + fineScale*fineScale/2) / (fineScale * fineScale)
+			i := (y0+y)*width + x0 + x
+			if clip != nil {
+				cover = div255(cover * uint32(clip[i]))
+			}
+			if cover == 0 {
+				continue
+			}
+			// source over, as the pipeline of okage blends a color with a
+			// coverage
+			sa := div255(ca * cover)
+			inv := 255 - sa
+			px := data[4*i : 4*i+4 : 4*i+4]
+			px[0] = uint8(div255(cr*cover) + div255(uint32(px[0])*inv))
+			px[1] = uint8(div255(cg*cover) + div255(uint32(px[1])*inv))
+			px[2] = uint8(div255(cb*cover) + div255(uint32(px[2])*inv))
+			px[3] = uint8(sa + div255(uint32(px[3])*inv))
+		}
+	}
+	return true
+}
+
+// floor returns the largest integer at most v, bounded to the range of an
+// int32, which holds every pixel of a pixmap.
+func floor(v float32) int {
+	f := math.Floor(float64(v))
+	switch {
+	case !(f > math.MinInt32):
+		return math.MinInt32
+	case f > math.MaxInt32:
+		return math.MaxInt32
+	}
+	return int(f)
+}
+
+// div255 returns v / 255 for v at most 255 * 255, as the pipeline of okage
+// computes it: (v + 255) / 256.
+func div255(v uint32) uint32 {
+	return (v + 255) >> 8
 }
 
 // layer returns a transparent pixmap of the size of the target, or nil.

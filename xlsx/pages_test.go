@@ -281,7 +281,9 @@ func TestImageAndChart(t *testing.T) {
 	_, docs := sourceOf(t, d)
 	doc := docs[0]
 	for _, want := range []string{
-		`<td class="a"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></td>`,
+		// the image covers 4 rows, and each row shows its slice
+		`<td class="a"><div class="cl" style="width:144pt;height:16pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
+		`<td class="a"><div class="cl" style="width:144pt;height:16pt"><img style="position:absolute;left:0pt;top:-45pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
 		`<img style="position:absolute;left:0pt;top:0pt;width:144pt;height:150pt" src="ivy-object:chart2" alt="">`,
 		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart: Sales</div>`,
 	} {

@@ -147,6 +147,12 @@ func (p *player) wmf(c Command) error {
 		}
 		return p.blit(blit{r: r, rop: v.RasterOperation, dest: v.Destination, destSize: v.DestinationSize, src: v.Source, srcSize: v.SourceSize, hasBitmap: !v.DeviceSource, deviceBitmapWhy: why, colorState: c.ColorState})
 	case 0x2c:
+		// ivy: Stream passes a slot without an object, which selects no
+		// region and removes the clipping region.
+		if id := body.(Value).Value; uint64(id) < uint64(len(p.objects)) && p.objects[id].empty() {
+			p.dc.clip = nil
+			return nil
+		}
 		rects, err := p.regionObject(r, body.(Value).Value)
 		if err != nil {
 			return err
@@ -178,7 +184,12 @@ func (p *player) wmf(c Command) error {
 		}
 		return p.paintRegion(c, rects, p.dc.brush.brush, nil)
 	case 0x2a:
-		return p.unsupported(r, "region inversion reads the destination")
+		// ivy: a backend that reads its destination inverts the region.
+		rects, err := p.regionObject(r, body.(Value).Value)
+		if err != nil {
+			return err
+		}
+		return p.invertRegion(c, rects)
 	default:
 		return p.unsupported(r, fmt.Sprintf("WMF record 0x%04x", r.Type))
 	}
@@ -385,7 +396,8 @@ func (p *player) emf(c Command) error {
 		}
 		return p.paintRegion(c, regionRects(v.Region), brush, frame)
 	case EMRInvertRgn:
-		return p.unsupported(r, "region inversion reads the destination")
+		// ivy: a backend that reads its destination inverts the region.
+		return p.invertRegion(c, regionRects(body.(EMFRegionPaint).Region))
 	case EMRGradientFill:
 		return p.gradient(c, body.(Gradient))
 	default:
@@ -701,6 +713,21 @@ func (p *player) render(c Command, path Path, fill, stroke bool) error {
 		return err
 	}
 	clip := p.currentClip()
+	// ivy: a backend that reads its destination fills with a mix mode that
+	// combines the brush with the destination, such as R2_MASKPEN.
+	rb, raster := backendAs[RasterBackend](p.backend)
+	if fill && raster && rop2ReadsDestination(p.dc.rop2) {
+		paint, err := p.brushPaint(c.Source, p.dc.brush.brush, m, false)
+		if err != nil {
+			return err
+		}
+		if paint != nil {
+			if err := rb.DrawRaster(RasterDraw{Operation: rop2Raster(p.dc.rop2), Area: path, Pattern: paint}, clip); err != nil {
+				return err
+			}
+		}
+		fill = false
+	}
 	if fill {
 		paint, err := p.brushPaint(c.Source, p.dc.brush.brush, m, true)
 		if err != nil {
@@ -770,6 +797,27 @@ func (p *player) rop2(r Record, paint *Paint) (*Paint, error) {
 		return nil, p.unsupported(r, fmt.Sprintf("ROP2 %d", p.dc.rop2))
 	}
 	return paint, nil
+}
+
+// ivy: rop2ReadsDestination reports whether the mix mode rop2 (MS-WMF
+// 2.1.1.4) combines the pen or the brush with the destination. R2_NOP (11)
+// leaves the destination as it is, and draws nothing.
+func rop2ReadsDestination(rop2 uint32) bool {
+	return rop2 >= 1 && rop2 <= 16 && rop2 != 11 && rop2Raster(rop2).UsesDestination()
+}
+
+// ivy: rop2Raster returns the ternary raster operation of the mix mode
+// rop2, with the pen or the brush as the pattern. The mix mode R2_x is the
+// truth table x-1 of the bits P<<1|D.
+func rop2Raster(rop2 uint32) RasterOperation {
+	var op RasterOperation
+	for i := uint(0); i < 8; i++ {
+		pd := i>>2&1<<1 | i&1
+		if (rop2-1)>>pd&1 != 0 {
+			op |= 1 << i
+		}
+	}
+	return op
 }
 
 // brushPaint resolves a brush. The returned paint is nil for BS_NULL or when

@@ -21,6 +21,10 @@ type Theme struct {
 	Colors map[string]color.NRGBA
 	// Major and Minor are the fonts of the headings and of the body text.
 	Major, Minor Fonts
+	// Pictures gives the pictures of the theme part, for the picture fills
+	// of its styles. It is nil when the format does not read them, and
+	// those fills then have no picture.
+	Pictures Pictures
 
 	// fills, lines, effects and backgrounds are the elements of the lists
 	// of the format scheme, which a style reference of a shape names by its
@@ -132,6 +136,14 @@ func (t *Theme) FillStyle(idx int) (roxmltree.Node, bool) {
 		return style(t.backgrounds, idx-1000)
 	}
 	return style(t.fills, idx)
+}
+
+// StylePictures returns the pictures of the styles of the theme, or nil.
+func (t *Theme) StylePictures() Pictures {
+	if t == nil {
+		return nil
+	}
+	return t.Pictures
 }
 
 // LineStyle returns the a:ln of the index of a:lnRef, from 1.

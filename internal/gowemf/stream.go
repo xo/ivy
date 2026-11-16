@@ -4,7 +4,10 @@
 
 package gowemf
 
-import "container/heap"
+import (
+	"container/heap"
+	"errors"
+)
 
 // StreamOptions controls typed command streaming. PreferGDI selects the GDI
 // fallback in EMF+ Dual files; requesting it for EMF+ Only returns ErrUnsupported.
@@ -119,10 +122,14 @@ func Stream(data []byte, options StreamOptions, visit func(Command) error) (Head
 				cmd.Body = body
 				cmd.ObjectID = uint32(f.ID)
 				cmd.HasObjectID = true
-			} else if err := s.plus(r, body); err != nil {
+			} else if err := s.plus(r, body); err == errIgnored {
+				return nil
+			} else if err != nil {
 				return err
 			}
-		} else if err := s.gdi(&cmd); err != nil {
+		} else if err := s.gdi(&cmd); err == errIgnored {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		if r.Format != EMFPlus {
@@ -147,6 +154,12 @@ func Stream(data []byte, options StreamOptions, visit func(Command) error) (Head
 	}
 	return h, nil
 }
+
+// ivy: errIgnored marks a record that Stream drops, as Windows does: the
+// record refers to an object that does not exist or that has another type,
+// or it creates an object that the table cannot hold. Windows plays the
+// other records of such a file, and Stream gives them to the visitor.
+var errIgnored = errors.New("gowemf: ignored record")
 
 func streamError(r Record, err error) error {
 	if pe, ok := err.(*ParseError); ok {
@@ -221,13 +234,17 @@ func (s *streamState) gdi(cmd *Command) error {
 		}
 	}
 	if kind != 0 {
+		// ivy: an object that the table cannot hold is dropped. An EMF
+		// object that takes a handle in use replaces the object.
 		if r.Format == WMF {
 			if len(s.free) == 0 {
-				return malformed(r.Offset, "WMF object table full")
+				return errIgnored
 			}
 			id = heap.Pop(&s.free).(uint32)
-		} else if id == 0 || uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] != 0 {
-			return malformed(r.Offset, "EMF object creation handle")
+		} else if id == 0 || uint64(id) >= uint64(len(s.kinds)) {
+			return errIgnored
+		} else if s.kinds[id] == kindColorSpace {
+			s.deleteColorObject(id)
 		}
 		s.kinds[id] = kind
 		if v, ok := b.(ColorSpaceObject); ok {
@@ -256,7 +273,7 @@ func (s *streamState) gdi(cmd *Command) error {
 	if r.Format == EMF && (typ == 50 || typ == 51 || typ == EMRColorCorrectPalette) {
 		p := b.(Palette)
 		if uint64(p.Handle) >= uint64(len(s.kinds)) || s.kinds[p.Handle] != kindPalette {
-			return malformed(r.Offset, "undefined palette handle")
+			return errIgnored // ivy: as Windows does
 		}
 		if typ != 51 && uint64(p.Start)+uint64(p.Count) > uint64(s.paletteCounts[p.Handle]) {
 			return malformed(r.Offset, "palette entry range")
@@ -270,17 +287,17 @@ func (s *streamState) gdi(cmd *Command) error {
 		if id&0x80000000 != 0 {
 			stock := id & 0x7fffffff
 			if stock > 5 && stock != 18 {
-				return malformed(r.Offset, "non-brush stock object in region paint")
+				return errIgnored // ivy: as Windows does
 			}
 		} else if uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] != kindBrush {
-			return malformed(r.Offset, "undefined region-paint brush")
+			return errIgnored // ivy: as Windows does
 		}
 	}
 	selectObject, deleteObject, save, restore := typ == 37, typ == 40, typ == 33, typ == 34
 	if r.Format == EMF && (typ == EMRSetColorSpace || typ == EMRDeleteColorSpace) {
 		id = b.(Value).Value
 		if uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] != kindColorSpace {
-			return malformed(r.Offset, "undefined color-space handle")
+			return errIgnored // ivy: as Windows does
 		}
 		if typ == EMRDeleteColorSpace {
 			s.kinds[id] = 0
@@ -296,18 +313,17 @@ func (s *streamState) gdi(cmd *Command) error {
 		if r.Format == EMF && id&0x80000000 != 0 {
 			n := id & 0x7fffffff
 			if deleteObject || n > 19 || n == 9 || n == 15 {
-				return malformed(r.Offset, "invalid stock object reference")
+				return errIgnored // ivy: as Windows does
 			}
 			return nil
 		}
+		// ivy: Windows ignores a selection or a deletion of an object that
+		// does not exist, and the selection of a palette or a color space.
 		if uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] == 0 {
-			return malformed(r.Offset, "undefined object handle")
+			return errIgnored
 		}
-		if selectObject && s.kinds[id] == kindPalette {
-			return malformed(r.Offset, "palette requires SelectPalette")
-		}
-		if selectObject && s.kinds[id] == kindColorSpace {
-			return malformed(r.Offset, "color space requires SetColorSpace")
+		if selectObject && (s.kinds[id] == kindPalette || s.kinds[id] == kindColorSpace) {
+			return errIgnored
 		}
 		if deleteObject {
 			if s.kinds[id] == kindColorSpace {
@@ -322,7 +338,7 @@ func (s *streamState) gdi(cmd *Command) error {
 	if r.Format == EMF && typ == 48 {
 		id = b.(Value).Value
 		if id != 0x8000000f && (uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] != kindPalette) {
-			return malformed(r.Offset, "undefined palette handle")
+			return errIgnored // ivy: as Windows does
 		}
 	}
 	if save {
@@ -399,7 +415,7 @@ func (s *streamState) gdi(cmd *Command) error {
 func (s *streamState) plus(r Record, body any) error {
 	ref := func(id uint32, typ uint8) error {
 		if id > 63 || s.plusKinds[id] != typ {
-			return malformed(r.Offset, "EMF+ object reference type")
+			return errIgnored // ivy: as GDI+ does
 		}
 		return nil
 	}

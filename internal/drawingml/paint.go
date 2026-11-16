@@ -89,8 +89,11 @@ type Stop struct {
 type Tile struct {
 	// X and Y offset the tiles, in the units of the shape.
 	X, Y float64
-	// SX and SY scale the picture, from 1 for its size.
+	// SX and SY scale the picture, from 1 for its size at its resolution.
 	SX, SY float64
+	// W and H are the size of a tile in the units of the shape. Zero is
+	// the size of the picture, scaled by SX and SY.
+	W, H float64
 	// Flip is "none", "x", "y" or "xy".
 	Flip string
 	// Align is where the first tile is, such as "tl" or "ctr".
@@ -345,9 +348,13 @@ func (pt *Paint) fillPicture(ctx context.Context, dev display.Device, p *okage.P
 	}
 	if pt.Tile != nil {
 		if pix, size, ok := pt.Picture.pattern(ctx); ok && size.X > 0 && size.Y > 0 {
-			// a pixel of the picture is a point of the slide at 96 dots
-			// per inch, the resolution that most pictures say
-			sx, sy := pt.Tile.SX*0.75, pt.Tile.SY*0.75
+			// a pixel of the picture takes the size of a dot at the
+			// resolution of the picture
+			dx, dy := pt.Picture.Resolution()
+			sx, sy := pt.Tile.SX*72/dx, pt.Tile.SY*72/dy
+			if pt.Tile.W > 0 && pt.Tile.H > 0 {
+				sx, sy = pt.Tile.W/float64(size.X), pt.Tile.H/float64(size.Y)
+			}
 			if sx == 0 || sy == 0 {
 				return nil
 			}

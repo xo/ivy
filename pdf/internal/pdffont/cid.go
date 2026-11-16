@@ -13,6 +13,9 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
+	utf16pkg "unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/xo/okage/kurbo"
 
@@ -37,6 +40,85 @@ type type0Font struct {
 	hasFlags              bool
 	fallback              bool
 	toUnicodeIsCIDIndexed bool
+
+	// latin is the substitute of a standard font that draws the characters
+	// that a fallback font of a CJK collection does not draw, or nil.
+	//
+	// Port: upstream has no such font.
+	latin *fontProgram
+	// unicode is the Unicode encoding of the codes, for an encoding CMap of
+	// Unicode such as UniJIS-UCS2-H.
+	//
+	// Port: upstream does not read it.
+	unicode unicodeEncoding
+}
+
+// unicodeEncoding is the Unicode encoding of the codes of a predefined CMap
+// of Unicode.
+type unicodeEncoding uint8
+
+// The encodings of unicodeEncoding.
+const (
+	// notUnicode is a CMap that is not of Unicode.
+	notUnicode unicodeEncoding = iota
+	// utf16 is the encoding of a CMap whose name holds UCS2 or UTF16. A
+	// code of 2 bytes is a character of the BMP, and a code of 4 bytes is
+	// a surrogate pair.
+	utf16
+	// utf32 is the encoding of a CMap whose name holds UTF32.
+	utf32
+)
+
+// unicodeEncodingOf returns the Unicode encoding of the CMap of the entry
+// Encoding of a Type 0 font.
+func unicodeEncodingOf(enc syntax.Object) unicodeEncoding {
+	name, ok := enc.(syntax.Name)
+	if !ok || !strings.HasPrefix(string(name), "Uni") {
+		return notUnicode
+	}
+	switch {
+	case strings.Contains(string(name), "-UCS2-"), strings.Contains(string(name), "-UTF16-"):
+		return utf16
+	case strings.Contains(string(name), "-UTF32-"):
+		return utf32
+	}
+	return notUnicode
+}
+
+// char returns the character of a code of the encoding, and false if the
+// code is not a valid character.
+func (u unicodeEncoding) char(code uint32) (rune, bool) {
+	var r rune
+	switch u {
+	case utf16:
+		if code > 0xFFFF {
+			r = utf16pkg.DecodeRune(rune(code>>16), rune(code&0xFFFF))
+		} else {
+			r = rune(code)
+		}
+	case utf32:
+		r = rune(code)
+	default:
+		return 0, false
+	}
+	return r, r > 0 && validChar(uint32(r)) && r != utf8.RuneError
+}
+
+// latinGlyph marks a glyph of type0Font.latin. No font has a glyph of an
+// ID this large.
+const latinGlyph GlyphID = 1 << 31
+
+// isCJK reports whether cc is one of the four CJK collections of Adobe:
+// Japan1, GB1, CNS1 and Korea1.
+func isCJK(cc *cmap.CharacterCollection) bool {
+	if cc == nil {
+		return false
+	}
+	switch cc.Family.Kind {
+	case cmap.AdobeJapan1, cmap.AdobeGB1, cmap.AdobeCNS1, cmap.AdobeKorea1:
+		return true
+	}
+	return false
 }
 
 // newType0Font is Type0Font::new in hayro-font src/cid.rs.
@@ -72,7 +154,12 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 	}
 
 	program, ok := loadCIDProgram(fontDescriptor, loader)
-	fallback := false
+	fallback := !ok
+	var latin *fontProgram
+	if !ok {
+		// Port: upstream does not ask for the font that dict names.
+		program, ok = loader.programs.resolveNamed(dict)
+	}
 	if !ok {
 		var query FontQuery
 		if standard, _, ok := selectStandardFont(dict, fontDescriptor); ok {
@@ -81,11 +168,17 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 			q := newFallbackFontQuery(dict)
 			q.CharacterCollection = characterCollection
 			query = FontQuery{Fallback: q}
+			if isCJK(characterCollection) {
+				// Port: upstream draws the text of a CJK collection with
+				// the font of the resolver only. A CJK font, such as Droid
+				// Sans Fallback, can lack the Latin letters. Go draws them
+				// with the substitute of a standard font.
+				latin, _ = loader.programs.resolve(&FontQuery{IsStandard: true, Standard: q.PickStandardFont()})
+			}
 		}
 		if program, ok = loader.programs.resolve(&query); !ok {
 			return nil, false
 		}
-		fallback = true
 	}
 
 	defaultWidth, ok := descendantFont.Get[float32](syntax.KeyDW)
@@ -145,6 +238,8 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 		fontFlags:             flags,
 		hasFlags:              hasFlags,
 		fallback:              fallback,
+		latin:                 latin,
+		unicode:               unicodeEncodingOf(encObj),
 		toUnicodeIsCIDIndexed: toUnicodeIsCIDIndexed,
 	}, true
 }
@@ -152,12 +247,29 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 // mapCode is Type0Font::map_code in hayro-font src/cid.rs.
 func (t *type0Font) mapCode(code uint32) GlyphID {
 	cid, ok := t.codeToCID(code)
+	if t.latin != nil && (!ok || cid == 0) {
+		// Port: upstream draws nothing for a code that the collection does
+		// not hold. The code of a Unicode CMap, such as UniJIS-UCS2-H, is
+		// a character, so Go draws it with the fallback font.
+		if r, ok := t.unicode.char(code); ok {
+			return t.fallbackGlyph(r)
+		}
+	}
 	if !ok {
 		return GlyphIDNotdef
 	}
 	toUnicodeKey := code
 	if t.toUnicodeIsCIDIndexed {
 		toUnicodeKey = cid
+	}
+	if t.fallback && t.latin != nil {
+		// Port: the glyph ID of a CID is a glyph of the font that the file
+		// does not embed, so Go draws nothing for a character that neither
+		// font draws.
+		if r, ok := t.unicodeOf(toUnicodeKey); ok {
+			return t.fallbackGlyph(r)
+		}
+		return GlyphIDNotdef
 	}
 	if t.fallback {
 		if glyph, ok := t.mapViaUnicode(toUnicodeKey); ok {
@@ -186,6 +298,16 @@ func (t *type0Font) mapCode(code uint32) GlyphID {
 
 // mapViaUnicode is Type0Font::map_via_unicode in hayro-font src/cid.rs.
 func (t *type0Font) mapViaUnicode(key uint32) (GlyphID, bool) {
+	r, ok := t.unicodeOf(key)
+	if !ok {
+		return 0, false
+	}
+	return glyphOfChar(t.prog, r)
+}
+
+// unicodeOf returns the character of a key of the ToUnicode CMap. It is the
+// first half of Type0Font::map_via_unicode in hayro-font src/cid.rs.
+func (t *type0Font) unicodeOf(key uint32) (rune, bool) {
 	if t.toUnicode == nil {
 		return 0, false
 	}
@@ -198,15 +320,45 @@ func (t *type0Font) mapViaUnicode(key uint32) (GlyphID, bool) {
 	if !found || bf.IsString {
 		return 0, false
 	}
-	character := bf.Char
-	if t.prog.programKind() == programSfnt {
-		return t.prog.cmapGlyph(character)
+	return bf.Char, true
+}
+
+// glyphOfChar returns the glyph of a character in prog. It is the second
+// half of Type0Font::map_via_unicode in hayro-font src/cid.rs.
+func glyphOfChar(prog *fontProgram, r rune) (GlyphID, bool) {
+	if prog.programKind() == programSfnt {
+		return prog.cmapGlyph(r)
 	}
-	name, ok := glyphNamesGetReverse(character)
+	name, ok := glyphNamesGetReverse(r)
 	if !ok {
 		return 0, false
 	}
-	return t.prog.glyphByName(name)
+	return prog.glyphByName(name)
+}
+
+// fallbackGlyph returns the glyph of a character in the program of a font
+// that has a latin font, then in the latin font, or .notdef.
+//
+// Port: upstream has no latin font.
+func (t *type0Font) fallbackGlyph(r rune) GlyphID {
+	if g, ok := glyphOfChar(t.prog, r); ok {
+		return g
+	}
+	if g, ok := glyphOfChar(t.latin, r); ok {
+		return g | latinGlyph
+	}
+	return GlyphIDNotdef
+}
+
+// programOf returns the program that draws glyph, and the ID of the glyph
+// in that program.
+//
+// Port: upstream has one program for each font.
+func (t *type0Font) programOf(glyph GlyphID) (*fontProgram, GlyphID) {
+	if t.latin != nil && glyph&latinGlyph != 0 {
+		return t.latin, glyph &^ latinGlyph
+	}
+	return t.prog, glyph
 }
 
 // validChar reports whether char::from_u32 of Rust accepts v.
@@ -238,7 +390,8 @@ func (t *type0Font) glyphStretch(glyph GlyphID, code uint32) float64 {
 	if !ok {
 		return 1
 	}
-	actualWidth, ok := t.prog.advanceWidth(glyph)
+	prog, glyph := t.programOf(glyph)
+	actualWidth, ok := prog.advanceWidth(glyph)
 	if !ok {
 		return 1
 	}
@@ -327,7 +480,31 @@ func (t *type0Font) readCode(bytes []byte, offset int) (uint32, int) {
 			return code, n + 1
 		}
 	}
+	// Port: upstream reads a code that the CMap does not map as one byte,
+	// so that a code of two bytes advances twice. Go reads the length of
+	// the code from the codespace ranges of the CMap, as pdf.js does.
+	code = 0
+	for n := range min(4, remaining) {
+		code = code<<8 | uint32(bytes[offset+n])
+		if inCodespace(t.encoding, code, uint8(n+1)) {
+			return code, n + 1
+		}
+	}
 	return 0, 1
+}
+
+// inCodespace reports whether a code of n bytes is inside a codespace range
+// of c or of the CMaps that it uses.
+func inCodespace(c *cmap.CMap, code uint32, n uint8) bool {
+	for depth := 0; c != nil && depth < 16; depth++ {
+		for _, r := range c.CodespaceRanges() {
+			if r.ByteLen() == n && code >= r.Low() && code <= r.High() {
+				return true
+			}
+		}
+		c = c.Base()
+	}
+	return false
 }
 
 // originDisplacement is Type0Font::origin_displacement in hayro-font

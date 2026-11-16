@@ -94,6 +94,9 @@ type odtPageLayout struct {
 // odtMasterPage is a style:master-page.
 type odtMasterPage struct {
 	name, layout string
+	// next is the master page of the pages after the first, from
+	// style:next-style-name, or "".
+	next string
 	// parts are the style:header, style:footer, style:header-left and the
 	// like, by their local name.
 	parts map[string]roxmltree.Node
@@ -193,7 +196,7 @@ func (ts *odtStyles) read(root roxmltree.Node) {
 				if !m.IsElement() || m.TagName().Name() != "master-page" {
 					continue
 				}
-				mp := &odtMasterPage{name: odtAttr(m, "name"), layout: odtAttr(m, "page-layout-name"), parts: map[string]roxmltree.Node{}}
+				mp := &odtMasterPage{name: odtAttr(m, "name"), layout: odtAttr(m, "page-layout-name"), next: odtAttr(m, "next-style-name"), parts: map[string]roxmltree.Node{}}
 				for part := range m.Children() {
 					if part.IsElement() {
 						mp.parts[part.TagName().Name()] = part

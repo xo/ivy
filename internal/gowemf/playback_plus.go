@@ -161,10 +161,12 @@ func (p *player) plusDispatch(c Command) error {
 	case PlusDrawDriverStringRecord:
 		return p.plusDriverString(c, body.(PlusDriverString))
 	case PlusDrawStringRecord:
-		// MS-EMFPLUS leaves GDI+ string layout open: the unit of the default
-		// 1/6 margins, how the 1.03 default tracking applies, line breaking,
-		// trimming and line spacing.
-		return p.unsupported(r, "EMF+ DrawString layout")
+		// ivy: MS-EMFPLUS leaves GDI+ string layout open: the unit of the
+		// default 1/6 margins, how the 1.03 default tracking applies, line
+		// breaking, trimming and line spacing. plusDrawString in
+		// playback_plus_string.go reads them closely enough to read the
+		// text. Upstream reports the record as not supported.
+		return p.plusDrawString(c, body.(PlusText))
 	case PlusSetRenderingOriginRecord:
 		s.origin = body.(PointRecord).Point
 	case PlusSetInterpolationModeRecord:

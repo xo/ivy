@@ -85,10 +85,20 @@ func newStackingContext(box *Box, childContexts []*StackingContext, blocks []*Bo
 // StackingContextFromPage is StackingContext.from_page. The children of the
 // page, the box of the root element and the margin boxes, and the page box
 // itself are always stacking contexts.
+//
+// Port: the positioned descendants of a margin box are part of the stacking
+// context of the page, so that one with a negative z-index draws behind the
+// content of the page, as the watermark of a header does. Upstream draws
+// them in the context of the margin box, over the content.
 func StackingContextFromPage(page *Box) *StackingContext {
 	inline := map[*Box]*StackingContext{}
 	childContexts := make([]*StackingContext, 0, len(page.Children))
 	for _, child := range page.Children {
+		if child.Kind == KindMargin {
+			sc := stackingContextFromBox(child, page, &childContexts, inline)
+			childContexts = append(childContexts, sc)
+			continue
+		}
 		childContexts = append(childContexts, stackingContextFromBox(child, page, nil, inline))
 	}
 	// The children are sub-contexts: remove them from the "normal" tree.

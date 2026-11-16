@@ -21,13 +21,19 @@ var officeColors = map[string]color.NRGBA{
 	"hlink": {0x05, 0x63, 0xc1, 255}, "folHlink": {0x95, 0x4f, 0x72, 255},
 }
 
-// The colors of the text and the lines of a chart of Office.
+// The colors of the text and the lines of the charts.
 var (
+	// textGray is the color of the text of a chart of Office 2016, and
+	// gridGray the color of its gridlines.
 	textGray = color.NRGBA{0x59, 0x59, 0x59, 255}
 	gridGray = color.NRGBA{0xd9, 0xd9, 0xd9, 255}
-	axisGray = color.NRGBA{0xbf, 0xbf, 0xbf, 255}
-	// labelGray is the color of the labels on the data.
+	// labelGray is the color of the labels on the data of a chart of
+	// Office 2016.
 	labelGray = color.NRGBA{0x40, 0x40, 0x40, 255}
+	// officeGray is the color of the axes and the gridlines of a chart of
+	// Office 2007, and libreGray the one of a chart of LibreOffice.
+	officeGray = color.NRGBA{0x86, 0x86, 0x86, 255}
+	libreGray  = color.NRGBA{0xb3, 0xb3, 0xb3, 255}
 )
 
 // withOffice returns a theme with the colors of theme, and the colors of
@@ -94,19 +100,4 @@ func fillColor(n roxmltree.Node, colors *drawingml.Colors) (c color.NRGBA, ok, n
 		}
 	}
 	return color.NRGBA{}, false, false
-}
-
-// css writes c as a color of CSS.
-func css(c color.NRGBA) string {
-	if c.A == 255 {
-		return "#" + hex2(c.R) + hex2(c.G) + hex2(c.B)
-	}
-	return "rgba(" + strconv.Itoa(int(c.R)) + "," + strconv.Itoa(int(c.G)) + "," + strconv.Itoa(int(c.B)) + "," +
-		strconv.FormatFloat(float64(c.A)/255, 'f', 3, 64) + ")"
-}
-
-// hex2 writes a byte as two hexadecimal digits.
-func hex2(b uint8) string {
-	const digits = "0123456789abcdef"
-	return string([]byte{digits[b>>4], digits[b&15]})
 }

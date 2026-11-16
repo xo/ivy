@@ -33,10 +33,10 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/go-text/typesetting/font/cff"
-	ot "github.com/go-text/typesetting/font/opentype"
-	"github.com/go-text/typesetting/font/opentype/tables"
 	"github.com/xo/okage/kurbo"
+	"github.com/xo/okage/typesetting/font/cff"
+	ot "github.com/xo/okage/typesetting/font/opentype"
+	"github.com/xo/okage/typesetting/font/opentype/tables"
 
 	"github.com/xo/ivy"
 )

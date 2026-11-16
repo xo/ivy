@@ -673,6 +673,8 @@ func FuzzPlay(f *testing.F) {
 		f.Add(s.data)
 	}
 	f.Add(maskBltFixture(false))
+	// ivy: a DrawString record, which ivy draws (README.md)
+	f.Add(plusScene(96, 64, plusFontObj(1, 10, 2, 0, "F"), plusRec(PlusDrawStringRecord, 0x8001, dwords(0xff000000, 0xffffffff, 5), fl(0, 0, 20, 40), words('A', 'B', ' ', 'C', '\n'))))
 	f.Add(emfScene(96, 64, 2, emfFont(1, -20, 300, 0, 0, "F"), emfSelect(1), emfValue(EMRSetTextAlign, 1|6), emfText(1, 4, 5, 6, &Rect{1, 2, 30, 40}, "ab c", nil, []int32{3, 4, 5, 6})))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		b := &fakeText{}

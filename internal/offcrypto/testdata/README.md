@@ -8,7 +8,8 @@ the files.
 These streams come from the test files of nolze/msoffcrypto-tool, under the
 MIT license, at the commit `bdb71ea5dfbdee2f3cd86f8852e74be7a6f15667`. The
 license is in `LICENSE-msoffcrypto-tool.txt`. The password of each file is
-`Password1234_`.
+`Password1234_`, except for `xor_xls.workbook`, whose password is
+`123456789012345`.
 
 | Stream | Source file in `tests/inputs` | Stream of the source |
 | --- | --- | --- |
@@ -17,9 +18,11 @@ license is in `LICENSE-msoffcrypto-tool.txt`. The password of each file is
 | `standard.info`, `standard.package` | `ecma376standard_password.docx` | `EncryptionInfo`, `EncryptedPackage` |
 | `rc4cryptoapi_doc.table` | `rc4cryptoapi_password.doc` | `1Table` |
 | `rc4cryptoapi_xls.workbook` | `rc4cryptoapi_password.xls` | `Workbook` |
+| `xor_xls.workbook` | `xor_password_123456789012345.xls` | the first 4096 bytes of `Workbook` |
 
 The tests compare the result with the SHA-256 of the files that
-msoffcrypto-tool keeps in `tests/outputs`.
+msoffcrypto-tool keeps in `tests/outputs`. The test of `xor_xls.workbook`
+reads the records after FILEPASS instead, whose values it knows.
 
 LibreOffice 26.8 wrote the other files, from a short text or a sheet of one
 cell, with the password `secret`. It encrypts a .docx file with Standard

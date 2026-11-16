@@ -373,10 +373,16 @@ func (o *OutlineGlyph) AdvanceWidth() (float32, bool) {
 
 // newOutlineGlyph is OutlineGlyph::new in hayro-font src/lib.rs.
 func newOutlineGlyph(font outlineFont, id GlyphID, charCode uint32) *OutlineGlyph {
+	hidden := id == GlyphIDNotdef && font.hidesNotdef()
+	program := font.program()
+	if font.type0 != nil {
+		// Port: a glyph of a CID font can come from its latin font.
+		program, id = font.type0.programOf(id)
+	}
 	return &OutlineGlyph{
 		id:       id,
-		program:  font.program(),
-		hidden:   id == GlyphIDNotdef && font.hidesNotdef(),
+		program:  program,
+		hidden:   hidden,
 		font:     font,
 		charCode: charCode,
 	}
@@ -413,7 +419,7 @@ func (g GlyphIdentifier) FontKey() Key128 {
 // one of the 14 standard fonts, or a font that the PDF file does not embed.
 //
 // Port: upstream is an enum. Go holds both cases. IsStandard tells which
-// one is set.
+// one is set. Named marks a third case that upstream does not have.
 type FontQuery struct {
 	// IsStandard is true for FontQuery::Standard and false for
 	// FontQuery::Fallback.
@@ -422,6 +428,15 @@ type FontQuery struct {
 	Standard StandardFont
 	// Fallback is the query of FontQuery::Fallback.
 	Fallback FallbackFontQuery
+	// Named is true for a query of the font that a PDF file names and does
+	// not embed, by its name, such as Arial or MS-Mincho. Fallback holds
+	// the name and the style. The font of a Named query is a font that a
+	// program gives, such as a font of ivy.Config.Fonts or of the system.
+	// A resolver returns false when it has no font of the name. The font
+	// then is the substitute of a standard font, as upstream does.
+	//
+	// Port: upstream has no such query.
+	Named bool
 }
 
 // cacheKey is the derived Hash of FontQuery in hayro-font src/lib.rs.
@@ -431,7 +446,7 @@ func (q *FontQuery) cacheKey() Key128 {
 		return h.u64(uint64(q.Standard)).sum()
 	}
 	f := &q.Fallback
-	h.str(f.PostScriptName).str(f.FontName).str(f.FontFamily).u64(uint64(f.FontStretch)).
+	h.boolean(q.Named).str(f.PostScriptName).str(f.FontName).str(f.FontFamily).u64(uint64(f.FontStretch)).
 		u64(uint64(f.FontWeight)).boolean(f.IsFixedPitch).boolean(f.IsSerif).
 		boolean(f.IsItalic).boolean(f.IsBold).boolean(f.IsSmallCap)
 	if cc := f.CharacterCollection; cc != nil {
@@ -648,6 +663,32 @@ func (l *programLoader) resolve(query *FontQuery) (*fontProgram, bool) {
 		}
 		return p
 	})
+}
+
+// resolveNamed returns the font program that the font resolver gives for
+// the font that dict names, with a Named query, and false if it gives none.
+// A font that names one of the 14 standard fonts gets no Named query, so
+// that it keeps the substitute of the standard font.
+//
+// Port: upstream has no such query. It draws a font that the file does not
+// embed with the substitute of a standard font.
+func (l *programLoader) resolveNamed(dict syntax.Dict) (*fontProgram, bool) {
+	q := newFallbackFontQuery(dict)
+	if q.PostScriptName == "" || isStandardName(q.PostScriptName) {
+		return nil, false
+	}
+	return l.resolve(&FontQuery{Named: true, Fallback: q})
+}
+
+// isStandardName reports whether name is the PostScript name of one of
+// the 14 standard fonts.
+func isStandardName(name string) bool {
+	for f := Helvetica; f <= Symbol; f++ {
+		if f.PostscriptName() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // getOrInsertWith is ProgramLoader::get_or_insert_with in hayro-font

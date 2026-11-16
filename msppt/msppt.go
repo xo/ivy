@@ -4,32 +4,38 @@
 // A presentation is a Compound File, which the package cfb of magic reads.
 // The package reads the stream "PowerPoint Document" through the stream
 // "Current User", the chain of the edits and the persist directory, to the
-// slides in their order. It reads the text of each shape of a slide, with
-// its place on the slide and its kind: a title, a body or another text. It
-// puts each slide on a page of the size of the slides, with each text in
-// its place, for the layout of ivy (D10). The texts of a body are lists
-// with bullets.
+// slides in their order. Each slide is a page of the size of the slides,
+// which the package draws on the display list of D10 with
+// internal/drawingml.
 //
-// The package leaves out the pictures, the shapes without text, the
-// masters, the backgrounds, the notes, and the fonts, the sizes and the
-// colors of the runs of text. A text has the size of its kind.
+// A slide draws its background, the shapes of its master, and its own
+// shapes: the preset shapes, the shapes of a custom geometry, the lines,
+// the groups and the pictures, with their fills, their outlines and their
+// shadows. The text of a shape has the fonts, the sizes, the colors and
+// the bullets of its runs and paragraphs, over the styles of the master.
+// The colors come from the color scheme of the slide or of its master.
+//
+// The package leaves out the notes, the charts and the objects of OLE
+// other than their pictures, the animations, the comments and the
+// headers and footers of the masters. The pictures of a presentation that
+// a password protects are left out.
 //
 // A presentation gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A presentation that a password protects with
-// RC4 CryptoAPI asks for the password as D12 says.
+// RC4 CryptoAPI asks for the password as D12 says. The package returns an
+// error that wraps ivy.ErrUnsupported for a presentation of PowerPoint 95
+// or of PowerPoint 4.
 package msppt
 
 import (
 	"context"
 	"fmt"
 	"iter"
-	"strconv"
 	"sync"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/drawingml"
 	"github.com/xo/ivy/internal/ebook"
-	"github.com/xo/ivy/internal/layout"
-	"github.com/xo/ivy/internal/memfs"
 	"github.com/xo/ivy/internal/msole"
 )
 
@@ -63,12 +69,18 @@ type Document struct {
 	summary msole.Summary
 	stream  *stream
 	doc     *document
+	// picStream is the stream "Pictures", which holds the pictures of the
+	// store.
+	picStream []byte
 
-	mu     sync.Mutex
-	src    *layout.Source
-	srcErr error
-	// pages holds the book of the layout.
-	pages ebook.Pages
+	// mu guards the caches, which the pages fill as they are built.
+	mu          sync.Mutex
+	masterCache map[uint32]*master
+	pictures    map[int]*drawingml.Picture
+	rawPictures map[int][]byte
+	keyed       map[pictureKey]*drawingml.Picture
+	// ctx is the context of the page that is being built.
+	ctx context.Context
 }
 
 // The capabilities of a document.
@@ -110,7 +122,22 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if !ok {
 		return nil, fmt.Errorf("powerpoint file without a document container: %w", ivy.ErrFormat)
 	}
-	return &Document{cfg: cfg, summary: summary, stream: s, doc: doc}, nil
+	d = &Document{
+		cfg:         cfg,
+		summary:     summary,
+		stream:      s,
+		doc:         doc,
+		masterCache: make(map[uint32]*master),
+		pictures:    make(map[int]*drawingml.Picture),
+		rawPictures: make(map[int][]byte),
+		keyed:       make(map[pictureKey]*drawingml.Picture),
+	}
+	if msole.Has(f, "Pictures") {
+		// a presentation whose pictures are too large shows its slides
+		// without them
+		d.picStream, _ = msole.ReadStream(f, "Pictures", cfg.Limits)
+	}
+	return d, nil
 }
 
 // Close satisfies the ivy.Document interface.
@@ -133,76 +160,34 @@ func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
 	return d.summary.Info, nil
 }
 
-// PageCount satisfies the ivy.Pager interface. Each slide is a page.
+// PageCount satisfies the ivy.Pager interface. Each slide is a page, and a
+// presentation without a slide has one empty page.
 func (d *Document) PageCount(ctx context.Context) (int, error) {
-	return d.pages.PageCount(ctx, d.source, d.cfg)
+	if err := ctx.Err(); err != nil {
+		return 0, fmt.Errorf("counting slides: %w", err)
+	}
+	return max(1, len(d.doc.slides)), nil
 }
 
-// Page satisfies the ivy.Pager interface.
-func (d *Document) Page(ctx context.Context, n int) (ivy.Page, error) {
-	return d.pages.Page(ctx, d.source, d.cfg, n)
-}
-
-// source converts the slides into HTML for the layout, once.
-func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
+// Page satisfies the ivy.Pager interface. It reads the slide n, from 0,
+// and its master.
+func (d *Document) Page(ctx context.Context, n int) (p ivy.Page, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("reading slide %d: %w", n+1, err)
+	}
+	if n < 0 || n >= max(1, len(d.doc.slides)) {
+		return nil, fmt.Errorf("slide %d of %d: %w", n+1, len(d.doc.slides), ivy.ErrPageRange)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	switch {
-	case d.srcErr != nil:
-		return layout.Source{}, d.srcErr
-	case d.src != nil:
-		return *d.src, nil
-	}
+	defer ebook.Recover("reading powerpoint slide", &err)
+	d.ctx = ctx
 	defer func() {
-		switch {
-		case err == nil:
-			d.src = &src
-		case ctx.Err() == nil:
-			// an error of the context is not kept, so that a later call can
-			// convert the slides
-			d.srcErr = err
-		}
+		d.ctx = nil
 	}()
-	defer ebook.Recover("converting powerpoint file", &err)
-	return d.convert(ctx)
-}
-
-// convert writes each slide as an HTML document of its own, of the size of
-// the slides, so that each slide is one page.
-func (d *Document) convert(ctx context.Context) (layout.Source, error) {
-	lim := d.cfg.Limits
-	var files memfs.FS
-	var docs []string
-	var total, read int64
-	for i, ref := range d.doc.slides {
-		if err := ctx.Err(); err != nil {
-			return layout.Source{}, fmt.Errorf("converting powerpoint file: %w", err)
-		}
-		sl, size := readSlide(d.stream, ref, lim.MaxDepth)
-		// a slide list can name one large slide many times
-		if read += int64(size); read > lim.MaxMemory {
-			return layout.Source{}, fmt.Errorf("slides of more than %d bytes: %w", lim.MaxMemory, ivy.ErrLimit)
-		}
-		head, body := slideHTML(sl, d.doc.width, d.doc.height)
-		doc := msole.HTML(d.summary.Info.Title, "", head, body)
-		total += int64(len(doc))
-		if total > lim.MaxMemory {
-			return layout.Source{}, fmt.Errorf("html of more than %d bytes: %w", lim.MaxMemory, ivy.ErrLimit)
-		}
-		name := "slide" + strconv.Itoa(i+1) + ".html"
-		files.Add(name, []byte(doc))
-		docs = append(docs, name)
+	pg, err := d.slidePage(ctx, n)
+	if err != nil {
+		return nil, err
 	}
-	if len(docs) == 0 {
-		// a presentation without a slide has one empty page
-		head, body := slideHTML(slide{}, d.doc.width, d.doc.height)
-		files.Add("empty.html", []byte(msole.HTML(d.summary.Info.Title, "", head, body)))
-		docs = append(docs, "empty.html")
-	}
-	return layout.Source{
-		FS:          &files,
-		Documents:   docs,
-		StyleSheets: []string{styleSheet},
-		Title:       d.summary.Info.Title,
-	}, nil
+	return pg, nil
 }

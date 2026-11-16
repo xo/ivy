@@ -1,11 +1,8 @@
 package chart
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"image/color"
 	"os"
@@ -20,9 +17,6 @@ import (
 	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/drawingml"
 )
-
-// update writes the golden specs in testdata.
-var update = flag.Bool("update", false, "write the golden specs in testdata")
 
 // The namespaces of the charts of the tests.
 const chartNS = `xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" ` +
@@ -123,8 +117,8 @@ const categoryAxes = `<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="m
 	`<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/>` +
 	`<c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="General" sourceLinked="1"/><c:crossAx val="1"/></c:valAx>`
 
-// axisIDs are the axes of a chart type.
-const axisIDs = `<c:axId val="1"/><c:axId val="2"/>`
+// axisRefs are the axes of a chart type.
+const axisRefs = `<c:axId val="1"/><c:axId val="2"/>`
 
 // testChart is a chart of the tests and what its drawing must show.
 type testChart struct {
@@ -146,7 +140,7 @@ func testCharts() []testChart {
 			ser(0, "East", solid("1F77B4"), quarters, "10", "14", "-3")+
 			ser(1, "West", solid("FF7F0E"), quarters, "12", "8", "9")+
 			`<c:dLbls><c:showLegendKey val="0"/><c:showVal val="1"/></c:dLbls><c:gapWidth val="150"/>`+
-			axisIDs+`</c:barChart>`, categoryAxes, "b"),
+			axisRefs+`</c:barChart>`, categoryAxes, "b"),
 		colors: []color.NRGBA{{0x1f, 0x77, 0xb4, 255}, {0xff, 0x7f, 0x0e, 255}},
 	}, {
 		name: "stacked",
@@ -154,7 +148,7 @@ func testCharts() []testChart {
 			ser(0, "A", "", quarters, "1", "2", "3")+
 			ser(1, "B", "", quarters, "2", "2", "2")+
 			ser(2, "C", "", quarters, "3", "1", "1")+
-			`<c:overlap val="100"/>`+axisIDs+`</c:barChart>`,
+			`<c:overlap val="100"/>`+axisRefs+`</c:barChart>`,
 			strings.ReplaceAll(strings.ReplaceAll(categoryAxes, `"b"`, `"x"`), `"l"`, `"b"`), "r"),
 		colors: []color.NRGBA{red, green, blue},
 	}, {
@@ -162,7 +156,7 @@ func testCharts() []testChart {
 		xml: chartXML("Trend", `<c:lineChart><c:grouping val="standard"/>`+
 			ser(0, "Visits", "", strCache("Sheet1!$A$2:$A$6", "Mon", "Tue", "Wed", "Thu", "Fri"), "5", "7", "", "6", "9")+
 			ser(1, "Sales", "", strCache("Sheet1!$A$2:$A$6", "Mon", "Tue", "Wed", "Thu", "Fri"), "1", "3", "4", "2", "5")+
-			`<c:marker val="1"/>`+axisIDs+`</c:lineChart>`, categoryAxes, "t"),
+			`<c:marker val="1"/>`+axisRefs+`</c:lineChart>`, categoryAxes, "t"),
 		colors: []color.NRGBA{red, green},
 	}, {
 		name: "pie",
@@ -185,40 +179,6 @@ func testCharts() []testChart {
 				`<c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:majorUnit val="5"/><c:crossAx val="1"/></c:valAx>`, ""),
 		colors: []color.NRGBA{red},
 	}}
-}
-
-func TestSpec(t *testing.T) {
-	theme := testTheme(t)
-	for _, test := range testCharts() {
-		t.Run(test.name, func(t *testing.T) {
-			c, err := Parse(test.xml, Options{Theme: theme})
-			if err != nil {
-				t.Fatal(err)
-			}
-			b, err := c.Spec(400, 300, "Carlito")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got bytes.Buffer
-			if err := json.Indent(&got, b, "", "  "); err != nil {
-				t.Fatal(err)
-			}
-			got.WriteByte('\n')
-			name := filepath.Join("testdata", test.name+".json")
-			if *update {
-				if err := os.WriteFile(name, got.Bytes(), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			exp, err := os.ReadFile(name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(got.Bytes(), exp) {
-				t.Errorf("expected the spec of %s, got:\n%s", name, got.String())
-			}
-		})
-	}
 }
 
 // render draws a chart onto a pixmap of w by h, on white.
@@ -322,7 +282,7 @@ func TestPieSlices(t *testing.T) {
 	}
 	// The first slice starts at the top and goes clockwise, so the top
 	// right of the pie is red, and the top left is the color of the last.
-	cx, cy := centerOf(pm, test.colors, w*3/4, h)
+	cx, cy := centerOf(pm, test.colors, w*9/10, h)
 	if p := at(pm, cx+8, cy-40); p != test.colors[0] {
 		t.Errorf("expected the first slice at the top right, got: %v", p)
 	}
@@ -370,7 +330,7 @@ func TestDrawList(t *testing.T) {
 	}
 	fills := 0
 	for _, op := range ops {
-		if strings.HasPrefix(op, "fill") {
+		if strings.HasPrefix(op, "fill") || strings.HasPrefix(op, "glyphs") {
 			fills++
 		}
 		if strings.HasPrefix(op, "image") || strings.HasPrefix(op, "mask") {
@@ -400,7 +360,7 @@ func TestLimits(t *testing.T) {
 	for i := range maxPoints + 10 {
 		vals = append(vals, fmt.Sprint(i%7))
 	}
-	xml := chartXML("", `<c:lineChart><c:grouping val="standard"/>`+ser(0, "Big", "", "", vals...)+axisIDs+
+	xml := chartXML("", `<c:lineChart><c:grouping val="standard"/>`+ser(0, "Big", "", "", vals...)+axisRefs+
 		`</c:lineChart>`, categoryAxes, "")
 	c, err := Parse(xml, Options{})
 	if err != nil {
@@ -419,7 +379,7 @@ func TestLimits(t *testing.T) {
 
 func TestUnsupported(t *testing.T) {
 	xml := chartXML("Surface", `<c:surfaceChart><c:wireframe val="0"/>`+
-		ser(0, "S", "", strCache("A", "x", "y"), "1", "2")+axisIDs+`</c:surfaceChart>`, categoryAxes, "")
+		ser(0, "S", "", strCache("A", "x", "y"), "1", "2")+axisRefs+`</c:surfaceChart>`, categoryAxes, "")
 	c, err := Parse(xml, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -455,17 +415,6 @@ func TestFormatValue(t *testing.T) {
 	for _, test := range tests {
 		if got := formatValue(test.v, test.code); got != test.exp {
 			t.Errorf("formatValue(%g, %q): expected %q, got %q", test.v, test.code, test.exp, got)
-		}
-	}
-}
-
-func TestD3Format(t *testing.T) {
-	tests := map[string]string{
-		"General": "", "0": ".0f", "#,##0.00": ",.2f", "0%": ".0%", `"$"#,##0`: "$,.0f", "m/d/yyyy": "",
-	}
-	for code, exp := range tests {
-		if got := d3Format(code); got != exp {
-			t.Errorf("d3Format(%q): expected %q, got %q", code, exp, got)
 		}
 	}
 }

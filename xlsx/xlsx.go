@@ -23,7 +23,7 @@
 //
 // The pictures and the charts of the drawings show at their cells, and a
 // chart sheet shows its chart on a page of its own. internal/chart draws
-// the charts with zuzu (D24), with the colors of the theme and the fonts of
+// the charts (D27), with the colors of the theme and the fonts of
 // ivy.Config. A chart that cannot be read shows as a frame with its title.
 // The conditional formats, the comments, the shapes and the sparklines are
 // left out.

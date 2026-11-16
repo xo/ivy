@@ -10,6 +10,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/charset"
+	"github.com/xo/ivy/internal/msole"
 )
 
 // piece is a piece of the piece table: a run of characters in the stream
@@ -66,6 +67,9 @@ type parser struct {
 // the fonts of the document.
 func newParser(s *streams, lim ivy.Limits) (*parser, error) {
 	p := &parser{s: s, lim: lim}
+	if s.word6 {
+		return p, p.readWord6()
+	}
 	if err := p.readClx(); err != nil {
 		return nil, err
 	}
@@ -84,7 +88,17 @@ func newParser(s *streams, lim ivy.Limits) (*parser, error) {
 	for i := range all {
 		all[i] = byte(i)
 	}
-	text, _ := charset.Decode(all[:], "windows-1252")
+	p.setCodePage(all[:], "windows-1252")
+	return p, nil
+}
+
+// setCodePage maps each byte of a compressed piece to its character in the
+// code page label. all holds the 256 bytes.
+func (p *parser) setCodePage(all []byte, label string) {
+	text, ok := charset.Decode(all, label)
+	if !ok {
+		text, _ = charset.Decode(all, "windows-1252")
+	}
 	i := 0
 	for _, r := range text {
 		if i < len(p.ansi) {
@@ -92,7 +106,36 @@ func newParser(s *streams, lim ivy.Limits) (*parser, error) {
 		}
 		i++
 	}
-	return p, nil
+}
+
+// readWord6 reads the pieces of a document of Word 6 or Word 95, each
+// with one byte for each character. A document that Word did not save fast
+// has no piece table, and its text is one piece from fcMin.
+func (p *parser) readWord6() error {
+	var all [256]byte
+	for i := range all {
+		all[i] = byte(i)
+	}
+	p.setCodePage(all[:], msole.CodePageLabel(p.s.codePage))
+	p.styles = parseStyles(nil, 0)
+	if p.s.fib.flags&flagComplex == 0 {
+		if p.s.fcMac < p.s.fcMin {
+			return fmt.Errorf("word 6 document with the text from %d to %d: %w", p.s.fcMin, p.s.fcMac, ivy.ErrFormat)
+		}
+		end := min(p.s.fib.ccpText, p.s.fcMac-p.s.fcMin)
+		p.pieces = []piece{{cpEnd: end, fc: p.s.fcMin, compressed: true}}
+		return nil
+	}
+	if err := p.readClx(); err != nil {
+		return err
+	}
+	for i := range p.pieces {
+		pc := &p.pieces[i]
+		// a piece of Word 6 has the offset of its bytes, without flags,
+		// and its modifiers have the codes of Word 6
+		pc.compressed, pc.prm = true, 0
+	}
+	return nil
 }
 
 // readClx reads the CLX of the table stream: the property modifiers of the
@@ -136,9 +179,12 @@ func (p *parser) readClx() error {
 		pcd := plc[4*(n+1)+8*i:]
 		fc := le.Uint32(pcd[2:])
 		pc := piece{cpStart: cpStart, cpEnd: cpEnd, prm: le.Uint16(pcd[6:])}
-		if fc&0x40000000 != 0 {
+		switch {
+		case p.s.word6:
+			pc.fc = fc
+		case fc&0x40000000 != 0:
 			pc.compressed, pc.fc = true, (fc&0x3FFFFFFF)/2
-		} else {
+		default:
 			pc.fc = fc & 0x3FFFFFFF
 		}
 		if cpEnd <= cpStart {
@@ -317,6 +363,7 @@ func (p *parser) charProps(r *fkpRun, istd int, pieceMods []byte) chp {
 // WordDocument that holds it.
 type char struct {
 	r     rune
+	cp    uint32
 	fc    uint32
 	piece int
 }
@@ -341,7 +388,7 @@ func (p *parser) chars(yield func(char) bool) {
 			}
 			k := cp - pc.cpStart
 			var c char
-			c.piece = i
+			c.piece, c.cp = i, cp
 			if pc.compressed {
 				c.fc = pc.fc + k
 				if uint64(c.fc) >= uint64(len(word)) {
@@ -386,6 +433,7 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 		fields  []bool // for each open field, whether its code is read
 		pending []char
 		total   int
+		secs    = p.sections()
 	)
 	flushRun := func() {
 		if haveRun && text.Len() > 0 {
@@ -466,13 +514,16 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 				continue
 			}
 			// a page break ends the text before it, and the text after it
-			// starts on a new page
+			// starts on a new page. A section break does the same, unless
+			// the next section is continuous
 			if len(pending) > 0 {
 				mark := c
 				mark.r = 0x0D
 				endPara(mark)
 			}
-			cur.pageBreak = true
+			if !secs.continuous(c.cp + 1) {
+				cur.pageBreak = true
+			}
 			continue
 		}
 		if inCode() {

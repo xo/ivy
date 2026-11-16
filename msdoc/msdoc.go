@@ -1,5 +1,6 @@
 // Package msdoc opens the Word documents of Word 97 to Word 2003: .doc
-// files and .dot templates (MS-DOC).
+// files and .dot templates (MS-DOC). It also reads the text of a document
+// of Word 6 or Word 95.
 //
 // A Word document is a Compound File, which the package cfb of magic reads.
 // The package reads the File Information Block, the piece table and the text
@@ -8,18 +9,21 @@
 // spacing of each paragraph, and the headings of the style sheet. It
 // converts the text into HTML, with each table as an HTML table, for the
 // layout of ivy (D10). The pages have the size and the margins of the first
-// section.
+// section. A section break starts a new page, unless the next section is
+// continuous.
 //
 // The package leaves out the headers, the footers, the footnotes, the
 // comments, the text boxes, the pictures, and the numbers and the bullets
 // of the lists. The codes of the fields are left out, and their results
-// stay.
+// stay. Of a document of Word 6 or Word 95, the package reads the text, the
+// paragraphs and the sections, without the properties of the characters
+// and the paragraphs.
 //
 // A document gives its thumbnail and its properties from the stream
-// "\x05SummaryInformation". A document that a password protects with RC4 or
-// RC4 CryptoAPI asks for the password as D12 says. The XOR obfuscation is
-// not read, and the package returns an error that wraps ivy.ErrUnsupported
-// for it, as it does for a document of Word 6 or Word 95.
+// "\x05SummaryInformation". A document that a password protects with RC4,
+// RC4 CryptoAPI or the XOR obfuscation asks for the password as D12 says.
+// The package returns an error that wraps ivy.ErrUnsupported for a
+// document of Word 6 or Word 95 that a password protects.
 package msdoc
 
 import (
@@ -90,8 +94,8 @@ var (
 // decrypts the document if a password protects it. It returns an error that
 // wraps ivy.ErrFormat if src is not a Word document, one that wraps
 // ivy.ErrPassword if the password is missing or wrong, and one that wraps
-// ivy.ErrUnsupported for a document of Word 6 or Word 95, or with the XOR
-// obfuscation.
+// ivy.ErrUnsupported for a document of Word 6 or Word 95 with a password,
+// or for a FIB of Word 97 with the nFib of an older version.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
 	for _, opt := range opts {

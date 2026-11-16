@@ -67,7 +67,22 @@ func (tb *TextBody) Box(theme *Theme, w, h float64) (TextBox, bool) {
 		m = okage.TransformFromRotateAt(float32(rot), float32(w/2), float32(h/2)).PreConcat(m)
 	}
 	page := max(ph*overflowLines, ph+720)
-	doc := tb.html(theme, pw, ph, page)
+	row := ph
+	switch b.Anchor.Or("t") {
+	case "ctr":
+		// the text that overflows a box goes past its top and its bottom
+		// by the same amount, so the row is taller than the box by the
+		// same space above and below
+		extra := (page - ph) / 2
+		row, page = ph+2*extra, ph+2*extra
+		m = m.PreTranslate(0, float32(-extra))
+	case "b":
+		// the text that overflows goes past the top of the box
+		extra := page - ph
+		row = page
+		m = m.PreTranslate(0, float32(-extra))
+	}
+	doc := tb.html(theme, pw, row, page)
 	return TextBox{HTML: doc, Width: pw, Height: page, Transform: m}, true
 }
 

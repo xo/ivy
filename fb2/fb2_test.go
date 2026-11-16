@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,10 +171,10 @@ func TestSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(src.Documents) != 1 || src.Title != "Война и мир" || len(src.StyleSheets) != 2 {
-		t.Fatalf("unexpected source: %+v", src)
+	if !slices.Equal(src.Documents, []string{coverName, documentName}) || src.Title != "Война и мир" || len(src.StyleSheets) != 2 {
+		t.Fatalf("unexpected source: %q %q", src.Documents, src.Title)
 	}
-	buf, err := fs.ReadFile(src.FS, src.Documents[0])
+	buf, err := fs.ReadFile(src.FS, documentName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +332,8 @@ func FuzzOpen(f *testing.F) {
 	f.Add(toWindows1251(f, book("windows-1251")))
 	f.Add(fixture.Zip(fixture.Entry{Name: "book.fb2", Data: []byte(book("utf-8"))}))
 	f.Add([]byte(billionLaughs))
+	f.Add(fixture.FictionBook(``, `<coverpage><image l:href="#c.png"/></coverpage>`, `<p foo:a="1">a<a l:href="#n">1</a></p>`,
+		fixture.Binary{ID: "c.png", ContentType: "image/png", Data: fixture.PNG(2, 3, color.Black)}))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
@@ -347,12 +350,14 @@ func FuzzOpen(f *testing.F) {
 		if err != nil {
 			return
 		}
-		xhtml, err := fs.ReadFile(src.FS, src.Documents[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := roxmltree.Parse(string(xhtml)); err != nil {
-			t.Fatalf("the xhtml is not well formed: %v\n%s", err, xhtml)
+		for _, name := range src.Documents {
+			xhtml, err := fs.ReadFile(src.FS, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := roxmltree.Parse(string(xhtml)); err != nil {
+				t.Fatalf("the xhtml is not well formed: %v\n%s", err, xhtml)
+			}
 		}
 		ebooktest.RenderFirstPage(t, d)
 	})
@@ -383,8 +388,9 @@ func TestPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n < 1 {
-		t.Fatalf("expected a page, got: %d", n)
+	// The page of the cover comes first.
+	if n < 2 {
+		t.Fatalf("expected 2 pages or more, got: %d", n)
 	}
 	p, err := d.Page(t.Context(), 0)
 	if err != nil {
@@ -393,7 +399,16 @@ func TestPages(t *testing.T) {
 	if w, h := p.Size(); w != 6*72 || h != 9*72 {
 		t.Errorf("expected a page of 6 by 9 inches, got: %g by %g", w, h)
 	}
-	img := ebooktest.RenderPage(t, d, 0)
+	// The cover of 30 by 40 pixels fills the width of the page, and it is
+	// in the middle of its height.
+	cover := ebooktest.RenderPage(t, d, 0)
+	if ink := ebooktest.Ink(cover, image.Rect(0, 50, 576, 814)); ink < 576*760 {
+		t.Errorf("expected the cover on the first page, got %d pixels of ink", ink)
+	}
+	if ink := ebooktest.Ink(cover, image.Rect(0, 0, 576, 46)) + ebooktest.Ink(cover, image.Rect(0, 818, 576, 864)); ink != 0 {
+		t.Errorf("expected no ink above and below the cover, got %d pixels", ink)
+	}
+	img := ebooktest.RenderPage(t, d, 1)
 	// The title of the book is at the top of the page area, inside the
 	// margins of 0.5 and 0.6 inches.
 	if ink := ebooktest.Ink(img, image.Rect(48, 58, 528, 120)); ink < 50 {

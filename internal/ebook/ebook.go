@@ -1,7 +1,7 @@
 // Package ebook holds the code that the formats of ebooks share: the OPF
 // package of EPUB, HTMLZ and TXTZ, the style sheets that give the size of the
-// page and the default fonts, the decode of text, and a light scan of the
-// tags of HTML.
+// page and the default fonts, the decode of text, a light scan of the tags of
+// HTML, and the page that shows a cover image.
 //
 // The scan of tags reads the title and the metadata of a document, and the
 // first image of the page of a cover. It is not a parser of HTML. The layout

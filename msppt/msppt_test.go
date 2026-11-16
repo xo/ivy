@@ -7,7 +7,8 @@ import (
 	"errors"
 	"image"
 	"image/color"
-	"io/fs"
+	"image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/xo/magic/cfb"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/drawingml"
 	"github.com/xo/ivy/internal/fixture"
 )
 
@@ -31,22 +33,57 @@ func readFile(t testing.TB, name string) []byte {
 	return buf
 }
 
-// slides returns the HTML documents that d makes for the layout.
-func slides(t *testing.T, d *Document) []string {
+// slidePage returns the page n of d, with its figures.
+func slidePage(t *testing.T, d *Document, n int) *page {
 	t.Helper()
-	src, err := d.source(t.Context())
+	p, err := d.Page(t.Context(), n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := make([]string, 0, len(src.Documents))
-	for _, name := range src.Documents {
-		buf, err := fs.ReadFile(src.FS, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, string(buf))
+	return p.(*page)
+}
+
+// textOf returns the text of a figure, with a line feed between two
+// paragraphs.
+func textOf(f *drawingml.Figure) string {
+	if f.Text == nil {
+		return ""
 	}
-	return out
+	var paras []string
+	for _, p := range f.Text.Paragraphs {
+		var sb strings.Builder
+		for _, r := range p.Runs {
+			sb.WriteString(r.Text)
+		}
+		paras = append(paras, sb.String())
+	}
+	return strings.Join(paras, "\n")
+}
+
+// figureWith returns the figure of p whose text is text, or nil.
+func figureWith(p *page, text string) *drawingml.Figure {
+	for _, f := range p.figures {
+		if textOf(f) == text {
+			return f
+		}
+	}
+	return nil
+}
+
+// near reports whether a and b differ by less than 0.01.
+func near(a, b float64) bool {
+	return math.Abs(a-b) < 0.01
+}
+
+// pixel returns the color of the pixel at x, y.
+func pixel(img image.Image, x, y int) color.NRGBA {
+	return color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+}
+
+// close reports whether the colors differ by at most 8 in each channel.
+func closeTo(a, b color.NRGBA) bool {
+	d := func(x, y uint8) bool { return x-y <= 8 || y-x <= 8 }
+	return d(a.R, b.R) && d(a.G, b.G) && d(a.B, b.B)
 }
 
 func TestOpen(t *testing.T) {
@@ -62,42 +99,104 @@ func TestOpen(t *testing.T) {
 	if info.Title != "Ivy test slides" || len(info.Authors) != 1 || info.Authors[0] != "Ivy Tester" {
 		t.Errorf("expected the title and the author, got: %+v", info)
 	}
-	docs := slides(t, doc)
-	if len(docs) != 2 {
-		t.Fatalf("expected 2 slides, got: %d", len(docs))
-	}
-	for _, want := range []string{
-		"size: 793.75pt 446.50pt;",
-		`<div class="shape title" style="left: 39.62pt; top: 17.75pt; width: 714.25pt"><p>First slide title</p></div>`,
-		`<div class="shape center-body"`,
-		"<p>A subtitle</p>",
-	} {
-		if !strings.Contains(docs[0], want) {
-			t.Errorf("expected %q in the first slide:\n%s", want, docs[0])
-		}
-	}
-	for _, want := range []string{
-		"<p>Second slide</p>",
-		"<ul><li>First point</li><li>Second point</li><li>Third point</li></ul>",
-		`<div class="shape other" style="left: 56.75pt; top: 425.25pt; width: 283.50pt"><p>A free text box</p></div>`,
-	} {
-		if !strings.Contains(docs[1], want) {
-			t.Errorf("expected %q in the second slide:\n%s", want, docs[1])
-		}
-	}
 	n, err := doc.PageCount(t.Context())
 	if err != nil || n != 2 {
 		t.Fatalf("expected 2 pages, got: %d, %v", n, err)
 	}
-	p, err := doc.Page(t.Context(), 1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := slidePage(t, doc, 0)
 	if w, h := p.Size(); w != 793.75 || h != 446.5 {
 		t.Errorf("expected a page of 793.75x446.5, got: %gx%g", w, h)
 	}
+	title := figureWith(p, "First slide title")
+	if title == nil {
+		t.Fatalf("expected the title on the first slide, got %d figures", len(p.figures))
+	}
+	if x, y := title.Transform.TX, title.Transform.TY; !near(float64(x), 39.625) || !near(float64(y), 17.75) {
+		t.Errorf("expected the title at 39.625, 17.75, got: %g, %g", x, y)
+	}
+	if run := title.Text.Paragraphs[0].Runs[0].Style; run.Size.V != 44 || run.Latin.V != "Arial" {
+		t.Errorf("expected a title of 44 points in Arial, got: %+v", run)
+	}
+	if figureWith(p, "A subtitle") == nil {
+		t.Error("expected the subtitle on the first slide")
+	}
+	p = slidePage(t, doc, 1)
+	body := figureWith(p, "First point\nSecond point\nThird point")
+	if body == nil {
+		t.Fatal("expected the body of three points on the second slide")
+	}
+	// LibreOffice writes the points without bullets
+	if b := body.Text.Paragraphs[0].Style.Bullet; b.V.Kind != drawingml.BulletNone {
+		t.Errorf("expected a point without a bullet, got: %+v", b)
+	}
+	if figureWith(p, "A free text box") == nil {
+		t.Error("expected the text box on the second slide")
+	}
+	if _, err := doc.Page(t.Context(), 2); !errors.Is(err, ivy.ErrPageRange) {
+		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
+	}
 	if _, err := ivy.RenderImage(t.Context(), p, 36, color.White); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestShapes(t *testing.T) {
+	d, err := Open(t.Context(), bytes.NewReader(readFile(t, "shapes.ppt")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := slidePage(t, d, 0)
+	// the background, a rectangle with text, an ellipse with a gradient, a
+	// triangle of a custom geometry and a picture
+	if len(p.figures) != 5 {
+		t.Fatalf("expected 5 figures, got: %d", len(p.figures))
+	}
+	if bg := p.figures[0].Fill; bg.Kind != drawingml.PaintSolid || bg.Color.NRGBA() != (color.NRGBA{0, 0x33, 0x66, 255}) {
+		t.Errorf("expected a background of #003366, got: %+v", bg)
+	}
+	r := figureWith(p, "Red bold text")
+	if r == nil {
+		t.Fatal("expected the rectangle with its text")
+	}
+	if r.Fill.Color.NRGBA() != (color.NRGBA{0, 255, 0, 255}) || r.Line.Paint.Color.NRGBA() != (color.NRGBA{255, 0, 255, 255}) {
+		t.Errorf("expected a green rectangle with a magenta outline, got: %+v, %+v", r.Fill, r.Line.Paint)
+	}
+	run := r.Text.Paragraphs[0].Runs[0].Style
+	if run.Size.V != 28 || !run.Bold.V || run.Paint.V.Color.NRGBA() != (color.NRGBA{255, 0, 0, 255}) {
+		t.Errorf("expected red bold text of 28 points, got: %+v", run)
+	}
+	if g := p.figures[2].Fill; g.Kind != drawingml.PaintGradient || len(g.Gradient.Stops) != 2 || g.Gradient.Angle != 90 {
+		t.Errorf("expected a vertical gradient, got: %+v", g)
+	}
+	if paths := p.figures[3].Paths; len(paths) != 1 || paths[0].Fill != drawingml.FillNorm {
+		t.Errorf("expected the filled path of the triangle, got: %+v", paths)
+	}
+	if pic := p.figures[4].Fill; pic.Kind != drawingml.PaintPicture || pic.Picture == nil {
+		t.Errorf("expected the picture, got: %+v", pic)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		x, y int
+		want color.NRGBA
+	}{
+		{5, 5, color.NRGBA{0, 0x33, 0x66, 255}},
+		{200, 120, color.NRGBA{0, 255, 0, 255}},
+		{453, 35, color.NRGBA{255, 11, 0, 255}},
+		{453, 190, color.NRGBA{255, 243, 0, 255}},
+		{140, 400, color.NRGBA{255, 255, 255, 255}},
+		{453, 340, color.NRGBA{0, 0, 255, 255}},
+	} {
+		if got := pixel(img, tt.x, tt.y); !closeTo(got, tt.want) {
+			t.Errorf("expected %v at %d, %d, got: %v", tt.want, tt.x, tt.y, got)
+		}
+	}
+	if os.Getenv("MSPPT_PNG") != "" {
+		var buf bytes.Buffer
+		_ = png.Encode(&buf, img)
+		_ = os.WriteFile(os.Getenv("MSPPT_PNG"), buf.Bytes(), 0o644)
 	}
 }
 
@@ -106,12 +205,16 @@ func TestPowerPoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	docs := slides(t, d)
-	if len(docs) != 1 || !strings.Contains(docs[0], `<div class="shape center-title" style="left: 120.00pt; top: 88.38pt; width: 720.00pt"><p>Lorem ipsum</p></div>`) {
-		t.Errorf("expected one slide with its title, got:\n%s", docs)
+	p := slidePage(t, d, 0)
+	if w, h := p.Size(); w != 960 || h != 540 {
+		t.Errorf("expected a slide of 16:9, got: %gx%g", w, h)
 	}
-	if !strings.Contains(docs[0], "size: 960.00pt 540.00pt;") {
-		t.Errorf("expected a slide of 16:9, got:\n%s", docs[0])
+	title := figureWith(p, "Lorem ipsum")
+	if title == nil {
+		t.Fatal("expected the title of the slide")
+	}
+	if run := title.Text.Paragraphs[0].Runs[0].Style; run.Size.V != 60 || run.Latin.V != "Calibri Light" {
+		t.Errorf("expected the style of the title of the master, got: %+v", run)
 	}
 }
 
@@ -133,8 +236,8 @@ func TestPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if docs := slides(t, d); len(docs) != 1 || !strings.Contains(docs[0], "<p>Lorem ipsum</p>") {
-		t.Errorf("expected the slide of the encrypted file, got:\n%s", docs)
+	if figureWith(slidePage(t, d, 0), "Lorem ipsum") == nil {
+		t.Error("expected the title of the encrypted slide")
 	}
 }
 
@@ -206,6 +309,12 @@ func TestOpenErrors(t *testing.T) {
 		{"no current user", fixture.CFB(fixture.CFBEntry{Name: "PowerPoint Document", Data: s["PowerPoint Document"]}), ivy.ErrFormat},
 		{"no document", fixture.CFB(fixture.CFBEntry{Name: "Current User", Data: s["Current User"]}), ivy.ErrFormat},
 		{"bad current user", user(func(b []byte) { b[2] = 0 }), ivy.ErrFormat},
+		{"powerpoint 95", fixture.CFB(
+			fixture.CFBEntry{Name: "Header", Data: []byte("PowerPoint 95 header")},
+			fixture.CFBEntry{Name: "Current User", Data: []byte("short user")},
+			fixture.CFBEntry{Name: "PowerPoint Document", Data: s["PowerPoint Document"]},
+		), ivy.ErrUnsupported},
+		{"powerpoint 4", fixture.CFB(fixture.CFBEntry{Name: "PP40", Data: []byte("x")}), ivy.ErrUnsupported},
 		{"bad offset", user(func(b []byte) { binary.LittleEndian.PutUint32(b[16:], 3) }), ivy.ErrFormat},
 		{"encrypted without a crypt session", user(func(b []byte) { binary.LittleEndian.PutUint32(b[12:], tokenEncrypted) }), ivy.ErrFormat},
 	}
@@ -230,8 +339,94 @@ func TestTransform(t *testing.T) {
 	}
 }
 
+func TestStyleRuns(t *testing.T) {
+	le := binary.LittleEndian
+	var b []byte
+	// a paragraph of 6 characters at level 1, centered, with a bullet
+	b = le.AppendUint32(b, 6)
+	b = le.AppendUint16(b, 1)
+	b = le.AppendUint32(b, pfHasBullet|pfAlign)
+	b = le.AppendUint16(b, 1)
+	b = le.AppendUint16(b, 1)
+	// two runs of characters: bold, then red of 20 points
+	b = le.AppendUint32(b, 2)
+	b = le.AppendUint32(b, cfBold)
+	b = le.AppendUint16(b, 1)
+	b = le.AppendUint32(b, 4)
+	b = le.AppendUint32(b, cfSize|cfColor)
+	b = le.AppendUint16(b, 20)
+	b = le.AppendUint32(b, 0xFE0000FF)
+	paras, chars := readStyleRuns(b, 5)
+	if len(paras) != 1 || paras[0].level != 1 || !paras[0].pf.hasBullet.v || paras[0].pf.align.v != 1 {
+		t.Errorf("expected one centered paragraph with a bullet, got: %+v", paras)
+	}
+	if len(chars) != 2 || !chars[0].cf.bold.v || chars[1].cf.size.v != 20 || chars[1].cf.color.v != 0xFE0000FF {
+		t.Errorf("expected a bold run and a red run, got: %+v", chars)
+	}
+	// a record that ends early gives the runs before its end
+	if paras, _ := readStyleRuns(b[:8], 5); len(paras) != 0 {
+		t.Errorf("expected no paragraph, got: %+v", paras)
+	}
+}
+
+func TestArrayWithoutHeader(t *testing.T) {
+	le := binary.LittleEndian
+	arr := le.AppendUint16(nil, 2)
+	arr = le.AppendUint16(arr, 2)
+	arr = le.AppendUint16(arr, 0xFFF0)
+	arr = append(arr, 1, 0, 2, 0, 3, 0, 4, 0)
+	for _, size := range []uint32{8, 14} {
+		var fopt []byte
+		fopt = le.AppendUint16(fopt, propVertices|0x8000)
+		fopt = le.AppendUint32(fopt, size)
+		fopt = le.AppendUint16(fopt, propFillColor)
+		fopt = le.AppendUint32(fopt, 0x123456)
+		fopt = append(fopt, arr...)
+		var p props
+		p.readProps(fopt, 2)
+		if got := msoArray(p.complex[propVertices], 4); len(got) != 2 {
+			t.Errorf("size %d: expected 2 vertices, got: %d", size, len(got))
+		}
+	}
+}
+
+func TestBlips(t *testing.T) {
+	le := binary.LittleEndian
+	// a DIB of 1 by 1 pixel of 24 bits
+	dib := make([]byte, 40, 44)
+	le.PutUint32(dib, 40)
+	le.PutUint32(dib[4:], 1)
+	le.PutUint32(dib[8:], 1)
+	le.PutUint16(dib[12:], 1)
+	le.PutUint16(dib[14:], 24)
+	dib = append(dib, 0, 0, 255, 0)
+	body := append(make([]byte, 17), dib...)
+	rec := le.AppendUint16(nil, 0x7A8<<4)
+	rec = le.AppendUint16(rec, rtOfficeArtBlipDIB)
+	rec = le.AppendUint32(rec, uint32(len(body)))
+	rec = append(rec, body...)
+	data := blipData(rec, 1<<20)
+	if len(data) != 14+len(dib) || string(data[:2]) != "BM" || le.Uint32(data[10:]) != 54 {
+		t.Fatalf("expected a BMP file, got: %q", data)
+	}
+	keyed, ok := colorKey(t.Context(), data, 255, 0, 0, ivy.Limits{}.WithDefaults())
+	if !ok {
+		t.Fatal("expected the picture with a color key")
+	}
+	img, err := png.Decode(bytes.NewReader(keyed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := pixel(img, 0, 0); c.A != 0 {
+		t.Errorf("expected a transparent pixel, got: %v", c)
+	}
+	if blipData(rec[:20], 1<<20) != nil {
+		t.Error("expected no picture of a cut record")
+	}
+}
+
 func FuzzOpen(f *testing.F) {
-	for _, name := range []string{"slides.ppt", "plain.ppt", "rc4cryptoapi_password.ppt"} {
+	for _, name := range []string{"slides.ppt", "plain.ppt", "rc4cryptoapi_password.ppt", "shapes.ppt"} {
 		f.Add(readFile(f, name))
 	}
 	cfg := ivy.Config{
@@ -252,8 +447,35 @@ func FuzzOpen(f *testing.F) {
 				_, _ = p.Decode(t.Context())
 			}
 		}
-		if _, err := d.source(t.Context()); err != nil && strings.Contains(err.Error(), "panic") {
+		n, err := d.PageCount(t.Context())
+		if err != nil {
 			t.Fatal(err)
 		}
+		for i := range min(n, 3) {
+			p, err := d.Page(t.Context(), i)
+			if err != nil {
+				if strings.Contains(err.Error(), "panic") {
+					t.Fatal(err)
+				}
+				continue
+			}
+			if _, err := ivy.RenderImage(t.Context(), p, 8, color.White); err != nil && strings.Contains(err.Error(), "panic") {
+				t.Fatal(err)
+			}
+		}
 	})
+}
+
+func TestSymbolChar(t *testing.T) {
+	for _, tt := range []struct {
+		u    uint16
+		want rune
+	}{{0x61, 'α'}, {0xF0A3, '≤'}, {0x44, 'Δ'}, {0xB7, '•'}} {
+		if got, ok := symbolChar(tt.u); !ok || got != tt.want {
+			t.Errorf("expected %q for %#x, got: %q", tt.want, tt.u, got)
+		}
+	}
+	if _, ok := symbolChar(0x10); ok {
+		t.Error("expected no character for 0x10")
+	}
 }

@@ -14,8 +14,8 @@ import (
 	"log/slog"
 	"math"
 
-	gofont "github.com/go-text/typesetting/font"
 	"github.com/xo/okage"
+	gofont "github.com/xo/okage/typesetting/font"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"

@@ -9,7 +9,9 @@
 // The layout of phase 4 puts the documents of the spine on pages, one after
 // the other, with the style sheet of an ebook: a page of 6 by 9 inches
 // (D10, D15). Page lays out the book only as far as the page that a program
-// asks for.
+// asks for. As in calibre, the first page shows the cover image, scaled to
+// fit the page. An image of the spine, such as an image of SVG, is on a page
+// of its own.
 //
 // The package undoes the obfuscation of fonts of the IDPF and of Adobe,
 // because it is not DRM (D12). A book whose documents DRM encrypts, such as
@@ -22,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"io/fs"
 	"iter"
 	"log/slog"
 	"path"
@@ -32,6 +35,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/layout"
+	"github.com/xo/ivy/internal/memfs"
 	"github.com/xo/ivy/internal/zipdoc"
 )
 
@@ -68,6 +72,8 @@ type Document struct {
 	archive *zipdoc.Archive
 	lim     ivy.Limits
 	log     *slog.Logger
+	// fonts are the fonts of the configuration, for the layout.
+	fonts ebook.Fonts
 	// opf is the path of the package document.
 	opf string
 	pkg *ebook.Package
@@ -132,6 +138,7 @@ func open(src ivy.Source, cfg ivy.Config) (*Document, error) {
 		archive: archive,
 		lim:     lim,
 		log:     cfg.Log(),
+		fonts:   ebook.FontsOf(cfg),
 		opf:     name,
 		pkg:     pkg,
 		fsys:    archive.FS(),
@@ -179,7 +186,7 @@ func (d *Document) layoutSource(context.Context) (layout.Source, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Previews satisfies the ivy.Previewer interface. It lists the cover image,
@@ -366,8 +373,10 @@ func (d *Document) ncxTitle() string {
 
 // source returns the book as a source for the layout: the files of the
 // archive, the documents of the spine, the style sheet of an ebook and the
-// title. It returns an error that wraps ivy.ErrDRM if DRM encrypts a
-// document, and ivy.ErrFormat if the book has no document.
+// title. A book with a cover image starts with a page of the cover. An image
+// of the spine, such as an image of SVG, is on a page of its own. source
+// returns an error that wraps ivy.ErrDRM if DRM encrypts a document, and
+// ivy.ErrFormat if the book has no document.
 func (d *Document) source() (src layout.Source, err error) {
 	defer ebook.Recover("reading epub", &err)
 	docs := d.documents()
@@ -383,19 +392,113 @@ func (d *Document) source() (src layout.Source, err error) {
 	if title == "" {
 		title = d.ncxTitle()
 	}
+	p := &imagePages{d: d, title: title}
+	docs = p.withCover(docs)
+	for i, name := range docs {
+		if d.isSpineImage(name) {
+			docs[i] = p.add(name)
+		}
+	}
+	var fsys fs.FS = d.fsys
+	if p.n > 0 {
+		fsys = p.fs.Over(d.fsys)
+	}
 	return layout.Source{
-		FS:          d.fsys,
+		FS:          fsys,
 		Documents:   docs,
 		StyleSheets: []string{ebook.BookStyle},
 		Title:       title,
 	}, nil
 }
 
+// imagePages makes the pages of XHTML that show an image of the book: the
+// page of the cover, and the page of each image of the spine.
+type imagePages struct {
+	d     *Document
+	title string
+	fs    memfs.FS
+	// n counts the pages.
+	n int
+}
+
+// add adds the page of the image name, and returns its path.
+func (p *imagePages) add(name string) string {
+	page := ebook.ImagePageName(name, func(s string) bool {
+		_, err := p.fs.Stat(s)
+		return err == nil || p.d.exists(s)
+	})
+	p.fs.Add(page, ebook.ImagePage(ebook.ImagePageLink(page, name), p.title))
+	p.n++
+	return page
+}
+
+// withCover returns docs with a page of the cover image first, as calibre
+// shows a book. A first document that is already a page of the cover, with
+// almost no text, stays after the page of the cover, as in calibre. A first
+// document that shows the cover with its text, or that the guide names as
+// the cover, stays the first page. A book without a cover image is
+// unchanged.
+func (p *imagePages) withCover(docs []string) []string {
+	d := p.d
+	cover, ok := d.cover()
+	if !ok || !d.exists(cover) {
+		return docs
+	}
+	first := docs[0]
+	if d.isSpineImage(first) {
+		if first == cover || d.isCoverItem(first) {
+			return docs
+		}
+		return append([]string{cover}, docs...)
+	}
+	page, shows := ebook.IsCoverPage(d.fsys, first, cover, d.lim)
+	if page {
+		return append([]string{cover}, docs...)
+	}
+	if shows {
+		return docs
+	}
+	for _, ref := range d.pkg.Guide {
+		if ref.Type == "cover" && ref.Path == first {
+			return docs
+		}
+	}
+	return append([]string{cover}, docs...)
+}
+
+// isCoverItem reports whether the manifest gives name the property
+// cover-image of EPUB 3.
+func (d *Document) isCoverItem(name string) bool {
+	it, ok := d.pkg.ItemByPath(name)
+	return ok && it.HasProperty("cover-image")
+}
+
+// isSpineImage reports whether name is an image, of SVG or raster, and not
+// a document.
+func (d *Document) isSpineImage(name string) bool {
+	if it, ok := d.pkg.ItemByPath(name); ok {
+		if it.IsDocument() {
+			return false
+		}
+		if isImageItem(it) {
+			return true
+		}
+	}
+	return ebook.IsImagePath(name) || strings.EqualFold(path.Ext(name), ".svg")
+}
+
+// isImageItem reports whether the item is an image of SVG or a raster
+// image.
+func isImageItem(it ebook.Item) bool {
+	return it.MediaType == "image/svg+xml" || it.IsImage() || strings.EqualFold(path.Ext(it.Path), ".svg")
+}
+
 // documents returns the paths of the documents of the spine: the linear
 // items first, then the items that are not linear, such as notes. An item
-// that is not XHTML is replaced with its fallback, or left out. If the
-// spine gives no document, documents falls back on the documents of the
-// manifest, without the navigation document of EPUB 3.
+// that is not XHTML is replaced with its fallback. An image without a
+// fallback stays, so that source puts it on a page of its own. Another
+// item is left out. If the spine gives no document, documents falls back on
+// the documents of the manifest, without the navigation document of EPUB 3.
 func (d *Document) documents() []string {
 	var linear, other []string
 	seen := make(map[string]bool)
@@ -406,7 +509,11 @@ func (d *Document) documents() []string {
 			d.log.Debug("epub: spine item without a manifest item", "idref", ref.IDRef)
 			continue
 		}
+		spine := it
 		it, ok = d.document(it, memo)
+		if !ok && isImageItem(spine) {
+			it, ok = spine, true
+		}
 		if !ok || seen[it.Path] || !d.exists(it.Path) {
 			d.log.Debug("epub: spine item left out", "idref", ref.IDRef, "path", it.Path)
 			continue

@@ -109,7 +109,25 @@ Each difference is marked with `Port:` in the code. These are the main ones:
    byte reads. The W array of a CID font is merged by a sweep in n log n
    time, where upstream splits a BTreeMap.
 6. `Font.ReadCode` returns the code 0 of length 1 for an offset outside the
-   string, where upstream panics.
+   string, where upstream panics. A code that the CMap of a Type 0 font
+   does not map takes its length from the codespace ranges of the CMap,
+   where upstream reads one byte.
+7. A font that the file does not embed first gets a query of the kind
+   `Named`, with its name, before the query of a standard font. A resolver
+   gives a font of the program for it, such as Liberation Sans for Arial.
+   The package `pdf` resolves these queries with `ivy.Config.Fonts` and the
+   fonts of the system. The 14 standard fonts, Symbol and ZapfDingbats
+   keep their substitutes.
+8. A CID font of a CJK collection (Japan1, GB1, CNS1 or Korea1) that the
+   file does not embed also holds the substitute of a standard font, its
+   latin font. A character that the CJK font of the resolver does not draw,
+   such as a Latin letter of Droid Sans Fallback, draws with the latin
+   font. A character that neither font draws draws nothing. The code of a
+   Unicode CMap, such as UniJIS-UCS2-H, that the collection does not hold
+   draws as its character.
+9. `sfntTables` cuts the capacity of each table to its end. `ot.WriteTTF`
+   of go-text appends the padding of a checksum to a table, and it wrote
+   over the start of the next table in the data of the file.
 
 The port keeps the faults of upstream. For example, `newFallbackFontQuery`
 reads `FontName` from the font dictionary, and it never sets

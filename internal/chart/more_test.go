@@ -14,13 +14,13 @@ import (
 func TestCombination(t *testing.T) {
 	cats := strCache("A", "x", "y", "z")
 	xml := chartXML("Combo", `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>`+
-		ser(0, "Bars", solid("0000FF"), cats, "3", "5", "4")+axisIDs+`</c:barChart>`+
+		ser(0, "Bars", solid("0000FF"), cats, "3", "5", "4")+axisRefs+`</c:barChart>`+
 		`<c:lineChart><c:grouping val="standard"/>`+
 		`<c:ser><c:idx val="1"/><c:order val="1"/><c:tx>`+strCache("B", "Line")+`</c:tx>`+
 		`<c:spPr><a:ln w="28575"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>`+
 		`<c:marker><c:symbol val="none"/></c:marker>`+
 		`<c:cat>`+cats+`</c:cat><c:val>`+numCache("C", "General", "1", "2", "6")+`</c:val></c:ser>`+
-		`<c:marker val="1"/>`+axisIDs+`</c:lineChart>`, categoryAxes, "r")
+		`<c:marker val="1"/>`+axisRefs+`</c:lineChart>`, categoryAxes, "r")
 	c, err := Parse(xml, Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestBubble(t *testing.T) {
 		t.Fatalf("expected a bubble chart with sizes, got: %+v", c.plots[0])
 	}
 	pm := render(t, c, 300, 300)
-	if n := count(pm, color.NRGBA{255, 0x40, 0x40, 255}, 0, 0, 300, 300); n < 200 {
+	if n := count(pm, color.NRGBA{255, 0, 0, 255}, 0, 0, 300, 300); n < 200 {
 		t.Errorf("expected the bubbles, got %d pixels", n)
 	}
 }
@@ -83,7 +83,7 @@ func TestBubble(t *testing.T) {
 func TestDateAxis(t *testing.T) {
 	xml := chartXML("", `<c:lineChart><c:grouping val="standard"/>`+
 		`<c:ser><c:idx val="0"/><c:order val="0"/><c:cat>`+numCache("A", "General", "45000", "45001")+`</c:cat>`+
-		`<c:val>`+numCache("B", "General", "1", "2")+`</c:val></c:ser>`+axisIDs+`</c:lineChart>`,
+		`<c:val>`+numCache("B", "General", "1", "2")+`</c:val></c:ser>`+axisRefs+`</c:lineChart>`,
 		`<c:dateAx><c:axId val="1"/><c:axPos val="b"/><c:numFmt formatCode="d mmm" sourceLinked="0"/></c:dateAx>`+
 			`<c:valAx><c:axId val="2"/><c:axPos val="l"/></c:valAx>`, "")
 	c, err := Parse(xml, Options{})

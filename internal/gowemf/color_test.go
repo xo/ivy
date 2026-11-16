@@ -143,14 +143,12 @@ func TestColorRecordsAndLifetimes(t *testing.T) {
 		if _, err := Stream(file, StreamOptions{}, nil); err != nil {
 			t.Fatal(err)
 		}
+		// ivy: Windows ignores these records, so Stream drops them.
+		// Upstream expects ErrMalformed.
 		file = emfFixture(r.Raw, emfRecord(EMRDeleteObject, longs(1)), emfRecord(EMRSetColorSpace, longs(1)))
-		if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-			t.Fatal("deleted color-space handle", err)
-		}
+		streamDrops(t, file, EMRSetColorSpace)
 		file = emfFixture(r.Raw, emfRecord(EMRSelectObject, longs(1)))
-		if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-			t.Fatal("wrong color-space selection opcode", err)
-		}
+		streamDrops(t, file, EMRSelectObject)
 	}
 	name := words('x', 0)
 	data := []byte{1, 2, 3, 4}

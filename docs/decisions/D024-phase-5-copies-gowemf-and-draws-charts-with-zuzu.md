@@ -1,6 +1,6 @@
 # D24. Phase 5 copies gowemf and draws charts with zuzu
 
-Status: Decided.
+Status: Decided. Amended by D27.
 
 Phase 5 is the Office formats: EMF and WMF, the slides, the documents, the
 spreadsheets, RTF, the previews and the text of the binary formats, and the

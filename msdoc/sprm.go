@@ -40,10 +40,12 @@ const (
 	sprmPDxaRight   = 0x845D
 	sprmPDxaLeft    = 0x845E
 	sprmPDxaLeft1   = 0x8460
+	sprmPDyaLine    = 0x6412
 	sprmPDyaBefore  = 0xA413
 	sprmPDyaAfter   = 0xA414
 	sprmPChgTabs    = 0xC615
 	sprmTDefTable   = 0xD608
+	sprmSBkc        = 0x3009
 	sprmSDyaTop     = 0x9023
 	sprmSDyaBottom  = 0x9024
 	sprmSXaPage     = 0xB01F
@@ -167,13 +169,18 @@ type chp struct {
 type pap struct {
 	istd int
 	// jc is the alignment: 0 left, 1 center, 2 right, 3 justify.
-	jc                       byte
-	inTable, ttp             bool
-	innerCell, innerTtp      bool
-	itap                     int
-	pageBreak                bool
-	left, right, first       int // twips
-	before, after            int // twips
+	jc                  byte
+	inTable, ttp        bool
+	innerCell, innerTtp bool
+	itap                int
+	pageBreak           bool
+	left, right, first  int // twips
+	before, after       int // twips
+	// lineMult is the spacing of the lines as a multiple of a single
+	// line, and lineExact the exact height of a line in twips. Both are 0
+	// for single lines.
+	lineMult                 float64
+	lineExact                int
 	outline                  int
 	hasOutline, hasLeftFirst bool
 	// widths are the widths of the cells of a row, in twips, from the
@@ -286,6 +293,18 @@ func applyPap(p *pap, s sprm) {
 		p.before = int(uint16(s.value()))
 	case sprmPDyaAfter:
 		p.after = int(uint16(s.value()))
+	case sprmPDyaLine:
+		// an LSPD: dyaLine, then fMultLinespace (MS-DOC 2.9.150)
+		if len(s.operand) == 4 {
+			dya, mult := int(int16(le.Uint16(s.operand))), le.Uint16(s.operand[2:]) != 0
+			p.lineMult, p.lineExact = 0, 0
+			switch {
+			case mult && dya > 0 && dya != 240 && dya <= 240*10:
+				p.lineMult = float64(dya) / 240
+			case !mult && dya < 0 && dya > -31680:
+				p.lineExact = -dya
+			}
+		}
 	case sprmPOutLvl:
 		p.outline, p.hasOutline = int(v), true
 	case sprmTDefTable:
@@ -302,6 +321,58 @@ func applyPap(p *pap, s sprm) {
 		p.widths = make([]int, n)
 		for i := range n {
 			p.widths[i] = int(int16(le.Uint16(b[3+2*i+2:]))) - int(int16(le.Uint16(b[3+2*i:])))
+		}
+	}
+}
+
+// The modifiers of a section of Word 6 and Word 95 that the package reads,
+// with the codes of Word 97 that match them.
+var word6Sections = map[byte]uint16{
+	142: sprmSBkc,
+	164: sprmSXaPage,
+	165: sprmSYaPage,
+	166: sprmSDxaLeft,
+	167: sprmSDxaRight,
+	168: sprmSDyaTop,
+	169: sprmSDyaBottom,
+}
+
+// word6SectionSprms iterates over the modifiers of a section of Word 6 or
+// Word 95, each with a code of one byte. It gives a modifier that the
+// package does not read with the code 0, and stops at a code that is not a
+// modifier of a section, whose size it does not know.
+func word6SectionSprms(grpprl []byte) iter.Seq[sprm] {
+	return func(yield func(sprm) bool) {
+		for len(grpprl) >= 1 {
+			code := grpprl[0]
+			rest := grpprl[1:]
+			var n int
+			switch {
+			case code == 133:
+				// sprmSOlstAnm has a size in its first byte
+				if len(rest) < 1 {
+					return
+				}
+				n = 1 + int(rest[0])
+			case code == 136 || code == 137:
+				n = 3
+			case code == 140 || code == 141 || code == 144 || code == 145 ||
+				code == 148 || code == 149 || code == 154 || code == 155 ||
+				code == 156 || code == 157 || code == 160 || code == 161 ||
+				code >= 164 && code <= 171:
+				n = 2
+			case code >= 131 && code <= 171:
+				n = 1
+			default:
+				return
+			}
+			if n > len(rest) {
+				return
+			}
+			if !yield(sprm{op: word6Sections[code], operand: rest[:n]}) {
+				return
+			}
+			grpprl = rest[n:]
 		}
 	}
 }

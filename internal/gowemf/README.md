@@ -12,13 +12,17 @@ interface on the display list (D10).
 
 ## The files
 
-Each file has the same path as in upstream.
+Each copied file has the same path as in upstream.
 
 | Folder | What it holds |
 | --- | --- |
 | the root | the reader of the records, the decoders of the bitmaps, the color management, the playback, and their tests |
 | `internal/bidi` | the bidirectional algorithm of Unicode, for the text, and its tests |
 | `internal/raster` | a small rasterizer that only the tests of the playback use |
+
+Two files are files of ivy, not of upstream:
+`playback_plus_string.go` draws the EMF+ DrawString record (change 11),
+and `ivy_test.go` holds the tests of the changes 6 to 11.
 
 The copy leaves out these files of upstream:
 
@@ -66,3 +70,52 @@ Each change is marked in the code with a comment that starts with `ivy:`.
 5. A comment of `color_pixels_test.go` no longer names the illuminant of
    the PCS by its short name, which the tests of ivy read as the number of
    a decision.
+6. `emf.go` and `wmf.go` read the framing of a file as Windows does, not
+   as strictly as MS-EMF and MS-WMF write it. Upstream refuses these files:
+   - The count of records in the header of an EMF file is not checked.
+   - The maximum size of a record in the header of a WMF file is not
+     checked.
+   - A file can have bytes after its EOF record. A size in the header that
+     is smaller than the data is not an error. A larger size is still an
+     error, because the file is cut short.
+   - A file can end without an EOF record, if its last record ends at the
+     end of the data.
+7. `stream.go` and `stream_wmf.go` drop a record that Windows ignores, and
+   give the other records to the visitor. Upstream returns `ErrMalformed`
+   for these records:
+   - the selection or the deletion of an object that does not exist, or of
+     a stock object that cannot be deleted
+   - the selection with SelectObject of a palette or a color space
+   - a reference to an object of another type, such as a brush in place of
+     a region, in WMF, EMF and EMF+ records
+   - the change of a palette that is not selected, or that was deleted
+   - the creation of a WMF object when the table is full, or of an EMF
+     object with a handle outside the table. An EMF object with a handle
+     in use replaces the object.
+   - a WMF SelectClipRegion record names a slot without an object. It
+     removes the clipping region, as SelectClipRgn does with a null region.
+     The player does the same in `playback_records.go`.
+8. `decode_wmf.go` reads a WMF ExtTextOut record that is too short for all
+   its advances. The text has no advances, and takes the advances of its
+   font.
+9. `playback_state.go` and `playback_fills.go` read a WMF pattern brush of
+   the style BS_PATTERN that holds a DIB in place of a Bitmap16, as Stata
+   writes it. A monochrome DIB takes the colors of the device context, and
+   another DIB is a DIB pattern.
+10. `playback_records.go` and `playback_fills.go` pass two more kinds of
+    drawing to a `RasterBackend`, a backend that reads its destination.
+    Upstream reports them as not supported for every backend:
+    - the inversion of a region, for the records WMF InvertRegion and
+      EMR_INVERTRGN
+    - a fill with a mix mode (ROP2) that combines the brush with the
+      destination, such as R2_MASKPEN or R2_XORPEN. A stroke with such a
+      mix mode is still reported.
+11. `playback_plus.go` draws the EMF+ DrawString record with
+    `plusDrawString` of `playback_plus_string.go`. MS-EMFPLUS does not
+    define the layout of GDI+, so the layout is close, not exact: lines
+    break at line feeds and at spaces, the margins are fractions of the em,
+    and the tracking multiplies the advances. Upstream reports the record
+    as not supported.
+12. The tests of upstream that expect `ErrMalformed` for the cases of
+    changes 6 and 7, or that expect DrawString to be reported, expect the
+    behavior of ivy. Each such test has a comment that starts with `ivy:`.

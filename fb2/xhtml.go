@@ -11,11 +11,16 @@ import (
 	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/memfs"
+	"github.com/xo/ivy/internal/raster"
 	"github.com/xo/okage/roxmltree"
 )
 
-// documentName is the path of the XHTML document in the FS of the source.
-const documentName = "index.xhtml"
+// The paths of the documents of XHTML in the FS of the source: the book,
+// and the page of the cover.
+const (
+	documentName = "index.xhtml"
+	coverName    = "cover.xhtml"
+)
 
 // styleSheet is the style sheet of the format. It comes after
 // ebook.BookStyle, which sets the page and the font, and it sets the style
@@ -100,9 +105,15 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		d.log.Warn("fictionbook nests deeper than the limit, content left out", "limit", d.lim.MaxDepth)
 	}
 	c.fs.Add(documentName, []byte(c.b.String()))
+	docs := []string{documentName}
+	if cover := c.coverPath(); cover != "" {
+		// the book starts with a page of the cover, as calibre shows it
+		c.fs.Add(coverName, ebook.ImagePage(ebook.ImagePageLink(coverName, cover), d.info.Title))
+		docs = []string{coverName, documentName}
+	}
 	return layout.Source{
 		FS:          &c.fs,
-		Documents:   []string{documentName},
+		Documents:   docs,
 		StyleSheets: []string{ebook.BookStyle, styleSheet},
 		Title:       d.info.Title,
 	}, nil
@@ -399,6 +410,27 @@ func (c *converter) image(n roxmltree.Node) {
 	c.b.WriteString(`" alt="`)
 	c.escape(alt, true)
 	c.b.WriteString(`"/>`)
+}
+
+// coverPath returns the path of the image of the coverpage in the FS of
+// the source, or "" if the book has no cover image that decodes.
+func (c *converter) coverPath() string {
+	if c.d.cover == "" {
+		return ""
+	}
+	p := c.binaryPath(c.d.cover)
+	if p == "" || path.Ext(p) == ".svg" {
+		return p
+	}
+	buf, err := c.fs.ReadFile(p)
+	if err == nil {
+		_, err = raster.Config(buf)
+	}
+	if err != nil {
+		c.d.log.Warn("fictionbook cover left out", "id", c.d.cover, "err", err)
+		return ""
+	}
+	return p
 }
 
 // binaryPath decodes the binary id into the FS of the source, once, and

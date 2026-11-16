@@ -39,10 +39,10 @@ func TestWMFRegionScans(t *testing.T) {
 	if _, err := Stream(file, StreamOptions{}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// ivy: Windows ignores a region and a brush that change places, so
+	// Stream drops the record. Upstream expects ErrMalformed.
 	file = wmfDocument(2, region, brush, testRecord(WMF, 0x0228, 0, words(1, 0)))
-	if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-		t.Fatal("region/brush type confusion", err)
-	}
+	streamDrops(t, file, 0x0228)
 }
 
 func TestWMFPaletteState(t *testing.T) {
@@ -65,15 +65,17 @@ func TestWMFPaletteState(t *testing.T) {
 	if updates != 1 {
 		t.Fatal(updates)
 	}
+	if _, err := Stream(wmfDocument(1, wmfPaletteFixture(1), selectPalette(0), update), StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
+		t.Fatal("outside palette", err)
+	}
+	// ivy: Windows ignores an update without a palette, so Stream drops
+	// it. Upstream expects ErrMalformed.
 	for name, file := range map[string][]byte{
 		"no selection":          wmfDocument(1, wmfPaletteFixture(2), update),
-		"outside palette":       wmfDocument(1, wmfPaletteFixture(1), selectPalette(0), update),
 		"stale restored handle": wmfDocument(1, wmfPaletteFixture(2), selectPalette(0), testRecord(WMF, 0x001e, 0, nil), testRecord(WMF, 0x01f0, 0, words(0)), wmfPaletteFixture(2), testRecord(WMF, 0x0127, 0, words(-1)), update),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-				t.Fatal(err)
-			}
+			streamDrops(t, file, 0x0037)
 		})
 	}
 }

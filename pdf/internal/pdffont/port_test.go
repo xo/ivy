@@ -19,8 +19,12 @@ import (
 )
 
 // defaultResolver is the default font resolver of hayro-interpret
-// src/interpret/mod.rs: the embedded substitutes of the standard fonts.
+// src/interpret/mod.rs: the embedded substitutes of the standard fonts. It
+// has no font for a Named query.
 func defaultResolver(q *FontQuery) (FontData, uint32, bool) {
+	if q.Named {
+		return nil, 0, false
+	}
 	if q.IsStandard {
 		data, index := q.Standard.GetFontData()
 		return data, index, true

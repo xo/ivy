@@ -21,6 +21,7 @@ import (
 const (
 	loPassword  = "secret"
 	msoPassword = "Password1234_"
+	xorPassword = "123456789012345"
 )
 
 func readFile(t testing.TB, name string) []byte {
@@ -113,6 +114,7 @@ func TestPassword(t *testing.T) {
 	}{
 		{"rc4_password.xls", loPassword, "Merged across"},
 		{"rc4cryptoapi_password.xls", msoPassword, "lorem ipsum"},
+		{"xor_password.xls", xorPassword, ">415</td>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -268,7 +270,7 @@ func TestOpenErrors(t *testing.T) {
 		{"no workbook", fixture.CFB(fixture.CFBEntry{Name: "Other", Data: []byte("x")}), ivy.ErrFormat},
 		{"no bof", stream([]byte{1, 2, 3, 4, 5, 6, 7, 8}), ivy.ErrFormat},
 		{"biff4", stream([]byte{0x09, 0x04, 6, 0, 0, 0, 0x10, 0}), ivy.ErrUnsupported},
-		{"xor obfuscation", stream(xor.buf), ivy.ErrUnsupported},
+		{"xor obfuscation", stream(xor.buf), ivy.ErrPassword},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -300,12 +302,19 @@ func TestRK(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
-	for _, name := range []string{"sheet.xls", "rc4_password.xls", "plain.xls"} {
+	for _, name := range []string{"sheet.xls", "rc4_password.xls", "plain.xls", "xor_password.xls"} {
 		f.Add(readFile(f, name))
 	}
 	cfg := ivy.Config{
 		Password: loPassword,
-		Limits:   ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 10000, MaxDepth: 16},
+		// the password of the XOR obfuscation, after the password of RC4
+		PasswordFunc: func(_ context.Context, attempt int) (string, error) {
+			if attempt > 1 {
+				return "", ivy.ErrPassword
+			}
+			return xorPassword, nil
+		},
+		Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 10000, MaxDepth: 16},
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(data), WithConfig(cfg))

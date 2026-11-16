@@ -394,7 +394,13 @@ func FuzzOpen(f *testing.F) {
 		f.Add(buf)
 	}
 	f.Add(onePage("0 0 1 rg 10 10 30 30 re f", "", "/Title (x)"))
+	f.Add(cjkPage)
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
+	// The fonts of the module github.com/xo/ivy/fonts resolve the fonts
+	// that a file does not embed, when the folder is there.
+	if _, err := os.Stat(fontsDir); err == nil {
+		cfg.Fonts = os.DirFS(fontsDir)
+	}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {

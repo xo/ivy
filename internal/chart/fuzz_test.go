@@ -16,6 +16,8 @@ func FuzzParse(f *testing.F) {
 		f.Add(test.xml)
 	}
 	f.Add([]byte(odfChart))
+	f.Add(exXML("T", "waterfall", "", []string{"a", "b"}, []float64{1, -2}))
+	f.Add(exXML("T", "boxWhisker", "", []string{"a", "a", "b"}, []float64{1, 2, 3}))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		opts := Options{Config: ivy.Config{Limits: ivy.Limits{MaxObjects: 1 << 10}}}
 		c, err := Parse(data, opts)

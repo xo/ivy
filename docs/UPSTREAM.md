@@ -82,7 +82,9 @@ git -C upstream/psd checkout a5d50ec0acac
 ivy also keeps files that are data, not code:
 
 1. The module `fonts` keeps the font files of Liberation, Carlito and
-   Caladea as they are, under the SIL Open Font License (D24). Each one has
+   Caladea as they are, under the SIL Open Font License (D24), and Droid
+   Sans Fallback of the Android Open Source Project, under the Apache
+   License 2.0, in `fonts/droid` with its `NOTICE`. Each one has
    a row in `upstream/upstreams.tsv` of the kind `copy`, and its folder
    keeps its license. `fonts/README.md` holds the URL, the version and the
    SHA-256 of each file. The license forbids a change to a font that keeps

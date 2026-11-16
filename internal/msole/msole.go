@@ -7,8 +7,8 @@
 // reads the stream "\x05SummaryInformation" (MS-OLEPS): the title, the
 // author, the dates and the thumbnail. It decodes a thumbnail in WMF, EMF,
 // DIB, PNG or JPEG, and draws a metafile into an image of a size for a
-// preview. It also asks for the password of a file that RC4 encrypts, as D12
-// says.
+// preview. It also asks for the password of a file that RC4 encrypts, or
+// that the XOR obfuscation protects, as D12 says.
 package msole
 
 import (

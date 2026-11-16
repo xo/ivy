@@ -9,12 +9,20 @@ func (s *streamState) wmfObjects(cmd *Command) error {
 	typ := r.Type & 255
 	ref := func(id uint32, kind uint8) error {
 		if uint64(id) >= uint64(len(s.kinds)) || s.kinds[id] != kind {
-			return malformed(r.Offset, "WMF object reference type")
+			return errIgnored // ivy: as Windows does
 		}
 		return nil
 	}
 	switch typ {
-	case 0x2a, 0x2b, 0x2c:
+	case 0x2c:
+		// ivy: a slot without an object selects no region, which removes
+		// the clipping region, as SelectClipRgn does with a null handle.
+		id := cmd.Body.(Value).Value
+		if uint64(id) < uint64(len(s.kinds)) && s.kinds[id] == 0 {
+			return nil
+		}
+		return ref(id, kindRegion)
+	case 0x2a, 0x2b:
 		return ref(cmd.Body.(Value).Value, kindRegion)
 	case 0x28, 0x29:
 		v := cmd.Body.(RegionPaint)
@@ -31,13 +39,13 @@ func (s *streamState) wmfObjects(cmd *Command) error {
 	case 0x36, 0x37, 0x39:
 		selected := s.paletteSelection
 		if !selected.selected {
-			return malformed(r.Offset, "WMF palette update without selection")
+			return errIgnored // ivy: as Windows does
 		}
 		if err := ref(selected.index, kindPalette); err != nil {
 			return err
 		}
 		if s.generations[selected.index] != selected.generation {
-			return malformed(r.Offset, "stale WMF palette selection")
+			return errIgnored // ivy: as Windows does
 		}
 		v := cmd.Body.(Palette)
 		v.Handle = selected.index

@@ -70,6 +70,11 @@ type playObject struct {
 	region  []Rect // WMF region object in logical units; nil if not a region
 }
 
+// ivy: empty reports whether the slot holds no object.
+func (o *playObject) empty() bool {
+	return o.pen == nil && o.brush == nil && o.font == nil && o.palette == nil && o.region == nil
+}
+
 type gdiPen struct {
 	null           bool
 	style          uint32 // PS_* line style (low nibble)
@@ -197,6 +202,16 @@ func newBrush(r Record, v any, limits DecodeLimits) *gdiBrush {
 			// BS_PATTERN carries a Bitmap16 (MS-WMF 2.3.4.8).
 			bm, err := parseBitmap16(b.Data, limits)
 			if err != nil {
+				// ivy: writers such as Stata put a DIB in place of the
+				// Bitmap16. A monochrome DIB takes its colors from the
+				// device context, as the Bitmap16 does, and a DIB of more
+				// colors is a DIB pattern.
+				if bits, ok := packedDIBBitCount(b.Data); ok {
+					if bits == 1 {
+						return &gdiBrush{style: 3, packed: b.Data, usage: b.Usage, monoDIB: true}
+					}
+					return &gdiBrush{style: 5, packed: b.Data, usage: b.Usage}
+				}
 				return &gdiBrush{style: 3, unsupportedWhy: "malformed Bitmap16 pattern brush"}
 			}
 			m, why := monoFromBitmap16(bm)
@@ -208,6 +223,22 @@ func newBrush(r Record, v any, limits DecodeLimits) *gdiBrush {
 		return &gdiBrush{style: 3, mono: m, unsupportedWhy: why}
 	}
 	return nil
+}
+
+// ivy: packedDIBBitCount returns the bits of a pixel of a packed DIB, and
+// false if data does not start with a BITMAPCOREHEADER or a
+// BITMAPINFOHEADER of a later version.
+func packedDIBBitCount(data []byte) (uint16, bool) {
+	if len(data) < 12 {
+		return 0, false
+	}
+	switch size := u32(data); {
+	case size == 12:
+		return u16(data[10:]), true
+	case size >= 40 && len(data) >= 16:
+		return u16(data[14:]), true
+	}
+	return 0, false
 }
 
 // pageMatrix maps page (logical, after world transform) to device units.

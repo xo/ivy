@@ -78,11 +78,43 @@ func (t *Tree) log() *slog.Logger {
 // Draw draws the children of the shape tree n, such as p:spTree, with the
 // transform m from the space of the shapes onto the space of the scene.
 func (t *Tree) Draw(n roxmltree.Node, m okage.Transform) {
-	t.group(n, m, Paint{Kind: PaintNone}, 0, t.Pictures)
+	t.group(n, rootSpace(m), Paint{Kind: PaintNone}, 0, t.Pictures)
+}
+
+// space is the space of the children of a shape tree or of a group. The
+// boxes of the children map onto the box of the group, so a box changes
+// its size and its place, but the width of its outline and the size of its
+// text do not scale with the group, as in PowerPoint.
+type space struct {
+	// m maps the space of the box of the group onto the space of the
+	// scene. It holds no scale of the group.
+	m okage.Transform
+	// sx and sy scale the boxes of the children, and ox and oy are the
+	// origin of the space of the children.
+	sx, sy, ox, oy float64
+}
+
+// rootSpace returns the space of a shape tree with the transform m onto the
+// space of the scene.
+func rootSpace(m okage.Transform) space {
+	return space{m: m, sx: 1, sy: 1}
+}
+
+// place returns the box of the transform x in the box of the group.
+func (s space) place(x Xfrm) Xfrm {
+	if s.sx == 1 && s.sy == 1 && s.ox == 0 && s.oy == 0 {
+		return x
+	}
+	// the box scales before it turns, as in LibreOffice
+	cx := (x.X + x.W/2 - s.ox) * s.sx
+	cy := (x.Y + x.H/2 - s.oy) * s.sy
+	x.W, x.H = x.W*s.sx, x.H*s.sy
+	x.X, x.Y = cx-x.W/2, cy-x.H/2
+	return x
 }
 
 // group draws the children of a shape tree or of a group.
-func (t *Tree) group(n roxmltree.Node, m okage.Transform, groupFill Paint, depth int, pics Pictures) {
+func (t *Tree) group(n roxmltree.Node, m space, groupFill Paint, depth int, pics Pictures) {
 	lim := t.Config.Limits.WithDefaults()
 	if depth > lim.MaxDepth || depth > 256 {
 		t.log().Warn("drawingml: groups nested too deep", "max", lim.MaxDepth, "err", ivy.ErrLimit)
@@ -113,7 +145,20 @@ func (t *Tree) group(n roxmltree.Node, m okage.Transform, groupFill Paint, depth
 			t.frame(e, m, pics)
 		case "AlternateContent":
 			// the fallback holds the shapes of the first edition of
-			// DrawingML, which the package reads
+			// DrawingML, which the package reads. A choice that holds a
+			// chart of Office 2016 (chartex) goes first, as the chart draws
+			// better than the picture of its fallback.
+			drawn := false
+			if ch, ok := t.chartexChoice(e); ok {
+				// a chart that cannot be read draws nothing, and the
+				// fallback draws instead
+				n := t.Scene.Len()
+				t.group(ch, m, groupFill, depth+1, pics)
+				drawn = t.Scene.Len() > n
+			}
+			if drawn {
+				continue
+			}
 			if fb, ok := child(e, "Fallback"); ok {
 				t.group(fb, m, groupFill, depth+1, pics)
 			} else if ch, ok := child(e, "Choice"); ok {
@@ -124,6 +169,25 @@ func (t *Tree) group(n roxmltree.Node, m okage.Transform, groupFill Paint, depth
 			t.log().Debug("drawingml: shape left out", "element", e.TagName().Name())
 		}
 	}
+}
+
+// chartexChoice returns the mc:Choice of the mc:AlternateContent n that
+// holds a chart of Office 2016, when the tree draws charts.
+func (t *Tree) chartexChoice(n roxmltree.Node) (roxmltree.Node, bool) {
+	if t.Chart == nil {
+		return roxmltree.Node{}, false
+	}
+	for c := range n.Children() {
+		if !c.IsElement() || c.TagName().Name() != "Choice" {
+			continue
+		}
+		for d := range c.Descendants() {
+			if d.IsElement() && d.TagName().Name() == "graphicData" && hasSuffix(attr(d, "uri", ""), "/chartex") {
+				return c, true
+			}
+		}
+	}
+	return roxmltree.Node{}, false
 }
 
 // Xfrm is the transform of a shape, from a:xfrm: its box, its rotation and
@@ -180,7 +244,7 @@ func (x *Xfrm) textTransform() okage.Transform {
 }
 
 // groupShape draws p:grpSp.
-func (t *Tree) groupShape(n roxmltree.Node, m okage.Transform, groupFill Paint, depth int, pics Pictures) {
+func (t *Tree) groupShape(n roxmltree.Node, m space, groupFill Paint, depth int, pics Pictures) {
 	g, ok := child(n, "grpSpPr")
 	if !ok {
 		t.group(n, m, groupFill, depth+1, pics)
@@ -197,15 +261,14 @@ func (t *Tree) groupShape(n roxmltree.Node, m okage.Transform, groupFill Paint, 
 	if x.OK {
 		// the children are in the box of the children, which maps onto the
 		// box of the group
-		gm = m.PreConcat(x.Transform())
-		sx, sy := 1.0, 1.0
+		x = m.place(x)
+		gm = space{m: m.m.PreConcat(x.Transform()), sx: 1, sy: 1, ox: x.ChX, oy: x.ChY}
 		if x.ChW > 0 {
-			sx = x.W / x.ChW
+			gm.sx = x.W / x.ChW
 		}
 		if x.ChH > 0 {
-			sy = x.H / x.ChH
+			gm.sy = x.H / x.ChH
 		}
-		gm = gm.PreScale(float32(sx), float32(sy)).PreTranslate(float32(-x.ChX), float32(-x.ChY))
 	}
 	t.group(n, gm, groupFill, depth+1, pics)
 }
@@ -244,6 +307,9 @@ type shapeProps struct {
 	// inherits from that has one.
 	style    roxmltree.Node
 	hasStyle bool
+	// ownStyle reports whether style is the p:style of the shape itself.
+	// It then comes before the p:spPr of the shapes that it inherits from.
+	ownStyle bool
 }
 
 // props returns the properties of the shape n.
@@ -254,6 +320,7 @@ func (t *Tree) props(n roxmltree.Node, ph *Placeholder) *shapeProps {
 		sp.chain = t.Inherit(*ph)
 	}
 	sp.style, sp.hasStyle = child(n, "style")
+	sp.ownStyle = sp.hasStyle
 	for _, in := range sp.chain {
 		if sp.hasStyle {
 			break
@@ -360,6 +427,11 @@ func (t *Tree) fill(sp *shapeProps, groupFill Paint, pics Pictures) Paint {
 			return t.groupPaint(pt, groupFill)
 		}
 	}
+	if sp.ownStyle {
+		if pt, ok := t.styleFill(sp); ok {
+			return pt
+		}
+	}
 	for _, in := range sp.chain {
 		if pr, ok := child(in.Node, "spPr"); ok {
 			if pt, ok := t.Colors.PaintIn(pr, in.Pictures); ok {
@@ -367,14 +439,23 @@ func (t *Tree) fill(sp *shapeProps, groupFill Paint, pics Pictures) Paint {
 			}
 		}
 	}
-	if idx, colors, ok := t.styleRef(sp, "fillRef"); ok && idx > 0 {
-		if e, ok := t.Colors.Theme.FillStyle(idx); ok {
-			if pt, ok := colors.PaintOf(e, pics); ok {
-				return pt
-			}
+	if !sp.ownStyle {
+		if pt, ok := t.styleFill(sp); ok {
+			return pt
 		}
 	}
 	return Paint{Kind: PaintNone}
+}
+
+// styleFill returns the fill of the a:fillRef of the p:style of the shape.
+// A picture of the fill is in the theme part.
+func (t *Tree) styleFill(sp *shapeProps) (Paint, bool) {
+	if idx, colors, ok := t.styleRef(sp, "fillRef"); ok && idx > 0 {
+		if e, ok := t.Colors.Theme.FillStyle(idx); ok {
+			return colors.PaintOf(e, t.Colors.Theme.StylePictures())
+		}
+	}
+	return Paint{}, false
 }
 
 // groupPaint returns the fill of the group for a:grpFill.
@@ -388,10 +469,15 @@ func (t *Tree) groupPaint(pt, groupFill Paint) Paint {
 // line returns the outline of the shape.
 func (t *Tree) line(sp *shapeProps, pics Pictures) Line {
 	l := DefaultLine()
-	if idx, colors, ok := t.styleRef(sp, "lnRef"); ok && idx > 0 {
-		if e, ok := t.Colors.Theme.LineStyle(idx); ok {
-			l = colors.ParseLine(e, l, pics)
+	style := func() {
+		if idx, colors, ok := t.styleRef(sp, "lnRef"); ok && idx > 0 {
+			if e, ok := t.Colors.Theme.LineStyle(idx); ok {
+				l = colors.ParseLine(e, l, t.Colors.Theme.StylePictures())
+			}
 		}
+	}
+	if !sp.ownStyle {
+		style()
 	}
 	for i := len(sp.chain) - 1; i >= 0; i-- {
 		if pr, ok := child(sp.chain[i].Node, "spPr"); ok {
@@ -399,6 +485,9 @@ func (t *Tree) line(sp *shapeProps, pics Pictures) Line {
 				l = t.Colors.ParseLine(e, l, sp.chain[i].Pictures)
 			}
 		}
+	}
+	if sp.ownStyle {
+		style()
 	}
 	if sp.hasPr {
 		if e, ok := child(sp.own, "ln"); ok {
@@ -410,6 +499,15 @@ func (t *Tree) line(sp *shapeProps, pics Pictures) Line {
 
 // shadow returns the shadow of the shape.
 func (t *Tree) shadow(sp *shapeProps, pics Pictures) *Shadow {
+	own := sp.hasPr
+	if own {
+		_, own = child(sp.own, "effectLst")
+	}
+	if !own && sp.ownStyle {
+		if s, ok := t.styleShadow(sp); ok {
+			return s
+		}
+	}
 	if e, _, ok := sp.find("effectLst", pics); ok {
 		if names := Effects(e); len(names) > 0 {
 			t.log().Debug("drawingml: effects left out", "effects", names)
@@ -417,13 +515,19 @@ func (t *Tree) shadow(sp *shapeProps, pics Pictures) *Shadow {
 		s, _ := t.Colors.ParseEffects(e)
 		return s
 	}
+	s, _ := t.styleShadow(sp)
+	return s
+}
+
+// styleShadow returns the shadow of the a:effectRef of the p:style of the
+// shape.
+func (t *Tree) styleShadow(sp *shapeProps) (*Shadow, bool) {
 	if idx, colors, ok := t.styleRef(sp, "effectRef"); ok && idx > 0 {
 		if e, ok := t.Colors.Theme.EffectStyle(idx); ok {
-			s, _ := colors.ParseEffects(e)
-			return s
+			return colors.ParseEffects(e)
 		}
 	}
-	return nil
+	return nil, false
 }
 
 // xfrm returns the transform of the shape: its own, or that of the nearest
@@ -436,7 +540,7 @@ func (sp *shapeProps) xfrm(pics Pictures) Xfrm {
 }
 
 // shape draws p:sp, or p:cxnSp for a connector without text.
-func (t *Tree) shape(n roxmltree.Node, m okage.Transform, groupFill Paint, pics Pictures, text bool) {
+func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures, text bool) {
 	ph, isPh := placeholder(n)
 	if isPh && t.SkipPlaceholders {
 		return
@@ -446,6 +550,8 @@ func (t *Tree) shape(n roxmltree.Node, m okage.Transform, groupFill Paint, pics 
 	if !x.OK {
 		return
 	}
+	x = gs.place(x)
+	m := gs.m
 	paths, rect := t.geometry(sp, x.W, x.H, pics)
 	f := &Figure{
 		Transform:     m.PreConcat(x.Transform()),
@@ -519,7 +625,7 @@ func (t *Tree) text(n roxmltree.Node, sp *shapeProps, ph *Placeholder) *TextBody
 }
 
 // picture draws p:pic.
-func (t *Tree) picture(n roxmltree.Node, m okage.Transform, pics Pictures) {
+func (t *Tree) picture(n roxmltree.Node, gs space, pics Pictures) {
 	ph, isPh := placeholder(n)
 	if isPh && t.SkipPlaceholders {
 		return
@@ -529,6 +635,8 @@ func (t *Tree) picture(n roxmltree.Node, m okage.Transform, pics Pictures) {
 	if !x.OK {
 		return
 	}
+	x = gs.place(x)
+	m := gs.m
 	paths, _ := t.geometry(sp, x.W, x.H, pics)
 	f := &Figure{
 		Transform: m.PreConcat(x.Transform()),
@@ -548,7 +656,7 @@ func (t *Tree) picture(n roxmltree.Node, m okage.Transform, pics Pictures) {
 }
 
 // frame draws p:graphicFrame: a table, a chart, a diagram or an object.
-func (t *Tree) frame(n roxmltree.Node, m okage.Transform, pics Pictures) {
+func (t *Tree) frame(n roxmltree.Node, gs space, pics Pictures) {
 	ph, isPh := placeholder(n)
 	if isPh && t.SkipPlaceholders {
 		return
@@ -569,6 +677,8 @@ func (t *Tree) frame(n roxmltree.Node, m okage.Transform, pics Pictures) {
 	if !x.OK {
 		return
 	}
+	x = gs.place(x)
+	m := gs.m
 	g, ok := child(n, "graphic")
 	if !ok {
 		return
@@ -599,13 +709,13 @@ func (t *Tree) frame(n roxmltree.Node, m okage.Transform, pics Pictures) {
 			return
 		}
 		// the shapes of the drawing are in the space of the frame
-		t.group(tree, m.PreTranslate(float32(x.X), float32(x.Y)), Paint{Kind: PaintNone}, 1, dpics)
+		t.group(tree, rootSpace(m.PreTranslate(float32(x.X), float32(x.Y))), Paint{Kind: PaintNone}, 1, dpics)
 	default:
 		// an object, such as OLE, can hold a picture of its content
 		found := false
 		for e := range data.Descendants() {
 			if e.IsElement() && e.TagName().Name() == "pic" {
-				t.picture(e, m, pics)
+				t.picture(e, gs, pics)
 				found = true
 				break
 			}

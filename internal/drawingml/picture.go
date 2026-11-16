@@ -122,6 +122,48 @@ func isSVG(data []byte) bool {
 	return bytes.HasPrefix(head, []byte("<")) && bytes.Contains(data[:min(len(data), 4096)], []byte("<svg"))
 }
 
+// Resolution returns the resolution of a raster picture in dots per inch,
+// from the JFIF header of a JPEG file or the pHYs chunk of a PNG file. It
+// returns 96 for each axis that the picture does not give, as Office does.
+func (p *Picture) Resolution() (float64, float64) {
+	x, y, ok := rasterResolution(p.data)
+	if !ok || !(x >= 1 && x <= 10000) || !(y >= 1 && y <= 10000) {
+		return 96, 96
+	}
+	return x, y
+}
+
+// rasterResolution reads the resolution of the JPEG or PNG file data, in
+// dots per inch.
+func rasterResolution(data []byte) (float64, float64, bool) {
+	switch {
+	case len(data) >= 18 && data[0] == 0xff && data[1] == 0xd8 && data[2] == 0xff && data[3] == 0xe0 &&
+		string(data[6:11]) == "JFIF\x00":
+		x, y := float64(binary.BigEndian.Uint16(data[14:])), float64(binary.BigEndian.Uint16(data[16:]))
+		switch data[13] {
+		case 1:
+			return x, y, true
+		case 2:
+			return x * 2.54, y * 2.54, true
+		}
+	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
+		for i := 8; i+12 <= len(data); {
+			n := int(binary.BigEndian.Uint32(data[i:]))
+			typ := string(data[i+4 : i+8])
+			if n < 0 || n > len(data)-i-12 || typ == "IDAT" {
+				break
+			}
+			if typ == "pHYs" && n >= 9 && data[i+16] == 1 {
+				// pixels per meter
+				x, y := float64(binary.BigEndian.Uint32(data[i+8:])), float64(binary.BigEndian.Uint32(data[i+12:]))
+				return x * 0.0254, y * 0.0254, true
+			}
+			i += n + 12
+		}
+	}
+	return 0, 0, false
+}
+
 // Size returns the size of the picture in pixels, or in points for a
 // metafile and SVG. It returns false if the picture cannot be decoded.
 func (p *Picture) Size(ctx context.Context) (float64, float64, bool) {

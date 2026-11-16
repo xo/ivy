@@ -78,6 +78,7 @@ func WithAnnotations(on bool) Option {
 type Document struct {
 	pdf         *syntax.Pdf
 	cache       *render.RenderCache
+	fonts       *fontResolver
 	lim         ivy.Limits
 	log         *slog.Logger
 	annotations bool
@@ -128,6 +129,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	return &Document{
 		pdf:         pdf,
 		cache:       render.NewRenderCache(),
+		fonts:       newFontResolver(o.cfg, lim),
 		lim:         lim,
 		log:         o.cfg.Log(),
 		annotations: o.annotations,
@@ -381,6 +383,7 @@ func (d *Document) settings(ctx context.Context) interpret.InterpreterSettings {
 	settings := interpret.DefaultInterpreterSettings()
 	settings.Cancel = func() bool { return ctx.Err() != nil }
 	settings.Limits = d.lim
+	settings.FontResolver = d.fonts.resolve
 	decoders := interpret.ImageDecoders(settings.Cancel, d.lim)
 	settings.Decoders = &decoders
 	if !d.annotations {

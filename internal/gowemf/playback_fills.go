@@ -206,7 +206,14 @@ func (p *player) monoBrushPattern(r Record, g *gdiBrush) (*monoPattern, error) {
 	if g.usage == 0 {
 		usage, logical = 0, nil
 	}
-	d, err := ParseDIB(g.info, g.bits, usage, logical, p.options.Images)
+	var d *DIB
+	var err error
+	if g.packed != nil {
+		// ivy: a DIB in place of the Bitmap16 of a WMF pattern brush.
+		d, err = ParsePackedDIB(g.packed, usage, logical, p.options.Images)
+	} else {
+		d, err = ParseDIB(g.info, g.bits, usage, logical, p.options.Images)
+	}
 	if err == nil {
 		err = p.spendPixels(r, d.width, d.height)
 	}
@@ -299,6 +306,31 @@ func rectsPath(rects []Rect, m Matrix, limit uint64) (Path, bool) {
 // paintRegion fills a region with a brush (FillRgn, PaintRgn and the WMF
 // equivalents). A non-nil frame draws only the region's border of frame.X by
 // frame.Y logical units (FrameRgn); an empty border draws nothing.
+// ivy: invertRegion inverts the destination in a region, the raster
+// operation DSTINVERT, if the backend can read its destination.
+func (p *player) invertRegion(c Command, rects []Rect) error {
+	r := c.Source
+	rb, ok := backendAs[RasterBackend](p.backend)
+	if !ok {
+		return p.unsupported(r, "region inversion reads the destination")
+	}
+	if err := p.drawable(r, c.ColorState); err != nil {
+		return err
+	}
+	m, err := p.toDestination(r)
+	if err != nil {
+		return err
+	}
+	area, ok := rectsPath(rects, m, p.options.MaxPathPoints)
+	if !ok {
+		return failure(r.Offset, "region points", ErrLimit)
+	}
+	if len(area.Verbs) == 0 {
+		return nil
+	}
+	return rb.DrawRaster(RasterDraw{Operation: 0x55, Area: area}, p.currentClip())
+}
+
 func (p *player) paintRegion(c Command, rects []Rect, brush *gdiBrush, frame *Point) error {
 	r := c.Source
 	if err := p.drawable(r, c.ColorState); err != nil {

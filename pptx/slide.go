@@ -248,7 +248,8 @@ func (s *slide) backgroundPaint(bg roxmltree.Node, pics drawingml.Pictures) (dra
 		colors = s.colors.WithPlaceholder(v)
 	}
 	if e, ok := s.colors.Theme.FillStyle(idx); ok {
-		return colors.PaintOf(e, pics)
+		// a picture of the style is in the theme part
+		return colors.PaintOf(e, s.colors.Theme.StylePictures())
 	}
 	// a reference without a style of the theme is the color of the
 	// reference
@@ -389,8 +390,8 @@ func placeholderOf(n roxmltree.Node) (drawingml.Placeholder, bool) {
 }
 
 // drawChart draws the chart of a graphic frame of the part of pics, in the
-// box of w by h points of the space m. internal/chart draws it with zuzu
-// (D24), with the theme and the fonts of the slide. It returns false for a
+// box of w by h points of the space m. internal/chart draws it (D27),
+// with the theme and the fonts of the slide. It returns false for a
 // chart that cannot be read, which the tree logs and leaves out.
 func (s *slide) drawChart(frame roxmltree.Node, pics *partPictures, m okage.Transform, w, h float64) bool {
 	if pics == nil {

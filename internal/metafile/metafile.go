@@ -4,7 +4,8 @@
 // package reads WMF, EMF and EMF+ files with the copy of gowemf in
 // internal/gowemf (D24), and plays each record onto a display.Device. It
 // draws paths, fills, strokes, hatches, patterns, gradients, clips,
-// transforms, bitmaps and text. The text uses the fonts of the program, as
+// transforms, bitmaps and text. It draws the raster operations of GDI, which
+// combine a bitmap or a brush with the page, with blend modes. The text uses the fonts of the program, as
 // the layout of the ebooks does: the fonts of ivy.Config.Fonts, then the Go
 // fonts. A font of Office that the program does not have takes the font of
 // ivy.Config.Fonts with the same metrics, such as Carlito for Calibri

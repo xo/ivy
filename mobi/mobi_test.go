@@ -118,7 +118,7 @@ func TestCalibre(t *testing.T) {
 				t.Errorf("expected the image of the book, got: %q", img[:min(len(img), 8)])
 			}
 			if tt.kind == mobi6 {
-				if !slices.Equal(src.Documents, []string{"index.html"}) {
+				if !slices.Equal(src.Documents, []string{"cover-page.xhtml", "index.html"}) {
 					t.Fatalf("expected one document, got: %q", src.Documents)
 				}
 				doc := readFile(t, src.FS, "index.html")
@@ -136,7 +136,7 @@ func TestCalibre(t *testing.T) {
 				}
 				return
 			}
-			want := []string{"part0000.xhtml", "part0001.xhtml", "part0002.xhtml"}
+			want := []string{"cover-page.xhtml", "part0000.xhtml", "part0001.xhtml", "part0002.xhtml"}
 			if !slices.Equal(src.Documents, want) {
 				t.Fatalf("expected the parts %q, got: %q", want, src.Documents)
 			}
@@ -632,9 +632,10 @@ func TestPages(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The page break before the second chapter makes two pages.
-			if n < 2 {
-				t.Errorf("expected 2 pages or more, got: %d", n)
+			// The page of the cover comes first, and the page break before
+			// the second chapter makes two more pages.
+			if n < 3 {
+				t.Errorf("expected 3 pages or more, got: %d", n)
 			}
 			p, err := d.Page(t.Context(), 0)
 			if err != nil {
@@ -643,7 +644,11 @@ func TestPages(t *testing.T) {
 			if w, h := p.Size(); w != 6*72 || h != 9*72 {
 				t.Errorf("expected a page of 6 by 9 inches, got: %g by %g", w, h)
 			}
-			img := ebooktest.RenderPage(t, d, 0)
+			// The cover is blue, and it fills the page.
+			if ink := ebooktest.Ink(ebooktest.RenderPage(t, d, 0), image.Rect(0, 0, 576, 864)); ink < 576*864*9/10 {
+				t.Errorf("expected the cover on the first page, got %d pixels of ink", ink)
+			}
+			img := ebooktest.RenderPage(t, d, 1)
 			// "Chapter One" is at the top of the page area. The KF8 books
 			// have a page margin of their own, so the area starts at 20
 			// pixels.
@@ -653,8 +658,8 @@ func TestPages(t *testing.T) {
 			if ink := ebooktest.Ink(img, image.Rect(0, 0, 576, 20)); ink != 0 {
 				t.Errorf("expected no ink in the top margin, got %d pixels", ink)
 			}
-			// The second chapter starts the second page.
-			second := ebooktest.RenderPage(t, d, 1)
+			// The second chapter starts the third page.
+			second := ebooktest.RenderPage(t, d, 2)
 			if ink := ebooktest.Ink(second, image.Rect(30, 20, 528, 200)); ink < 50 {
 				t.Errorf("expected the ink of the second chapter, got %d pixels", ink)
 			}

@@ -786,7 +786,9 @@ func TestPlayEMFPlusUnsupported(t *testing.T) {
 	font := plusObj(1, 6, dwords(plusVersion), fl(12), dwords(2, 0, 0, 1), words('A', 0))
 	text := plusRec(PlusDrawStringRecord, 0x8001, dwords(0xff000000, 0xffffffff, 1), fl(0, 0, 50, 20), words('A', 0))
 	b, skipped := plusPlay(t, plusScene(96, 64, font, text, fillRect(0xff000000, 0, 0, 1, 1)), PlayOptions{})
-	if len(skipped) != 1 || skipped[0] != "EMF+ DrawString layout" || len(b.fills) != 1 {
+	// ivy: ivy draws DrawString, so the backend without text reports text
+	// output. Upstream reports "EMF+ DrawString layout".
+	if len(skipped) != 1 || skipped[0] != "text output" || len(b.fills) != 1 {
 		t.Fatal(skipped)
 	}
 	if _, err := Play(plusScene(96, 64, font, text), PlayOptions{Destination: Box{Width: 96, Height: 64}}, &recordingBackend{}); !errors.Is(err, ErrUnsupported) {
@@ -901,7 +903,8 @@ func TestPlayEMFPlusDriverString(t *testing.T) {
 		{[][]byte{plusFontObj(1, 16, 2, 0, "F"), driverString(1, 0xff000000, 1, ab, []float64{0, 0, 1, 0}, []float64{2, 0, 0, 1, 0, 0})}, "transform other than a translation"},
 		{[][]byte{plusFontObj(1, 16, 2, 0, "F"), driverString(1, 0xff000000, 1|2, ab, []float64{0, 0, 1, 0}, nil)}, "vertical"},
 		{[][]byte{plusFontObj(1, 16, 1, 0, "F"), driverString(1, 0xff000000, 1, ab, []float64{0, 0, 1, 0}, nil)}, "font size unit"},
-		{[][]byte{plusFontObj(1, 16, 2, 0, "F"), plusRec(PlusDrawStringRecord, 0x8001, dwords(0xff000000, 0xffffffff, 1), fl(0, 0, 50, 20), words('A', 0))}, "DrawString"},
+		// ivy: upstream reports DrawString here. ivy draws it, and
+		// TestPlayEMFPlusDrawString checks it.
 	} {
 		if _, skipped := play(t, c.records...); len(skipped) != 1 || !strings.Contains(skipped[0], c.reason) {
 			t.Errorf("%s: %v", c.reason, skipped)

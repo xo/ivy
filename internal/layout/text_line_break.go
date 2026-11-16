@@ -27,11 +27,11 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/go-text/typesetting/di"
-	"github.com/go-text/typesetting/font"
-	"github.com/go-text/typesetting/segmenter"
-	"github.com/go-text/typesetting/shaping"
 	"github.com/xo/okage/svg"
+	"github.com/xo/okage/typesetting/di"
+	"github.com/xo/okage/typesetting/font"
+	"github.com/xo/okage/typesetting/segmenter"
+	"github.com/xo/okage/typesetting/shaping"
 	"golang.org/x/image/math/fixed"
 )
 
@@ -879,9 +879,16 @@ func firstLineMetrics(firstLine *TextLine, text string, layout *TextLayout, resu
 			firstLineText = strings.TrimRight(firstLineText, " ")
 		}
 
+		wrapped := firstLine.wrapped
 		layout.SetText(firstLineText, false)
 		firstLine, _, _ = layout.FirstLine()
 		length = firstLine.Length
+		if wrapped && !spaceCollapse && !firstLine.wrapped {
+			// Port: the final space of a wrapped line keeps its width of 0
+			// when the spaces do not collapse, as in the first layout.
+			firstLine.wrapped = true
+			layout.measureLine(firstLine)
+		}
 	}
 
 	width, height := lineSize(firstLine, style)

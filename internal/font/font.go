@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"sync"
 
-	gofont "github.com/go-text/typesetting/font"
-	"github.com/go-text/typesetting/font/opentype"
+	gofont "github.com/xo/okage/typesetting/font"
+	"github.com/xo/okage/typesetting/font/opentype"
 
 	"github.com/xo/ivy"
 	"github.com/xo/okage"

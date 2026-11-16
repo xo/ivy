@@ -25,12 +25,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-text/typesetting/font"
-	ot "github.com/go-text/typesetting/font/opentype"
-	"github.com/go-text/typesetting/language"
-	"github.com/go-text/typesetting/shaping"
 	"github.com/xo/okage/svg"
 	"github.com/xo/okage/tinycss2"
+	"github.com/xo/okage/typesetting/font"
+	ot "github.com/xo/okage/typesetting/font/opentype"
+	"github.com/xo/okage/typesetting/language"
+	"github.com/xo/okage/typesetting/shaping"
 	"github.com/xo/okage/webfont"
 
 	"github.com/xo/ivy"

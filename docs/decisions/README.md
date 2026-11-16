@@ -43,5 +43,8 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D21 | [Phase 4 builds its parsers in okage and its decoders in magic](D021-phase-4-builds-its-parsers-in-okage-and-its-decoders-in-magic.md) | Decided |
 | D22 | [A program can give the folder of a Markdown or HTML file](D022-a-program-can-give-the-folder-of-a-markdown-or-html-file.md) | Decided |
 | D23 | [A program can ask for the fonts of the system](D023-a-program-can-ask-for-the-fonts-of-the-system.md) | Decided |
-| D24 | [Phase 5 copies gowemf and draws charts with zuzu](D024-phase-5-copies-gowemf-and-draws-charts-with-zuzu.md) | Decided |
+| D24 | [Phase 5 copies gowemf and draws charts with zuzu](D024-phase-5-copies-gowemf-and-draws-charts-with-zuzu.md) | Decided. Amended by D27 |
 | D25 | [ivy derives the keys of OpenDocument with Argon2id](D025-ivy-derives-the-keys-of-opendocument-with-argon2id.md) | Decided |
+| D26 | [ivy reads DjVu with a copy of the decoders of dejapdf](D026-ivy-reads-djvu-with-a-copy-of-the-decoders-of-dejapdf.md) | Decided |
+| D27 | [ivy draws the charts of Office itself](D027-ivy-draws-the-charts-of-office-itself.md) | Decided. Amends D24 |
+| D28 | [ivy reads fonts with the typesetting of okage, and fills small glyphs finely](D028-ivy-reads-fonts-with-the-typesetting-of-okage-and-fills-small-glyphs-finely.md) | Decided |

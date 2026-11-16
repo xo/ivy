@@ -34,10 +34,10 @@ import (
 	"slices"
 	"sync"
 
-	gofont "github.com/go-text/typesetting/font"
-	ot "github.com/go-text/typesetting/font/opentype"
-	"github.com/go-text/typesetting/font/opentype/tables"
 	"github.com/xo/okage/kurbo"
+	gofont "github.com/xo/okage/typesetting/font"
+	ot "github.com/xo/okage/typesetting/font/opentype"
+	"github.com/xo/okage/typesetting/font/opentype/tables"
 
 	"github.com/xo/ivy"
 )
@@ -113,7 +113,10 @@ func sfntTables(data []byte, index uint32) (map[ot.Tag][]byte, error) {
 		}
 		end := min(start+length, uint64(len(data)))
 		if _, ok := tabs[tag]; !ok {
-			tabs[tag] = data[start:end]
+			// The capacity ends with the table. ot.WriteTTF appends the
+			// padding of the checksum to the table, which would else
+			// write over the start of the next table in data.
+			tabs[tag] = data[start:end:end]
 		}
 	}
 	return tabs, nil

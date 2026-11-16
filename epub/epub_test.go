@@ -154,10 +154,14 @@ func TestEPUB3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The page of the cover comes first, and the image of the spine is on
+	// a page of its own.
 	want := []string{
+		"OEBPS/images/cover-page.xhtml",
 		"OEBPS/text/ch1.xhtml",
 		"OEBPS/text/ch 2.xhtml",
 		"OEBPS/text/ch3.xhtml",
+		"OEBPS/images/pic-page.xhtml",
 		"OEBPS/text/notes.xhtml",
 	}
 	if !slices.Equal(src.Documents, want) {
@@ -268,12 +272,16 @@ func TestEPUB2(t *testing.T) {
 	for name, tt := range map[string]struct {
 		extra, guide string
 		cover        image.Point
+		// docs are the documents of the layout. The title page shows
+		// images/other.png without text, so it is the page of that cover,
+		// and it stays after the page of the cover.
+		docs []string
 	}{
-		"meta cover": {`<meta name="cover" content="img1"/>`, ``, image.Pt(30, 40)},
-		"meta path":  {`<meta name="cover" content="images/other.png"/>`, ``, image.Pt(20, 25)},
-		"guide page": {``, `<reference type="cover" href="titlepage.xhtml"/>`, image.Pt(20, 25)},
-		"guide img":  {``, `<reference type="cover" href="images/front.gif"/>`, image.Pt(30, 40)},
-		"no cover":   {``, ``, image.Point{}},
+		"meta cover": {`<meta name="cover" content="img1"/>`, ``, image.Pt(30, 40), []string{"images/front-page.xhtml", "titlepage.xhtml", "c1.html"}},
+		"meta path":  {`<meta name="cover" content="images/other.png"/>`, ``, image.Pt(20, 25), []string{"images/other-page.xhtml", "titlepage.xhtml", "c1.html"}},
+		"guide page": {``, `<reference type="cover" href="titlepage.xhtml"/>`, image.Pt(20, 25), []string{"images/other-page.xhtml", "titlepage.xhtml", "c1.html"}},
+		"guide img":  {``, `<reference type="cover" href="images/front.gif"/>`, image.Pt(30, 40), []string{"images/front-page.xhtml", "titlepage.xhtml", "c1.html"}},
+		"no cover":   {``, ``, image.Point{}, []string{"titlepage.xhtml", "c1.html"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := mustOpen(t, book2(tt.extra, tt.guide))
@@ -299,7 +307,7 @@ func TestEPUB2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !slices.Equal(src.Documents, []string{"titlepage.xhtml", "c1.html"}) || src.Title != info.Title {
+			if !slices.Equal(src.Documents, tt.docs) || src.Title != info.Title {
 				t.Errorf("expected the spine and the title, got: %q %q", src.Documents, src.Title)
 			}
 		})
@@ -491,6 +499,10 @@ func TestErrors(t *testing.T) {
 func FuzzOpen(f *testing.F) {
 	f.Add(fixture.Zip(book3()...))
 	f.Add(fixture.Zip(book2(`<meta name="cover" content="img1"/>`, `<reference type="cover" href="titlepage.xhtml"/>`)...))
+	f.Add(fixture.EPUB(fixture.EPUBPackage{
+		Manifest: coverItem + `<item id="p1" href="p1.svg" media-type="image/svg+xml"/>`,
+		Spine:    `<itemref idref="p1"/>`,
+	}, fixture.Entry{Name: "p1.svg", Data: []byte(square)}, fixture.Entry{Name: "cover.png", Data: fixture.PNG(2, 3, color.Black)}))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		check := func(err error) {
@@ -553,9 +565,10 @@ func TestPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The four documents of the spine each start a page.
-	if n != 4 {
-		t.Errorf("expected 4 pages, got: %d", n)
+	// The page of the cover, the four documents of the spine and the image
+	// of the spine each start a page.
+	if n != 6 {
+		t.Errorf("expected 6 pages, got: %d", n)
 	}
 	p, err := d.Page(t.Context(), 0)
 	if err != nil {
@@ -564,7 +577,11 @@ func TestPages(t *testing.T) {
 	if w, h := p.Size(); w != 6*72 || h != 9*72 {
 		t.Errorf("expected a page of 6 by 9 inches, got: %g by %g", w, h)
 	}
-	img := ebooktest.RenderPage(t, d, 0)
+	// The cover is white, and it fills the page.
+	if ink := ebooktest.Ink(ebooktest.RenderPage(t, d, 0), image.Rect(0, 0, 576, 864)); ink != 0 {
+		t.Errorf("expected the white cover on the first page, got %d pixels of ink", ink)
+	}
+	img := ebooktest.RenderPage(t, d, 1)
 	// The heading "One" is in the top left corner, inside the margins of
 	// 0.5 and 0.6 inches.
 	if ink := ebooktest.Ink(img, image.Rect(48, 58, 200, 110)); ink < 20 {

@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	ot "github.com/go-text/typesetting/font/opentype"
+	ot "github.com/xo/okage/typesetting/font/opentype"
 	"golang.org/x/image/font/gofont/goregular"
 )
 
@@ -46,5 +46,47 @@ func TestSfntTablesCut(t *testing.T) {
 	// the font still reads with the cut table
 	if _, err := newSfntProgram(bytes.Clone(goregular.TTF)[:len(goregular.TTF)-2], 0); err != nil {
 		t.Errorf("expected a font with a short last table to read, got: %v", err)
+	}
+}
+
+// TestSfntTablesUnpadded makes sure that a font whose tables have no
+// padding reads, and that the reader does not change its data. ot.WriteTTF
+// appends the padding of a checksum to each table, and it wrote over the
+// version of the table maxp that followed the table name in the Arabic
+// fonts of the file arabic-cid-truetype of pdf.js.
+func TestSfntTablesUnpadded(t *testing.T) {
+	ld, err := ot.NewLoader(bytes.NewReader(goregular.TTF))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list []ot.Table
+	odd := false
+	for _, tag := range ld.Tables() {
+		raw, err := ld.RawTable(tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag == tagCmap {
+			continue
+		}
+		odd = odd || len(raw)%4 != 0
+		list = append(list, ot.Table{Tag: tag, Content: raw})
+	}
+	if !odd {
+		t.Fatal("expected a table with a length that is not a multiple of 4")
+	}
+	// ot.WriteTTF does not pad the tables. The font has no cmap table, so
+	// the reader builds the font twice.
+	data := ot.WriteTTF(list)
+	orig := bytes.Clone(data)
+	p, err := newFontProgram(data, 0)
+	if err != nil {
+		t.Fatalf("expected the font to read, got: %v", err)
+	}
+	if !bytes.Equal(data, orig) {
+		t.Error("the reader changed the data of the font")
+	}
+	if n := len(p.outline(36).Elements()); n == 0 {
+		t.Error("expected the outline of glyph 36")
 	}
 }

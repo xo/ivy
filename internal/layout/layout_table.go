@@ -736,7 +736,11 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			}
 			var rowBottomY float64
 			if len(endingCells) > 0 { // in this row
-				if row.Height == Auto {
+				// Port: each part of a row that a page break splits takes
+				// the height of its content. Upstream keeps the height of
+				// the row, which then overflows the page, so that a row
+				// with a height never splits.
+				if row.Height == Auto || len(resumeAt) > 0 || len(skip) > 0 {
 					rowBottomY = math.Inf(-1)
 					for _, cell := range endingCells {
 						rowBottomY = max(rowBottomY, cell.PositionY+cell.BorderHeight())
@@ -789,6 +793,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 						for _, child := range cell.Children {
 							child.Translate(0, verticalAlignShift, false)
 						}
+						keepAbsolute(cell, verticalAlignShift)
 					}
 				}
 			}
@@ -1152,10 +1157,34 @@ func tableColumnCells(table, column *Box) func() []*Box {
 
 // addTopPadding is add_top_padding in weasyprint/layout/table.py: it
 // increases the top padding of a box. This also translates the children.
+//
+// Port: an absolutely positioned box of the cell with a top or a bottom of
+// its own stays in place, because the padding box of the cell, its
+// containing block, does not move. Upstream moves it with the content.
 func addTopPadding(box *Box, extraPadding float64) {
 	box.PaddingTop += extraPadding
 	for _, child := range box.Children {
 		child.Translate(0, extraPadding, false)
+	}
+	keepAbsolute(box, extraPadding)
+}
+
+// keepAbsolute moves back by dy the absolutely positioned descendants of box
+// that have a top or a bottom, and whose containing block is box or
+// outside it.
+func keepAbsolute(box *Box, dy float64) {
+	for _, child := range box.AllChildren() {
+		switch {
+		case child.IsAbsolutelyPositioned():
+			if !isStr(child.Style.Get("top"), "auto") || !isStr(child.Style.Get("bottom"), "auto") {
+				child.Translate(0, -dy, false)
+			}
+		case !isStr(child.Style.Get("position"), "static"):
+			// a positioned box is the containing block of its absolutely
+			// positioned descendants, which move with it
+		default:
+			keepAbsolute(child, dy)
+		}
 	}
 }
 

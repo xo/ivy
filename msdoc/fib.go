@@ -17,6 +17,7 @@ var le = binary.LittleEndian
 // The flags of the FibBase (MS-DOC 2.5.2).
 const (
 	flagDot        = 0x0001
+	flagComplex    = 0x0004
 	flagEncrypted  = 0x0100
 	flagWhichTable = 0x0200
 	flagObfuscated = 0x8000
@@ -25,6 +26,23 @@ const (
 // The first nFib of Word 97. An older file is Word 6 or Word 95, whose
 // format is not MS-DOC.
 const nFibWord97 = 0x00C1
+
+// The FIB of Word 6 and Word 95 starts with wIdentWord6. It holds every
+// structure in the stream WordDocument, and the offsets of its fields are
+// not those of MS-DOC. The package reads these fields of it.
+const (
+	wIdentWord6       = 0xA5DC
+	word6ChseOffset   = 0x14
+	word6FcMinOffset  = 0x18
+	word6FcMacOffset  = 0x1C
+	word6CcpOffset    = 0x34
+	word6PlcfSed      = 0x88
+	word6FcClxOffset  = 0x160
+	word6FibSize      = 0x168
+	word6CharsetMac   = 256
+	word6CodePageMac  = 10000
+	word6CodePageANSI = 1252
+)
 
 // clearBytes is the number of bytes at the start of the stream WordDocument
 // that the encryption leaves in the clear: the FibBase and a part of the
@@ -67,6 +85,13 @@ type streams struct {
 	fib   fib
 	word  []byte
 	table []byte
+	// word6 is set for a document of Word 6 or Word 95, whose table stream
+	// is the stream WordDocument. Its text has one byte for each character,
+	// in the code page codePage, from the byte fcMin.
+	word6    bool
+	codePage uint16
+	fcMin    uint32
+	fcMac    uint32
 }
 
 // readStreams reads the streams WordDocument and the table stream of f, and
@@ -76,6 +101,9 @@ func readStreams(ctx context.Context, f *cfb.File, cfg ivy.Config) (*streams, er
 	word, err := msole.ReadStream(f, cfbWordName, lim)
 	if err != nil {
 		return nil, err
+	}
+	if len(word) >= fibBaseSize+2 && le.Uint16(word) == wIdentWord6 {
+		return readWord6(word)
 	}
 	if len(word) < fibBaseSize+2 || le.Uint16(word) != wIdentWord {
 		return nil, fmt.Errorf("word document without a fib: %w", ivy.ErrFormat)
@@ -105,13 +133,54 @@ func readStreams(ctx context.Context, f *cfb.File, cfg ivy.Config) (*streams, er
 	return s, nil
 }
 
-// decrypt decrypts the streams with the key of the password. The table
-// stream starts with the encryption header, of lKey bytes, and the stream
-// WordDocument starts with 68 bytes in the clear. Both start a new block of
-// RC4 every 512 bytes from their start.
+// readWord6 reads the FIB of a document of Word 6 or Word 95. The package
+// reads only its text: the pieces of a document that Word saved fast, or
+// the bytes from fcMin to fcMac. It does not read the properties of the
+// characters and the paragraphs, whose modifiers have other codes than in
+// Word 97.
+func readWord6(word []byte) (*streams, error) {
+	if len(word) < word6FibSize {
+		return nil, fmt.Errorf("word 6 document with a fib of %d bytes: %w", len(word), ivy.ErrFormat)
+	}
+	s := &streams{word: word, table: word, word6: true, codePage: word6CodePageANSI}
+	s.fib.nFib = le.Uint16(word[2:])
+	s.fib.lid = le.Uint16(word[6:])
+	s.fib.flags = le.Uint16(word[10:])
+	if s.fib.flags&flagEncrypted != 0 {
+		return nil, fmt.Errorf("word 6 document with a password: %w", ivy.ErrUnsupported)
+	}
+	if le.Uint16(word[word6ChseOffset:]) == word6CharsetMac {
+		s.codePage = word6CodePageMac
+	}
+	s.fcMin = le.Uint32(word[word6FcMinOffset:])
+	s.fcMac = le.Uint32(word[word6FcMacOffset:])
+	s.fib.ccpText = le.Uint32(word[word6CcpOffset:])
+	s.fib.fcLcb = make([][2]uint32, fcLcbCountMin)
+	s.fib.fcLcb[fcPlcfSed] = [2]uint32{le.Uint32(word[word6PlcfSed:]), le.Uint32(word[word6PlcfSed+4:])}
+	if s.fib.flags&flagComplex != 0 {
+		s.fib.fcLcb[fcClx] = [2]uint32{le.Uint32(word[word6FcClxOffset:]), le.Uint32(word[word6FcClxOffset+4:])}
+	}
+	return s, nil
+}
+
+// decrypt decrypts the streams with the key of the password. For RC4, the
+// table stream starts with the encryption header, of lKey bytes, and the
+// stream WordDocument starts with 68 bytes in the clear. Both start a new
+// block of RC4 every 512 bytes from their start. The XOR obfuscation
+// leaves the same 68 bytes in the clear, and has no header (MS-DOC
+// 2.2.6.1).
 func (s *streams) decrypt(ctx context.Context, cfg ivy.Config) error {
 	if s.fib.flags&flagObfuscated != 0 {
-		return fmt.Errorf("word document with xor obfuscation: %w", ivy.ErrUnsupported)
+		key, err := msole.Key(ctx, offcrypto.XORMethod2(le.Uint32(s.word[14:])), cfg)
+		if err != nil {
+			return fmt.Errorf("opening word document: %w", err)
+		}
+		if len(s.word) > clearBytes {
+			if err := key.DecryptAt(s.word[clearBytes:], clearBytes, blockSizeBytes); err != nil {
+				return err
+			}
+		}
+		return key.DecryptAt(s.table, 0, blockSizeBytes)
 	}
 	lKey := int(le.Uint32(s.word[14:]))
 	if lKey <= 0 || lKey > len(s.table) {

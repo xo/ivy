@@ -61,9 +61,9 @@ okage requires each one already, and okage D6 approved it for okage, except
 | `golang.org/x/image` | the TIFF decoder of `ps`, the WebP decoder of `comic`, the BMP, TIFF and WebP decoders of `internal/layout`, and the Go fonts, which the layout uses when a program gives no fonts | 2026-11-16 |
 | `golang.org/x/crypto` | Blowfish, for the encryption of OpenDocument before ODF 1.2 (D24), and Argon2id, for the encryption of ODF 1.4 (D25) | 2026-11-17 |
 | `golang.org/x/text` | the encodings of the WHATWG Encoding Standard in `internal/charset`, such as windows-1251, KOI8-R and Shift_JIS | 2026-11-17 |
-| `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout` | 2026-11-16 |
+| `github.com/go-text/typesetting` | the fonts of `internal/font`: TrueType, OpenType and CFF, the map from characters to glyphs, the outlines and the advances. The shaping and the breaks of the lines of `internal/layout`. Since D28, ivy imports the copy of okage, `github.com/xo/okage/typesetting` | 2026-11-16 |
 
-The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21), and a copy of gowemf in `internal/`, for EMF and WMF (D24).
+The maintainers also approved a copy of goldmark in `internal/`, for Markdown (D21), a copy of gowemf in `internal/`, for EMF and WMF (D24), and a copy of the decoders of DjVu of dejapdf in `djvu/internal/` (D26).
 
 A port follows its source file by file, as okage does, and keeps a ledger of
 the commits of its source after a base commit. A copy also records its

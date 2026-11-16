@@ -22,10 +22,10 @@ func TestEMFRegionPainting(t *testing.T) {
 	if _, err := Stream(file, StreamOptions{}, nil); err != nil {
 		t.Fatal(err)
 	}
+	// ivy: Windows ignores a stock pen as the brush of a region, so Stream
+	// drops the record. Upstream expects ErrMalformed.
 	put32(r.Raw, 28, 0x80000006)
-	if _, err := Stream(emfFixture(r.Raw), StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-		t.Fatal("stock pen used as region brush", err)
-	}
+	streamDrops(t, emfFixture(r.Raw), EMRFillRgn)
 }
 
 func TestEMFGradientIndexes(t *testing.T) {

@@ -4,8 +4,6 @@ github.com/go-text/typesetting-utils v0.0.0-20260419141703-4ffe8874dabc h1:8FGo2
 github.com/go-text/typesetting-utils v0.0.0-20260419141703-4ffe8874dabc/go.mod h1:3/62I4La/HBRX9TcTpBj4eipLiwzf+vhI+7whTc9V7o=
 github.com/xo/okage v0.9.0 h1:hpGe0nrvKwa7GjVIRZ79OYq4QBVHrhDLQT5ZcfDZHfA=
 github.com/xo/okage v0.9.0/go.mod h1:H4pR7XnUoRFCjXoo9Mx4lQPE9JeUu6OS3pbzMWEAOpY=
-github.com/xo/zuzu v0.2.1 h1:D3z3rTjYHPa/oKhsh4ss/1jc3w9+K3XHLGf9dz9c438=
-github.com/xo/zuzu v0.2.1/go.mod h1:yyQN9/k3jNCo5uBr6/gIZLde8BguHCdDK962K3RXrYw=
 golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=
 golang.org/x/crypto v0.58.0/go.mod h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w=
 golang.org/x/image v0.47.0 h1:za/8gVz++PPZqmZJBNSISICN5Rrj5zixP/8K++fgmqo=

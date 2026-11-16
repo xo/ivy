@@ -30,7 +30,9 @@ func TestFontsSubstitute(t *testing.T) {
 		{"Calibri", "Carlito"},
 		{"Arial", "Liberation Sans"},
 		{"Times New Roman", "Liberation Serif"},
-		{"Unknown Face", "Go"},
+		// an unknown face takes the generic sans-serif family, which is
+		// Liberation Sans with the fonts module (D28)
+		{"Unknown Face", "Liberation Sans"},
 	} {
 		f := newFontSet(nil, cfg).face(gowemf.FontRequest{FaceName: c.name})
 		if f == nil || f.family != c.want {

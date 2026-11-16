@@ -33,7 +33,7 @@ import (
 // scale, the print ranges, the rows and the columns of the print titles,
 // the manual page breaks, the grid of the page layout, and the images of
 // the cells and of the sheet, and the charts of the embedded objects, which
-// internal/chart draws with zuzu (D24). An object that is not a chart shows
+// internal/chart draws (D27). An object that is not a chart shows
 // as a frame. The conditional formats, the annotations and the shapes are
 // left out.
 //
@@ -891,7 +891,7 @@ func odsAnchor(sh *sheet.Sheet, x, y float64) (int, int, float64, float64) {
 
 // chartObject returns the object that draws the chart of the embedded
 // object dir in a frame of w by h points, or nil when the object is not a
-// chart. internal/chart draws it with zuzu (D24), with the fonts of the
+// chart. internal/chart draws it (D27), with the fonts of the
 // program.
 func (r *odsReader) chartObject(dir string, w, h float64) layout.Object {
 	name := path.Clean(dir)

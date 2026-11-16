@@ -142,7 +142,9 @@ func (r *renderer) fillOutlineRun(run *interpret.GlyphRun, props *interpret.Draw
 			}
 			r.dev.Save()
 			r.dev.Concat(toTransform(props.Transform.Mul(glyph.Transform())))
-			r.dev.FillPath(path, okage.FillRuleWinding, shader)
+			// Port: ivy fills a glyph with display.FillText, which gives a
+			// small glyph a finer coverage than FillPath.
+			display.FillText(r.dev, path, okage.FillRuleWinding, shader)
 			r.dev.Restore()
 		}
 		return

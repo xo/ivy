@@ -1,7 +1,6 @@
 package msppt
 
 import (
-	"strings"
 	"unicode/utf16"
 )
 
@@ -15,32 +14,49 @@ const (
 	txCenterTitle = 6
 	txHalfBody    = 7
 	txQuarterBody = 8
+	txTypes       = 9
 )
 
-// text is a text of a slide with its type.
+// More records of MS-PPT 2.13.24 that the package reads.
+const (
+	rtSlideAtom          = 0x03EF
+	rtEnvironment        = 0x03F2
+	rtMainMaster         = 0x03F8
+	rtPPDrawingGroup     = 0x040B
+	rtColorScheme        = 0x07F0
+	rtFontCollection     = 0x07D5
+	rtStyleTextProp      = 0x0FA1
+	rtTextMasterStyle    = 0x0FA3
+	rtTextCFException    = 0x0FA4
+	rtTextPFException    = 0x0FA5
+	rtFontEntity         = 0x0FB7
+	rtSlideNumberMC      = 0x0FD8
+	rtMasterListWithText = 1
+)
+
+// The flags of a SlideAtom (MS-PPT 2.5.11).
+const (
+	slideMasterObjects    = 0x0001
+	slideMasterScheme     = 0x0002
+	slideMasterBackground = 0x0004
+)
+
+// text is a text of a shape: its type, its characters with a carriage
+// return between two paragraphs, and the records of its style.
 type text struct {
 	kind uint32
-	text string
+	// units are the characters in UTF-16, as the offsets of the style
+	// count them.
+	units []uint16
+	// style is the body of the StyleTextPropAtom, or nil.
+	style []byte
+	// fields are the offsets of the slide numbers in text.
+	fields []int
 }
 
 // rect is a rectangle in master units, 576 to the inch.
 type rect struct {
 	left, top, right, bottom float64
-}
-
-// shape is a shape of a slide that holds text.
-type shape struct {
-	text
-	anchor    rect
-	hasAnchor bool
-}
-
-// slide is a slide with its texts.
-type slide struct {
-	shapes []shape
-	// texts are the texts of the slide list for the slide, which the
-	// placeholders name by their index.
-	texts []text
 }
 
 // slideRef is a slide of the slide list: its persist object and its texts.
@@ -50,10 +66,20 @@ type slideRef struct {
 }
 
 // document is what the package reads of the DocumentContainer: the size of
-// the slides and the list of the slides, in order.
+// the slides, the slides in order, the masters, the fonts, the default
+// styles of the text and the pictures.
 type document struct {
 	width, height float64 // master units
 	slides        []slideRef
+	// masters maps the id of a master to its persist object.
+	masters map[uint32]uint32
+	fonts   []string
+	// defaults are the styles of the text that the masters inherit.
+	defaults masterStyle
+	// shapeDefaults are the properties of a shape that it does not give.
+	shapeDefaults props
+	// blips are the entries of the store of pictures, from index 1.
+	blips []blipEntry
 }
 
 // readDocument reads the DocumentContainer of s.
@@ -62,46 +88,148 @@ func readDocument(s *stream) (*document, bool) {
 	if !ok || h.typ != rtDocument {
 		return nil, false
 	}
-	d := &document{width: 5760, height: 4320}
+	d := &document{width: 5760, height: 4320, masters: make(map[uint32]uint32)}
 	if atom := child(body, rtDocumentAtom); len(atom) >= 8 {
 		w, ht := float64(int32(le.Uint32(atom))), float64(int32(le.Uint32(atom[4:])))
 		if w >= 576 && ht >= 576 && w <= 576*200 && ht <= 576*200 {
 			d.width, d.height = w, ht
 		}
 	}
-	for h, list := range children(body) {
-		if h.typ != rtSlideListWithText || h.inst != 0 {
-			continue
-		}
-		var cur *slideRef
-		var kind uint32 = txOther
-		for ch, b := range children(list) {
-			switch ch.typ {
-			case rtSlidePersistAtom:
-				if len(b) >= 4 {
-					d.slides = append(d.slides, slideRef{persist: le.Uint32(b)})
-					cur = &d.slides[len(d.slides)-1]
-				}
-			case rtTextHeaderAtom:
-				if len(b) >= 4 {
-					kind = le.Uint32(b)
-				}
-			case rtTextCharsAtom, rtTextBytesAtom:
-				if cur != nil {
-					cur.texts = append(cur.texts, text{kind: kind, text: decodeText(ch.typ, b)})
+	for h, b := range children(body) {
+		switch {
+		case h.typ == rtSlideListWithText && h.inst == 0:
+			d.readSlideList(b, s.lim.MaxObjects)
+		case h.typ == rtSlideListWithText && h.inst == rtMasterListWithText:
+			for ch, a := range children(b) {
+				if ch.typ == rtSlidePersistAtom && len(a) >= 16 && len(d.masters) < s.lim.MaxObjects {
+					d.masters[le.Uint32(a[12:])] = le.Uint32(a)
 				}
 			}
-			if len(d.slides) > s.lim.MaxObjects {
-				return d, true
-			}
+		case h.typ == rtEnvironment:
+			d.readEnvironment(b, s.lim.MaxObjects)
+		case h.typ == rtPPDrawingGroup:
+			d.readDrawingGroup(child(b, rtOfficeArtDggContainer), s.lim.MaxObjects)
 		}
 	}
 	return d, true
 }
 
+// readSlideList reads the slides of a SlideListWithTextContainer and their
+// texts.
+func (d *document) readSlideList(b []byte, maxObjects int) {
+	var cur *slideRef
+	for ch, a := range children(b) {
+		if ch.typ == rtSlidePersistAtom {
+			if len(a) >= 4 && len(d.slides) < maxObjects {
+				d.slides = append(d.slides, slideRef{persist: le.Uint32(a)})
+				cur = &d.slides[len(d.slides)-1]
+			}
+			continue
+		}
+		if cur != nil && len(cur.texts) < maxObjects {
+			cur.texts = addText(cur.texts, ch, a)
+		}
+	}
+}
+
+// addText adds the record of the header h and the body b to the texts of a
+// list: a TextHeaderAtom starts a new text, and the records after it give
+// its characters and its style.
+func addText(texts []text, h header, b []byte) []text {
+	if h.typ == rtTextHeaderAtom {
+		var kind uint32 = txOther
+		if len(b) >= 4 {
+			kind = le.Uint32(b)
+		}
+		return append(texts, text{kind: kind})
+	}
+	if len(texts) == 0 {
+		return texts
+	}
+	t := &texts[len(texts)-1]
+	switch h.typ {
+	case rtTextCharsAtom, rtTextBytesAtom:
+		t.units = decodeText(h.typ, b)
+	case rtStyleTextProp:
+		t.style = b
+	case rtSlideNumberMC:
+		if len(b) >= 4 && len(t.fields) < 64 {
+			t.fields = append(t.fields, int(int32(le.Uint32(b))))
+		}
+	}
+	return texts
+}
+
+// readEnvironment reads the fonts and the default styles of the text from
+// the DocumentTextInfoContainer.
+func (d *document) readEnvironment(b []byte, maxObjects int) {
+	for h, a := range children(b) {
+		switch h.typ {
+		case rtFontCollection:
+			for ch, e := range children(a) {
+				if ch.typ == rtFontEntity && len(d.fonts) < maxObjects {
+					d.fonts = append(d.fonts, fontName(e))
+				}
+			}
+		case rtTextCFException:
+			if cf, _, ok := readCF(a); ok {
+				for i := range d.defaults {
+					d.defaults[i].cf = cf
+				}
+			}
+		case rtTextPFException:
+			if len(a) > 2 {
+				if pf, _, ok := readPF(a[2:]); ok {
+					for i := range d.defaults {
+						d.defaults[i].pf = pf
+					}
+				}
+			}
+		case rtTextMasterStyle:
+			if st, ok := readMasterStyle(a, h.inst); ok {
+				for i := range d.defaults {
+					d.defaults[i].over(&st[i])
+				}
+			}
+		}
+	}
+}
+
+// fontName returns the name of the font of a FontEntityAtom: a string of
+// UTF-16 of 32 characters at most, which a NUL ends.
+func fontName(b []byte) string {
+	units := make([]uint16, 0, 32)
+	for i := 0; i+2 <= min(len(b), 64); i += 2 {
+		u := le.Uint16(b[i:])
+		if u == 0 {
+			break
+		}
+		units = append(units, u)
+	}
+	return string(utf16.Decode(units))
+}
+
+// readDrawingGroup reads the store of pictures and the default properties
+// of the shapes from the OfficeArtDggContainer.
+func (d *document) readDrawingGroup(b []byte, maxObjects int) {
+	for h, a := range children(b) {
+		switch h.typ {
+		case rtOfficeArtBStore:
+			for ch, e := range children(a) {
+				if len(d.blips) >= maxObjects {
+					break
+				}
+				d.blips = append(d.blips, readFBSE(ch, e))
+			}
+		case rtOfficeArtFOPT:
+			d.shapeDefaults.readProps(a, int(h.inst))
+		}
+	}
+}
+
 // decodeText decodes a TextCharsAtom, in UTF-16, or a TextBytesAtom, whose
 // bytes are the low bytes of UTF-16.
-func decodeText(typ uint16, b []byte) string {
+func decodeText(typ uint16, b []byte) []uint16 {
 	var units []uint16
 	if typ == rtTextCharsAtom {
 		units = make([]uint16, len(b)/2)
@@ -114,157 +242,5 @@ func decodeText(typ uint16, b []byte) string {
 			units[i] = uint16(c)
 		}
 	}
-	return string(utf16.Decode(units))
-}
-
-// readSlide reads the shapes of the slide ref, with their anchors and their
-// texts. It returns the size of the record of the slide.
-func readSlide(s *stream, ref slideRef, maxDepth int) (slide, int) {
-	sl := slide{texts: ref.texts}
-	h, body, ok := s.object(ref.persist)
-	if !ok || h.typ != rtSlide {
-		return sl, len(body)
-	}
-	dg := child(child(body, rtPPDrawing), rtOfficeArtDg)
-	if spgr := child(dg, rtOfficeArtSpgr); spgr != nil {
-		sl.readGroup(spgr, nil, maxDepth)
-	}
-	return sl, len(body)
-}
-
-// transform maps the coordinates of a group onto the coordinates of the
-// slide.
-type transform struct {
-	from, to rect
-}
-
-// apply maps r through t.
-func (t *transform) apply(r rect) rect {
-	if t == nil {
-		return r
-	}
-	sx := (t.to.right - t.to.left) / nonzero(t.from.right-t.from.left)
-	sy := (t.to.bottom - t.to.top) / nonzero(t.from.bottom-t.from.top)
-	return rect{
-		left:   t.to.left + (r.left-t.from.left)*sx,
-		top:    t.to.top + (r.top-t.from.top)*sy,
-		right:  t.to.left + (r.right-t.from.left)*sx,
-		bottom: t.to.top + (r.bottom-t.from.top)*sy,
-	}
-}
-
-func nonzero(v float64) float64 {
-	if v == 0 {
-		return 1
-	}
-	return v
-}
-
-// readGroup reads the shapes of the OfficeArtSpgrContainer b. The first
-// shape of a group is the group itself, with the coordinates of its
-// children (MS-ODRAW 2.2.16).
-func (sl *slide) readGroup(b []byte, t *transform, depth int) {
-	if depth <= 0 {
-		return
-	}
-	first := true
-	for h, body := range children(b) {
-		switch h.typ {
-		case rtOfficeArtSpgr:
-			sl.readGroup(body, t, depth-1)
-		case rtOfficeArtSp:
-			if first {
-				first = false
-				if fspgr := child(body, rtOfficeArtFSPGR); len(fspgr) >= 16 {
-					anchor, ok := anchorOf(body)
-					if ok {
-						from := rect{
-							left:   float64(int32(le.Uint32(fspgr))),
-							top:    float64(int32(le.Uint32(fspgr[4:]))),
-							right:  float64(int32(le.Uint32(fspgr[8:]))),
-							bottom: float64(int32(le.Uint32(fspgr[12:]))),
-						}
-						t = &transform{from: from, to: t.apply(anchor)}
-					}
-				}
-				continue
-			}
-			sl.readShape(body, t)
-		}
-		if len(sl.shapes) > 1<<16 {
-			return
-		}
-	}
-}
-
-// anchorOf returns the anchor of a shape: its client anchor on a slide, or
-// its child anchor in a group.
-func anchorOf(sp []byte) (rect, bool) {
-	if a := child(sp, rtOfficeArtClientAnch); a != nil {
-		switch {
-		case len(a) >= 16:
-			// a RectStruct: top, left, right, bottom
-			return rect{
-				top:    float64(int32(le.Uint32(a))),
-				left:   float64(int32(le.Uint32(a[4:]))),
-				right:  float64(int32(le.Uint32(a[8:]))),
-				bottom: float64(int32(le.Uint32(a[12:]))),
-			}, true
-		case len(a) >= 8:
-			// a SmallRectStruct: top, left, right, bottom
-			return rect{
-				top:    float64(int16(le.Uint16(a))),
-				left:   float64(int16(le.Uint16(a[2:]))),
-				right:  float64(int16(le.Uint16(a[4:]))),
-				bottom: float64(int16(le.Uint16(a[6:]))),
-			}, true
-		}
-	}
-	if a := child(sp, rtOfficeArtChild); len(a) >= 16 {
-		// a RECT: left, top, right, bottom
-		return rect{
-			left:   float64(int32(le.Uint32(a))),
-			top:    float64(int32(le.Uint32(a[4:]))),
-			right:  float64(int32(le.Uint32(a[8:]))),
-			bottom: float64(int32(le.Uint32(a[12:]))),
-		}, true
-	}
-	return rect{}, false
-}
-
-// readShape reads the text of a shape, from its client text box: the text
-// itself, or a reference to a text of the slide list.
-func (sl *slide) readShape(sp []byte, t *transform) {
-	box := child(sp, rtOfficeArtClientText)
-	if box == nil {
-		return
-	}
-	sh := shape{text: text{kind: txOther}}
-	found := false
-	for h, b := range children(box) {
-		switch h.typ {
-		case rtTextHeaderAtom:
-			if len(b) >= 4 {
-				sh.kind = le.Uint32(b)
-			}
-		case rtTextCharsAtom, rtTextBytesAtom:
-			sh.text.text = decodeText(h.typ, b)
-			found = true
-		case rtOutlineTextRefAtom:
-			if len(b) >= 4 {
-				i := int(int32(le.Uint32(b)))
-				if i >= 0 && i < len(sl.texts) {
-					sh.text = sl.texts[i]
-					found = true
-				}
-			}
-		}
-	}
-	if !found || strings.TrimSpace(sh.text.text) == "" {
-		return
-	}
-	if anchor, ok := anchorOf(sp); ok {
-		sh.anchor, sh.hasAnchor = t.apply(anchor), true
-	}
-	sl.shapes = append(sl.shapes, sh)
+	return units
 }

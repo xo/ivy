@@ -1,31 +1,24 @@
 package chart
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"image/color"
 	"math"
-	"strings"
+	"strconv"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/svg"
-	"github.com/xo/zuzu"
-	"github.com/xo/zuzu/scene"
-	zsvg "github.com/xo/zuzu/svg"
-	ztext "github.com/xo/zuzu/text"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
-	"github.com/xo/ivy/internal/font"
 	"github.com/xo/ivy/internal/fontdb"
 )
 
-// This file draws a chart. zuzu lays the spec out and returns its scene.
-// The scene gets the labels on the data, and zuzu writes it as SVG. okage
-// reads the SVG into its tree of paths, with the text as the outlines of
-// its glyphs, and the drawing sends each path to the device. The chart
-// stays vectors, and its text stays vectors too.
+// This file draws a chart: the chart area, the title and the legend. The
+// plot area draws in plane.go for the charts with axes, in pie.go for a pie
+// and in radar.go for a radar chart. The sizes and the gaps are the ones of
+// Office, in points.
 
 // The bounds of the size of the layout of a chart, in points. A chart of
 // another size lays out at the nearest size in the bounds, and scales to its
@@ -33,9 +26,22 @@ import (
 const (
 	minSize = 24
 	maxSize = 4096
-	// maxTreeDepth is the depth of the groups of the tree of okage that
-	// the drawing follows.
-	maxTreeDepth = 64
+)
+
+// The gaps of the layout of a chart, in points.
+const (
+	// pad is the gap between the side of the chart and its parts.
+	pad = 7
+	// gapPart is the gap between the title, the legend and the plot area.
+	gapPart = 6
+	// tickLen is the length of a major tick mark, and minorLen of a minor
+	// one.
+	tickLen  = 4
+	minorLen = 2
+	// gapLabel is the gap between an axis and its labels.
+	gapLabel = 3
+	// thin is the width of the lines of the axes and of the gridlines.
+	thin = 0.75
 )
 
 // Draw draws the chart onto dev, into the rectangle rect of the user space of
@@ -66,67 +72,15 @@ func (c *Chart) Draw(ctx context.Context, dev display.Device, rect okage.Rect) (
 	}
 	w, h = max(w, minSize), max(h, minSize)
 	db := c.fontDatabase()
-	family := c.family(db)
-	src, err := c.Spec(w, h, family)
-	if err != nil {
-		return err
-	}
-	zc, report, err := zuzu.Parse(src)
-	if err != nil {
-		return fmt.Errorf("laying out chart: %w: %w", ivy.ErrFormat, err)
-	}
-	s, report2, err := zc.Render(ctx, zuzu.WithBackground(color.Transparent))
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return fmt.Errorf("laying out chart: %w: %w", ivy.ErrFormat, err)
-	}
-	if len(report)+len(report2) > 0 {
-		c.cfg.Log().Debug("chart: zuzu report", "report", append(report, report2...))
-	}
-	c.decorate(s, family)
-	var b bytes.Buffer
-	if err := zsvg.Write(&b, s); err != nil {
-		return fmt.Errorf("writing chart: %w: %w", ivy.ErrFormat, err)
-	}
-	tree, err := svg.FromData(b.Bytes(), svg.WithFontDatabase(db), svg.WithMaxDepth(maxTreeDepth))
-	if err != nil {
-		return fmt.Errorf("reading chart: %w: %w", ivy.ErrFormat, err)
-	}
-	sw, sh := s.Width, s.Height
-	if !(sw > 0) || !(sh > 0) {
-		sw, sh = w, h
-	}
+	cv := &canvas{c: c, dev: dev, t: newTexter(db, c.font), w: w, h: h}
 	dev.Save()
 	defer dev.Restore()
-	dev.Concat(okage.TransformFromRow(float32(rw/sw), 0, 0, float32(rh/sh), rect.X(), rect.Y()))
-	c.background(dev, sw, sh)
-	drawGroup(dev, tree.Root(), 0)
+	dev.Concat(okage.TransformFromRow(float32(rw/w), 0, 0, float32(rh/h), rect.X(), rect.Y()))
+	cv.draw()
 	if c.truncated {
 		return &ivy.PartialError{Err: fmt.Errorf("chart with more than %d series or %d points: %w", maxSeries, maxPoints, ivy.ErrLimit)}
 	}
 	return nil
-}
-
-// background draws the fill and the border of the chart.
-func (c *Chart) background(dev display.Device, w, h float64) {
-	r, ok := okage.RectFromXYWH(0, 0, float32(w), float32(h))
-	if !ok {
-		return
-	}
-	p := okage.PathFromRect(r)
-	if c.fill.A > 0 {
-		dev.FillPath(p, okage.FillRuleWinding, okage.SolidColor(rgba(c.fill)))
-	}
-	if c.border.A > 0 {
-		dev.StrokePath(p, okage.Stroke{Width: 0.75, MiterLimit: 4}, okage.SolidColor(rgba(c.border)))
-	}
-}
-
-// rgba converts a color to a color of okage.
-func rgba(c color.NRGBA) okage.Color {
-	return okage.ColorFromRGBA8(c.R, c.G, c.B, c.A)
 }
 
 // fontDatabase returns the fonts of the text of the chart: the fonts of
@@ -142,304 +96,388 @@ func (c *Chart) fontDatabase() *svg.FontDatabase {
 // db has it, else the font with the same metrics if db has it, else the
 // sans serif family of db, else the first family of db.
 func (c *Chart) family(db *svg.FontDatabase) string {
-	has := func(name string) bool {
-		if name == "" {
-			return false
-		}
-		for face := range db.Faces() {
-			for _, f := range face.Families {
-				if strings.EqualFold(f.Name, name) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	if has(c.font) {
-		return c.font
-	}
-	if sub, ok := font.Substitute(c.font); ok && has(sub) {
-		return sub
-	}
-	if f := db.FamilyName(svg.FontFamily{Kind: svg.FontFamilySansSerif}); has(f) {
-		return f
-	}
-	for face := range db.Faces() {
-		if len(face.Families) > 0 {
-			return face.Families[0].Name
-		}
-	}
-	return ztext.Family
+	return familyOf(db, c.font)
 }
 
-// decorate adds to the scene what zuzu does not draw from the spec: the
-// labels on the data, the hole of a doughnut and the angle of the first
-// slice of a pie.
-func (c *Chart) decorate(s *scene.Scene, family string) {
-	seen := map[[3]int]bool{}
-	var walk func(marks []scene.Mark, depth int) []scene.Mark
-	walk = func(marks []scene.Mark, depth int) []scene.Mark {
-		if depth > maxTreeDepth {
-			return marks
-		}
-		var added []scene.Mark
-		for i := range marks {
-			m := &marks[i]
-			if m.Type == scene.Group {
-				for j := range m.Items {
-					m.Items[j].Items = walk(m.Items[j].Items, depth+1)
-				}
-				continue
-			}
-			if m.Type == scene.Arc {
-				c.shapeArcs(m)
-			}
-			if l, ok := c.labelMark(m, family, seen); ok {
-				added = append(added, l)
-			}
-		}
-		return append(marks, added...)
-	}
-	root := walk([]scene.Mark{s.Root}, 0)
-	s.Root = root[0]
-	centerTitle(s)
+// box is a rectangle of the layout, by its sides.
+type box struct {
+	x0, y0, x1, y1 float64
 }
 
-// centerTitle puts the title in the middle of the chart, as Office does.
-// zuzu puts the title of a spec of Vega-Lite at its start.
-func centerTitle(s *scene.Scene) {
-	if len(s.Root.Items) == 0 {
+// w returns the width of a box.
+func (b box) w() float64 { return b.x1 - b.x0 }
+
+// h returns the height of a box.
+func (b box) h() float64 { return b.y1 - b.y0 }
+
+// ok says whether a box has an area.
+func (b box) ok() bool {
+	return b.x1 > b.x0 && b.y1 > b.y0 && !math.IsNaN(b.x0+b.x1+b.y0+b.y1) && !math.IsInf(b.x0+b.x1+b.y0+b.y1, 0)
+}
+
+// canvas holds the state of one drawing of a chart.
+type canvas struct {
+	c   *Chart
+	dev display.Device
+	t   *texter
+	// w and h are the size of the layout, in points.
+	w, h float64
+}
+
+// draw draws the whole chart.
+func (cv *canvas) draw() {
+	c := cv.c
+	cv.rect(box{0, 0, cv.w, cv.h}, c.fill, c.border, thin)
+	area := box{pad, pad, cv.w - pad, cv.h - pad}
+	area = cv.title(area)
+	area = cv.legend(area)
+	plotBox, inner := area, false
+	if b := c.plotAt; !math.IsNaN(b[0]) && !math.IsNaN(b[2]) {
+		pb := box{b[0] * cv.w, b[1] * cv.h, (b[0] + b[2]) * cv.w, (b[1] + b[3]) * cv.h}
+		if pb.ok() && pb.w() > 4 && pb.h() > 4 {
+			plotBox, inner = pb, c.plotInner
+		}
+	}
+	if !plotBox.ok() {
 		return
 	}
-	frame := &s.Root.Items[0]
-	for i := range frame.Items {
-		m := &frame.Items[i]
-		if m.Type != scene.Group || m.Role != "title" {
-			continue
-		}
-		for j := range m.Items {
-			g := &m.Items[j]
-			for k := range g.Items {
-				lines := &g.Items[k]
-				if lines.Role != "title-text" {
-					continue
-				}
-				for l := range lines.Items {
-					lines.Items[l].X = s.Width/2 - frame.X - g.X
-					lines.Items[l].Align = "center"
-				}
-			}
-		}
-	}
-}
-
-// datum returns the row of an item of the data of the chart, which has the
-// field p, or false for an item of a guide.
-func datum(it *scene.Item) (map[string]any, int, bool) {
-	row, ok := it.Datum.(map[string]any)
-	if !ok {
-		return nil, 0, false
-	}
-	p, ok := row["p"].(float64)
-	if !ok {
-		return nil, 0, false
-	}
-	return row, int(p), true
-}
-
-// rowNumber returns a number field of a row, or NaN.
-func rowNumber(row map[string]any, key string) float64 {
-	if v, ok := row[key].(float64); ok {
-		return v
-	}
-	return math.NaN()
-}
-
-// shapeArcs gives the arcs of a pie the hole of a doughnut and the angle of
-// the first slice.
-func (c *Chart) shapeArcs(m *scene.Mark) {
-	for i := range m.Items {
-		it := &m.Items[i]
-		_, p, ok := datum(it)
-		if !ok || p < 0 || p >= len(c.plots) {
-			continue
-		}
-		pl := c.plots[p]
-		if pl.hole > 0 {
-			it.InnerRadius = pl.hole * it.OuterRadius
-		}
-		a := pl.firstAngle * math.Pi / 180
-		it.StartAngle += a
-		it.EndAngle += a
-	}
-}
-
-// labelMark returns a mark of the labels on the points of the mark m, or
-// false when its points have no labels. seen holds the points that have a
-// label already, so that the points of a line get one label.
-func (c *Chart) labelMark(m *scene.Mark, family string, seen map[[3]int]bool) (scene.Mark, bool) {
-	out := scene.Mark{Type: scene.Text, Role: "ivy-labels"}
-	for i := range m.Items {
-		it := &m.Items[i]
-		row, p, ok := datum(it)
-		if !ok || p < 0 || p >= len(c.plots) {
-			continue
-		}
-		l, _ := row["l"].(string)
-		if l == "" {
-			continue
-		}
-		key := [3]int{p, int(rowNumber(row, "k")), int(rowNumber(row, "i"))}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		pl := c.plots[p]
-		style := c.labelStyle(pl, int(rowNumber(row, "k")))
-		t := scene.Item{
-			Text: scene.Lines{l}, Font: family, FontSize: style.size,
-			Fill: scene.Paint{Color: css(style.color)}, Align: "center", Baseline: "middle",
-		}
-		if style.bold {
-			t.FontWeight = "bold"
-		}
-		if !place(&t, m.Type, it, pl, rowNumber(row, "v"), style.size) {
-			continue
-		}
-		out.Items = append(out.Items, t)
-	}
-	return out, len(out.Items) > 0
-}
-
-// labelStyle returns the style of the labels of the series k of a plot.
-func (c *Chart) labelStyle(p *plot, k int) textStyle {
-	l := p.labels
-	if k >= 0 && k < len(p.series) && p.series[k].labels.set {
-		l = p.series[k].labels
-	}
-	base := textStyle{size: math.Round(c.text.size * 0.9), color: labelGray, hasColor: true}
-	return l.text.merge(base)
-}
-
-// place puts the label t next to the item it of a mark of the type typ.
-// It returns false for an item that has no place.
-func place(t *scene.Item, typ string, it *scene.Item, p *plot, v, size float64) bool {
-	gap := size / 3
-	switch typ {
-	case scene.Rect:
-		x, y, w, h := box(it)
-		inside := p.grouping == "stacked" || p.grouping == "percentStacked" || p.labels.position == "ctr"
-		switch {
-		case inside:
-			t.X, t.Y = x+w/2, y+h/2
-		case p.horizontal && v < 0:
-			t.X, t.Y, t.Align = x-gap, y+h/2, "right"
-		case p.horizontal:
-			t.X, t.Y, t.Align = x+w+gap, y+h/2, "left"
-		case v < 0:
-			t.X, t.Y, t.Baseline = x+w/2, y+h+gap, "top"
-		default:
-			t.X, t.Y, t.Baseline = x+w/2, y-gap, "bottom"
-		}
-	case scene.Arc:
-		a := (it.StartAngle + it.EndAngle) / 2
-		r := it.InnerRadius + (it.OuterRadius-it.InnerRadius)*0.6
-		if it.InnerRadius > 0 {
-			r = (it.InnerRadius + it.OuterRadius) / 2
-		}
-		t.X, t.Y = it.X+r*math.Sin(a), it.Y-r*math.Cos(a)
-	case scene.Symbol:
-		r := 3.0
-		if it.Size != nil && *it.Size > 0 {
-			r = math.Sqrt(*it.Size) / 2
-		}
-		t.X, t.Y, t.Baseline = it.X, it.Y-r-gap, "bottom"
-	case scene.Line, scene.Area:
-		t.X, t.Y, t.Baseline = it.X, it.Y-gap, "bottom"
+	switch {
+	case c.unsupported != "" || len(c.plots) == 0:
+		cv.frame(plotBox)
+	case c.plots[0].kind == kindPie:
+		cv.pie(plotBox, inner)
+	case c.plots[0].kind == kindRadar:
+		cv.radar(plotBox)
 	default:
-		return false
+		cv.plane(plotBox, inner)
 	}
-	return !math.IsNaN(t.X) && !math.IsNaN(t.Y) && !math.IsInf(t.X, 0) && !math.IsInf(t.Y, 0)
 }
 
-// box returns the box of a rect item, with a width and a height that are
-// not negative.
-func box(it *scene.Item) (x, y, w, h float64) {
-	x, y, w, h = it.X, it.Y, it.Width, it.Height
-	if w == 0 && it.X2 != 0 {
-		w = it.X2 - it.X
-	}
-	if h == 0 && it.Y2 != 0 {
-		h = it.Y2 - it.Y
-	}
-	if w < 0 {
-		x, w = x+w, -w
-	}
-	if h < 0 {
-		y, h = y+h, -h
-	}
-	return x, y, w, h
-}
-
-// drawGroup draws a group of the tree of okage and its children.
-func drawGroup(dev display.Device, g *svg.Group, depth int) {
-	if g == nil || depth > maxTreeDepth {
+// rect fills and strokes a box. A transparent color draws nothing.
+func (cv *canvas) rect(b box, fill, line color.NRGBA, width float64) {
+	r, ok := okage.RectFromLTRB(float32(b.x0), float32(b.y0), float32(b.x1), float32(b.y1))
+	if !ok {
 		return
 	}
-	op := g.Opacity().Get()
-	if op <= 0 {
-		return
+	p := okage.PathFromRect(r)
+	if fill.A > 0 {
+		cv.dev.FillPath(p, okage.FillRuleWinding, okage.SolidColor(rgba(fill)))
 	}
-	dev.Save()
-	defer dev.Restore()
-	dev.Concat(g.Transform())
-	if cp, ok := g.ClipPath(); ok {
-		p := clipPath(cp, depth)
-		if p == nil {
-			return
-		}
-		dev.ClipPath(p, okage.FillRuleWinding)
-	}
-	if op < 1 {
-		dev.BeginGroup(display.Group{Opacity: op, Isolated: true})
-		defer dev.EndGroup()
-	}
-	for _, n := range g.Children() {
-		switch n := n.(type) {
-		case *svg.Group:
-			drawGroup(dev, n, depth+1)
-		case *svg.Path:
-			drawPath(dev, n)
-		case *svg.Text:
-			drawGroup(dev, n.Flattened(), depth+1)
-		}
+	if line.A > 0 && width > 0 {
+		cv.dev.StrokePath(p, okage.Stroke{Width: float32(width), MiterLimit: 4}, okage.SolidColor(rgba(line)))
 	}
 }
 
-// clipPath returns the area of a clip path as one path in the user space
-// of the group that it clips, or nil for an empty area.
-func clipPath(cp *svg.ClipPath, depth int) *okage.Path {
+// line strokes a line from (x0, y0) to (x1, y1).
+func (cv *canvas) line(x0, y0, x1, y1 float64, col color.NRGBA, width float64) {
+	if col.A == 0 || !(width > 0) {
+		return
+	}
 	pb := okage.NewPathBuilder()
-	var add func(g *svg.Group, t okage.Transform, depth int)
-	add = func(g *svg.Group, t okage.Transform, depth int) {
-		if g == nil || depth > maxTreeDepth {
+	pb.MoveTo(float32(x0), float32(y0))
+	pb.LineTo(float32(x1), float32(y1))
+	if p, ok := pb.Finish(); ok {
+		cv.dev.StrokePath(p, okage.Stroke{Width: float32(width), MiterLimit: 4}, okage.SolidColor(rgba(col)))
+	}
+}
+
+// title draws the title of the chart, and returns the area below it.
+func (cv *canvas) title(area box) box {
+	c := cv.c
+	if len(c.title) == 0 {
+		return area
+	}
+	st := c.titleText
+	var lines []string
+	for _, l := range c.title {
+		lines = append(lines, cv.t.wrap(l, st, cv.w*0.8)...)
+	}
+	b := block{lines: lines, st: st}
+	_, h := cv.t.size(b)
+	if at := c.titleAt; !math.IsNaN(at[0]) && !math.IsNaN(at[1]) {
+		cv.t.draw(cv.dev, b, at[0]*cv.w, at[1]*cv.h, alignStart, alignStart, 0)
+		if at[1]*cv.h < cv.h/3 {
+			area.y0 = max(area.y0, at[1]*cv.h+h+gapPart)
+		}
+		return area
+	}
+	cv.t.draw(cv.dev, b, cv.w/2, area.y0, alignCenter, alignStart, 0)
+	if !c.titleOver {
+		area.y0 += h + gapPart
+	}
+	return area
+}
+
+// entry is an entry of the legend.
+type entry struct {
+	text string
+	// line draws the symbol as a line with a marker, and not as a square.
+	line bool
+	fill color.NRGBA
+	// noFill draws the square without a fill.
+	noFill bool
+	// stroke is the color of the outline of the square, or of the line.
+	stroke    color.NRGBA
+	lineWidth float64
+	dash      string
+	// marker is the marker on the line, or empty.
+	marker string
+	s      *series
+	p      *plot
+}
+
+// entries returns the entries of the legend: one for each category of a
+// pie or of a single series with a color for each point, else one for each
+// series.
+func (cv *canvas) entries() []entry {
+	c := cv.c
+	var out []entry
+	add := func(e entry) {
+		if !c.legendHidden[len(out)] || len(out) >= maxSeries {
+			out = append(out, e)
 			return
 		}
-		t = t.PreConcat(g.Transform())
-		for _, n := range g.Children() {
-			switch n := n.(type) {
-			case *svg.Group:
-				add(n, t, depth+1)
-			case *svg.Text:
-				add(n.Flattened(), t, depth+1)
-			case *svg.Path:
-				if p, ok := display.Clone(n.Data()).Transform(t); ok {
-					pb.PushPath(p)
+		out = append(out, entry{text: "\x00"})
+	}
+	first := c.plots[0]
+	if len(c.plots) == 1 && first.varyColors && len(first.series) == 1 && (first.kind == kindPie || first.kind == kindBar) {
+		s := first.series[0]
+		cats := c.categories()
+		for i := range min(len(cats), max(len(s.vals), len(s.cats)), maxSeries) {
+			add(entry{text: cats[i], fill: c.pointColor(s, i, true), stroke: cv.outline(s), p: first, s: s})
+		}
+		return visible(out)
+	}
+	if first.special == "waterfall" {
+		for i, name := range []string{"Increase", "Decrease", "Total"} {
+			add(entry{text: name, fill: c.palette(i)})
+		}
+		return visible(out)
+	}
+	for _, p := range c.plots {
+		for _, s := range p.series {
+			name := s.name
+			if name == "" {
+				name = "Series " + strconv.Itoa(s.index+1)
+			}
+			e := entry{text: name, fill: s.color, noFill: s.noFill, stroke: cv.outline(s), p: p, s: s}
+			if p.kind == kindLine || p.kind == kindScatter && !p.bubbles || p.kind == kindRadar && !p.filled {
+				e.line = cv.drawsLine(p, s)
+				e.stroke, e.lineWidth, e.dash = s.color, s.lineWidth, s.dash
+				e.marker = cv.markerOf(p, s)
+				if !e.line && e.marker == "" {
+					e.marker = "square"
 				}
 			}
+			add(e)
 		}
 	}
-	add(cp.Root(), cp.Transform(), depth+1)
+	return visible(out)
+}
+
+// visible returns the entries that the legend does not leave out.
+func visible(list []entry) []entry {
+	out := list[:0]
+	for _, e := range list {
+		if e.text != "\x00" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// outline returns the color of the outline of a bar, a slice or a square of
+// the legend of a series, or transparent.
+func (cv *canvas) outline(s *series) color.NRGBA {
+	if s.hasLine && !s.noLine {
+		return s.line
+	}
+	return color.NRGBA{}
+}
+
+// legendLayout is the layout of the legend: its box, and the place of each
+// entry.
+type legendLayout struct {
+	b       box
+	entries []entry
+	// at are the places of the entries: the left side and the middle of
+	// the line of each.
+	at [][2]float64
+	// symW is the width of the symbol of an entry.
+	symW float64
+}
+
+// legend draws the legend, and returns the area that it leaves to the plot.
+func (cv *canvas) legend(area box) box {
+	c := cv.c
+	if c.legend == "" || len(c.plots) == 0 || c.unsupported != "" {
+		return area
+	}
+	es := cv.entries()
+	if len(es) == 0 {
+		return area
+	}
+	keep := area
+	st := c.legendText
+	em := st.size
+	line := false
+	for _, e := range es {
+		line = line || e.line
+	}
+	symW := em * 0.6
+	if line {
+		symW = em * 2.2
+	}
+	symGap := em * 0.35
+	widths := make([]float64, len(es))
+	maxW := 0.0
+	for i, e := range es {
+		widths[i] = symW + symGap + cv.t.width(e.text, st)
+		maxW = max(maxW, widths[i])
+	}
+	l := legendLayout{entries: es, symW: symW}
+	vertical := c.legend == "right" || c.legend == "left" || c.legend == "top-right"
+	if vertical {
+		rowH := em * 1.35
+		maxW = min(maxW, cv.w*0.45)
+		n := max(1, min(len(es), int((area.h())/rowH)))
+		lh := float64(n) * rowH
+		x := area.x1 - maxW
+		if c.legend == "left" {
+			x = area.x0
+		}
+		y := (cv.h - lh) / 2
+		if c.legend == "top-right" {
+			y = area.y0
+		}
+		y = max(area.y0, y)
+		l.b = box{x, y, x + maxW, y + lh}
+		for i := range n {
+			l.at = append(l.at, [2]float64{x, y + (float64(i)+0.5)*rowH})
+		}
+		switch c.legend {
+		case "left":
+			area.x0 = l.b.x1 + gapPart
+		default:
+			area.x1 = l.b.x0 - gapPart
+		}
+	} else {
+		rowH := em * 1.3
+		space := em
+		limit := area.w()
+		var rows [][]int
+		var rowW []float64
+		cur, curW := []int{}, 0.0
+		for i, wi := range widths {
+			add := wi
+			if len(cur) > 0 {
+				add += space
+			}
+			if len(cur) > 0 && curW+add > limit {
+				rows, rowW = append(rows, cur), append(rowW, curW)
+				cur, curW, add = []int{}, 0, wi
+			}
+			cur, curW = append(cur, i), curW+add
+		}
+		rows, rowW = append(rows, cur), append(rowW, curW)
+		rows = rows[:min(len(rows), max(1, int(area.h()/2/rowH)))]
+		lh := float64(len(rows)) * rowH
+		y := area.y1 - lh
+		if c.legend == "top" {
+			y = area.y0
+		}
+		widest := 0.0
+		for r, row := range rows {
+			x := (cv.w - rowW[r]) / 2
+			widest = max(widest, rowW[r])
+			for _, i := range row {
+				l.at = append(l.at, [2]float64{x, y + (float64(r)+0.5)*rowH})
+				x += widths[i] + space
+			}
+		}
+		l.entries = nil
+		for _, row := range rows {
+			for _, i := range row {
+				l.entries = append(l.entries, es[i])
+			}
+		}
+		l.b = box{(cv.w - widest) / 2, y, (cv.w + widest) / 2, y + lh}
+		if c.legend == "top" {
+			area.y0 = l.b.y1 + gapPart
+		} else {
+			area.y1 = l.b.y0 - gapPart
+		}
+	}
+	if at := c.legendAt; !math.IsNaN(at[0]) && !math.IsNaN(at[1]) {
+		dx, dy := at[0]*cv.w-l.b.x0, at[1]*cv.h-l.b.y0
+		for i := range l.at {
+			l.at[i][0] += dx
+			l.at[i][1] += dy
+		}
+	}
+	cv.drawLegend(l)
+	if c.legendOver {
+		return keep
+	}
+	return area
+}
+
+// drawLegend draws the entries of a legend.
+func (cv *canvas) drawLegend(l legendLayout) {
+	st := cv.c.legendText
+	em := st.size
+	for i, at := range l.at {
+		if i >= len(l.entries) {
+			break
+		}
+		e := l.entries[i]
+		x, y := at[0], at[1]
+		if e.line {
+			w := min(e.lineWidth, 3)
+			if !(w > 0) {
+				w = 2.25
+			}
+			cv.stroke(polyline([][2]float64{{x, y}, {x + l.symW, y}}), e.stroke, w, e.dash, false)
+		}
+		switch {
+		case e.marker != "" && e.s != nil:
+			cv.marker(e.marker, x+l.symW/2, y, min(cv.markerSize(e.p, e.s), em*0.8), e.s, e.stroke)
+		case !e.line:
+			q := em * 0.6
+			b := box{x + (l.symW-q)/2, y - q/2, x + (l.symW+q)/2, y + q/2}
+			fill := e.fill
+			if e.noFill {
+				fill = color.NRGBA{}
+			}
+			cv.rect(b, fill, e.stroke, thin)
+		}
+		cv.t.draw(cv.dev, block{lines: []string{e.text}, st: st}, x+l.symW+em*0.35, y, alignStart, alignCenter, 0)
+	}
+}
+
+// frame draws the plot area of a chart that draws as a frame: a border and
+// the name of its type.
+func (cv *canvas) frame(b box) {
+	c := cv.c
+	cv.rect(b, color.NRGBA{}, gridGray, thin)
+	name := c.unsupported
+	if name == "" {
+		name = "empty chart"
+	}
+	st := c.text
+	cv.t.draw(cv.dev, block{lines: []string{name}, st: st}, (b.x0+b.x1)/2, (b.y0+b.y1)/2, alignCenter, alignCenter, 0)
+}
+
+// polyline returns an open path through points.
+func polyline(points [][2]float64) *okage.Path {
+	pb := okage.NewPathBuilder()
+	for i, pt := range points {
+		if i == 0 {
+			pb.MoveTo(float32(pt[0]), float32(pt[1]))
+		} else {
+			pb.LineTo(float32(pt[0]), float32(pt[1]))
+		}
+	}
 	p, ok := pb.Finish()
 	if !ok {
 		return nil
@@ -447,95 +485,41 @@ func clipPath(cp *svg.ClipPath, depth int) *okage.Path {
 	return p
 }
 
-// drawPath fills and strokes a path of the tree of okage, in its paint
-// order.
-func drawPath(dev display.Device, p *svg.Path) {
-	if !p.IsVisible() || p.Data() == nil {
-		return
-	}
-	fill := func() {
-		f, ok := p.Fill()
-		if !ok {
-			return
-		}
-		if b := p.Data().Bounds(); b.Width() == 0 || b.Height() == 0 {
-			return
-		}
-		sh := shader(f.Paint(), f.Opacity())
-		if sh == nil {
-			return
-		}
-		rule := okage.FillRuleWinding
-		if f.Rule() == svg.FillRuleEvenOdd {
-			rule = okage.FillRuleEvenOdd
-		}
-		dev.FillPath(p.Data(), rule, sh)
-	}
-	stroke := func() {
-		s, ok := p.Stroke()
-		if !ok {
-			return
-		}
-		sh := shader(s.Paint(), s.Opacity())
-		if sh == nil {
-			return
-		}
-		st := s.ToTinySkia()
-		if dash, ok := s.Dasharray(); ok {
-			if d, ok := okage.NewStrokeDash(dash, s.Dashoffset()); ok {
-				st.Dash = d
-			}
-		}
-		dev.StrokePath(p.Data(), st, sh)
-	}
-	if p.PaintOrder() == svg.PaintOrderStrokeAndFill {
-		stroke()
-		fill()
-		return
-	}
-	fill()
-	stroke()
+// dashes maps the preset dashes of DrawingML to their dashes and gaps, in
+// widths of the line.
+var dashes = map[string][]float32{
+	"dash": {4, 3}, "dashDot": {4, 3, 1, 3}, "dot": {1, 3}, "lgDash": {8, 3}, "lgDashDot": {8, 3, 1, 3},
+	"lgDashDotDot": {8, 3, 1, 3, 1, 3}, "sysDash": {3, 1}, "sysDot": {1, 1}, "sysDashDot": {3, 1, 1, 1},
+	"sysDashDotDot": {3, 1, 1, 1, 1, 1},
 }
 
-// shader returns the shader of a paint of the tree of okage, or nil for a
-// paint that the drawing does not draw, a pattern.
-func shader(paint svg.Paint, opacity svg.Opacity) okage.Shader {
-	switch p := paint.(type) {
-	case svg.Color:
-		return okage.SolidColor(okage.ColorFromRGBA8(p.Red, p.Green, p.Blue, opacity.ToU8()))
-	case *svg.LinearGradient:
-		mode, stops := gradient(&p.BaseGradient, opacity)
-		sh, ok := okage.NewLinearGradient(okage.PointFromXY(p.X1(), p.Y1()), okage.PointFromXY(p.X2(), p.Y2()),
-			stops, mode, p.Transform())
-		if ok {
-			return sh
+// stroke strokes a path with a color, a width, a preset dash, and round
+// joins when round is set.
+func (cv *canvas) stroke(p *okage.Path, col color.NRGBA, width float64, dash string, round bool) {
+	if p == nil || col.A == 0 || !(width > 0) {
+		return
+	}
+	st := okage.Stroke{Width: float32(width), MiterLimit: 4}
+	if round {
+		st.LineJoin, st.LineCap = okage.LineJoinRound, okage.LineCapRound
+	}
+	if d, ok := dashes[dash]; ok {
+		arr := make([]float32, len(d))
+		for i, v := range d {
+			arr[i] = v * float32(width)
 		}
-	case *svg.RadialGradient:
-		mode, stops := gradient(&p.BaseGradient, opacity)
-		sh, ok := okage.NewRadialGradient(okage.PointFromXY(p.Fx(), p.Fy()), p.Fr().Get(),
-			okage.PointFromXY(p.Cx(), p.Cy()), p.R().Get(), stops, mode, p.Transform())
-		if ok {
-			return sh
+		if sd, ok := okage.NewStrokeDash(arr, 0); ok {
+			st.Dash = sd
+			st.LineCap = okage.LineCapButt
 		}
 	}
-	return nil
+	cv.dev.StrokePath(p, st, okage.SolidColor(rgba(col)))
 }
 
-// gradient returns the spread mode and the stops of a gradient of the tree
-// of okage, as resvg draws them.
-func gradient(g *svg.BaseGradient, opacity svg.Opacity) (okage.SpreadMode, []okage.GradientStop) {
-	mode := okage.SpreadModePad
-	switch g.SpreadMethod() {
-	case svg.SpreadMethodReflect:
-		mode = okage.SpreadModeReflect
-	case svg.SpreadMethodRepeat:
-		mode = okage.SpreadModeRepeat
+// fill fills a path with a color.
+func (cv *canvas) fill(p *okage.Path, col color.NRGBA) {
+	if p == nil || col.A == 0 {
+		return
 	}
-	stops := make([]okage.GradientStop, 0, len(g.Stops()))
-	for _, s := range g.Stops() {
-		c := s.Color()
-		stops = append(stops, okage.NewGradientStop(s.Offset().Get(),
-			okage.ColorFromRGBA8(c.Red, c.Green, c.Blue, s.Opacity().Mul(opacity).ToU8())))
-	}
-	return mode, stops
+	cv.dev.FillPath(p, okage.FillRuleWinding, okage.SolidColor(rgba(col)))
 }

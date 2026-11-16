@@ -387,6 +387,10 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		s.set("margin-top", pt(distT))
 		s.set("margin-bottom", pt(distB))
 	default:
+		if c.margin != "" {
+			c.marginDrawing(g, w, h, x, pv, docAlt(n))
+			return
+		}
 		s.set("position", "absolute")
 		s.set("left", pt(x))
 		switch pv.relative {
@@ -433,6 +437,175 @@ func vmlLength(s string) float64 {
 	return min(max(v/emuPerPoint, 0), maxDrawingSize)
 }
 
+// pageTop returns the top of a drawing of a header or a footer in the box
+// of its floats, from its top y on the page area. The box of a header is
+// at the distance of the header from the top of the paper, and the box of
+// a footer at the distance of the footer from the bottom.
+func (c *converter) pageTop(y float64) float64 {
+	sec := c.sections[c.section]
+	if c.margin == "footer" {
+		return y + sec.top - (sec.height - min(sec.footer, sec.bottom))
+	}
+	return y + sec.top - min(sec.header, sec.top)
+}
+
+// marginDrawing writes a drawing of a header or a footer that does not take
+// part in the flow of the text, such as a picture watermark, at its place on
+// the page. x is its place in the column, from its wp:positionH.
+func (c *converter) marginDrawing(g roxmltree.Node, w, h, x float64, pv position, alt string) {
+	sec := c.sections[c.section]
+	areaH := sec.height - sec.top - sec.bottom
+	y := pv.offset
+	switch pv.relative {
+	case "page":
+		y -= sec.top
+	case "margin", "topMargin":
+	default:
+		y += c.paragraphTop()
+	}
+	switch pv.align {
+	case "top":
+		y = 0
+	case "bottom":
+		y = areaH - h
+	case "center":
+		y = (areaH - h) / 2
+	}
+	var s css
+	s.set("position", "absolute")
+	s.set("left", pt(x))
+	s.set("top", pt(c.pageTop(y)))
+	s.set("width", pt(w))
+	// Word draws the drawings of a header behind the text of the page
+	s.set("z-index", "-1")
+	w0 := c.w
+	c.w = &c.floats
+	defer func() { c.w = w0 }()
+	c.w.WriteString(`<div style="` + attrText(s.String()) + `">`)
+	c.graphic(g, w, h, alt)
+	c.w.WriteString("</div>")
+}
+
+// footerLine is the height that the paragraph of a footer takes for the
+// place of its drawings: one line of text of 10 points.
+const footerLine = 11.5
+
+// paragraphTop returns the top of the paragraph of a header or a footer on
+// the page area: the distance of the header from the top of the paper, or
+// one line above the distance of the footer from the bottom. A drawing that
+// a paragraph places takes it as its origin.
+func (c *converter) paragraphTop() float64 {
+	sec := c.sections[c.section]
+	if c.margin == "footer" {
+		return sec.height - sec.footer - footerLine - sec.top
+	}
+	return sec.header - sec.top
+}
+
+// vmlStyle returns the declarations of the style of a VML shape, with
+// lower case names.
+func vmlStyle(n roxmltree.Node) map[string]string {
+	m := map[string]string{}
+	for decl := range strings.SplitSeq(ooxml.Attr(n, "style"), ";") {
+		k, v, ok := strings.Cut(decl, ":")
+		if ok && len(m) < 64 {
+			m[strings.TrimSpace(strings.ToLower(k))] = strings.TrimSpace(v)
+		}
+	}
+	return m
+}
+
+// vmlFraction parses a fraction of VML, such as "0.5" or "19661f", which
+// is 19661/65536.
+func vmlFraction(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	div := 1.0
+	if rest, ok := strings.CutSuffix(s, "f"); ok {
+		s, div = rest, 65536
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil || v != v || v < -1e9 || v > 1e9 {
+		return 0, false
+	}
+	return v / div, true
+}
+
+// marginPict writes a VML shape of a header or a footer whose position is
+// absolute, such as a picture watermark, at its place on the page. It
+// returns false for a shape that flows with the text.
+func (c *converter) marginPict(shape roxmltree.Node, src string, w, h, opacity float64) bool {
+	st := vmlStyle(shape)
+	if st["position"] != "absolute" || w <= 0 || h <= 0 {
+		return false
+	}
+	sec := c.sections[c.section]
+	areaW := sec.width - sec.left - sec.right - sec.gutter
+	areaH := sec.height - sec.top - sec.bottom
+	x, y := vmlLength(st["margin-left"]), vmlLength(st["margin-top"])
+	if v := strings.TrimSpace(st["margin-left"]); strings.HasPrefix(v, "-") {
+		x = -vmlLength(v[1:])
+	}
+	if v := strings.TrimSpace(st["margin-top"]); strings.HasPrefix(v, "-") {
+		y = -vmlLength(v[1:])
+	}
+	switch st["mso-position-horizontal-relative"] {
+	case "page":
+		x -= sec.left + sec.gutter
+	case "left-margin-area", "inner-margin-area":
+		x -= sec.left
+	}
+	switch st["mso-position-horizontal"] {
+	case "left", "inside":
+		x = 0
+	case "right", "outside":
+		x = areaW - w
+	case "center":
+		x = (areaW - w) / 2
+	}
+	switch st["mso-position-vertical-relative"] {
+	case "page":
+		y -= sec.top
+	case "margin", "top-margin-area":
+	default:
+		y += c.paragraphTop()
+	}
+	switch st["mso-position-vertical"] {
+	case "top":
+		y = 0
+	case "bottom":
+		y = areaH - h
+	case "center":
+		y = (areaH - h) / 2
+	}
+	var s css
+	s.set("position", "absolute")
+	s.set("left", pt(x))
+	s.set("top", pt(c.pageTop(y)))
+	s.set("width", pt(w))
+	s.set("height", pt(h))
+	s.set("z-index", "-1")
+	if opacity < 1 {
+		s.set("opacity", strconv.FormatFloat(opacity, 'f', 3, 64))
+	}
+	c.floats.WriteString(`<img src="` + attrText(src) + `" alt="" style="` + attrText(s.String()) + `"/>`)
+	return true
+}
+
+// washout returns the opacity of a picture of VML with the gain and the
+// black level of its v:imagedata. Word washes a watermark out with a gain
+// g and a black level of (1-g)/2, which draws the picture as with an
+// opacity of g over white.
+func washout(d roxmltree.Node) float64 {
+	g, ok := vmlFraction(ooxml.Attr(d, "gain"))
+	if !ok || !(g > 0 && g < 1) {
+		return 1
+	}
+	if b, ok := vmlFraction(ooxml.Attr(d, "blacklevel")); !ok || b <= 0 {
+		return 1
+	}
+	return max(g, 0.05)
+}
+
 // pict converts a w:pict or a w:object element, which hold shapes of VML:
 // an image of v:imagedata or the text of v:textbox.
 func (c *converter) pict(n roxmltree.Node) {
@@ -451,10 +624,19 @@ func (c *converter) pict(n roxmltree.Node) {
 				continue
 			}
 			w, h := vmlSize(d)
+			opacity := washout(d)
+			if c.margin != "" {
+				if shape, ok := d.Parent(); ok && c.marginPict(shape, src, w, h, opacity) {
+					return
+				}
+			}
 			var s css
 			if w > 0 && h > 0 {
 				s.set("width", pt(w))
 				s.set("height", pt(h))
+			}
+			if opacity < 1 {
+				s.set("opacity", strconv.FormatFloat(opacity, 'f', 3, 64))
 			}
 			c.w.WriteString(`<img src="` + attrText(src) + `" alt="" style="` + attrText(s.String()) + `"/>`)
 			return

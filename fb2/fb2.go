@@ -6,7 +6,8 @@
 // in its binary elements, as base64, and the package decodes them into the
 // files that the document links to. The cover is the preview. The layout
 // puts the document on the pages of an ebook, and Page lays it out only as
-// far as the page that a program asks for.
+// far as the page that a program asks for. As in calibre, the first page
+// shows the cover image, scaled to fit the page.
 //
 // The package reads UTF-8, UTF-16 and each encoding of the WHATWG Encoding
 // Standard, such as windows-1251 and KOI8-R. It reads a file of another
@@ -64,10 +65,12 @@ func WithConfig(cfg ivy.Config) Option {
 
 // Document is an open FictionBook file.
 type Document struct {
-	lim  ivy.Limits
-	log  *slog.Logger
-	root roxmltree.Node
-	info ivy.Info
+	lim ivy.Limits
+	log *slog.Logger
+	// fonts are the fonts of the configuration, for the layout.
+	fonts ebook.Fonts
+	root  roxmltree.Node
+	info  ivy.Info
 	// cover is the id of the binary of the cover, or "".
 	cover string
 	// annotation is the annotation of the title-info, if ok is true.
@@ -127,7 +130,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if root.TagName().Name() != "FictionBook" {
 		return nil, fmt.Errorf("xml of root element %s, not FictionBook: %w", root.TagName().Name(), ivy.ErrFormat)
 	}
-	d = &Document{lim: lim, log: log, root: root, binaries: make(map[string]binary)}
+	d = &Document{lim: lim, log: log, fonts: ebook.FontsOf(o.cfg), root: root, binaries: make(map[string]binary)}
 	for n := range root.Children() {
 		switch name(n) {
 		case "description":
@@ -281,7 +284,7 @@ func (d *Document) Page(ctx context.Context, n int) (ivy.Page, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Describe satisfies the ivy.Describer interface. It reads the title-info

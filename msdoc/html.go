@@ -3,6 +3,8 @@ package msdoc
 import (
 	"fmt"
 	"html"
+	"iter"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -18,25 +20,79 @@ type page struct {
 // margins of Word 97 (MS-DOC 2.6.4).
 var letter = page{width: 12240, height: 15840, top: 1440, right: 1800, bottom: 1440, left: 1800}
 
+// section is a section of the document: the character where it starts,
+// and its kind of break (MS-DOC 2.9.23).
+type section struct {
+	cp  uint32
+	bkc int
+}
+
+// The kinds of the break of a section.
+const (
+	bkcContinuous = 0
+	bkcNewPage    = 2
+)
+
+// sectionList is the sections of the document, in order.
+type sectionList []section
+
+// continuous reports whether a section that is continuous starts at the
+// character cp.
+func (sl sectionList) continuous(cp uint32) bool {
+	i := sort.Search(len(sl), func(i int) bool { return sl[i].cp >= cp })
+	return i < len(sl) && sl[i].cp == cp && sl[i].bkc == bkcContinuous
+}
+
+// sepx returns the modifiers of the section i of the PlcfSed plc of n
+// sections, or nil (MS-DOC 2.8.26 and 2.9.253).
+func (p *parser) sepx(plc []byte, n, i int) []byte {
+	sed := plc[4*(n+1)+12*i:]
+	fc := u32(sed, 2)
+	word := p.s.word
+	if fc == 0xFFFFFFFF || uint64(fc)+2 > uint64(len(word)) {
+		return nil
+	}
+	cb := int(u16(word, int(fc)))
+	start := int(fc) + 2
+	return word[start:min(start+cb, len(word))]
+}
+
+// sedPlc returns the PlcfSed and its number of sections.
+func (p *parser) sedPlc() ([]byte, int) {
+	plc := p.s.part(fcPlcfSed)
+	n := (len(plc) - 4) / 16
+	if n < 1 {
+		return nil, 0
+	}
+	return plc, min(n, p.lim.MaxObjects)
+}
+
+// sections reads the start and the kind of break of each section.
+func (p *parser) sections() sectionList {
+	plc, n := p.sedPlc()
+	sl := make(sectionList, 0, n)
+	for i := range n {
+		sec := section{cp: u32(plc, 4*i), bkc: bkcNewPage}
+		for s := range p.sectionSprms(p.sepx(plc, n, i)) {
+			if s.op == sprmSBkc {
+				sec.bkc = int(s.byteValue())
+			}
+		}
+		sl = append(sl, sec)
+	}
+	sort.SliceStable(sl, func(i, j int) bool { return sl[i].cp < sl[j].cp })
+	return sl
+}
+
 // firstPage reads the size of the pages of the first section, from the
 // PlcfSed and its Sepx (MS-DOC 2.8.26 and 2.9.253).
 func (p *parser) firstPage() page {
 	pg := letter
-	plc := p.s.part(fcPlcfSed)
-	n := (len(plc) - 4) / 16
+	plc, n := p.sedPlc()
 	if n < 1 {
 		return pg
 	}
-	sed := plc[4*(n+1):]
-	fc := u32(sed, 2)
-	word := p.s.word
-	if fc == 0xFFFFFFFF || uint64(fc)+2 > uint64(len(word)) {
-		return pg
-	}
-	cb := int(u16(word, int(fc)))
-	start := int(fc) + 2
-	grpprl := word[start:min(start+cb, len(word))]
-	for s := range sprms(grpprl) {
+	for s := range p.sectionSprms(p.sepx(plc, n, 0)) {
 		v := int(uint16(s.value()))
 		switch s.op {
 		case sprmSXaPage:
@@ -63,6 +119,16 @@ func (p *parser) firstPage() page {
 	pg.left, pg.right = clamp(pg.left, pg.width/3), clamp(pg.right, pg.width/3)
 	pg.top, pg.bottom = clamp(pg.top, pg.height/3), clamp(pg.bottom, pg.height/3)
 	return pg
+}
+
+// sectionSprms iterates over the modifiers of a section. A document of
+// Word 6 or Word 95 has modifiers of one byte, which the iteration gives
+// with the codes of Word 97.
+func (p *parser) sectionSprms(grpprl []byte) iter.Seq[sprm] {
+	if !p.s.word6 {
+		return sprms(grpprl)
+	}
+	return word6SectionSprms(grpprl)
 }
 
 func abs(v int) int {
@@ -229,6 +295,13 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	}
 	if para.pap.after > 0 && para.pap.after < 14400 {
 		style = append(style, "margin-bottom: "+pt(para.pap.after))
+	}
+	switch {
+	case para.pap.lineMult > 0:
+		// a single line of Word is about 1.15 times the size of the font
+		style = append(style, "line-height: "+strconv.FormatFloat(1.15*para.pap.lineMult, 'f', 3, 64))
+	case para.pap.lineExact > 0:
+		style = append(style, "line-height: "+pt(para.pap.lineExact))
 	}
 	b.WriteString("<" + tag)
 	if para.pageBreak || para.pap.pageBreak {

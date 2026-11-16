@@ -173,8 +173,10 @@ func TestSplitFirstLine(t *testing.T) {
 		// A preserved new line ends the line.
 		{name: "pre", text: "ab\ncd", width: 200, style: map[string]Value{"white_space": String("pre")},
 			layoutText: "ab", length: 2, resume: 3, hasResume: true, lineWidth: 32},
+		// The final space of a wrapped line of pre-wrap hangs, and has no
+		// width.
 		{name: "pre-wrap", text: "ab cd\nef", width: 40, style: map[string]Value{"white_space": String("pre-wrap")},
-			layoutText: "ab ", length: 3, resume: 3, hasResume: true, lineWidth: 48},
+			layoutText: "ab ", length: 3, resume: 3, hasResume: true, lineWidth: 32},
 		{name: "nowrap", text: "ab cd ef", width: 40, style: map[string]Value{"white_space": String("nowrap")},
 			layoutText: "ab cd ef", length: 8, lineWidth: 128},
 		{name: "letter-spacing", text: "ab", width: -1, style: map[string]Value{"letter_spacing": Float(2)},

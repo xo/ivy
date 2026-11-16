@@ -1530,6 +1530,13 @@ func textAlign(lc *layoutContext, line *Box, availableWidth float64, last bool) 
 			// - forbidden by CSS 2, and
 			// - not required by CSS 3 Text.
 			justifyLine(lc, line, offset)
+		} else if isStr(line.Style.Get("white_space"), "pre-wrap") {
+			// Port: a text of pre-wrap is justified too, without the
+			// spaces at the end of the line, which hang. The documents of
+			// Word keep their spaces with pre-wrap, and justify.
+			if n := countExpandableSpaces(line) - trailingSpaces(line); n > 0 {
+				addWordSpacing(lc, line, offset/float64(n), 0)
+			}
 		}
 		return 0
 	case "center":
@@ -1546,6 +1553,25 @@ func justifyLine(lc *layoutContext, line *Box, extraWidth float64) {
 	if nbSpaces := countExpandableSpaces(line); nbSpaces > 0 {
 		addWordSpacing(lc, line, extraWidth/float64(nbSpaces), 0)
 	}
+}
+
+// trailingSpaces returns the number of spaces at the end of the last text
+// of the line box or the inline box box.
+func trailingSpaces(box *Box) int {
+	for i := len(box.Children) - 1; i >= 0; i-- {
+		child := box.Children[i]
+		if !child.IsInNormalFlow() {
+			continue
+		}
+		switch child.Kind {
+		case KindText:
+			return len(child.Text) - len(strings.TrimRight(child.Text, " "))
+		case KindInline:
+			return trailingSpaces(child)
+		}
+		return 0
+	}
+	return 0
 }
 
 // countExpandableSpaces is count_expandable_spaces in

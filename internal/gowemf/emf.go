@@ -20,7 +20,10 @@ func (p *parser) emf() error {
 		PaletteEntries: u32(b[68:]), Device: size(b[72:]), Millimeters: size(b[80:]),
 	}
 	p.header.Format, p.header.EMF = EMF, h
-	if uint64(h.Bytes) != uint64(len(b)) {
+	// ivy: Windows plays a file with bytes after its last record, so a size
+	// smaller than the data is not an error. A larger size means that the
+	// file is cut short.
+	if uint64(h.Bytes) > uint64(len(b)) {
 		return malformed(48, "EMF file size")
 	}
 	var records uint64
@@ -88,7 +91,9 @@ func (p *parser) emf() error {
 			comment = r[12 : 12+int(dataSize)]
 		}
 		if typ == 14 {
-			if n < 20 || end != len(b) {
+			// ivy: the bytes after the EOF record are not read, as Windows
+			// does not read them.
+			if n < 20 {
 				return malformed(off, "EMF EOF")
 			}
 			entries, pos := uint64(u32(r[8:])), uint64(u32(r[12:]))
@@ -101,9 +106,8 @@ func (p *parser) emf() error {
 			if uint64(u32(r[len(r)-4:])) != n {
 				return malformed(end-4, "EMF EOF SizeLast")
 			}
-			if records != uint64(h.Records) {
-				return malformed(52, "EMF record count")
-			}
+			// ivy: Windows plays a file whose header counts the records
+			// wrongly, so the count of the header is not checked.
 			if p.header.EMFPlus != nil && !p.plusEnded {
 				return malformed(off, "missing EMF+ EOF")
 			}
@@ -124,5 +128,10 @@ func (p *parser) emf() error {
 		}
 		off = end
 	}
-	return malformed(len(b), "missing EMF EOF")
+	// ivy: Windows plays a file without an EOF record when its last record
+	// ends at the end of the file. The EMF+ records must still end.
+	if p.header.EMFPlus != nil && !p.plusEnded {
+		return malformed(len(b), "missing EMF+ EOF")
+	}
+	return nil
 }

@@ -105,6 +105,26 @@ type Mask struct {
 	Key any
 }
 
+// TextFiller is a device that fills the outlines of glyphs with a finer
+// coverage than FillPath gives. An OkageDevice and a List are text fillers.
+type TextFiller interface {
+	// FillText fills p, the outlines of one or more glyphs, with the
+	// shader.
+	FillText(p *okage.Path, rule okage.FillRule, shader okage.Shader)
+}
+
+// FillText fills p, the outlines of one or more glyphs, with the shader. It
+// calls FillText of d when d is a TextFiller, and FillPath of d otherwise. A
+// format that draws the outline of each glyph itself, such as PDF, calls it
+// in place of FillPath.
+func FillText(d Device, p *okage.Path, rule okage.FillRule, shader okage.Shader) {
+	if tf, ok := d.(TextFiller); ok {
+		tf.FillText(p, rule, shader)
+		return
+	}
+	d.FillPath(p, rule, shader)
+}
+
 // GlyphRun is a run of glyphs of one font and one size.
 type GlyphRun struct {
 	Face *font.Face
@@ -185,7 +205,10 @@ type List struct {
 }
 
 // The interfaces that a List implements.
-var _ Device = (*List)(nil)
+var (
+	_ Device     = (*List)(nil)
+	_ TextFiller = (*List)(nil)
+)
 
 // record keeps one command.
 func (l *List) record(op string, cmd func(Device)) {
@@ -250,6 +273,12 @@ func (l *List) FillMask(mask *image.Alpha, t okage.Transform, opts ImageOptions,
 // FillGlyphs satisfies the Device interface.
 func (l *List) FillGlyphs(run GlyphRun, shader okage.Shader) {
 	l.record(fmt.Sprintf("glyphs %d %g", len(run.Glyphs), run.Size), func(d Device) { d.FillGlyphs(run, shader) })
+}
+
+// FillText satisfies the TextFiller interface. The replay calls FillText
+// of this package with the device of the replay.
+func (l *List) FillText(p *okage.Path, rule okage.FillRule, shader okage.Shader) {
+	l.record(fmt.Sprintf("fill text %v %v", bounds(p), rule), func(d Device) { FillText(d, p, rule, shader) })
 }
 
 // BeginGroup satisfies the Device interface.

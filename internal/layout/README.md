@@ -841,7 +841,10 @@ Each guard is marked with `Port:` in the code.
 30. A line that fits but for its final space gives that space no width, and
     a wrapped line leaves out the width of its final space, as the
     `zero_line_final_space` of Pango does. The width of a line is rounded
-    down to the units of Pango.
+    down to the units of Pango. A wrapped line of `white-space: pre-wrap`
+    keeps the width of 0 for its final space when `first_line_metrics`
+    lays out its text again. Upstream gives the space its width there, so
+    that the line overflows and breaks before the box of the line.
 31. A stacking context of an inline block stands in the children of its
     parent as its box, and the map `inline` of the contexts of a page gives
     the context of the box. Upstream puts the context itself in the
@@ -860,6 +863,19 @@ Each guard is marked with `Port:` in the code.
     `LoadHTML` gives it `charset.Reader` of `internal/charset` for the other
     encodings, such as the code pages of a CHM file. `LoadHTML` passes the
     charset of a response, as the `transport_encoding` of upstream.
+36. Each part of a table row that a page break splits takes the height of
+    its content. Upstream keeps the height of the row in each part, so that
+    a row with a height never splits and goes whole to the next page.
+37. The positioned descendants of a margin box are in the stacking context
+    of the page. A box with a negative `z-index` in a header then draws
+    behind the content of the page, as the watermark of Word does.
+    Upstream draws it in the context of the margin box, over the content.
+38. A line of `white-space: pre-wrap` is justified, without the spaces at
+    its end. Upstream justifies only the text whose spaces collapse.
+39. When a cell aligns its content to the middle or to the bottom, a box of
+    the cell that is absolutely positioned with a `top` or a `bottom` stays
+    in place, because its containing block does not move. Upstream moves it
+    with the content of the cell.
 
 ## What the port leaves out
 
@@ -919,8 +935,8 @@ values of upstream stay the same, except in these places, which a comment
    margin box of 10px. The port breaks the text of the box into three
    lines, and the test reads the text of the lines. See "Open problems".
 
-On 2026-11-16, the package runs 1333 test functions with 1369 subtests.
-1271 functions and 1351 subtests pass, and 62 functions and 18 subtests are
+On 2026-11-17, the package runs 1346 test functions with 1373 subtests.
+1284 functions and 1355 subtests pass, and 62 functions and 18 subtests are
 skipped. The tests of stage C are 672 functions with 684 subtests: 648
 functions and 668 subtests pass, and 24 functions and 16 subtests are
 skipped. All the 580 test functions of `tests/layout/` are ported. The

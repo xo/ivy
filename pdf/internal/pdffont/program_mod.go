@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/go-text/typesetting/font/opentype/tables"
+	"github.com/xo/okage/typesetting/font/opentype/tables"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/pdf/internal/kurboext"

@@ -43,10 +43,24 @@ var want = map[string]struct {
 	"caladea/Caladea-Bold.ttf":       {"Caladea", "ae3cb2dcbc925809dd29d2a44e9802211cab66be541bacbfc9c08c74b27c3742"},
 	"caladea/Caladea-Italic.ttf":     {"Caladea", "4359a8e24f748b6447b1ff6d7a174febe70961d29f8bb8634b56dacd740a3deb"},
 	"caladea/Caladea-BoldItalic.ttf": {"Caladea", "ccabaa7b7e2fdf253d2b1a5fa699dd8a3df8d835a9eb285ad82631a677eb76c0"},
+
+	"droid/DroidSansFallback.ttf": {"Droid Sans Fallback", "21b96a0377f067833a93af3082eb28d4ffab7a8cd46bfd513286f1d64b7b0949"},
 }
 
-// licenses holds the license file of each folder.
-var licenses = []string{"liberation/LICENSE", "carlito/OFL.txt", "caladea/OFL.txt"}
+// The texts that the licenses hold.
+const (
+	ofl    = "SIL OPEN FONT LICENSE Version 1.1"
+	apache = "Apache License\n                           Version 2.0"
+)
+
+// licenses holds the license file of each folder, with a text of its
+// license.
+var licenses = map[string]string{
+	"liberation/LICENSE": ofl,
+	"carlito/OFL.txt":    ofl,
+	"caladea/OFL.txt":    ofl,
+	"droid/NOTICE":       apache,
+}
 
 // TestFonts makes sure that each file of FS is a TrueType font of its
 // family, with the bytes that README.md gives, and that FS holds no other
@@ -91,47 +105,79 @@ func TestFonts(t *testing.T) {
 	}
 }
 
-// TestLicenses makes sure that each folder holds the SIL Open Font License
-// 1.1.
+// TestLicenses makes sure that each folder holds its license: the SIL Open
+// Font License 1.1, or the Apache License 2.0 for Droid Sans Fallback.
 func TestLicenses(t *testing.T) {
 	t.Parallel()
-	for _, name := range licenses {
+	for name, text := range licenses {
 		data, err := fs.ReadFile(FS(), name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(data), "SIL OPEN FONT LICENSE Version 1.1") {
-			t.Errorf("%s: not the SIL Open Font License 1.1", name)
+		if !strings.Contains(string(data), text) {
+			t.Errorf("%s: does not hold %q", name, text)
 		}
+	}
+}
+
+// cjk holds a character of each of the four CJK character collections of
+// Adobe: Japan1, GB1, CNS1 and Korea1.
+var cjk = []rune{'あ', '这', '這', '한'}
+
+// TestCJK makes sure that Droid Sans Fallback draws a character of each
+// CJK character collection, so that it can be the fallback of each.
+func TestCJK(t *testing.T) {
+	t.Parallel()
+	data, err := fs.ReadFile(FS(), "droid/DroidSansFallback.ttf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range cjk {
+		if !covers(t, data, r) {
+			t.Errorf("Droid Sans Fallback does not draw %q", r)
+		}
+	}
+	if covers(t, data, 'A') {
+		t.Error("Droid Sans Fallback draws 'A', expected only CJK characters")
 	}
 }
 
 // errFont is the error of a file that is not a TrueType font.
 var errFont = errors.New("not a TrueType font")
 
-// familyOf returns the family of a TrueType font: the name with the ID 1
-// for Windows and Unicode in its table name. It reads the table directory,
-// and makes sure that the table head has its magic number.
-func familyOf(data []byte) (string, error) {
+// tablesOf returns the tables of a TrueType font by their tags. It reads
+// the table directory, and makes sure that the table head has its magic
+// number.
+func tablesOf(data []byte) (map[string][]byte, error) {
 	if len(data) < 12 || binary.BigEndian.Uint32(data) != 0x00010000 {
-		return "", errFont
+		return nil, errFont
 	}
 	n := int(binary.BigEndian.Uint16(data[4:]))
 	if len(data) < 12+16*n {
-		return "", fmt.Errorf("table directory: %w", errFont)
+		return nil, fmt.Errorf("table directory: %w", errFont)
 	}
 	tables := map[string][]byte{}
 	for i := range n {
 		rec := data[12+16*i:]
 		off, size := int(binary.BigEndian.Uint32(rec[8:])), int(binary.BigEndian.Uint32(rec[12:]))
 		if off < 0 || size < 0 || off > len(data) || size > len(data)-off {
-			return "", fmt.Errorf("table %q: %w", rec[:4], errFont)
+			return nil, fmt.Errorf("table %q: %w", rec[:4], errFont)
 		}
 		tables[string(rec[:4])] = data[off : off+size]
 	}
 	head := tables["head"]
 	if len(head) < 16 || binary.BigEndian.Uint32(head[12:]) != 0x5F0F3CF5 {
-		return "", fmt.Errorf("table head: %w", errFont)
+		return nil, fmt.Errorf("table head: %w", errFont)
+	}
+	return tables, nil
+}
+
+// familyOf returns the family of a TrueType font: the name with the ID 1
+// for Windows and Unicode in its table name.
+func familyOf(data []byte) (string, error) {
+	tables, err := tablesOf(data)
+	if err != nil {
+		return "", err
 	}
 	name := tables["name"]
 	if len(name) < 6 {
@@ -160,4 +206,93 @@ func familyOf(data []byte) (string, error) {
 		return string(utf16.Decode(u)), nil
 	}
 	return "", fmt.Errorf("no family: %w", errFont)
+}
+
+// covers reports whether the subtable of the cmap table of a TrueType font
+// for Windows and Unicode maps r to a glyph other than 0. It reads the
+// formats 4 and 12.
+func covers(t *testing.T, data []byte, r rune) bool {
+	t.Helper()
+	tables, err := tablesOf(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmap := tables["cmap"]
+	if len(cmap) < 4 {
+		t.Fatal("no table cmap")
+	}
+	n := int(binary.BigEndian.Uint16(cmap[2:]))
+	for i := range n {
+		rec := 4 + 8*i
+		if rec+8 > len(cmap) {
+			break
+		}
+		platform, encoding := binary.BigEndian.Uint16(cmap[rec:]), binary.BigEndian.Uint16(cmap[rec+2:])
+		off := int(binary.BigEndian.Uint32(cmap[rec+4:]))
+		if platform != 3 || (encoding != 1 && encoding != 10) || off+4 > len(cmap) {
+			continue
+		}
+		sub := cmap[off:]
+		switch binary.BigEndian.Uint16(sub) {
+		case 4:
+			if covers4(sub, r) {
+				return true
+			}
+		case 12:
+			if covers12(sub, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// covers4 reports whether a subtable of the format 4 maps r to a glyph.
+func covers4(sub []byte, r rune) bool {
+	if r > 0xFFFF || len(sub) < 14 {
+		return false
+	}
+	segs := int(binary.BigEndian.Uint16(sub[6:])) / 2
+	if len(sub) < 16+8*segs {
+		return false
+	}
+	c := uint16(r)
+	ends, starts := sub[14:], sub[16+2*segs:]
+	deltas, offsets := sub[16+4*segs:], sub[16+6*segs:]
+	for i := range segs {
+		end, start := binary.BigEndian.Uint16(ends[2*i:]), binary.BigEndian.Uint16(starts[2*i:])
+		if c > end || c < start {
+			continue
+		}
+		delta, ro := binary.BigEndian.Uint16(deltas[2*i:]), int(binary.BigEndian.Uint16(offsets[2*i:]))
+		if ro == 0 {
+			return c+delta != 0
+		}
+		at := 16 + 6*segs + 2*i + ro + 2*int(c-start)
+		if at+2 > len(sub) {
+			return false
+		}
+		g := binary.BigEndian.Uint16(sub[at:])
+		return g != 0 && g+delta != 0
+	}
+	return false
+}
+
+// covers12 reports whether a subtable of the format 12 maps r to a glyph.
+func covers12(sub []byte, r rune) bool {
+	if len(sub) < 16 {
+		return false
+	}
+	n := int(binary.BigEndian.Uint32(sub[12:]))
+	for i := range n {
+		g := 16 + 12*i
+		if g+12 > len(sub) {
+			return false
+		}
+		start, end := rune(binary.BigEndian.Uint32(sub[g:])), rune(binary.BigEndian.Uint32(sub[g+4:]))
+		if r >= start && r <= end {
+			return binary.BigEndian.Uint32(sub[g+8:])+uint32(r-start) != 0
+		}
+	}
+	return false
 }

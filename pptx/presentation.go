@@ -249,6 +249,7 @@ func (p *presentation) theme(name string) (*drawingml.Theme, error) {
 	if err != nil {
 		return nil, err
 	}
+	t.Pictures = p.picturesOf(name)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.themes) >= maxParts {

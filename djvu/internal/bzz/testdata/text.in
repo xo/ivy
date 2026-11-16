@@ -1,0 +1,1218 @@
+package bzz
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/sergev/dejapdf/internal/zp"
+)
+
+// ErrNotImplemented is kept for callers that test for it; Decode no
+// longer returns it.
+var ErrNotImplemented = errors.New("bzz: not implemented")
+
+const (
+	maxBlock  = 1 << 24 // the 24-bit size field
+	maxOutput = 1 << 28 // refuse to expand beyond this
+)
+
+// Decode decompresses a BZZ stream (DjVu v3 spec, appendix 4).
+func Decode(b []byte) ([]byte, error) {
+	d := zp.NewDecoder(b)
+	ctx := make([]byte, 262) // shared by all blocks
+	var out []byte
+	for {
+		size := raw(d, 24)
+		if size == 0 {
+			return out, nil
+		}
+		if len(out)+size > maxOutput {
+			return nil, fmt.Errorf("bzz: output exceeds %d bytes", maxOutput)
+		}
+		blk, err := decodeBlock(d, ctx, size)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, blk...)
+	}
+}
+
+// raw decodes a bits-wide integer in pass-through mode.
+func raw(d *zp.Decoder, bits int) int {
+	n := 1
+	for n < 1<<bits {
+		n = n<<1 | d.DecodePassthrough()
+	}
+	return n - 1<<bits
+}
+
+// bin decodes a bits-wide integer with contexts ctx[1..2^bits-1].
+func bin(d *zp.Decoder, ctx []byte, bits int) int {
+	n := 1
+	for n < 1<<bits {
+		n = n<<1 | d.Decode(&ctx[n])
+	}
+	return n - 1<<bits
+}
+
+func decodeBlock(d *zp.Decoder, ctx []byte, size int) ([]byte, error) {
+	if size > maxBlock {
+		return nil, fmt.Errorf("bzz: block size %d", size)
+	}
+	fshift := uint(0)
+	if d.DecodePassthrough() == 1 {
+		fshift = 1 + uint(d.DecodePassthrough())
+	}
+
+	// Move-to-front indices to the Burrows-Wheeler buffer.
+	var mtf [256]byte
+	for i := range mtf {
+		mtf[i] = byte(i)
+	}
+	var freq [4]uint32
+	fadd := uint32(4)
+	data := make([]byte, size)
+	marker := -1
+	mtfno := 3
+	for i := range data {
+		c := 2
+		if mtfno < 2 {
+			c = mtfno
+		}
+		switch {
+		case d.Decode(&ctx[c]) == 1:
+			mtfno = 0
+		case d.Decode(&ctx[c+3]) == 1:
+			mtfno = 1
+		default:
+			mtfno = 256 // end of block
+			for bits, base := 1, 6; bits <= 7; bits, base = bits+1, base+1<<bits {
+				if d.Decode(&ctx[base]) == 1 {
+					mtfno = 1<<bits + bin(d, ctx[base:], bits)
+					break
+				}
+			}
+		}
+		if mtfno == 256 {
+			if marker >= 0 {
+				return nil, errors.New("bzz: two end-of-block markers")
+			}
+			marker = i
+			continue
+		}
+		data[i] = mtf[mtfno]
+
+		fadd += fadd >> fshift
+		if fadd > 0x10000000 {
+			fadd >>= 24
+			for j := range freq {
+				freq[j] >>= 24
+			}
+		}
+		fc := fadd
+		if mtfno < 4 {
+			fc += freq[mtfno]
+		}
+		k := mtfno
+		for ; k > 3; k-- {
+			mtf[k] = mtf[k-1]
+		}
+		for ; k > 0 && fc >= freq[k-1]; k-- {
+			mtf[k] = mtf[k-1]
+			freq[k] = freq[k-1]
+		}
+		mtf[k] = data[i]
+		freq[k] = fc
+	}
+	if marker <= 0 {
+		return nil, fmt.Errorf("bzz: bad end-of-block position %d", marker)
+	}
+
+	// Inverse Burrows-Wheeler transform.
+	var count [256]int
+	posn := make([]int32, size)
+	for i, k := range data {
+		if i == marker {
+			continue
+		}
+		posn[i] = int32(count[k])
+		count[k]++
+	}
+	last := 1
+	for i, k := range count {
+		count[i] = last
+		last += k
+	}
+	out := make([]byte, size-1)
+	k := 0
+	for i := size - 2; i >= 0; i-- {
+		out[i] = data[k]
+		k = count[data[k]] + int(posn[k])
+	}
+	if k != marker {
+		return nil, errors.New("bzz: corrupt block")
+	}
+	return out, nil
+}
+// Package bzz implements the DjVu BZZ decompressor (ZP-coded Burrows-Wheeler).
+package bzz
+// Package convert maps DjVu pages onto layered PDF pages.
+package convert
+package djvu
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+
+	"github.com/sergev/dejapdf/internal/bzz"
+)
+
+// ComponentType is the kind of a document component.
+type ComponentType int
+
+const (
+	Include    ComponentType = iota // FORM:DJVI
+	PageComp                        // FORM:DJVU
+	Thumbnails                      // FORM:THUM
+	SharedAnno                      // FORM:DJVI with shared annotations
+)
+
+// Component is one DIRM entry.
+type Component struct {
+	ID     string
+	Name   string // file name; defaults to ID
+	Title  string // defaults to ID
+	Type   ComponentType
+	Offset int // bundled only: absolute offset of the FORM
+	Size   int
+
+	HasName, HasTitle bool
+}
+
+// Dir is a decoded DIRM chunk.
+type Dir struct {
+	Bundled    bool
+	Version    int
+	Components []Component
+}
+
+// NumPages returns the number of page components.
+func (d *Dir) NumPages() int {
+	n := 0
+	for _, c := range d.Components {
+		if c.Type == PageComp {
+			n++
+		}
+	}
+	return n
+}
+
+// parseDirHeader decodes the uncompressed part of DIRM and returns
+// the remaining BZZ data.
+func parseDirHeader(b []byte) (*Dir, []byte, error) {
+	if len(b) < 3 {
+		return nil, nil, fmt.Errorf("djvu: DIRM too short")
+	}
+	d := &Dir{Bundled: b[0]&0x80 != 0, Version: int(b[0] & 0x7f)}
+	n := int(binary.BigEndian.Uint16(b[1:]))
+	d.Components = make([]Component, n)
+	b = b[3:]
+	if d.Bundled {
+		if len(b) < 4*n {
+			return nil, nil, fmt.Errorf("djvu: DIRM offsets truncated")
+		}
+		for i := range d.Components {
+			d.Components[i].Offset = int(binary.BigEndian.Uint32(b[4*i:]))
+		}
+		b = b[4*n:]
+	}
+	return d, b, nil
+}
+
+// parseDirBody fills components from the decompressed part of DIRM:
+// 24-bit sizes, flag bytes, then NUL-terminated id, name, title.
+func (d *Dir) parseDirBody(b []byte) error {
+	n := len(d.Components)
+	if len(b) < 4*n {
+		return fmt.Errorf("djvu: DIRM body truncated")
+	}
+	for i := range d.Components {
+		p := b[3*i:]
+		d.Components[i].Size = int(p[0])<<16 | int(p[1])<<8 | int(p[2])
+	}
+	flags := b[3*n : 4*n]
+	b = b[4*n:]
+	str := func() (string, error) {
+		k := bytes.IndexByte(b, 0)
+		if k < 0 {
+			return "", fmt.Errorf("djvu: DIRM name not terminated")
+		}
+		s := string(b[:k])
+		b = b[k+1:]
+		return s, nil
+	}
+	for i := range d.Components {
+		c := &d.Components[i]
+		f := flags[i]
+		c.Type = ComponentType(f & 0x3f)
+		c.HasName = f&0x80 != 0
+		c.HasTitle = f&0x40 != 0
+		var err error
+		if c.ID, err = str(); err != nil {
+			return err
+		}
+		c.Name, c.Title = c.ID, c.ID
+		if c.HasName {
+			if c.Name, err = str(); err != nil {
+				return err
+			}
+		}
+		if c.HasTitle {
+			if c.Title, err = str(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ParseDir decodes a DIRM chunk. Until BZZ is implemented it returns
+// the header part together with an error wrapping bzz.ErrNotImplemented.
+func ParseDir(b []byte) (*Dir, error) {
+	d, rest, err := parseDirHeader(b)
+	if err != nil {
+		return nil, err
+	}
+	body, err := bzz.Decode(rest)
+	if err != nil {
+		return d, fmt.Errorf("djvu: DIRM: %w", err)
+	}
+	if err := d.parseDirBody(body); err != nil {
+		return d, err
+	}
+	return d, nil
+}
+// Package djvu provides the DjVu document model: pages, layers, text, outline, annotations.
+package djvu
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/sergev/dejapdf/internal/iff"
+)
+
+// Loader reads a file that an indirect document or an INCL refers to.
+type Loader func(name string) ([]byte, error)
+
+// Document is a parsed DjVu document.
+type Document struct {
+	Root  *iff.Chunk
+	Dir   *Dir // nil for a single-page document
+	Pages []*Page
+
+	load  Loader
+	cache map[string]*iff.Chunk // components by id
+}
+
+// Page is one FORM:DJVU with its resolved includes.
+type Page struct {
+	ID       string // component id; empty for a single-page document
+	Form     *iff.Chunk
+	Info     Info
+	Includes []*iff.Chunk // FORM:DJVI reached through INCL, depth-first
+}
+
+// Chunks returns the data chunks with the given id, from the page
+// first, then from its includes.
+func (p *Page) Chunks(id string) []*iff.Chunk {
+	r := p.Form.All(id)
+	for _, f := range p.Includes {
+		r = append(r, f.All(id)...)
+	}
+	return r
+}
+
+// Open reads a document; referenced files are looked up next to it.
+func Open(path string) (*Document, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(path)
+	return Parse(data, func(name string) ([]byte, error) {
+		if !filepath.IsLocal(name) {
+			return nil, fmt.Errorf("djvu: refusing non-local file name %q", name)
+		}
+		return os.ReadFile(filepath.Join(dir, name))
+	})
+}
+
+// Parse parses a document from memory. load may be nil if the
+// document references no other files.
+func Parse(data []byte, load Loader) (*Document, error) {
+	root, err := iff.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	d := &Document{Root: root, load: load, cache: map[string]*iff.Chunk{}}
+	switch root.Name() {
+	case "FORM:DJVU":
+		p, err := d.newPage("", root)
+		if err != nil {
+			return nil, err
+		}
+		d.Pages = []*Page{p}
+	case "FORM:DJVM":
+		c := root.Find("DIRM")
+		if c == nil {
+			return nil, fmt.Errorf("djvu: FORM:DJVM without DIRM")
+		}
+		dir, err := ParseDir(c.Data)
+		if err != nil {
+			return nil, err
+		}
+		if err := d.build(dir); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("djvu: unsupported document type %s", root.Name())
+	}
+	return d, nil
+}
+
+// build creates pages from a decoded directory.
+func (d *Document) build(dir *Dir) error {
+	d.Dir = dir
+	for _, c := range dir.Components {
+		if c.Type != PageComp {
+			continue
+		}
+		f, err := d.component(c)
+		if err != nil {
+			return err
+		}
+		if f.Name() != "FORM:DJVU" {
+			return fmt.Errorf("djvu: page %q is %s", c.ID, f.Name())
+		}
+		p, err := d.newPage(c.ID, f)
+		if err != nil {
+			return err
+		}
+		d.Pages = append(d.Pages, p)
+	}
+	return nil
+}
+
+// component returns the FORM of a directory entry.
+func (d *Document) component(c Component) (*iff.Chunk, error) {
+	if f, ok := d.cache[c.ID]; ok {
+		return f, nil
+	}
+	var f *iff.Chunk
+	if d.Dir.Bundled {
+		for _, k := range d.Root.Children {
+			if k.Offset == c.Offset {
+				f = k
+				break
+			}
+		}
+		if f == nil {
+			return nil, fmt.Errorf("djvu: component %q: no chunk at offset %d", c.ID, c.Offset)
+		}
+	} else {
+		var err error
+		if f, err = d.loadFile(c.Name); err != nil {
+			return nil, err
+		}
+	}
+	d.cache[c.ID] = f
+	return f, nil
+}
+
+func (d *Document) loadFile(name string) (*iff.Chunk, error) {
+	if d.load == nil {
+		return nil, fmt.Errorf("djvu: cannot load %q: no loader", name)
+	}
+	data, err := d.load(name)
+	if err != nil {
+		return nil, err
+	}
+	f, err := iff.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("djvu: %s: %w", name, err)
+	}
+	return f, nil
+}
+
+// lookup resolves an INCL id.
+func (d *Document) lookup(id string) (*iff.Chunk, error) {
+	if d.Dir != nil {
+		for _, c := range d.Dir.Components {
+			if c.ID == id {
+				return d.component(c)
+			}
+		}
+		return nil, fmt.Errorf("djvu: included component %q not in directory", id)
+	}
+	// Single-page file: ids are file names next to it.
+	if f, ok := d.cache[id]; ok {
+		return f, nil
+	}
+	f, err := d.loadFile(id)
+	if err != nil {
+		return nil, err
+	}
+	d.cache[id] = f
+	return f, nil
+}
+
+func (d *Document) newPage(id string, f *iff.Chunk) (*Page, error) {
+	c := f.Find("INFO")
+	if c == nil {
+		return nil, fmt.Errorf("djvu: page %q has no INFO", id)
+	}
+	in, err := ParseInfo(c.Data)
+	if err != nil {
+		return nil, err
+	}
+	p := &Page{ID: id, Form: f, Info: in}
+	seen := map[*iff.Chunk]bool{f: true}
+	var walk func(*iff.Chunk) error
+	walk = func(f *iff.Chunk) error {
+		for _, k := range f.All("INCL") {
+			t, err := d.lookup(strings.TrimSpace(string(k.Data)))
+			if err != nil {
+				return err
+			}
+			if t.Name() != "FORM:DJVI" {
+				return fmt.Errorf("djvu: INCL %q is %s", k.Data, t.Name())
+			}
+			if seen[t] {
+				continue
+			}
+			seen[t] = true
+			p.Includes = append(p.Includes, t)
+			if err := walk(t); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return p, walk(f)
+}
+package djvu
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/sergev/dejapdf/internal/bzz"
+	"github.com/sergev/dejapdf/internal/iff"
+)
+
+const corpus = "../../testdata/corpus"
+
+var (
+	rePages  = regexp.MustCompile(` files \d+ pages\)`)
+	reFormID = regexp.MustCompile(`(?m)^( *FORM:\w{4} \[\d+\] ).*$`)
+	reDirEnt = regexp.MustCompile(`(?m)^ +\S+ -> \S+\n`)
+)
+
+// stripDir removes what needs the BZZ-coded part of DIRM.
+func stripDir(s string) string {
+	s = rePages.ReplaceAllString(s, " files)")
+	s = reFormID.ReplaceAllString(s, "$1")
+	return reDirEnt.ReplaceAllString(s, "")
+}
+
+func bzzMissing() bool {
+	_, err := bzz.Decode(nil)
+	return errors.Is(err, bzz.ErrNotImplemented)
+}
+
+func TestDumpCorpus(t *testing.T) {
+	goldens, _ := filepath.Glob(filepath.Join(corpus, "*.dump"))
+	more, _ := filepath.Glob(filepath.Join(corpus, "*", "*.dump"))
+	goldens = append(goldens, more...)
+	if len(goldens) == 0 {
+		t.Fatal("no goldens")
+	}
+	for _, g := range goldens {
+		want, err := os.ReadFile(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(strings.TrimSuffix(g, ".dump") + ".djvu")
+		if err != nil {
+			t.Fatal(err)
+		}
+		root, err := iff.Parse(data)
+		if err != nil {
+			t.Fatalf("%s: %v", g, err)
+		}
+		var buf bytes.Buffer
+		if err := Dump(&buf, root); err != nil {
+			t.Fatal(err)
+		}
+		got, exp := buf.String(), string(want)
+		if bzzMissing() {
+			got, exp = stripDir(got), stripDir(exp)
+		}
+		if got != exp {
+			t.Errorf("%s:\n--- got\n%s--- want\n%s", g, got, exp)
+		}
+	}
+}
+
+func TestParseInfo(t *testing.T) {
+	mk := func(minor, major byte, dpi uint16, gamma, flags byte) []byte {
+		b := binary.BigEndian.AppendUint16(nil, 2550)
+		b = binary.BigEndian.AppendUint16(b, 3300)
+		b = append(b, minor, major)
+		b = binary.LittleEndian.AppendUint16(b, dpi)
+		return append(b, gamma, flags)
+	}
+	cases := []struct {
+		b    []byte
+		want Info
+	}{
+		{mk(24, 0, 300, 22, 1), Info{2550, 3300, 24, 300, 22, 0}},
+		{mk(24, 1, 600, 22, 6), Info{2550, 3300, 280, 600, 22, 270}},
+		{mk(24, 0, 24, 2, 2), Info{2550, 3300, 24, 300, 3, 180}},
+		{mk(24, 0, 6001, 51, 5), Info{2550, 3300, 24, 300, 50, 90}},
+		{mk(24, 0, 25, 3, 0x0d), Info{2550, 3300, 24, 25, 3, 90}},
+		{mk(24, 0, 6000, 50, 0)[:4], Info{2550, 3300, 0, 300, 22, 0}},
+	}
+	for i, c := range cases {
+		got, err := ParseInfo(c.b)
+		if err != nil || got != c.want {
+			t.Errorf("case %d: got %+v, %v; want %+v", i, got, err, c.want)
+		}
+	}
+	if _, err := ParseInfo([]byte{1, 2, 3}); err == nil {
+		t.Error("short INFO accepted")
+	}
+}
+
+func TestDirBody(t *testing.T) {
+	d := &Dir{Components: make([]Component, 3)}
+	body := []byte{0, 1, 2, 0, 0, 3, 1, 0, 0}
+	body = append(body, 0x01, 0xc1, 0x03)
+	body = append(body, "a.djvu\x00b.djvu\x00b-file.djvu\x00Two\x00s.iff\x00"...)
+	if err := d.parseDirBody(body); err != nil {
+		t.Fatal(err)
+	}
+	want := []Component{
+		{ID: "a.djvu", Name: "a.djvu", Title: "a.djvu", Type: PageComp, Size: 0x102},
+		{ID: "b.djvu", Name: "b-file.djvu", Title: "Two", Type: PageComp, Size: 3, HasName: true, HasTitle: true},
+		{ID: "s.iff", Name: "s.iff", Title: "s.iff", Type: SharedAnno, Size: 0x10000},
+	}
+	for i := range want {
+		if d.Components[i] != want[i] {
+			t.Errorf("%d: got %+v want %+v", i, d.Components[i], want[i])
+		}
+	}
+	if d.NumPages() != 2 {
+		t.Errorf("pages %d", d.NumPages())
+	}
+	if err := d.parseDirBody(body[:len(body)-1]); err == nil {
+		t.Error("unterminated name accepted")
+	}
+	if err := d.parseDirBody(body[:5]); err == nil {
+		t.Error("truncated body accepted")
+	}
+}
+
+func TestSinglePage(t *testing.T) {
+	d, err := Open(filepath.Join(corpus, "photo.djvu"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Pages) != 1 || d.Dir != nil {
+		t.Fatalf("pages %d", len(d.Pages))
+	}
+	p := d.Pages[0]
+	if p.Info != (Info{850, 1100, 24, 100, 22, 0}) {
+		t.Errorf("info %+v", p.Info)
+	}
+	if n := len(p.Chunks("BG44")); n != 3 {
+		t.Errorf("BG44 chunks %d", n)
+	}
+}
+
+// A component page of an indirect document opened on its own: INCL
+// names a file next to it.
+func TestIncludeFile(t *testing.T) {
+	d, err := Open(filepath.Join(corpus, "indirect", "bilevel.djvu"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := d.Pages[0]
+	if len(p.Includes) != 1 || len(p.Chunks("ANTz")) != 2 {
+		t.Fatalf("includes %d, ANTz %d", len(p.Includes), len(p.Chunks("ANTz")))
+	}
+	if _, err := Parse(mustRead(t, filepath.Join(corpus, "indirect", "bilevel.djvu")), nil); err == nil {
+		t.Error("INCL without loader accepted")
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// withDir builds a document from a hand-written directory, standing in
+// for the BZZ part of DIRM.
+func withDir(t *testing.T, path string, comps []Component, load Loader) *Document {
+	t.Helper()
+	root, err := iff.Parse(mustRead(t, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _, err := parseDirHeader(root.Find("DIRM").Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dir.Components) != len(comps) {
+		t.Fatalf("directory has %d components, test gives %d", len(dir.Components), len(comps))
+	}
+	for i := range comps {
+		comps[i].Offset = dir.Components[i].Offset
+		if comps[i].Name == "" {
+			comps[i].Name = comps[i].ID
+		}
+	}
+	dir.Components = comps
+	d := &Document{Root: root, load: load, cache: map[string]*iff.Chunk{}}
+	if err := d.build(dir); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestBundled(t *testing.T) {
+	d := withDir(t, filepath.Join(corpus, "shared-dict.djvu"), []Component{
+		{ID: "p1.iff", Type: Include},
+		{ID: "p1.djvu", Type: PageComp},
+		{ID: "p4.djvu", Type: PageComp},
+	}, nil)
+	if len(d.Pages) != 2 {
+		t.Fatalf("pages %d", len(d.Pages))
+	}
+	for _, p := range d.Pages {
+		if len(p.Chunks("Djbz")) != 1 || len(p.Chunks("Sjbz")) != 1 {
+			t.Errorf("%s: Djbz %d Sjbz %d", p.ID, len(p.Chunks("Djbz")), len(p.Chunks("Sjbz")))
+		}
+	}
+	if d.Pages[0].Includes[0] != d.Pages[1].Includes[0] {
+		t.Error("shared dictionary not shared")
+	}
+}
+
+func TestIndirect(t *testing.T) {
+	dir := filepath.Join(corpus, "indirect")
+	load := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, name)) }
+	d := withDir(t, filepath.Join(dir, "index.djvu"), []Component{
+		{ID: "bilevel.djvu", Type: PageComp},
+		{ID: "shared_anno.iff", Type: SharedAnno},
+		{ID: "photo.djvu", Type: PageComp},
+		{ID: "palette.djvu", Type: PageComp},
+		{ID: "compound.djvu", Type: PageComp},
+	}, load)
+	if len(d.Pages) != 4 {
+		t.Fatalf("pages %d", len(d.Pages))
+	}
+	for _, p := range d.Pages {
+		if len(p.Includes) != 1 || p.Includes[0] != d.Pages[0].Includes[0] {
+			t.Errorf("%s: shared annotations not resolved", p.ID)
+		}
+	}
+	if d.Pages[3].Info.Width != 2550 || len(d.Pages[3].Chunks("FG44")) != 1 {
+		t.Error("compound page wrong")
+	}
+}
+
+func TestDJVMNeedsBZZ(t *testing.T) {
+	if !bzzMissing() {
+		t.Skip("BZZ implemented")
+	}
+	_, err := Open(filepath.Join(corpus, "bundled.djvu"))
+	if !errors.Is(err, bzz.ErrNotImplemented) {
+		t.Errorf("got %v", err)
+	}
+}
+package djvu
+
+import (
+	"bufio"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/sergev/dejapdf/internal/iff"
+)
+
+// Dump writes the chunk tree of a file in the format of djvudump.
+func Dump(w io.Writer, root *iff.Chunk) error {
+	var (
+		dir     *Dir
+		dirFull bool
+	)
+	if root.Name() == "FORM:DJVM" {
+		if c := root.Find("DIRM"); c != nil {
+			var err error
+			dir, err = ParseDir(c.Data)
+			dirFull = err == nil
+		}
+	}
+	// Bundled components by offset, with their page numbers.
+	comps := map[int]*Component{}
+	pageNo := map[int]int{}
+	if dir != nil && dir.Bundled && dirFull {
+		n := 0
+		for i := range dir.Components {
+			c := &dir.Components[i]
+			comps[c.Offset] = c
+			if c.Type == PageComp {
+				n++
+				pageNo[c.Offset] = n
+			}
+		}
+	}
+
+	bw := bufio.NewWriter(w)
+	var walk func(c *iff.Chunk, parent string, depth int)
+	walk = func(c *iff.Chunk, parent string, depth int) {
+		indent := strings.Repeat("  ", depth+1)
+		head := fmt.Sprintf("%s [%d] ", c.Name(), c.Size())
+		if c.Composite() {
+			if k := comps[c.Offset]; k != nil {
+				head += "{" + k.ID + "} [" + kindTag(k.Type, pageNo[c.Offset]) + "]"
+				if k.HasTitle {
+					head += " (" + k.Title + ")"
+				}
+			}
+			fmt.Fprintf(bw, "%s%s\n", indent, head)
+			for _, k := range c.Children {
+				walk(k, c.Type, depth+1)
+			}
+			return
+		}
+		d := describe(c, parent)
+		if c.ID == "DIRM" && dir != nil {
+			kind := "indirect"
+			if dir.Bundled {
+				kind = "bundled"
+			}
+			d = fmt.Sprintf("Document directory (%s, %d files", kind, len(dir.Components))
+			if dirFull {
+				d += fmt.Sprintf(" %d pages", dir.NumPages())
+			}
+			d += ")"
+		}
+		if d == "" {
+			fmt.Fprintf(bw, "%s%s\n", indent, head)
+		} else {
+			fmt.Fprintf(bw, "%s%-18s%s\n", indent, head, d)
+		}
+		if c.ID == "DIRM" && dir != nil && !dir.Bundled && dirFull {
+			for _, k := range dir.Components {
+				fmt.Fprintf(bw, "%s  %s -> %s\n", indent, k.ID, k.Name)
+			}
+		}
+	}
+	walk(root, "", 0)
+	return bw.Flush()
+}
+
+func kindTag(t ComponentType, page int) string {
+	switch t {
+	case PageComp:
+		return fmt.Sprintf("P%d", page)
+	case Thumbnails:
+		return "T"
+	case SharedAnno:
+		return "S"
+	}
+	return "I"
+}
+
+// describe returns the djvudump description of a data chunk.
+func describe(c *iff.Chunk, parent string) string {
+	b := c.Data
+	switch c.ID {
+	case "INFO":
+		in, err := ParseInfo(b)
+		if err != nil {
+			return ""
+		}
+		return fmt.Sprintf("DjVu %dx%d, v%d, %d dpi, gamma=%d.%d",
+			in.Width, in.Height, in.Version, in.DPI, in.Gamma/10, in.Gamma%10)
+	case "Sjbz":
+		return "JB2 bilevel data"
+	case "Djbz":
+		return "JB2 shared dictionary"
+	case "Smmr":
+		return "G4/MMR stencil data"
+	case "FGbz":
+		if len(b) < 3 {
+			return ""
+		}
+		return fmt.Sprintf("JB2 colors data, v%d, %d colors", b[0]&0x7f, binary.BigEndian.Uint16(b[1:]))
+	case "BG44", "FG44":
+		return describeIW44(b)
+	case "PM44", "BM44":
+		if parent == c.ID {
+			return describeIW44(b)
+		}
+	case "TH44":
+		if parent == "THUM" {
+			return "Thumbnail icon"
+		}
+	case "ANTa", "ANTz":
+		return "Page annotation (hyperlinks, etc.)"
+	case "TXTa", "TXTz":
+		return "Hidden text (text, etc.)"
+	case "INCL":
+		return "Indirection chunk --> {" + string(b) + "}"
+	}
+	return ""
+}
+
+// describeIW44 summarises the header of an IW44 chunk.
+func describeIW44(b []byte) string {
+	if len(b) < 2 {
+		return ""
+	}
+	s := fmt.Sprintf("IW4 data #%d, %d slices", int(b[0])+1, b[1])
+	if b[0] == 0 && len(b) >= 8 {
+		color := "color"
+		if b[2]&0x80 != 0 {
+			color = "b&w"
+		}
+		s += fmt.Sprintf(", v%d.%d (%s), %dx%d", b[2]&0x7f, b[3],
+			color, binary.BigEndian.Uint16(b[4:]), binary.BigEndian.Uint16(b[6:]))
+	}
+	return s
+}
+package djvu
+
+import (
+	"encoding/binary"
+	"fmt"
+)
+
+// Info is the content of an INFO chunk.
+type Info struct {
+	Width, Height int
+	Version       int // minor | major<<8
+	DPI           int
+	Gamma         int // tenths
+	Rotate        int // clockwise degrees, as PDF /Rotate
+}
+
+// ParseInfo decodes an INFO chunk. Missing or out-of-range fields
+// get defaults: 300 dpi, gamma 2.2 clamped to 0.3..5.0.
+func ParseInfo(b []byte) (Info, error) {
+	if len(b) < 4 {
+		return Info{}, fmt.Errorf("djvu: INFO chunk too short (%d bytes)", len(b))
+	}
+	in := Info{
+		Width:  int(binary.BigEndian.Uint16(b[0:])),
+		Height: int(binary.BigEndian.Uint16(b[2:])),
+		DPI:    300,
+		Gamma:  22,
+	}
+	if len(b) >= 6 {
+		in.Version = int(b[4]) | int(b[5])<<8
+	} else if len(b) == 5 {
+		in.Version = int(b[4])
+	}
+	if len(b) >= 8 {
+		if d := int(binary.LittleEndian.Uint16(b[6:])); d >= 25 && d <= 6000 {
+			in.DPI = d
+		}
+	}
+	if len(b) >= 9 {
+		in.Gamma = min(max(int(b[8]), 3), 50)
+	}
+	if len(b) >= 10 {
+		switch b[9] & 7 {
+		case 6: // 90° counter-clockwise
+			in.Rotate = 270
+		case 2:
+			in.Rotate = 180
+		case 5: // 90° clockwise
+			in.Rotate = 90
+		}
+	}
+	return in, nil
+}
+// Package iff parses the IFF85 chunk structure of DjVu files.
+package iff
+
+import (
+	"encoding/binary"
+	"fmt"
+)
+
+// Chunk is one IFF chunk. Offsets are absolute within the file.
+type Chunk struct {
+	ID       string   // "FORM" or a data chunk id like "INFO"
+	Type     string   // secondary id of a composite chunk, e.g. "DJVU"
+	Offset   int      // offset of the chunk header
+	Data     []byte   // payload; for a composite chunk, the bytes after Type
+	Children []*Chunk // sub-chunks of a composite chunk
+}
+
+// Composite reports whether the chunk contains sub-chunks.
+func (c *Chunk) Composite() bool { return isComposite(c.ID) }
+
+// Name returns "FORM:DJVU" for composite chunks, else the id.
+func (c *Chunk) Name() string {
+	if c.Composite() {
+		return c.ID + ":" + c.Type
+	}
+	return c.ID
+}
+
+// Size returns the length field of the chunk header.
+func (c *Chunk) Size() int {
+	if c.Composite() {
+		return len(c.Data) + 4
+	}
+	return len(c.Data)
+}
+
+// Find returns the first child with the given id (or "FORM:TYPE" name).
+func (c *Chunk) Find(id string) *Chunk {
+	for _, k := range c.Children {
+		if k.ID == id || k.Name() == id {
+			return k
+		}
+	}
+	return nil
+}
+
+// All returns all children with the given id (or "FORM:TYPE" name).
+func (c *Chunk) All(id string) []*Chunk {
+	var r []*Chunk
+	for _, k := range c.Children {
+		if k.ID == id || k.Name() == id {
+			r = append(r, k)
+		}
+	}
+	return r
+}
+
+func isComposite(id string) bool {
+	switch id {
+	case "FORM", "LIST", "PROP", "CAT ":
+		return true
+	}
+	return false
+}
+
+// Parse parses a whole file: optional "AT&T" magic, then one chunk.
+func Parse(b []byte) (*Chunk, error) {
+	off := 0
+	if len(b) >= 4 && string(b[:4]) == "AT&T" {
+		off = 4
+	}
+	return ParseAt(b, off)
+}
+
+// ParseAt parses the chunk whose header starts at off.
+func ParseAt(b []byte, off int) (*Chunk, error) {
+	c, _, err := parse(b, off, len(b), 0)
+	return c, err
+}
+
+const maxDepth = 32
+
+// parse reads one chunk at off that must end by limit; returns the offset past it.
+func parse(b []byte, off, limit, depth int) (*Chunk, int, error) {
+	if depth > maxDepth {
+		return nil, 0, fmt.Errorf("iff: chunks nested too deep at offset %d", off)
+	}
+	if limit-off < 8 {
+		return nil, 0, fmt.Errorf("iff: truncated chunk header at offset %d", off)
+	}
+	id := string(b[off : off+4])
+	n := int(binary.BigEndian.Uint32(b[off+4 : off+8]))
+	start := off + 8
+	if n > limit-start {
+		return nil, 0, fmt.Errorf("iff: chunk %q at offset %d: size %d exceeds container", id, off, n)
+	}
+	end := start + n
+	c := &Chunk{ID: id, Offset: off, Data: b[start:end]}
+	if isComposite(id) {
+		if n < 4 {
+			return nil, 0, fmt.Errorf("iff: %s at offset %d: missing type", id, off)
+		}
+		c.Type = string(b[start : start+4])
+		c.Data = b[start+4 : end]
+		for p := start + 4; p < end; {
+			k, next, err := parse(b, p, end, depth+1)
+			if err != nil {
+				return nil, 0, err
+			}
+			c.Children = append(c.Children, k)
+			p = next
+			if p&1 == 1 && p < end {
+				p++ // pad byte
+			}
+		}
+	}
+	return c, end, nil
+}
+package iff
+
+import (
+	"encoding/binary"
+	"strings"
+	"testing"
+)
+
+func chunk(id string, data []byte) []byte {
+	b := []byte(id)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(data)))
+	b = append(b, data...)
+	if len(data)%2 == 1 {
+		b = append(b, 0)
+	}
+	return b
+}
+
+func form(typ string, kids ...[]byte) []byte {
+	d := []byte(typ)
+	for _, k := range kids {
+		d = append(d, k...)
+	}
+	return chunk("FORM", d)
+}
+
+func TestParse(t *testing.T) {
+	body := form("DJVU",
+		chunk("INFO", []byte("0123456789")),
+		chunk("ODD1", []byte("abc")), // padded
+		form("DJVI", chunk("ANTa", []byte("x"))),
+		chunk("LAST", []byte("q")), // odd, last: pad may be absent
+	)
+	body = body[:len(body)-1] // drop final pad
+	binary.BigEndian.PutUint32(body[4:], uint32(len(body)-8))
+
+	for _, magic := range []string{"AT&T", ""} {
+		c, err := Parse(append([]byte(magic), body...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Name() != "FORM:DJVU" || len(c.Children) != 4 {
+			t.Fatalf("got %s with %d children", c.Name(), len(c.Children))
+		}
+		if got := c.Find("ODD1"); got == nil || string(got.Data) != "abc" {
+			t.Fatalf("ODD1 = %v", got)
+		}
+		in := c.Find("FORM:DJVI")
+		if in == nil || string(in.Find("ANTa").Data) != "x" {
+			t.Fatal("nested form not parsed")
+		}
+		if got := string(c.Find("LAST").Data); got != "q" {
+			t.Fatalf("LAST = %q", got)
+		}
+		if c.Offset != len(magic) || c.Children[0].Offset != len(magic)+12 {
+			t.Fatalf("offsets %d %d", c.Offset, c.Children[0].Offset)
+		}
+		if c.Size() != len(body)-8 {
+			t.Fatalf("size %d", c.Size())
+		}
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	good := form("DJVU", chunk("INFO", []byte("0123456789")))
+	cases := map[string][]byte{
+		"truncated header": good[:6],
+		"exceeds":          good[:len(good)-2],
+		"child exceeds":    form("DJVU", chunk("INFO", []byte("01"))[:9]),
+		"missing type":     chunk("FORM", []byte("DJ")),
+	}
+	for name, b := range cases {
+		if _, err := Parse(b); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	deep := chunk("INFO", nil)
+	for i := 0; i < maxDepth+2; i++ {
+		deep = form("DJVU", deep)
+	}
+	if _, err := Parse(deep); err == nil || !strings.Contains(err.Error(), "deep") {
+		t.Errorf("deep nesting: %v", err)
+	}
+}
+
+func FuzzParse(f *testing.F) {
+	f.Add(form("DJVU", chunk("INFO", []byte("0123456789"))))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		Parse(b)
+	})
+}
+// Package iw44 decodes IW44 wavelet images (BG44, FG44).
+package iw44
+// Package jb2 decodes JB2 bilevel images into shape dictionaries and blits.
+package jb2
+// Package jbig2 encodes JBIG2 segments for embedding in PDF (JBIG2Decode).
+package jbig2
+// Package jpx encodes JPEG 2000 images for PDF (JPXDecode).
+package jpx
+// Package mq implements the JBIG2 MQ arithmetic encoder (ITU-T T.88 Annex E).
+package mq
+// Package pdf is a minimal PDF writer for pre-encoded image streams.
+package pdf
+package zp
+
+// Probability state table, DjVu v3 spec, appendix 3, table 9:
+// delta (interval decrement), theta (MPS update threshold),
+// mu (next state after MPS update), lambda (next state after LPS).
+//
+// The spec's table is an OCR'd scan. Garbled entries were reconstructed
+// from mirror states with equal successors: Δ97=0x0B5D, Δ99=0x078A,
+// Δ123=0x08AD, λ140=170, Δ151=0x017A, Δ163=0x0117, Δ195=0x0DC8,
+// θ49=θ50=0x7D0F.
+var table = [251]state{
+	{0x8000, 0x0000, 84, 145},  // 0
+	{0x8000, 0x0000, 3, 4},     // 1
+	{0x8000, 0x0000, 4, 3},     // 2
+	{0x6BBD, 0x10A5, 5, 1},     // 3
+	{0x6BBD, 0x10A5, 6, 2},     // 4
+	{0x5D45, 0x1F28, 7, 3},     // 5
+	{0x5D45, 0x1F28, 8, 4},     // 6
+	{0x51B9, 0x2BD3, 9, 5},     // 7
+	{0x51B9, 0x2BD3, 10, 6},    // 8
+	{0x4813, 0x36E3, 11, 7},    // 9
+	{0x4813, 0x36E3, 12, 8},    // 10
+	{0x3FD5, 0x408C, 13, 9},    // 11
+	{0x3FD5, 0x408C, 14, 10},   // 12
+	{0x38B1, 0x48FD, 15, 11},   // 13
+	{0x38B1, 0x48FD, 16, 12},   // 14
+	{0x3275, 0x505D, 17, 13},   // 15
+	{0x3275, 0x505D, 18, 14},   // 16
+	{0x2CFD, 0x56D0, 19, 15},   // 17
+	{0x2CFD, 0x56D0, 20, 16},   // 18
+	{0x2825, 0x5C71, 21, 17},   // 19
+	{0x2825, 0x5

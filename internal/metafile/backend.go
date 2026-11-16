@@ -401,34 +401,44 @@ func (b *backend) DrawImage(im gowemf.ImageDraw, clip gowemf.Clip) error {
 	if err := b.begin(); err != nil {
 		return err
 	}
+	img, t, ok := b.placeImage(im)
+	if !ok {
+		return nil
+	}
+	opacity := float32(im.Opacity)
+	b.clipped(clip, func() {
+		b.d.DrawImage(img, t, display.ImageOptions{Opacity: opacity, Smooth: im.Smooth})
+	})
+	return nil
+}
+
+// placeImage returns the pixels of the source rectangle of im, and the
+// transform that places them in the user space. It returns false if the
+// rectangle is empty, or if a corner of the image is garbage.
+func (b *backend) placeImage(im gowemf.ImageDraw) (image.Image, okage.Transform, bool) {
 	img := im.Image
 	if img == nil {
-		return nil
+		return nil, okage.Transform{}, false
 	}
 	src := im.Source.Intersect(img.Bounds())
 	if src.Empty() {
-		return nil
+		return nil, okage.Transform{}, false
 	}
 	if src != img.Bounds() {
 		sub, ok := img.(interface {
 			SubImage(image.Rectangle) image.Image
 		})
 		if !ok {
-			return nil
+			return nil, okage.Transform{}, false
 		}
 		img = sub.SubImage(src)
 	}
 	for _, c := range []image.Point{src.Min, {src.Max.X, src.Min.Y}, {src.Min.X, src.Max.Y}, src.Max} {
 		if q := im.Transform.Apply(gowemf.Point{X: float64(c.X), Y: float64(c.Y)}); !b.near(q.X, q.Y) {
-			return nil
+			return nil, okage.Transform{}, false
 		}
 	}
-	t := transform(im.Transform).PreTranslate(float32(src.Min.X), float32(src.Min.Y))
-	opacity := float32(im.Opacity)
-	b.clipped(clip, func() {
-		b.d.DrawImage(img, t, display.ImageOptions{Opacity: opacity, Smooth: im.Smooth})
-	})
-	return nil
+	return img, transform(im.Transform).PreTranslate(float32(src.Min.X), float32(src.Min.Y)), true
 }
 
 // shader returns the shader of a paint, or nil if the paint draws nothing.

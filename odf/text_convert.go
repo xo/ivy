@@ -138,6 +138,8 @@ func convertText(ctx context.Context, d *Document) (layout.Source, error) {
 		return layout.Source{}, fmt.Errorf("content.xml without office:text: %w", ivy.ErrFormat)
 	}
 	c.startSection(c.firstMaster(text))
+	// the blocks of the header and the footer do not start the text
+	c.started = false
 	c.blocks(text)
 	c.w.WriteString("</div>")
 	if c.err != nil {
@@ -239,7 +241,7 @@ func (c *odtConverter) firstMaster(text roxmltree.Node) string {
 			continue
 		}
 		name := n.TagName().Name()
-		if name == "p" || name == "h" || name == "table" {
+		if (name == "p" || name == "h" || name == "table") && !outOfText(n) {
 			if m := c.blockMaster(n); m != "" {
 				return m
 			}
@@ -253,6 +255,24 @@ func (c *odtConverter) firstMaster(text roxmltree.Node) string {
 		return c.st.masterOrder[0]
 	}
 	return ""
+}
+
+// hiddenSection reports whether n is a text:section that is hidden, with
+// text:display="none".
+func hiddenSection(n roxmltree.Node) bool {
+	return n.TagName().Name() == "section" && odtAttr(n, "display") == "none"
+}
+
+// outOfText reports whether n is a block that the text does not show: a
+// block of a text:section that is hidden, or of the deleted text of
+// text:tracked-changes.
+func outOfText(n roxmltree.Node) bool {
+	for a := range n.Ancestors() {
+		if a.IsElement() && (hiddenSection(a) || a.TagName().Name() == "tracked-changes") {
+			return true
+		}
+	}
+	return false
 }
 
 // blocks converts the children of n as blocks.
@@ -289,6 +309,9 @@ func (c *odtConverter) block(n roxmltree.Node) {
 		c.started = true
 		c.table(n)
 	case "section":
+		if hiddenSection(n) {
+			return
+		}
 		c.started = true
 		c.section(n)
 	case "table-of-content", "alphabetical-index", "illustration-index", "bibliography",
@@ -327,18 +350,15 @@ func (c *odtConverter) section(n roxmltree.Node) {
 }
 
 // startSection opens the element of the pages of a master page, writes its
-// running elements and the rules of its pages.
+// running elements and the rules of its pages. A master page with another
+// master page as its next style gives the first page of the section, and
+// the next one the pages after it.
 func (c *odtConverter) startSection(master string) {
 	c.sections++
 	c.master = master
 	name := "m" + strconv.Itoa(c.sections)
 	mp := c.st.masters[master]
-	pl := &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1}
-	if mp != nil {
-		if l, ok := c.st.layouts[mp.layout]; ok {
-			pl = l
-		}
-	}
+	pl := c.pageLayout(mp)
 	c.layout = pl
 	var s odtCSS
 	s.set("page", name)
@@ -350,47 +370,80 @@ func (c *odtConverter) startSection(master string) {
 		s.set("column-gap", odtPt(pl.columnGap))
 	}
 	c.w.WriteString(`<div class="section" style="` + odtAttrText(s.String()) + `">`)
-	parts := map[string]string{}
-	heights := map[string]float64{}
-	if mp != nil {
-		for _, part := range [...]string{"header", "footer", "header-left", "footer-left", "header-first", "footer-first"} {
-			n, ok := mp.parts[part]
-			if !ok || odtAttr(n, "display") == "false" {
-				continue
-			}
-			if running, h, ok := c.headerFooter(n); ok {
-				parts[part] = running
-				heights[part] = h
-			}
+	if mp != nil && mp.next != "" && mp.next != mp.name {
+		if next, ok := c.st.masters[mp.next]; ok {
+			c.pageRules("@page "+name, next, false)
+			c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+			return
 		}
 	}
+	c.pageRules("@page "+name, mp, false)
+	if mp != nil {
+		if _, ok := mp.parts["header-left"]; ok {
+			c.pageRules("@page "+name+":left", mp, false)
+		}
+		if _, ok := mp.parts["header-first"]; ok {
+			c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+		}
+	}
+}
+
+// pageLayout returns the page layout of the master page mp, which can be
+// nil.
+func (c *odtConverter) pageLayout(mp *odtMasterPage) *odtPageLayout {
+	if mp != nil {
+		if l, ok := c.st.layouts[mp.layout]; ok {
+			return l
+		}
+	}
+	return &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1}
+}
+
+// pageRules writes the rule sel of the pages of the master page mp, with
+// its size, its margins, its header and its footer. A rule of :left takes
+// the left header and footer, and first takes the header and the footer of
+// the first page.
+func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) {
+	pl := c.pageLayout(mp)
+	header, footer := "header", "footer"
+	switch {
+	case first:
+		header, footer = "header-first", "footer-first"
+	case strings.HasSuffix(sel, ":left"):
+		header, footer = "header-left", "footer-left"
+	}
+	part := func(name, def string) (string, float64, bool) {
+		if mp == nil {
+			return "", 0, false
+		}
+		n, ok := mp.parts[name]
+		if !ok {
+			n, ok = mp.parts[def]
+		}
+		if !ok || odtAttr(n, "display") == "false" {
+			return "", 0, false
+		}
+		return c.headerFooter(n)
+	}
 	top, bottom := pl.top, pl.bottom
-	if _, ok := parts["header"]; ok {
-		top += max(pl.headerHeight, heights["header"]) + pl.headerSpace
+	hName, hHeight, hOK := part(header, "header")
+	fName, fHeight, fOK := part(footer, "footer")
+	if hOK {
+		top += max(pl.headerHeight, hHeight) + pl.headerSpace
 	}
-	if _, ok := parts["footer"]; ok {
-		bottom += max(pl.footerHeight, heights["footer"]) + pl.footerSpace
+	if fOK {
+		bottom += max(pl.footerHeight, fHeight) + pl.footerSpace
 	}
-	box := func(part string) string {
-		if r, ok := parts[part]; ok {
-			return "element(" + r + ")"
+	box := func(name string, ok bool) string {
+		if ok {
+			return "element(" + name + ")"
 		}
 		return "none"
 	}
-	margins := func(header, footer string) string {
-		return "@top-center { content: " + box(header) + "; padding-top: " + odtPt(pl.top) + " } " +
-			"@bottom-center { content: " + box(footer) + "; padding-bottom: " + odtPt(pl.bottom) + " }"
-	}
-	w := &c.sheet
-	w.WriteString("@page " + name + " { size: " + odtPt(pl.width) + " " + odtPt(pl.height) +
+	c.sheet.WriteString(sel + " { size: " + odtPt(pl.width) + " " + odtPt(pl.height) +
 		"; margin: " + odtPt(top) + " " + odtPt(pl.right) + " " + odtPt(bottom) + " " + odtPt(pl.left) + "; " +
-		margins("header", "footer") + " }\n")
-	if _, ok := parts["header-left"]; ok {
-		w.WriteString("@page " + name + ":left { " + margins("header-left", odtPick(parts["footer-left"] != "", "footer-left", "footer")) + " }\n")
-	}
-	if _, ok := parts["header-first"]; ok {
-		w.WriteString("@page " + name + ":nth(1 of " + name + ") { " + margins("header-first", odtPick(parts["footer-first"] != "", "footer-first", "footer")) + " }\n")
-	}
+		"@top-center { content: " + box(hName, hOK) + "; padding-top: " + odtPt(pl.top) + " } " +
+		"@bottom-center { content: " + box(fName, fOK) + "; padding-bottom: " + odtPt(pl.bottom) + " } }\n")
 }
 
 // odtPick returns a if cond is true, else b.

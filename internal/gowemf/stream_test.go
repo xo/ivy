@@ -29,6 +29,20 @@ func wmfDocument(slots uint16, records ...Record) []byte {
 	return b
 }
 
+// ivy: streamDrops checks that Stream plays file without an error, and that
+// it drops each record of the WMF or EMF type typ, as Windows does.
+func streamDrops(t *testing.T, file []byte, typ uint32) {
+	t.Helper()
+	if _, err := Stream(file, StreamOptions{}, func(c Command) error {
+		if c.Source.Format != EMFPlus && c.Source.Type == typ {
+			t.Fatalf("record 0x%04x at %d was not dropped", typ, c.Source.Offset)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStreamWMFHandles(t *testing.T) {
 	pen := testRecord(WMF, 0x02fa, 0, append(words(0, 1, 0), longs(0)...))
 	brush := testRecord(WMF, 0x02fc, 0, append(append(words(0), longs(255)...), words(0)...))
@@ -45,16 +59,33 @@ func TestStreamWMFHandles(t *testing.T) {
 	if len(ids) != 3 || ids[0] != 0 || ids[1] != 1 || ids[2] != 0 {
 		t.Fatal(ids)
 	}
-	for name, file := range map[string][]byte{
-		"undefined":     wmfDocument(1, testRecord(WMF, 0x012d, 0, words(0))),
-		"full":          wmfDocument(1, pen, brush),
-		"double delete": wmfDocument(1, pen, testRecord(WMF, 0x01f0, 0, words(0)), testRecord(WMF, 0x01f0, 0, words(0))),
+	// ivy: Windows ignores these records, so Stream drops them. Upstream
+	// expects ErrMalformed.
+	for name, tt := range map[string]struct {
+		file []byte
+		typ  uint32
+	}{
+		"undefined": {wmfDocument(1, testRecord(WMF, 0x012d, 0, words(0))), 0x012d},
+		"full":      {wmfDocument(1, pen, brush), 0x02fc},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
-				t.Fatal(err)
-			}
+			streamDrops(t, tt.file, tt.typ)
 		})
+	}
+	// ivy: a second deletion does not free the slot twice, so the next two
+	// objects take two slots.
+	file = wmfDocument(2, pen, testRecord(WMF, 0x01f0, 0, words(0)), testRecord(WMF, 0x01f0, 0, words(0)), pen, brush)
+	ids = nil
+	if _, err := Stream(file, StreamOptions{}, func(c Command) error {
+		if c.HasObjectID {
+			ids = append(ids, c.ObjectID)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 3 || ids[0] != 0 || ids[1] != 0 || ids[2] != 1 {
+		t.Fatal("double delete", ids)
 	}
 }
 
@@ -97,9 +128,15 @@ func TestStreamPlusPlaybackSelection(t *testing.T) {
 	if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrUnsupported) {
 		t.Fatal("GetDC data was skipped", err)
 	}
-	// A reference to a missing pen must fail even if the geometry is valid.
+	// ivy: a record that refers to a missing pen is dropped, as GDI+
+	// drops it. Upstream expects ErrMalformed.
 	file = emfFixture(plusComment(plusHeader(), plusRecord(0x400f, floats(1, 2, 3, 4)), plusRecord(0x4002, nil)))
-	if _, err := Stream(file, StreamOptions{}, nil); !errors.Is(err, ErrMalformed) {
+	if _, err := Stream(file, StreamOptions{}, func(c Command) error {
+		if c.Source.Type == 0x400f {
+			t.Fatal("the draw of a missing pen was not dropped")
+		}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

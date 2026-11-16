@@ -97,6 +97,15 @@ type converter struct {
 	// running maps the name of a part of a header or a footer to the name
 	// of its running element.
 	running map[string]string
+	// margin is "header" or "footer" while the conversion reads a header or
+	// a footer, and "" otherwise. The drawings of the part that float on
+	// the page, such as a watermark, go to floats.
+	margin string
+	floats strings.Builder
+	// lineParent is the properties of the runs of the paragraph that the
+	// conversion is in, with the font of its largest run, which its
+	// element has. It is nil out of a paragraph.
+	lineParent props
 
 	// fields is the stack of the complex fields that are open.
 	fields []*field

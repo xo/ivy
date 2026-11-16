@@ -91,7 +91,9 @@ func TestPlayEMFPlusMetafileImageLimits(t *testing.T) {
 	}
 	// A malformed embedded file is reported and the picture continues.
 	bad := innerEMF()
-	put32(bad, 48, 12) // nBytes too small
+	// ivy: nBytes too large. Upstream makes it too small, which ivy reads
+	// as bytes after the last record.
+	put32(bad, 48, uint32(len(bad)+4))
 	b, ops, err = report(plusScene(96, 64, plusObj(1, 5, metafileImageObj(3, bad)), draw, after), PlayOptions{})
 	if err != nil || len(ops) != 1 || !strings.HasPrefix(ops[0].Reason, "EMF+ metafile image: ") || len(b.fills) != 1 {
 		t.Fatal("malformed embedded file", err, ops)

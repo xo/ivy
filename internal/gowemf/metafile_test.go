@@ -154,8 +154,10 @@ func TestTruncation(t *testing.T) {
 					t.Fatalf("accepted truncation at %d", i)
 				}
 			}
-			if _, err := Walk(append(b, 0), Limits{}, nil); err == nil {
-				t.Fatal("accepted trailing byte")
+			// ivy: Windows plays a file with bytes after its EOF record.
+			// Upstream expects an error.
+			if _, err := Walk(append(b, 0), Limits{}, nil); err != nil {
+				t.Fatal("trailing byte", err)
 			}
 		})
 	}
@@ -170,10 +172,10 @@ func TestMalformed(t *testing.T) {
 	}{
 		{"wmf zero record", func() []byte { return wmfFixture(false) }, 18, 0},
 		{"wmf overflowing words", func() []byte { return wmfFixture(false) }, 18, 0xffffffff},
-		{"wmf max record", func() []byte { return wmfFixture(false) }, 12, 4},
-		{"wmf missing EOF", func() []byte { return wmfFixture(false) }, 30, 0x12340000},
+		// ivy: upstream has the cases "wmf max record", "wmf missing EOF"
+		// and "emf record count". Windows plays such files, and
+		// TestTolerantFraming checks them.
 		{"placeable checksum", func() []byte { return wmfFixture(true) }, 6, 42},
-		{"emf record count", func() []byte { return emfFixture() }, 52, 3},
 		{"emf signature", func() []byte { return emfFixture() }, 40, 0},
 		{"emf short header", func() []byte { return emfFixture() }, 4, 84},
 		{"emf unaligned record", func() []byte { return emfFixture() }, 92, 19},

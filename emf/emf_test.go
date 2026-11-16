@@ -202,6 +202,9 @@ func FuzzOpen(f *testing.F) {
 		clip.Bytes(),
 		pen.Bytes(),
 		fixture.NewEMF(100, 100).Image(0, 0, 50, 50, img).Gradient(50, 50, 100, 100, red, white, true).Bytes(),
+		// SRCAND, then R2_XORPEN, which the device draws with blend modes
+		bytes.Replace(square().Image(0, 0, 50, 50, img).Record(20, uint32(7)).Rectangle(10, 10, 60, 60).Bytes(),
+			[]byte{0x20, 0, 0xcc, 0}, []byte{0xc6, 0, 0x88, 0}, 1),
 	} {
 		f.Add(data)
 	}

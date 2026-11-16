@@ -15,8 +15,12 @@ import (
 	"github.com/xo/ivy/internal/ooxml"
 )
 
+// nsChartEx is the namespace of the charts of Office 2016, cx:chartSpace.
+const nsChartEx = "http://schemas.microsoft.com/office/drawing/2014/chartex"
+
 // Parse reads a chart part of DrawingML, the part with the root
-// c:chartSpace (ECMA-376 Part 1, 21.2.2.29). It returns an error that wraps
+// c:chartSpace (ECMA-376 Part 1, 21.2.2.29), or the part of a chart of
+// Office 2016 with the root cx:chartSpace. It returns an error that wraps
 // ivy.ErrFormat for a part that is not a chart, and one that wraps
 // ivy.ErrLimit for a part with more nodes than the limits of
 // opts.Config.
@@ -51,25 +55,23 @@ func Parse(buf []byte, opts Options) (c *Chart, err error) {
 	}
 	if spPr, ok := child(root, "spPr"); ok {
 		c.fill, c.border = p.shapeColors(spPr)
+	} else if _, ok := child(root, "printSettings"); ok {
+		// A chart of a sheet has the settings of its printing, and a white
+		// chart area with a border.
+		c.fill, c.border = color.NRGBA{255, 255, 255, 255}, gridGray
 	}
 	for i := range 36 {
 		c.colors = append(c.colors, accent(theme, i))
 	}
-	p.chart(chart)
-	c.finish()
-	return c, nil
-}
-
-// newChart returns a chart with the defaults of Office.
-func newChart(opts Options) *Chart {
-	return &Chart{
-		cat: newAxis(), val: newAxis(),
-		blanks: "gap",
-		text:   textStyle{size: 10, color: textGray, hasColor: true},
-		width:  max(0, opts.Width), height: max(0, opts.Height),
-		fonts: opts.Fonts,
-		cfg:   opts.Config,
+	if ns, _ := root.TagName().Namespace(); ns == nsChartEx {
+		c.look = lookModern
+		p.chartEx(root, chart)
+	} else {
+		p.chart(chart)
 	}
+	c.finish()
+	c.styleText()
+	return c, nil
 }
 
 // dmlParser holds the state of one call of Parse.
@@ -96,28 +98,27 @@ func (p *dmlParser) chart(n roxmltree.Node) {
 		case "plotArea":
 			p.plotArea(e)
 		case "legend":
-			c.legend = "right"
-			for l := range elements(e) {
-				switch l.TagName().Name() {
-				case "legendPos":
-					c.legend = map[string]string{
-						"r": "right", "l": "left", "t": "top", "b": "bottom", "tr": "top-right",
-					}[ooxml.Attr(l, "val")]
-					if c.legend == "" {
-						c.legend = "right"
-					}
-				case "txPr":
-					c.legendText = p.bodyStyle(l)
-				}
-			}
+			p.legend(e)
 		case "dispBlanksAs":
 			if v := ooxml.Attr(e, "val"); v == "gap" || v == "zero" || v == "span" {
 				c.blanks = v
+			}
+		case "view3D":
+			if rx, ok := child(e, "rotX"); ok {
+				if v, ok := parseNumber(ooxml.Attr(rx, "val")); ok && v >= -90 && v <= 90 {
+					c.rotX = math.Abs(v)
+				}
 			}
 		}
 	}
 	if hasTitle {
 		c.title, c.titleText = p.title(title)
+		if o, ok := child(title, "overlay"); ok {
+			c.titleOver = boolVal(o)
+		}
+		if box, ok := p.layout(title); ok {
+			c.titleAt = [2]float64{box[0], box[1]}
+		}
 		if c.title == nil && !autoDeleted {
 			c.title = []string{"Chart Title"}
 			if len(c.plots) == 1 && len(c.plots[0].series) == 1 && c.plots[0].series[0].name != "" {
@@ -125,11 +126,101 @@ func (p *dmlParser) chart(n roxmltree.Node) {
 			}
 		}
 	}
-	if c.titleText.size <= 0 {
-		c.titleText.size = math.Round(c.text.size * 1.4)
+}
+
+// legend reads c:legend.
+func (p *dmlParser) legend(n roxmltree.Node) {
+	c := p.c
+	c.legend = "right"
+	for l := range elements(n) {
+		switch l.TagName().Name() {
+		case "legendPos":
+			c.legend = legendPositions[ooxml.Attr(l, "val")]
+			if c.legend == "" {
+				c.legend = "right"
+			}
+		case "overlay":
+			c.legendOver = boolVal(l)
+		case "legendEntry":
+			idx, del := -1, false
+			for e := range elements(l) {
+				switch e.TagName().Name() {
+				case "idx":
+					if v, err := strconv.Atoi(ooxml.Attr(e, "val")); err == nil && v >= 0 && v < maxPoints {
+						idx = v
+					}
+				case "delete":
+					del = boolVal(e)
+				}
+			}
+			if idx >= 0 && del && len(c.legendHidden) < maxSeries {
+				if c.legendHidden == nil {
+					c.legendHidden = map[int]bool{}
+				}
+				c.legendHidden[idx] = true
+			}
+		case "layout":
+			if box, _, ok := p.manualLayout(l); ok {
+				c.legendAt = box
+			}
+		case "txPr":
+			c.legendText = p.bodyStyle(l)
+		}
 	}
-	c.titleText = c.titleText.merge(c.text)
-	c.legendText = c.legendText.merge(textStyle{size: math.Round(c.text.size * 0.9)}).merge(c.text)
+}
+
+// legendPositions maps c:legendPos and the position of a legend of Office
+// 2016 to a position of the legend.
+var legendPositions = map[string]string{
+	"r": "right", "l": "left", "t": "top", "b": "bottom", "tr": "top-right",
+}
+
+// layout reads the c:layout of n, and returns its box.
+func (p *dmlParser) layout(n roxmltree.Node) ([4]float64, bool) {
+	if l, ok := child(n, "layout"); ok {
+		box, _, ok := p.manualLayout(l)
+		return box, ok
+	}
+	return nan4(), false
+}
+
+// manualLayout reads c:layout/c:manualLayout, the box of an element as
+// fractions of the size of the chart. A position of the mode factor moves
+// the element from its automatic place, which the drawing does not do, so
+// it returns false for it. A box without a size has NaN as its width and
+// height. inner says that the box is the inner box of a plot area, without
+// the labels of its axes.
+func (p *dmlParser) manualLayout(n roxmltree.Node) (box [4]float64, inner, ok bool) {
+	ml, found := child(n, "manualLayout")
+	if !found {
+		return nan4(), false, false
+	}
+	box = nan4()
+	modes := map[string]string{}
+	for e := range elements(ml) {
+		name := e.TagName().Name()
+		v := ooxml.Attr(e, "val")
+		switch name {
+		case "xMode", "yMode", "wMode", "hMode", "layoutTarget":
+			modes[name] = v
+		case "x", "y", "w", "h":
+			f, ok := parseNumber(v)
+			if !ok || f < -1 || f > 2 {
+				continue
+			}
+			box[strings.Index("xywh", name)] = f
+		}
+	}
+	if modes["xMode"] == "factor" || modes["yMode"] == "factor" || math.IsNaN(box[0]) || math.IsNaN(box[1]) {
+		return nan4(), false, false
+	}
+	if modes["wMode"] == "edge" {
+		box[2] -= box[0]
+	}
+	if modes["hMode"] == "edge" {
+		box[3] -= box[1]
+	}
+	return box, modes["layoutTarget"] == "inner", true
 }
 
 // title reads the text of c:title, from rich text or from the cache of a
@@ -146,6 +237,7 @@ func (p *dmlParser) title(n roxmltree.Node) ([]string, textStyle) {
 	}
 	if rich, ok := child(tx, "rich"); ok {
 		style = p.bodyStyle(rich).merge(style)
+		first := true
 		for para := range elements(rich) {
 			if para.TagName().Name() != "p" {
 				continue
@@ -154,8 +246,9 @@ func (p *dmlParser) title(n roxmltree.Node) ([]string, textStyle) {
 			for r := range elements(para) {
 				switch r.TagName().Name() {
 				case "r", "fld":
-					if rPr, ok := child(r, "rPr"); ok && style.size <= 0 {
+					if rPr, ok := child(r, "rPr"); ok && first {
 						style = p.runStyle(rPr).merge(style)
+						first = false
 					}
 					if t, ok := child(r, "t"); ok {
 						b.WriteString(text(t))
@@ -192,20 +285,28 @@ func clip(lines []string) []string {
 }
 
 // bodyStyle reads the style of the first paragraph of a text body, such as
-// c:txPr or c:rich: a:p/a:pPr/a:defRPr.
+// c:txPr or c:rich: a:p/a:pPr/a:defRPr, and the rotation of a:bodyPr.
 func (p *dmlParser) bodyStyle(n roxmltree.Node) textStyle {
+	var s textStyle
+	if bodyPr, ok := child(n, "bodyPr"); ok {
+		if rot, ok := parseNumber(ooxml.Attr(bodyPr, "rot")); ok && rot >= -5400000 && rot <= 5400000 {
+			s.rotation, s.hasRotation = -rot/60000, true
+		}
+	}
 	for para := range elements(n) {
 		if para.TagName().Name() != "p" {
 			continue
 		}
 		if pPr, ok := child(para, "pPr"); ok {
 			if def, ok := child(pPr, "defRPr"); ok {
-				return p.runStyle(def)
+				r := p.runStyle(def)
+				r.rotation, r.hasRotation = s.rotation, s.hasRotation
+				return r
 			}
 		}
-		return textStyle{}
+		return s
 	}
-	return textStyle{}
+	return s
 }
 
 // runStyle reads the properties of a run, a:rPr or a:defRPr.
@@ -214,7 +315,9 @@ func (p *dmlParser) runStyle(n roxmltree.Node) textStyle {
 	if sz, ok := parseNumber(ooxml.Attr(n, "sz")); ok && sz >= 100 && sz <= 400000 {
 		s.size = sz / 100
 	}
-	s.bold = ooxml.Attr(n, "b") == "1" || ooxml.Attr(n, "b") == "true"
+	if b := ooxml.Attr(n, "b"); b != "" {
+		s.bold, s.hasBold = b == "1" || b == "true", true
+	}
 	if c, ok, _ := fillColor(n, p.colors); ok {
 		s.color, s.hasColor = c, true
 	}
@@ -266,40 +369,56 @@ func (p *dmlParser) shapeColors(n roxmltree.Node) (fill, line color.NRGBA) {
 	return fill, line
 }
 
+// lineOf reads a:ln of c:spPr: its color, whether it is a:noFill, its
+// width in points, and its preset dash.
+func (p *dmlParser) lineOf(spPr roxmltree.Node) (c color.NRGBA, ok, none bool, width float64, dash string) {
+	ln, found := child(spPr, "ln")
+	if !found {
+		return c, false, false, 0, ""
+	}
+	if w, wok := parseNumber(ooxml.Attr(ln, "w")); wok && w >= 0 && w <= 20116800 {
+		width = w / 12700
+	}
+	if d, found := child(ln, "prstDash"); found {
+		dash = ooxml.Attr(d, "val")
+	}
+	c, ok, none = fillColor(ln, p.colors)
+	return c, ok, none, width, dash
+}
+
 // plotArea reads c:plotArea: its axes, then its charts, so that the
 // categories take the number format of their axis.
 func (p *dmlParser) plotArea(n roxmltree.Node) {
 	c := p.c
 	axes := map[string]axis{}
-	var axisIDs []string
+	var first []string
 	for e := range elements(n) {
 		switch name := e.TagName().Name(); {
 		case name == "catAx" || name == "valAx" || name == "dateAx" || name == "serAx":
-			id := ""
-			if a, ok := child(e, "axId"); ok {
-				id = ooxml.Attr(a, "val")
+			a := p.axis(e)
+			if _, ok := axes[a.id]; !ok && len(axes) < 16 {
+				axes[a.id] = a
 			}
-			if _, ok := axes[id]; !ok && len(axes) < 16 {
-				axes[id] = p.axis(e)
-			}
-		case plotKinds[name] != 0 && axisIDs == nil:
-			axisIDs = []string{}
-			for a := range elements(e) {
-				if a.TagName().Name() == "axId" {
-					axisIDs = append(axisIDs, ooxml.Attr(a, "val"))
-				}
+		case plotKinds[name] != 0 && first == nil:
+			first = axisIDs(e)
+		case name == "spPr":
+			c.plotFill, c.plotBorder = p.shapeColors(e)
+		case name == "layout":
+			if box, inner, ok := p.manualLayout(e); ok {
+				c.plotAt, c.plotInner = box, inner
 			}
 		}
 	}
-	if len(axisIDs) > 0 {
-		if a, ok := axes[axisIDs[0]]; ok {
-			c.cat = a
+	pair := func(ids []string) (axis, axis, bool) {
+		if len(ids) < 2 {
+			return axis{}, axis{}, false
 		}
+		a, ok0 := axes[ids[0]]
+		b, ok1 := axes[ids[1]]
+		return a, b, ok0 && ok1
 	}
-	if len(axisIDs) > 1 {
-		if a, ok := axes[axisIDs[1]]; ok {
-			c.val = a
-		}
+	if a, b, ok := pair(first); ok {
+		c.cat, c.val = a, b
 	}
 	for e := range elements(n) {
 		pl, unsupported := p.plot(e)
@@ -309,15 +428,44 @@ func (p *dmlParser) plotArea(n roxmltree.Node) {
 		if pl == nil || len(c.plots) >= 16 {
 			continue
 		}
+		ids := axisIDs(e)
+		if len(first) >= 2 && len(ids) >= 2 && (ids[0] != first[0] || ids[1] != first[1]) {
+			if a, b, ok := pair(ids); ok {
+				pl.secondary = true
+				if !c.val2.present {
+					c.cat2, c.val2 = a, b
+				}
+			}
+		}
 		c.plots = append(c.plots, pl)
 	}
 	if len(c.plots) > 0 {
 		c.unsupported = ""
 	}
-	c.cat.text = c.cat.text.merge(textStyle{size: math.Round(c.text.size * 0.9)}).merge(c.text)
-	c.val.text = c.val.text.merge(textStyle{size: math.Round(c.text.size * 0.9)}).merge(c.text)
-	c.cat.titleText = c.cat.titleText.merge(c.text)
-	c.val.titleText = c.val.titleText.merge(c.text)
+	// The axis of values tells how it crosses the axis of categories.
+	if c.val.betweenSet {
+		c.cat.between, c.cat.betweenSet = c.val.between, true
+	}
+	if c.val2.betweenSet {
+		c.cat2.between, c.cat2.betweenSet = c.val2.between, true
+	}
+}
+
+// axisIDs returns the c:axId of a chart type.
+func axisIDs(n roxmltree.Node) []string {
+	ids := []string{}
+	for a := range elements(n) {
+		if a.TagName().Name() == "axId" && len(ids) < 4 {
+			ids = append(ids, ooxml.Attr(a, "val"))
+		}
+	}
+	return ids
+}
+
+// dispUnits are the built-in units of an axis, c:builtInUnit.
+var dispUnits = map[string]float64{
+	"hundreds": 100, "thousands": 1e3, "tenThousands": 1e4, "hundredThousands": 1e5,
+	"millions": 1e6, "tenMillions": 1e7, "hundredMillions": 1e8, "billions": 1e9, "trillions": 1e12,
 }
 
 // axis reads c:catAx, c:valAx, c:dateAx or c:serAx.
@@ -326,11 +474,16 @@ func (p *dmlParser) axis(n roxmltree.Node) axis {
 	a.present = true
 	a.date = n.TagName().Name() == "dateAx"
 	for e := range elements(n) {
+		v := ooxml.Attr(e, "val")
 		switch e.TagName().Name() {
+		case "axId":
+			a.id = v
+		case "crossAx":
+			a.cross = v
 		case "delete":
 			a.deleted = boolVal(e)
 		case "axPos":
-			a.position = ooxml.Attr(e, "val")
+			a.position = v
 		case "title":
 			lines, style := p.title(e)
 			a.title = strings.Join(lines, " ")
@@ -339,30 +492,83 @@ func (p *dmlParser) axis(n roxmltree.Node) axis {
 			if ooxml.Attr(e, "sourceLinked") != "1" && ooxml.Attr(e, "sourceLinked") != "true" {
 				a.format = ooxml.Attr(e, "formatCode")
 			}
-		case "majorGridlines":
-			a.grid = true
+		case "majorGridlines", "minorGridlines":
+			major := e.TagName().Name() == "majorGridlines"
+			var col color.NRGBA
+			ok, none := false, false
+			if spPr, found := child(e, "spPr"); found {
+				col, ok, none, _, _ = p.lineOf(spPr)
+			}
+			if major {
+				a.grid = !none
+				a.gridColor, a.hasGridColor = col, ok
+			} else {
+				a.minorGrid = !none
+				a.minorColor, a.hasMinorColor = col, ok
+			}
+		case "majorTickMark":
+			a.majorTick = v
+		case "minorTickMark":
+			a.minorTick = v
+		case "tickLblPos":
+			a.labelPos = v
 		case "majorUnit":
-			if v, ok := parseNumber(ooxml.Attr(e, "val")); ok && v > 0 {
-				a.major = v
+			if f, ok := parseNumber(v); ok && f > 0 {
+				a.major = f
+			}
+		case "minorUnit":
+			if f, ok := parseNumber(v); ok && f > 0 {
+				a.minor = f
+			}
+		case "crosses":
+			a.crosses = v
+		case "crossesAt":
+			if f, ok := parseNumber(v); ok {
+				a.crossesAt = f
+			}
+		case "crossBetween":
+			a.between, a.betweenSet = v != "midCat", true
+		case "tickLblSkip":
+			if k, err := strconv.Atoi(v); err == nil && k > 0 && k <= maxCategories {
+				a.skip = k
+			}
+		case "dispUnits":
+			for u := range elements(e) {
+				switch u.TagName().Name() {
+				case "builtInUnit":
+					a.unit = dispUnits[ooxml.Attr(u, "val")]
+				case "custUnit":
+					if f, ok := parseNumber(ooxml.Attr(u, "val")); ok && f > 0 {
+						a.unit = f
+					}
+				}
 			}
 		case "scaling":
 			for s := range elements(e) {
-				v, ok := parseNumber(ooxml.Attr(s, "val"))
+				f, ok := parseNumber(ooxml.Attr(s, "val"))
 				switch s.TagName().Name() {
 				case "orientation":
 					a.reverse = ooxml.Attr(s, "val") == "maxMin"
 				case "min":
 					if ok {
-						a.min = v
+						a.min = f
 					}
 				case "max":
 					if ok {
-						a.max = v
+						a.max = f
+					}
+				case "logBase":
+					if ok && f >= 2 && f <= 1000 {
+						a.logBase = f
 					}
 				}
 			}
+		case "spPr":
+			col, ok, none, _, _ := p.lineOf(e)
+			a.line, a.hasLine, a.noLine = col, ok, none
 		case "txPr":
 			a.text = p.bodyStyle(e)
+			a.rotation, a.hasRotation = a.text.rotation, a.text.hasRotation
 		}
 	}
 	return a
@@ -372,8 +578,9 @@ func (p *dmlParser) axis(n roxmltree.Node) axis {
 // it.
 var plotKinds = map[string]kind{
 	"barChart": kindBar, "bar3DChart": kindBar,
-	"lineChart": kindLine, "line3DChart": kindLine, "stockChart": kindLine, "radarChart": kindLine,
-	"areaChart": kindArea, "area3DChart": kindArea,
+	"lineChart": kindLine, "line3DChart": kindLine, "stockChart": kindLine,
+	"radarChart": kindRadar,
+	"areaChart":  kindArea, "area3DChart": kindArea,
 	"pieChart": kindPie, "pie3DChart": kindPie, "doughnutChart": kindPie, "ofPieChart": kindPie,
 	"scatterChart": kindScatter, "bubbleChart": kindScatter,
 }
@@ -389,7 +596,7 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 		}
 		return nil, ""
 	}
-	pl := &plot{kind: k, gap: 150, markers: true, varyColors: k == kindPie}
+	pl := &plot{kind: k, gap: 150, overlap: math.NaN(), markers: true, varyColors: k == kindPie, bubbleScale: 100}
 	switch name {
 	case "barChart", "bar3DChart":
 		pl.grouping = "clustered"
@@ -397,8 +604,12 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 		pl.markers = false
 	case "doughnutChart":
 		pl.hole = 0.5
+	case "pie3DChart":
+		pl.flat3D = true
 	case "bubbleChart":
 		pl.bubbles = true
+	case "stockChart":
+		pl.grouping = "standard"
 	}
 	for e := range elements(n) {
 		v := ooxml.Attr(e, "val")
@@ -413,6 +624,10 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 			if g, ok := parseNumber(v); ok && g >= 0 && g <= 500 {
 				pl.gap = g
 			}
+		case "overlap":
+			if o, ok := parseNumber(v); ok && o >= -100 && o <= 100 {
+				pl.overlap = o
+			}
 		case "holeSize":
 			if h, ok := parseNumber(v); ok && h >= 1 && h <= 90 {
 				pl.hole = h / 100
@@ -421,6 +636,10 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 			if a, ok := parseNumber(v); ok && a >= 0 && a <= 360 {
 				pl.firstAngle = a
 			}
+		case "bubbleScale":
+			if s, ok := parseNumber(v); ok && s >= 0 && s <= 300 {
+				pl.bubbleScale = s
+			}
 		case "marker":
 			pl.markers = boolVal(e)
 		case "scatterStyle":
@@ -428,9 +647,12 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 			pl.smooth = strings.HasPrefix(v, "smooth")
 			pl.markers = v != "line" && v != "smooth"
 		case "radarStyle":
-			if v == "filled" {
-				pl.kind = kindArea
-			}
+			pl.filled = v == "filled"
+			pl.markers = v == "marker"
+		case "hiLowLines":
+			pl.hiLow = true
+		case "upDownBars":
+			pl.upDown = true
 		case "dLbls":
 			pl.labels = p.labels(e)
 		case "ser":
@@ -462,62 +684,132 @@ func (p *dmlParser) labels(n roxmltree.Node) labels {
 			if boolVal(e) {
 				return labels{set: true}
 			}
-		case "showVal":
-			l.value = boolVal(e)
-		case "showPercent":
-			l.percent = boolVal(e)
-		case "showCatName":
-			l.category = boolVal(e)
-		case "showSerName":
-			l.seriesOf = boolVal(e)
-		case "numFmt":
-			l.format = ooxml.Attr(e, "formatCode")
-			if ooxml.Attr(e, "sourceLinked") == "1" {
-				l.format = ""
+		case "dLbl":
+			idx, pt := p.pointLabel(e)
+			if idx >= 0 && len(l.points) < maxPoints {
+				if l.points == nil {
+					l.points = map[int]*pointLabel{}
+				}
+				l.points[idx] = pt
 			}
-		case "dLblPos":
-			l.position = ooxml.Attr(e, "val")
-		case "txPr":
-			l.text = p.bodyStyle(e)
+		default:
+			p.labelPart(e, &l)
 		}
 	}
 	return l
 }
 
+// labelPart reads a part of c:dLbls or c:dLbl into l: what the labels show,
+// their format, their place and their style.
+func (p *dmlParser) labelPart(e roxmltree.Node, l *labels) {
+	switch e.TagName().Name() {
+	case "showVal":
+		l.value = boolVal(e)
+	case "showPercent":
+		l.percent = boolVal(e)
+	case "showCatName":
+		l.category = boolVal(e)
+	case "showSerName":
+		l.seriesOf = boolVal(e)
+	case "separator":
+		l.separator, l.hasSep = text(e), true
+	case "numFmt":
+		l.format = ooxml.Attr(e, "formatCode")
+		if ooxml.Attr(e, "sourceLinked") == "1" {
+			l.format = ""
+		}
+	case "dLblPos":
+		l.position = ooxml.Attr(e, "val")
+	case "txPr":
+		l.text = p.bodyStyle(e).merge(l.text)
+	}
+}
+
+// pointLabel reads c:dLbl, the label of one point, and returns the number
+// of the point, or -1.
+func (p *dmlParser) pointLabel(n roxmltree.Node) (int, *pointLabel) {
+	pt := &pointLabel{labels: labels{set: true}}
+	idx := -1
+	for e := range elements(n) {
+		switch e.TagName().Name() {
+		case "idx":
+			if v, err := strconv.Atoi(ooxml.Attr(e, "val")); err == nil && v >= 0 && v < maxPoints {
+				idx = v
+			}
+		case "delete":
+			pt.deleted = boolVal(e)
+		case "layout":
+			if ml, ok := child(e, "manualLayout"); ok {
+				for m := range elements(ml) {
+					v, ok := parseNumber(ooxml.Attr(m, "val"))
+					if !ok || v < -2 || v > 2 {
+						continue
+					}
+					switch m.TagName().Name() {
+					case "x":
+						pt.dx = v
+					case "y":
+						pt.dy = v
+					}
+				}
+			}
+		case "tx":
+			lines, style := p.title(n)
+			for _, l := range lines {
+				pt.lines = append(pt.lines, strings.Split(l, "\n")...)
+			}
+			pt.hasText = len(pt.lines) > 0
+			pt.text = style.merge(pt.text)
+		default:
+			p.labelPart(e, &pt.labels)
+		}
+	}
+	return idx, pt
+}
+
 // series reads c:ser.
 func (p *dmlParser) series(n roxmltree.Node, pl *plot) *series {
 	s := &series{index: -1}
-	var line, markerFill color.NRGBA
-	hasLine, hasMarker := false, false
+	var markerFill color.NRGBA
+	hasMarker := false
 	for e := range elements(n) {
 		switch e.TagName().Name() {
 		case "idx":
 			if v, err := strconv.Atoi(ooxml.Attr(e, "val")); err == nil && v >= 0 {
-				s.index = v
+				s.index = min(v, maxPoints)
 			}
 		case "tx":
 			s.name = p.seriesName(e)
 		case "spPr":
-			if c, ok, _ := fillColor(e, p.colors); ok {
+			c, ok, none := fillColor(e, p.colors)
+			s.noFill = none
+			if ok {
 				s.color, s.hasColor = c, true
 			}
-			if ln, ok := child(e, "ln"); ok {
-				c, ok, none := fillColor(ln, p.colors)
-				s.noLine = none
-				if ok {
-					line, hasLine = c, true
-				}
-			}
+			s.line, s.hasLine, s.noLine, s.lineWidth, s.dash = p.lineOf(e)
 		case "marker":
 			for m := range elements(e) {
 				switch m.TagName().Name() {
 				case "symbol":
-					s.noMarker = ooxml.Attr(m, "val") == "none"
+					s.marker = ooxml.Attr(m, "val")
+					s.noMarker = s.marker == "none"
+				case "size":
+					if v, ok := parseNumber(ooxml.Attr(m, "val")); ok && v >= 2 && v <= 72 {
+						s.markerSize = v
+					}
 				case "spPr":
 					if c, ok, _ := fillColor(m, p.colors); ok {
 						markerFill, hasMarker = c, true
+						s.markerFill, s.hasMarkerFill = c, true
+					}
+					if c, ok, _, _, _ := p.lineOf(m); ok {
+						s.markerLine, s.hasMarkerLine = c, true
 					}
 				}
+			}
+		case "explosion":
+			if v, ok := parseNumber(ooxml.Attr(e, "val")); ok && v > 0 && v <= 400 {
+				s.explode = v / 100
 			}
 		case "dPt":
 			p.point(e, s)
@@ -535,20 +827,21 @@ func (p *dmlParser) series(n roxmltree.Node, pl *plot) *series {
 		case "bubbleSize":
 			_, s.sizes, _, _ = p.data(e)
 		case "smooth":
-			pl.smooth = pl.smooth || boolVal(e)
+			s.smooth = boolVal(e)
 		}
 	}
 	if s.index < 0 {
 		s.index = len(pl.series)
 	}
-	if (pl.kind == kindLine || pl.kind == kindScatter) && hasLine {
-		s.color, s.hasColor = line, true
+	lined := pl.kind == kindLine || pl.kind == kindScatter || (pl.kind == kindRadar && !pl.filled)
+	if lined && s.hasLine {
+		s.color, s.hasColor = s.line, true
 	}
 	if !s.hasColor && hasMarker {
 		s.color, s.hasColor = markerFill, true
 	}
-	if !s.hasColor && pl.kind != kindLine && pl.kind != kindScatter && hasLine {
-		s.color, s.hasColor = line, true
+	if !s.hasColor && !lined && s.hasLine && s.noFill {
+		s.color, s.hasColor = s.line, true
 	}
 	if len(s.name) > maxText {
 		s.name = s.name[:maxText]
@@ -557,16 +850,21 @@ func (p *dmlParser) series(n roxmltree.Node, pl *plot) *series {
 	return s
 }
 
-// point reads c:dPt, the color of one point of a series.
+// point reads c:dPt, the color and the explosion of one point of a series.
 func (p *dmlParser) point(n roxmltree.Node, s *series) {
 	idx := -1
 	var c color.NRGBA
 	ok := false
+	explode := math.NaN()
 	for e := range elements(n) {
 		switch e.TagName().Name() {
 		case "idx":
 			if v, err := strconv.Atoi(ooxml.Attr(e, "val")); err == nil && v >= 0 && v < maxPoints {
 				idx = v
+			}
+		case "explosion":
+			if v, vok := parseNumber(ooxml.Attr(e, "val")); vok && v >= 0 && v <= 400 {
+				explode = v / 100
 			}
 		case "spPr":
 			c, ok, _ = fillColor(e, p.colors)
@@ -577,13 +875,21 @@ func (p *dmlParser) point(n roxmltree.Node, s *series) {
 			}
 		}
 	}
-	if idx < 0 || !ok || len(s.points) >= maxPoints {
+	if idx < 0 || len(s.points) >= maxPoints || len(s.explodes) >= maxPoints {
 		return
 	}
-	if s.points == nil {
-		s.points = map[int]color.NRGBA{}
+	if ok {
+		if s.points == nil {
+			s.points = map[int]color.NRGBA{}
+		}
+		s.points[idx] = c
 	}
-	s.points[idx] = c
+	if !math.IsNaN(explode) {
+		if s.explodes == nil {
+			s.explodes = map[int]float64{}
+		}
+		s.explodes[idx] = explode
+	}
 }
 
 // seriesName reads the name of a series from c:tx: a reference with its
@@ -643,9 +949,11 @@ func (p *dmlParser) data(n roxmltree.Node) (strs []string, nums []float64, forma
 		}
 	})
 	if format == "" {
-		for _, f := range formats {
-			format = f
-			break
+		for i := range nums {
+			if f, ok := formats[i]; ok {
+				format = f
+				break
+			}
 		}
 	}
 	return nil, nums, format, true

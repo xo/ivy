@@ -9,7 +9,7 @@
 // fills, the lines and the text of internal/drawingml. A placeholder takes
 // what it does not set from the placeholder of the layout and of the
 // master. The text goes through the layout of the ebooks. internal/chart
-// draws the charts with zuzu (D24), with the theme of the slide and the
+// draws the charts (D27), with the theme of the slide and the
 // fonts of ivy.Config. The notes are never drawn.
 //
 // A file that a password protects opens with the password of ivy.Config, or

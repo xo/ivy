@@ -268,7 +268,7 @@ func (t *Tree) cellPart(n roxmltree.Node, p *tablePart, pics Pictures) {
 				colors = t.Colors.WithPlaceholder(v)
 			}
 			if f, ok := t.Colors.Theme.FillStyle(idx); ok {
-				if pt, ok := colors.PaintOf(f, pics); ok {
+				if pt, ok := colors.PaintOf(f, t.Colors.Theme.StylePictures()); ok {
 					p.fill.Set(pt)
 				}
 			}

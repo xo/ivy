@@ -134,8 +134,17 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	if rpr.on("vanish") && isEmpty {
 		return
 	}
+	// The paragraph takes the font of its largest run, so that the strut
+	// of its lines has the height of a line of that run, as the lines of
+	// Word have. A strut of another font makes the lines taller. The runs
+	// take their properties from rpr, and write the font of their own when
+	// it is not the font of the paragraph.
+	line := c.lineFont(p, rpr)
+	lineParent := c.lineParent
+	c.lineParent = line
+	defer func() { c.lineParent = lineParent }()
 
-	style := c.paragraphStyle(p, ppr, rpr)
+	style := c.paragraphStyle(p, ppr, line)
 	start := `<p style="` + attrText(style) + `">`
 	para, open := c.para, c.open
 	c.para, c.open = start, nil
@@ -170,6 +179,101 @@ func attrText(s string) string {
 	return b.String()
 }
 
+// hasSectPr reports whether the paragraph p ends a section, with a
+// w:sectPr in its w:pPr.
+func hasSectPr(p roxmltree.Node) bool {
+	ppr, ok := child(p, "pPr")
+	if !ok {
+		return false
+	}
+	_, ok = child(ppr, "sectPr")
+	return ok
+}
+
+// lineFont returns the properties rpr of the runs of the paragraph p with
+// the font and the size of most of its text. A run of a larger font makes
+// its own line taller, as in Word.
+func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
+	type font struct{ font, ea, sz string }
+	count := map[font]int{}
+	runs := map[font]props{}
+	var best props
+	most := 0
+	n := 0
+	for d := range p.Descendants() {
+		if !d.IsElement() || d.TagName().Name() != "r" || inDrawing(d, p) {
+			continue
+		}
+		if n++; n > 256 {
+			break
+		}
+		chars := 0
+		for t := range d.Children() {
+			if t.IsElement() && t.TagName().Name() == "t" {
+				v, _ := t.Text()
+				chars += len(v)
+			}
+		}
+		if chars == 0 {
+			continue
+		}
+		run := rpr
+		if r, ok := child(d, "rPr"); ok {
+			direct := parseRPr(r)
+			if id := direct["rStyle"]; id != "" {
+				if st := c.styles.get(id, "character"); st != nil {
+					run = run.over(st.rpr)
+				}
+			}
+			run = run.over(direct)
+		}
+		if run.on("vanish") || run["vertAlign"] == "superscript" || run["vertAlign"] == "subscript" {
+			continue
+		}
+		k := font{run["font"], run["font.ea"], run["sz"]}
+		if _, ok := runs[k]; !ok {
+			runs[k] = run
+		}
+		count[k] += chars
+		if count[k] > most {
+			best, most = runs[k], count[k]
+		}
+	}
+	if best == nil {
+		return rpr
+	}
+	out := rpr.over(props{})
+	for _, k := range [...]string{"font", "font.ea", "sz"} {
+		if v, ok := best[k]; ok {
+			out[k] = v
+		} else {
+			delete(out, k)
+		}
+	}
+	return out
+}
+
+// inDrawing reports whether the run r of the paragraph p is in a drawing or
+// a text box of p, which has paragraphs of its own.
+func inDrawing(r, p roxmltree.Node) bool {
+	for a := range r.Ancestors() {
+		if a == p {
+			return false
+		}
+		switch a.TagName().Name() {
+		case "drawing", "pict", "object", "txbxContent":
+			return true
+		}
+	}
+	return false
+}
+
+// inCell reports whether the paragraph p is in a cell of a table.
+func inCell(p roxmltree.Node) bool {
+	parent, ok := p.ParentElement()
+	return ok && parent.TagName().Name() == "tc"
+}
+
 // paragraphStyle returns the style attribute of a paragraph with the
 // properties ppr, whose runs have the properties rpr.
 func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
@@ -182,11 +286,21 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 	indent := ppr.num("ind.firstLine", 0)/20 - ppr.num("ind.hanging", 0)/20
 	before := ppr.num("spacing.before", 0) / 20
 	after := ppr.num("spacing.after", 0) / 20
-	if ppr.on("spacing.beforeAutospacing") {
+	// The automatic spacing of HTML is 14 points, which collapses with the
+	// spacing of the paragraph before, as the margins of HTML do. The first
+	// paragraph of a cell has none before, and the last none after.
+	autoBefore := ppr.on("spacing.beforeAutospacing")
+	if autoBefore {
 		before = 14
+		if prev, ok := p.PrevSiblingElement(); !ok && inCell(p) || ok && prev.TagName().Name() == "tcPr" {
+			before = 0
+		}
 	}
 	if ppr.on("spacing.afterAutospacing") {
 		after = 14
+		if _, ok := p.NextSiblingElement(); !ok && inCell(p) {
+			after = 0
+		}
 	}
 	if ppr.on("contextualSpacing") {
 		id := styleID(p)
@@ -224,7 +338,7 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 	// with the margin of the spacing after. The spacing after is a margin,
 	// which the bottom of a page cuts, as in Word.
 	if before > 0 {
-		s.set(pick(boxed, "margin-top", "padding-top"), pt(before))
+		s.set(pick(boxed || autoBefore, "margin-top", "padding-top"), pt(before))
 	}
 	if after > 0 {
 		s.set("margin-bottom", pt(after))
@@ -243,7 +357,9 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 	default:
 		s.set("text-align", "left")
 	}
-	if ppr.on("pageBreakBefore") {
+	// An empty paragraph that only ends a section does not break the page
+	// before it, as in LibreOffice: the section after it starts the page.
+	if ppr.on("pageBreakBefore") && (!empty(p) || !hasSectPr(p)) {
 		s.set("break-before", "page")
 	}
 	if ppr.on("keepNext") {

@@ -23,7 +23,8 @@
 // encrypt. Its text gives an error that wraps ivy.ErrDRM (D12).
 //
 // The layout puts the documents on the pages of an ebook (D10, D21), and Page
-// lays them out only as far as the page that a program asks for. An AZW4
+// lays them out only as far as the page that a program asks for. As in
+// calibre, the first page shows the cover image, scaled to fit the page. An AZW4
 // book holds a PDF file in its text, and its pages are the pages of that
 // PDF file, which the package pdf renders.
 package mobi
@@ -34,6 +35,7 @@ import (
 	"image"
 	"iter"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/xo/magic/compress/palmdoc"
@@ -111,6 +113,8 @@ type Document struct {
 	cfg ivy.Config
 	lim ivy.Limits
 	log *slog.Logger
+	// fonts are the fonts of the configuration, for the layout.
+	fonts ebook.Fonts
 	// first is the header of record 0. book is the header of the book that
 	// the package reads: the KF8 header of a joint file, or first.
 	first, book *header
@@ -157,7 +161,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if err != nil {
 		return nil, err
 	}
-	d = &Document{db: db, cfg: o.cfg, lim: lim, log: o.cfg.Log(), first: first, book: first, firstResource: first.firstImage}
+	d = &Document{db: db, cfg: o.cfg, lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), first: first, book: first, firstResource: first.firstImage}
 	switch {
 	case !first.mobi:
 		d.kind = palmDOC
@@ -234,7 +238,7 @@ func (d *Document) layoutSource(context.Context) (layout.Source, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Describe satisfies the ivy.Describer interface. It reads the EXTH
@@ -403,7 +407,42 @@ func (d *Document) convert() (layout.Source, error) {
 		}
 		src.Documents = d.addKF8(fsys, book, res, h)
 	}
+	src.Documents = d.withCover(fsys, res, src.Documents, src.Title)
 	return src, nil
+}
+
+// coverPage is the name of the page of the cover in the FS of the layout.
+const coverPage = "cover-page.xhtml"
+
+// withCover returns the documents of the book with a page of the cover
+// image first, as calibre shows a book. The cover is the image of the first
+// preview of the cover. A first document that is already a page of the
+// cover, with almost no text, stays after the page of the cover, as in
+// calibre. A first document that shows the cover with its text stays the
+// first page. A book without a cover image is unchanged.
+func (d *Document) withCover(fsys *zipdoc.FS, res *resources, docs []string, title string) []string {
+	if len(docs) == 0 {
+		return docs
+	}
+	var cover string
+	for _, p := range d.previewRecords() {
+		if p.kind != ivy.Cover {
+			continue
+		}
+		name, ok := res.name(p.record - d.firstResource + 1)
+		if ok && !strings.HasSuffix(name, ".ttf") {
+			cover = name
+		}
+		break
+	}
+	if cover == "" || fsys.Has(coverPage) {
+		return docs
+	}
+	if page, shows := ebook.IsCoverPage(fsys, docs[0], cover, d.lim); shows && !page {
+		return docs
+	}
+	fsys.Add(coverPage, ebook.ImagePage(ebook.ImagePageLink(coverPage, cover), title))
+	return append([]string{coverPage}, docs...)
 }
 
 // addKF8 adds the parts and the flows of a KF8 book to fsys, with their

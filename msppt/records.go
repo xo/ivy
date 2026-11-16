@@ -108,12 +108,20 @@ type stream struct {
 // directory (MS-PPT 2.1.2).
 func readStream(ctx context.Context, f *cfb.File, cfg ivy.Config) (*stream, error) {
 	lim := cfg.Limits
+	if _, err := f.Lookup("PP40"); err == nil {
+		return nil, fmt.Errorf("presentation of powerpoint 4: %w", ivy.ErrUnsupported)
+	}
 	cu, err := msole.ReadStream(f, "Current User", lim)
 	if err != nil {
 		return nil, err
 	}
 	h, ok := readHeader(cu)
 	if !ok || h.typ != rtCurrentUserAtom || len(cu) < 20 {
+		// PowerPoint 95 writes a stream "Header", and a "Current User" in
+		// another format
+		if msole.Has(f, "Header") {
+			return nil, fmt.Errorf("presentation of powerpoint 95: %w", ivy.ErrUnsupported)
+		}
 		return nil, fmt.Errorf("powerpoint file without a current user atom: %w", ivy.ErrFormat)
 	}
 	token := le.Uint32(cu[12:])

@@ -198,7 +198,7 @@ func (c *converter) startSection(i int) {
 		if !ok {
 			continue
 		}
-		if name, ok := c.headerFooter(id); ok {
+		if name, ok := c.headerFooter(id, key[:strings.IndexByte(key, '.')]); ok {
 			running[key] = name
 		} else {
 			delete(running, key)
@@ -209,8 +209,8 @@ func (c *converter) startSection(i int) {
 }
 
 // headerFooter converts the part of a header or a footer into a running
-// element, and returns its name.
-func (c *converter) headerFooter(id string) (string, bool) {
+// element, and returns its name. margin is "header" or "footer".
+func (c *converter) headerFooter(id, margin string) (string, bool) {
 	r, ok := c.relationship(id)
 	if !ok || r.External {
 		return "", false
@@ -229,11 +229,34 @@ func (c *converter) headerFooter(id string) (string, bool) {
 	part := c.part
 	c.part = r.Target
 	defer func() { c.part = part }()
-	c.w.WriteString(`<div style="position: running(` + name + `)">`)
+	// The drawings that float on the page are in a box of no height at the
+	// edge of the margin box that is next to the page area: the top of the
+	// box of a header, which aligns its content to the top, and the bottom
+	// of the box of a footer, which aligns its content to the bottom.
+	prev := c.margin
+	c.margin = margin
+	c.floats.Reset()
+	defer func() { c.margin = prev }()
+	var body strings.Builder
+	w := c.w
+	c.w = &body
 	for n := range doc.RootElement().Children() {
 		if n.IsElement() {
 			c.block(n, nil)
 		}
+	}
+	c.w = w
+	floats := ""
+	if c.floats.Len() > 0 {
+		floats = `<div style="position: relative; height: 0">` + c.floats.String() + "</div>"
+	}
+	c.w.WriteString(`<div style="position: running(` + name + `)">`)
+	if margin == "header" {
+		c.w.WriteString(floats)
+	}
+	c.w.WriteString(body.String())
+	if margin != "header" {
+		c.w.WriteString(floats)
 	}
 	c.w.WriteString("</div>")
 	return name, true

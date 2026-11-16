@@ -15,6 +15,13 @@
 // up the substitute of a font of Office, such as Carlito for Calibri, with
 // font.Substitute of internal/font, among the faces of the font files.
 //
+// Find gives the face of a font that a document names and does not embed,
+// such as a font of a PDF file, or its substitute. Covering gives the first
+// face that draws a character, such as Droid Sans Fallback of the module
+// github.com/xo/ivy/fonts for a CJK character. The layout finds the same
+// fallback with the fallback selector of okage, which looks at each face
+// of the database.
+//
 // The formats share the database of the same font files, when the value of
 // the fs.FS is comparable, such as the embed.FS of the module
 // github.com/xo/ivy/fonts. They share at most 16 sets. Load reads the files
@@ -183,7 +190,42 @@ func newFileSet(fsys fs.FS, system bool, lim ivy.Limits, log *slog.Logger) (*svg
 		db.PushFaceInfo(*face)
 	}
 	setGoFamilies(db)
+	setFileFamilies(db, first)
 	return db, first
+}
+
+// genericFamilies are the families of the font files that become the
+// generic families when the files hold them: the fonts of the module fonts,
+// which have the metrics of the fonts of Office, and which LibreOffice and
+// calibre also use for these generic families.
+var genericFamilies = []struct {
+	family string
+	set    func(*svg.FontDatabase, string)
+}{
+	{"Liberation Serif", (*svg.FontDatabase).SetSerifFamily},
+	{"Liberation Sans", (*svg.FontDatabase).SetSansSerifFamily},
+	{"Liberation Mono", (*svg.FontDatabase).SetMonospaceFamily},
+}
+
+// setFileFamilies makes the families of genericFamilies that the first
+// faces of db hold, which come from the font files, the generic families.
+func setFileFamilies(db *svg.FontDatabase, first int) {
+	have := map[string]bool{}
+	i := 0
+	for face := range db.Faces() {
+		if i >= first {
+			break
+		}
+		i++
+		for _, f := range face.Families {
+			have[f.Name] = true
+		}
+	}
+	for _, g := range genericFamilies {
+		if have[g.family] {
+			g.set(db, g.family)
+		}
+	}
 }
 
 // loadFiles loads the font files of fsys into db: TrueType, OpenType and

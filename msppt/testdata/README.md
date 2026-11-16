@@ -15,3 +15,12 @@ into the summary information of a .ppt file. To keep the test file small,
 of that file, and a new summary information with the title "Ivy test slides"
 and the author "Ivy Tester". The writer of Compound Files of
 `internal/fixture` wrote it.
+
+LibreOffice 26.8 converted a flat OpenDocument presentation into
+`shapes.ppt`, with one slide. The slide has a background of the color
+#003366, a green rectangle with a magenta outline and red bold text of 28
+points, an ellipse with a gradient from red at the top to yellow at the
+bottom, a white triangle of a custom geometry, and a blue picture in PNG.
+The file holds only the streams "Current User", "PowerPoint Document" and
+"Pictures" of that file, because LibreOffice writes a large thumbnail. The
+writer of Compound Files of `internal/fixture` wrote it.

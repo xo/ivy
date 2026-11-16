@@ -110,8 +110,10 @@ type writer struct {
 	hidden []int
 	// rowBreaks and colBreaks are the manual breaks.
 	rowBreaks, colBreaks map[int]bool
-	// images are the images of the sheet, at most maxImages.
+	// images are the images of the sheet, at most maxImages, and ends
+	// are the cells of their bottom right corners.
 	images []Image
+	ends   [][2]int
 	body   strings.Builder
 }
 
@@ -144,6 +146,10 @@ func newWriter(ctx context.Context, wb *Workbook, sh *Sheet, lim ivy.Limits) *wr
 		w.colBreaks[i] = true
 	}
 	w.images = sh.Images[:min(len(sh.Images), maxImages)]
+	w.ends = make([][2]int, len(w.images))
+	for i, img := range w.images {
+		w.ends[i][0], w.ends[i][1] = w.imageEnd(img)
+	}
 	return w
 }
 
@@ -176,9 +182,8 @@ func (w *writer) usedRange() (Range, bool) {
 	for _, m := range w.sh.Merges {
 		add(m.Row0, m.Col0, m.Row1, m.Col1)
 	}
-	for _, img := range w.images {
-		row1, col1 := w.imageEnd(img)
-		add(img.Row, img.Col, row1, col1)
+	for i, img := range w.images {
+		add(img.Row, img.Col, w.ends[i][0], w.ends[i][1])
 	}
 	return r, r.Row1 >= 0
 }
@@ -529,6 +534,7 @@ func (w *writer) css(b *strings.Builder) {
 	}
 	b.WriteString("}\n")
 	b.WriteString("td.n{text-align:right}\ntd.x{text-align:center}\ntd.c{overflow:hidden}\ntd.a{position:relative}\n")
+	b.WriteString("div.cl{position:absolute;left:0;top:0;overflow:hidden}\n")
 	b.WriteString("span.r{display:inline-block}\n")
 	b.WriteString("div.ph{position:absolute;border:0.75pt solid #808080;background:#f2f2f2;color:#404040;font-size:9pt;white-space:normal;text-align:center;overflow:hidden}\n")
 	b.WriteString("p.note{margin:6pt 0 0;font-family:sans-serif;font-size:9pt;color:#606060}\n")
@@ -866,7 +872,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		}
 		cell = srcRowp.cell(srcCol)
 		style := w.cellStyle(srcRowp, cell, srcCol)
-		imgs := w.imagesAt(i, c, m)
+		imgs := w.imagesAt(i, k, band, m)
 		hasText := cell != nil && (cell.Text != "" || len(cell.Runs) > 0)
 		if m != nil && w.firstCol(m.m) != c {
 			// the text of a merge that spans bands shows in its first band
@@ -979,19 +985,50 @@ func (w *writer) firstCol(m Range) int {
 }
 
 // placed is an image in a cell, with its offset from the top left corner
-// of the cell.
+// of the cell. A slice of an image shows only the part of the image in the
+// box of clipW by clipH points at the corner of the cell.
 type placed struct {
-	img    Image
-	dx, dy float64
+	img          Image
+	dx, dy       float64
+	slice        bool
+	clipW, clipH float64
 }
 
-// imagesAt returns the images that the cell of the row i and the column c
-// holds. A merged cell m holds the images of its cells.
-func (w *writer) imagesAt(i, c int, m *mergeState) []placed {
+// maxSliceRows is the number of rows of an image that each show the slice
+// of the image in their row. A taller image shows in its first cell only.
+const maxSliceRows = 1024
+
+// imagesAt returns the images that the cell of the row i and the column
+// band[k] holds. A merged cell m holds the images of its cells.
+//
+// An image that covers more than one row, or more than one band of
+// columns, shows as slices, one in each row in the first column of each
+// band that it covers. So each page shows the part of the image on it, as
+// Excel and LibreOffice print it.
+func (w *writer) imagesAt(i, k int, band []int, m *mergeState) []placed {
 	var out []placed
-	for _, img := range w.images {
+	c := band[k]
+	for n, img := range w.images {
+		row1, col1 := w.ends[n][0], w.ends[n][1]
 		switch {
+		case m == nil && img.Row == i && img.Col == c && row1 == i && w.inBand(band[k:], col1):
+			// the image fits in the row and in the band
+			out = append(out, placed{img: img, dx: img.DX, dy: img.DY})
+		case m == nil && i >= img.Row && i <= row1 && row1-img.Row < maxSliceRows &&
+			c >= img.Col && c <= col1 && (k == 0 || band[k-1] < img.Col):
+			p := placed{img: img, dx: img.DX, dy: img.DY, slice: true, clipH: w.sh.rowHeight(w.sh.row(i))}
+			for cc := img.Col; cc < c && cc-img.Col < 1024; cc++ {
+				p.dx -= w.sh.colWidth(cc)
+			}
+			for rr := img.Row; rr < i; rr++ {
+				p.dy -= w.sh.rowHeight(w.sh.row(rr))
+			}
+			for j := k; j < len(band) && band[j] <= col1; j++ {
+				p.clipW += w.sh.colWidth(band[j])
+			}
+			out = append(out, p)
 		case m == nil && img.Row == i && img.Col == c:
+			// a taller image shows whole in its first cell
 			out = append(out, placed{img: img, dx: img.DX, dy: img.DY})
 		case m != nil && img.Row >= m.m.Row0 && img.Row <= m.m.Row1 && img.Col >= m.m.Col0 && img.Col <= m.m.Col1 &&
 			img.Row >= i && img.Col >= c:
@@ -1008,6 +1045,20 @@ func (w *writer) imagesAt(i, c int, m *mergeState) []placed {
 	return out
 }
 
+// inBand reports whether the columns of band hold every column up to col
+// without a gap.
+func (w *writer) inBand(band []int, col int) bool {
+	for j, c := range band {
+		if c == col {
+			return true
+		}
+		if j > 0 && c != band[j-1]+1 {
+			return false
+		}
+	}
+	return false
+}
+
 // image writes an image in its cell.
 func (w *writer) image(p placed) {
 	if !w.spend(2) {
@@ -1017,6 +1068,15 @@ func (w *writer) image(p placed) {
 	img := p.img
 	pos := "left:" + pt(p.dx*s) + ";top:" + pt(p.dy*s) + ";width:" + pt(img.Width*s) + ";height:" + pt(img.Height*s)
 	b := &w.body
+	if p.slice {
+		if p.clipW <= 0 || p.clipH <= 0 {
+			return
+		}
+		// the slice reaches 1 point into the next row, which draws its own
+		// slice over it, so that no seam shows between the rows
+		b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt((p.clipH+1)*s) + `">`)
+		defer b.WriteString("</div>")
+	}
 	switch {
 	case img.Object != "":
 		b.WriteString(`<img style="position:absolute;` + pos + `" src="` + html.EscapeString(layout.ObjectURL(img.Object)) + `" alt="">`)

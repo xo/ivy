@@ -81,6 +81,8 @@ func WithDir(dir fs.FS) Option {
 type Document struct {
 	lim ivy.Limits
 	log *slog.Logger
+	// fonts are the fonts of the configuration, for the layout.
+	fonts ebook.Fonts
 	// fsys holds the document and its resources. For an HTML file, it holds
 	// the document over the folder of WithDir, or only the document, because
 	// an ivy.Source has no folder.
@@ -116,7 +118,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 		return nil, fmt.Errorf("opening html: %w", err)
 	}
 	defer ebook.Recover("opening html", &err)
-	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log()}
+	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg)}
 	var magic [4]byte
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
 		err = d.openHTMLZ(src)
@@ -235,7 +237,7 @@ func (d *Document) layoutSource(context.Context) (layout.Source, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Previews satisfies the ivy.Previewer interface. It lists the cover image

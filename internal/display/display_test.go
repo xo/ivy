@@ -3,6 +3,7 @@ package display
 import (
 	"image"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 
@@ -273,5 +274,75 @@ func TestSoftMask(t *testing.T) {
 	}
 	if c := at(dst, 7, 5); c.A != 0 {
 		t.Errorf("expected nothing where the inverted mask is black, got: %v", c)
+	}
+}
+
+func TestFillTextCoverage(t *testing.T) {
+	// the left edge of a rectangle at 16 positions inside the pixel 1: the
+	// finer coverage of the pixel is near its area, in steps finer than a
+	// quarter
+	levels := make(map[uint8]bool)
+	for f := range 16 {
+		dst, d := newDevice(t, 12, 6, okage.IdentityTransform())
+		x := 1 + float32(f)/16
+		d.FillText(rect(x, 1, 9-x, 4), okage.FillRuleWinding, solid(0, 0, 0, 255))
+		got := at(dst, 1, 2).A
+		want := (1 - float64(f)/16) * 255
+		if diff := float64(got) - want; diff < -20 || diff > 20 {
+			t.Errorf("edge at %g: expected a coverage near %.0f, got %d", x, want, got)
+		}
+		levels[got] = true
+		if c := at(dst, 5, 2); c != (color.NRGBA{0, 0, 0, 255}) {
+			t.Errorf("edge at %g: expected black inside, got: %v", x, c)
+		}
+	}
+	if len(levels) < 8 {
+		t.Errorf("expected at least 8 levels of coverage, got %d", len(levels))
+	}
+}
+
+func TestFillTextClip(t *testing.T) {
+	dst, d := newDevice(t, 20, 20, okage.TransformFromScale(2, 2))
+	d.ClipPath(rect(0, 0, 5, 10), okage.FillRuleWinding)
+	FillText(d, rect(1, 1, 8, 8), okage.FillRuleWinding, solid(0, 0, 255, 255))
+	if c := at(dst, 4, 4); c != (color.NRGBA{0, 0, 255, 255}) {
+		t.Errorf("expected blue inside the clip, got: %v", c)
+	}
+	if c := at(dst, 14, 4); c.A != 0 {
+		t.Errorf("expected nothing outside the clip, got: %v", c)
+	}
+	// a shader that is not a solid color fills as FillPath does
+	shader, ok := okage.NewLinearGradient(okage.Point{X: 0, Y: 0}, okage.Point{X: 10, Y: 0},
+		[]okage.GradientStop{okage.NewGradientStop(0, okage.ColorBlack), okage.NewGradientStop(1, okage.ColorWhite)},
+		okage.SpreadModePad, okage.IdentityTransform())
+	if !ok {
+		t.Fatal("expected a gradient")
+	}
+	FillText(d, rect(1, 1, 8, 8), okage.FillRuleWinding, shader)
+	if c := at(dst, 14, 4); c.A != 0 {
+		t.Errorf("expected nothing outside the clip, got: %v", c)
+	}
+	var l List
+	FillText(&l, rect(1, 1, 2, 2), okage.FillRuleWinding, solid(0, 0, 0, 255))
+	if got := l.String(); got != "fill text [1 1 3 3] Winding" {
+		t.Errorf("expected the fill of text in the list, got: %q", got)
+	}
+}
+
+func TestFillGlyphsLarge(t *testing.T) {
+	face, err := font.Load(goregular.TTF, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, _ := face.Glyph('I')
+	// a glyph larger than maxFineEm fills as FillPath does, with the same
+	// pixels
+	run := GlyphRun{Face: face, Size: 2 * maxFineEm, Glyphs: []Glyph{{ID: gid, X: 10, Y: 100}}, Transform: okage.IdentityTransform()}
+	a, da := newDevice(t, 120, 120, okage.IdentityTransform())
+	da.FillGlyphs(run, solid(0, 0, 0, 255))
+	b, db := newDevice(t, 120, 120, okage.IdentityTransform())
+	db.FillPath(run.Path(), okage.FillRuleWinding, solid(0, 0, 0, 255))
+	if !slices.Equal(a.Data(), b.Data()) {
+		t.Error("expected the pixels of FillPath for a large glyph")
 	}
 }

@@ -226,6 +226,17 @@ func own(p props) []decl {
 // runStyle returns the style attribute of a run with the properties p in a
 // parent with the properties parent.
 func (c *converter) runStyle(p, parent props) string {
+	if c.lineParent != nil {
+		// the element of the paragraph has the font of its largest run
+		parent = parent.over(props{})
+		for _, k := range [...]string{"font", "font.ea", "sz"} {
+			if v, ok := c.lineParent[k]; ok {
+				parent[k] = v
+			} else {
+				delete(parent, k)
+			}
+		}
+	}
 	var s css
 	have := map[string]string{}
 	for _, d := range c.inherited(parent) {

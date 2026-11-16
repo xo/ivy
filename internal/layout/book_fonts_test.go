@@ -86,9 +86,13 @@ func TestBookFontFilesSubstitute(t *testing.T) {
 	if !samePixels(renderFamily(t, "Arial", with), renderFamily(t, "'Liberation Sans'", with)) {
 		t.Error("Arial is not drawn with Liberation Sans")
 	}
-	// A family without a substitute takes the default font, Go.
-	if !samePixels(renderFamily(t, "Unknown", with), renderFamily(t, "Unknown", BookOptions{})) {
-		t.Error("a family without a substitute is not drawn with the Go fonts")
+	// A family without a substitute takes the default family, serif. With
+	// the fonts module, serif is Liberation Serif (D28), and without it, Go.
+	if !samePixels(renderFamily(t, "Unknown", with), renderFamily(t, "'Liberation Serif'", with)) {
+		t.Error("a family without a substitute is not drawn with Liberation Serif")
+	}
+	if !samePixels(renderFamily(t, "Unknown", BookOptions{}), renderFamily(t, "Go", BookOptions{})) {
+		t.Error("a family without a substitute is not drawn with the Go fonts without the fonts module")
 	}
 }
 
@@ -99,8 +103,9 @@ func TestBookFontFilesOrder(t *testing.T) {
 	fonts := officeFonts(t)
 	lim := ivy.Limits{}.WithDefaults()
 	db, first := fontdb.Load(fonts, false, lim, testLogger())
-	if first != 20 {
-		t.Fatalf("%d faces of the font files, expected 20", first)
+	// the module of the fonts holds 20 faces or more, as it adds fonts
+	if first < 20 {
+		t.Fatalf("%d faces of the font files, expected 20 or more", first)
 	}
 	fc := NewFontConfiguration(db, FontConfigurationOptions{FirstFaces: first})
 	family := func(name string) string {

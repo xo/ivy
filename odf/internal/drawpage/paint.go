@@ -78,7 +78,7 @@ func (b *builder) fill(gp props, solid bool) drawingml.Paint {
 		}
 		pt := drawingml.Paint{Kind: drawingml.PaintPicture, Picture: pic, Opacity: alpha}
 		if gp.get("style:repeat") == "repeat" {
-			pt.Tile = &drawingml.Tile{SX: 1, SY: 1, Flip: "none", Align: "tl"}
+			pt.Tile = tile(gp)
 		}
 		return pt
 	case "hatch":
@@ -99,6 +99,36 @@ func (b *builder) fill(gp props, solid bool) drawingml.Paint {
 		return drawingml.Paint{Kind: drawingml.PaintPattern, Pattern: hatchPattern(h), Color: fg.WithAlpha(alpha), Background: bg.WithAlpha(alpha)}
 	}
 	return drawingml.Paint{Kind: drawingml.PaintNone}
+}
+
+// tile returns the tiles of a bitmap fill that repeats. A size of zero is
+// the size of the picture at its resolution, and a percentage scales that
+// size.
+func tile(gp props) *drawingml.Tile {
+	t := &drawingml.Tile{SX: 1, SY: 1, Flip: "none", Align: "ctr"}
+	if v, ok := refPoints[gp.get("draw:fill-image-ref-point")]; ok {
+		t.Align = v
+	}
+	w, wok := length(gp.get("draw:fill-image-width"))
+	h, hok := length(gp.get("draw:fill-image-height"))
+	if wok && hok && w > 0 && h > 0 {
+		t.W, t.H = w, h
+	}
+	if v, ok := percent(gp.get("draw:fill-image-width")); ok && v > 0 {
+		t.SX = v
+	}
+	if v, ok := percent(gp.get("draw:fill-image-height")); ok && v > 0 {
+		t.SY = v
+	}
+	return t
+}
+
+// refPoints maps the values of draw:fill-image-ref-point onto the
+// alignments of a tile of DrawingML.
+var refPoints = map[string]string{
+	"top-left": "tl", "top": "t", "top-right": "tr",
+	"left": "l", "center": "ctr", "right": "r",
+	"bottom-left": "bl", "bottom": "b", "bottom-right": "br",
 }
 
 // hatchPattern returns the pattern of DrawingML that looks like the hatch

@@ -21,6 +21,7 @@ import (
 	"github.com/xo/ivy/chm"
 	"github.com/xo/ivy/comic"
 	"github.com/xo/ivy/csv"
+	"github.com/xo/ivy/djvu"
 	"github.com/xo/ivy/docx"
 	"github.com/xo/ivy/emf"
 	"github.com/xo/ivy/epub"
@@ -47,10 +48,10 @@ import (
 )
 
 // formats are the formats of ivy. A kind of the manifest names the format
-// that lists it as an extension. To add a format, such as djvu, add its
-// Format value here.
+// that lists it as an extension. To add a format, add its Format value
+// here.
 var formats = []ivy.Format{
-	camera.Format, chm.Format, comic.Format, csv.Format, docx.Format,
+	camera.Format, chm.Format, comic.Format, csv.Format, djvu.Format, docx.Format,
 	emf.Format, epub.Format, fb2.Format, html.Format, iwork.Format,
 	markdown.Format, mobi.Format, msdoc.Format, msppt.Format, msxls.Format,
 	odf.Format, ora.Format, pdf.Format, pptx.Format, ps.Format, psd.Format,

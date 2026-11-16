@@ -80,8 +80,7 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 		var from, to anchor
 		var hasTo bool
 		var cx, cy float64
-		var obj roxmltree.Node
-		hasObj := false
+		var objs []roxmltree.Node
 		for c := range n.Children() {
 			switch local(c) {
 			case "from":
@@ -93,10 +92,12 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 			case "pos":
 				from.dx, from.dy = number(c, "x", 0)/emuPerPoint, number(c, "y", 0)/emuPerPoint
 			case "pic", "graphicFrame":
-				obj, hasObj = c, true
+				objs = append(objs, c)
+			case "AlternateContent":
+				objs = append(objs, alternates(c)...)
 			}
 		}
-		if !hasObj {
+		if len(objs) == 0 {
 			continue
 		}
 		img := sheet.Image{Row: from.row, Col: from.col, DX: from.dx, DY: from.dy, Width: cx, Height: cy}
@@ -106,19 +107,69 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 		if img.Width <= 0 || img.Height <= 0 || img.Width > 14400 || img.Height > 14400 {
 			continue
 		}
-		switch local(obj) {
-		case "pic":
-			if !b.picture(&img, obj, part) {
-				continue
+		// the first object that shows wins. A chart that cannot be read
+		// gives way to the next object, such as the picture of the
+		// fallback of a chart of Office 2016, and shows as a frame when it
+		// is the last one.
+		shown := false
+		for i, obj := range objs {
+			try := img
+			switch local(obj) {
+			case "pic":
+				shown = b.picture(&try, obj, part)
+			case "graphicFrame":
+				shown = b.chart(&try, obj, part) && (try.Object != "" || i == len(objs)-1)
 			}
-		case "graphicFrame":
-			if !b.chart(&img, obj, part) {
-				continue
+			if shown {
+				img = try
+				break
 			}
+		}
+		if !shown {
+			continue
 		}
 		b.objects++
 		sh.Images = append(sh.Images, img)
 	}
+}
+
+// alternates returns the objects of an mc:AlternateContent of a drawing,
+// in the order to try them: the frames of a chart of Office 2016 (chartex)
+// of its choices, then the pictures and the frames of its fallback.
+func alternates(n roxmltree.Node) []roxmltree.Node {
+	var out []roxmltree.Node
+	for c := range n.Children() {
+		if local(c) != "Choice" {
+			continue
+		}
+		for d := range c.Descendants() {
+			if local(d) == "graphicFrame" && isChartex(d) {
+				out = append(out, d)
+				break
+			}
+		}
+	}
+	for c := range n.Children() {
+		if local(c) != "Fallback" {
+			continue
+		}
+		for d := range c.Children() {
+			if local(d) == "pic" || local(d) == "graphicFrame" {
+				out = append(out, d)
+			}
+		}
+	}
+	return out
+}
+
+// isChartex reports whether the frame holds a chart of Office 2016.
+func isChartex(frame roxmltree.Node) bool {
+	for d := range frame.Descendants() {
+		if local(d) == "graphicData" && strings.HasSuffix(attr(d, "uri"), "/chartex") {
+			return true
+		}
+	}
+	return false
 }
 
 // span returns the width and the height of an object from the anchor from
@@ -195,7 +246,7 @@ func (b *book) chart(img *sheet.Image, frame roxmltree.Node, part string) bool {
 
 // chartObject returns the object that draws the chart part in a frame of w
 // by h points, or nil when the part cannot be read. internal/chart draws it
-// with zuzu (D24), with the colors of the theme of the workbook and the
+// (D27), with the colors of the theme of the workbook and the
 // fonts of the program.
 func (b *book) chartObject(part string, w, h float64) layout.Object {
 	buf, err := b.doc.ReadPart(part)

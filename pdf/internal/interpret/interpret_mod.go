@@ -98,8 +98,11 @@ func DefaultInterpreterSettings() InterpreterSettings {
 // DefaultFontResolver is the font resolver of the default settings in
 // hayro-interpret src/interpret/mod.rs. It returns the substitute of a
 // standard font, and for any other font the substitute of the standard font
-// that is closest to it.
+// that is closest to it. It has no font for a Named query.
 func DefaultFontResolver(query *pdffont.FontQuery) (pdffont.FontData, uint32, bool) {
+	if query.Named {
+		return nil, 0, false
+	}
 	if query.IsStandard {
 		data, index := query.Standard.GetFontData()
 		return data, index, true

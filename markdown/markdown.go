@@ -70,8 +70,10 @@ func WithDir(dir fs.FS) Option {
 
 // Document is an open Markdown file.
 type Document struct {
-	lim   ivy.Limits
-	log   *slog.Logger
+	lim ivy.Limits
+	log *slog.Logger
+	// fonts are the fonts of the configuration, for the layout.
+	fonts ebook.Fonts
 	dir   fs.FS
 	text  []byte
 	title string
@@ -120,7 +122,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if bytes.IndexByte(text, 0) >= 0 {
 		return nil, fmt.Errorf("markdown with a nul byte: %w", ivy.ErrFormat)
 	}
-	d = &Document{lim: lim, log: o.cfg.Log(), dir: o.dir, text: text}
+	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), dir: o.dir, text: text}
 	doc := parse(text)
 	if err := checkTree(doc, lim); err != nil {
 		return nil, err
@@ -240,7 +242,7 @@ func (d *Document) Page(ctx context.Context, n int) (ivy.Page, error) {
 
 // config returns the configuration of the layout.
 func (d *Document) config() ivy.Config {
-	return ivy.Config{Limits: d.lim, Logger: d.log}
+	return d.fonts.Config(d.lim, d.log)
 }
 
 // Describe satisfies the ivy.Describer interface. The title is the text of

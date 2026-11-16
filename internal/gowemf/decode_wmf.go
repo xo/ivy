@@ -99,7 +99,10 @@ func (c *cursor) wmf(typ uint32) any {
 		if n&1 != 0 {
 			c.take(1)
 		}
-		if c.pos < len(c.b) {
+		// ivy: a record too short for all the advances has none, and the
+		// text takes the advances of its font. Writers such as Aspose
+		// leave out the advance of the last character.
+		if c.pos < len(c.b) && uint64(len(c.b)-c.pos) >= 2*uint64(n) {
 			t.Advances = c.ints(uint64(n), 2)
 		}
 		return t

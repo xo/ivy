@@ -1,17 +1,21 @@
 // Package offcrypto decrypts the Office files that a password protects, as
-// MS-OFFCRYPTO describes. It reads four schemes:
+// MS-OFFCRYPTO describes. It reads five schemes:
 //
 //   - Agile encryption of ECMA-376, version 4.4, for Office Open XML.
 //   - Standard encryption of ECMA-376, versions 2.2, 3.2 and 4.2, for Office
 //     Open XML.
 //   - RC4 CryptoAPI encryption, for the binary formats .doc, .xls and .ppt.
 //   - RC4 encryption, version 1.1, for .doc and .xls.
+//   - The XOR obfuscation, for .doc and .xls. It is weak, and a format keeps
+//     it only for old files.
 //
 // The package works on bytes. A caller reads the streams from the Compound
 // File, such as EncryptionInfo and EncryptedPackage, and gives them here.
 // For a binary format, the caller finds the encryption header in the format,
 // gives it to ParseEncryptionInfo, and decrypts each stream with the block
-// rules of the format, through Key.DecryptAt or Key.Stream.
+// rules of the format, through Key.DecryptAt or Key.Stream. For the XOR
+// obfuscation, the caller gives the values of the format to XORMethod1 or
+// XORMethod2, and decrypts with Key.DecryptAt.
 //
 // The package is written from the specification. nolze/msoffcrypto-tool
 // (MIT) was a reference, and its test files are in testdata.
@@ -46,6 +50,8 @@ const (
 	RC4CryptoAPI
 	// RC4 is the RC4 encryption of the binary formats, version 1.1.
 	RC4
+	// XOR is the XOR obfuscation of the binary formats.
+	XOR
 )
 
 // String satisfies the fmt.Stringer interface.
@@ -59,6 +65,8 @@ func (s Scheme) String() string {
 		return "rc4 cryptoapi"
 	case RC4:
 		return "rc4"
+	case XOR:
+		return "xor obfuscation"
 	}
 	return fmt.Sprintf("Scheme(%d)", int(s))
 }
@@ -74,6 +82,7 @@ type Info struct {
 	agile    *agileInfo
 	standard *standardInfo
 	rc4      *rc4Info
+	xor      *xorInfo
 }
 
 // ParseEncryptionInfo parses the EncryptionInfo stream of an Office Open XML
@@ -130,6 +139,8 @@ func (in *Info) Key(ctx context.Context, password string) (*Key, error) {
 		return in.standard.key(password)
 	case RC4:
 		return in.rc4.key(password)
+	case XOR:
+		return in.xor.key(password)
 	}
 	return nil, fmt.Errorf("scheme %v: %w", in.Scheme, ivy.ErrUnsupported)
 }
@@ -145,6 +156,10 @@ type Key struct {
 	keyLen   int
 	agile    *agileInfo
 	standard *standardInfo
+	// xorArray is the obfuscation array of the XOR obfuscation, and
+	// xorMethod its method, 1 or 2.
+	xorArray  [16]byte
+	xorMethod int
 }
 
 // Scheme returns the scheme of the key.

@@ -92,7 +92,17 @@ func (k *Key) Stream(block uint32) (*rc4.Cipher, error) {
 // A format that leaves some bytes in the clear, such as the headers of the
 // records of Excel, calls DecryptAt once for each part that it encrypts,
 // with the position of the part in the stream.
+//
+// The XOR obfuscation has no blocks, and ignores blockSize. The byte at the
+// position p takes the element p modulo 16 of the obfuscation array.
 func (k *Key) DecryptAt(buf []byte, offset int64, blockSize int) error {
+	if k.scheme == XOR {
+		if offset < 0 {
+			return fmt.Errorf("xor obfuscation at %d: %w", offset, ivy.ErrFormat)
+		}
+		k.deobfuscate(buf, offset)
+		return nil
+	}
 	if blockSize <= 0 || offset < 0 {
 		return fmt.Errorf("rc4 block of %d bytes at %d: %w", blockSize, offset, ivy.ErrFormat)
 	}

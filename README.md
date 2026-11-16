@@ -59,7 +59,7 @@ the program that made the document.
 
 ## Status
 
-Phases 1 to 5 are done. These packages open a file and give its previews,
+Phases 1 to 6 are done. These packages open a file and give its previews,
 its pages or both:
 
 | Package | Formats |
@@ -89,6 +89,7 @@ its pages or both:
 | `github.com/xo/ivy/vsdx` | Visio, .vsdx and .vsd: the thumbnail and the properties |
 | `github.com/xo/ivy/pub` | Publisher: the thumbnail and the properties |
 | `github.com/xo/ivy/csv` | CSV, TSV and TAB: the rows as one table on pages |
+| `github.com/xo/ivy/djvu` | DjVu, single and bundled: the pages, the thumbnails, and the title, the authors and the dates of the metadata |
 | `github.com/xo/ivy/emf` | EMF, EMF+ and WMF, also compressed as EMZ and WMZ: the page, and the program and the title of an EMF file |
 | `github.com/xo/ivy/markdown` | Markdown, with the extensions of GitHub: the pages and the title |
 
@@ -122,8 +123,10 @@ A program that renders Office documents can import the module
 `github.com/xo/ivy/fonts` and set `ivy.Config{Fonts: fonts.FS()}`. The module
 holds Liberation Sans, Serif and Mono, Carlito and Caladea, which have the
 metrics of Arial, Times New Roman, Courier New, Calibri and Cambria. Lines
-and pages then break as they do in Office. The module adds about 7.4 MB to a
-program.
+and pages then break as they do in Office. It also holds Droid Sans
+Fallback, under the Apache License 2.0, which draws the Chinese, Japanese and
+Korean characters that a document does not embed. The module adds about
+10.9 MB to a program.
 
 A document that has no pages, such as an EPS file, gives its preview:
 

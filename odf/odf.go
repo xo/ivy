@@ -13,7 +13,7 @@
 //     each page of the file, with its shapes, its pictures, its text and its
 //     charts.
 //
-// internal/chart draws the charts of the embedded objects with zuzu. The
+// internal/chart draws the charts of the embedded objects (D27). The
 // other kinds of files, such as a chart or a formula on its own, give no
 // pages, and Page returns an error that wraps ivy.ErrUnsupported. The title
 // and the authors come when okage exports its XML parser (D7).

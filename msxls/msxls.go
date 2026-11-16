@@ -19,11 +19,11 @@
 // hidden sheets.
 //
 // A workbook gives its thumbnail and its properties from the stream
-// "\x05SummaryInformation". A workbook that a password protects with RC4 or
-// RC4 CryptoAPI asks for the password as D12 says. A workbook that Excel
-// encrypts with its default password, VelvetSweatshop, opens without a
-// password. The XOR obfuscation is not read, and the package returns an
-// error that wraps ivy.ErrUnsupported for it.
+// "\x05SummaryInformation". A workbook that a password protects with RC4,
+// RC4 CryptoAPI or the XOR obfuscation of BIFF8 asks for the password as
+// D12 says. A workbook that Excel encrypts with its default password,
+// VelvetSweatshop, opens without a password. The package returns an error
+// that wraps ivy.ErrUnsupported for the XOR obfuscation of BIFF5.
 package msxls
 
 import (
@@ -88,7 +88,7 @@ var (
 // protects it. It returns an error that wraps ivy.ErrFormat if src is not a
 // workbook, one that wraps ivy.ErrPassword if the password is missing or
 // wrong, and one that wraps ivy.ErrUnsupported for a workbook before BIFF5
-// or with the XOR obfuscation.
+// or for a BIFF5 workbook with the XOR obfuscation.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
 	for _, opt := range opts {

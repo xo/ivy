@@ -262,10 +262,21 @@ func newStandardKindWith(dict syntax.Dict, baseFont StandardFont, fallback bool,
 	if baseFont == Symbol || baseFont == ZapfDingBats {
 		enc = encodingBuiltIn
 	}
-	program, ok := loader.resolve(&FontQuery{IsStandard: true, Standard: baseFont})
-	if !ok {
-		return nil, false
+	// Port: upstream draws the font with the substitute of baseFont. Go
+	// first asks for the font that dict names, and fits its glyphs to the
+	// widths of dict, as it fits those of a substitute. Symbol and
+	// ZapfDingbats keep their substitutes, which hold their glyphs.
+	program, named := (*fontProgram)(nil), false
+	if baseFont != Symbol && baseFont != ZapfDingBats {
+		program, named = loader.resolveNamed(dict)
 	}
+	if !named {
+		var ok bool
+		if program, ok = loader.resolve(&FontQuery{IsStandard: true, Standard: baseFont}); !ok {
+			return nil, false
+		}
+	}
+	fallback = fallback || named
 	k := &standardKind{
 		baseFont:     baseFont,
 		program:      program,
