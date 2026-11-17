@@ -491,8 +491,14 @@ func (r *renderer) glyphs(n roxmltree.Node, res *resources) {
 // element. The Indices give a glyph, an advance in hundredths of an em, and
 // offsets for each glyph. A glyph that the Indices do not give comes from the
 // UnicodeString and the map of the font.
+//
+// A sideways run turns each glyph 90 degrees counterclockwise, and puts the
+// vertical origin of the glyph, the top center of the glyph before the turn,
+// at the pen. The advance of a glyph that the Indices do not give is then
+// its vertical advance.
 func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
-	face, err := r.doc.font(resolve(r.part, attr(n, "FontUri")))
+	name := resolve(r.part, attr(n, "FontUri"))
+	face, err := r.doc.font(name)
 	if err != nil {
 		return display.GlyphRun{}, err
 	}
@@ -504,6 +510,12 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 	if strings.Contains(attr(n, "StyleSimulations"), "Italic") {
 		// an italic simulation slants each glyph by 20 degrees
 		run.Transform = okage.TransformFromRow(1, 0, -0.36397, 1, 0, 0)
+	}
+	var vert *vertical
+	sideways := attr(n, "IsSideways") == "true"
+	if sideways {
+		vert = r.doc.vertical(name)
+		run.Transform = sidewaysTurn.PreConcat(run.Transform)
 	}
 	text := []rune(strings.TrimPrefix(attr(n, "UnicodeString"), "{}"))
 	rtl := number(attr(n, "BidiLevel"), 0)
@@ -544,6 +556,13 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 		}
 		left--
 		advance := face.Advance(gid) * size
+		// dx and dy move the origin of a sideways glyph to the pen
+		var dx, dy float32
+		if sideways {
+			va, ox, oy := vert.metrics(face, gid)
+			advance = va * size
+			dx, dy = oy*size, ox*size
+		}
 		if len(fields) > 1 && strings.TrimSpace(fields[1]) != "" {
 			advance = number(fields[1], 0) / 100 * size
 		}
@@ -559,7 +578,7 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 			gx -= advance
 		}
 		if haveGID {
-			run.Glyphs = append(run.Glyphs, display.Glyph{ID: gid, X: gx, Y: y - v})
+			run.Glyphs = append(run.Glyphs, display.Glyph{ID: gid, X: gx + dx, Y: y - v + dy})
 		}
 		x += direction * advance
 	}

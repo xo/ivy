@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"image"
 	"net/url"
 	"path"
 	"slices"
@@ -185,22 +184,24 @@ func find(rels []rel, suffix string) (string, bool) {
 	return "", false
 }
 
-// image decodes the image part name. JPEG XR, which XPS allows, is not
-// supported.
-func (p *pkg) image(ctx context.Context, name string) (image.Image, error) {
+// image decodes the image part name, and reads its resolution. JPEG XR,
+// which XPS allows, is not supported.
+func (p *pkg) image(ctx context.Context, name string) imageResult {
 	switch strings.ToLower(path.Ext(name)) {
 	case ".wdp", ".jxr", ".hdp":
-		return nil, fmt.Errorf("image %s in jpeg xr: %w", name, ivy.ErrUnsupported)
+		return imageResult{err: fmt.Errorf("image %s in jpeg xr: %w", name, ivy.ErrUnsupported)}
 	}
 	buf, err := p.read(name)
 	if err != nil {
-		return nil, err
+		return imageResult{err: err}
 	}
 	img, err := raster.Decode(ctx, buf, p.lim)
 	if err != nil {
-		return nil, fmt.Errorf("image %s: %w", name, err)
+		return imageResult{err: fmt.Errorf("image %s: %w", name, err)}
 	}
-	return img, nil
+	r := imageResult{img: img}
+	r.dpiX, r.dpiY, _ = raster.Resolution(buf)
+	return r
 }
 
 // local returns the local name of the element n, without its namespace.

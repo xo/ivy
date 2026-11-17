@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"testing"
 
@@ -98,5 +99,35 @@ func TestPixmapSubImage(t *testing.T) {
 	}
 	if !bytes.Equal(pix.Data()[:4], []byte{255, 0, 0, 255}) {
 		t.Errorf("expected red, got: %v", pix.Data()[:4])
+	}
+}
+
+func TestResolution(t *testing.T) {
+	png := fixture.PNG(4, 4, color.White)
+	jpg := fixture.JPEG(4, 4, color.White)
+	dpcm := fixture.JPEGDPI(jpg, 50)
+	// the unit 2 is dots per centimeter
+	dpcm[13] = 2
+	tests := []struct {
+		name string
+		buf  []byte
+		want float64
+		ok   bool
+	}{
+		{"png without pHYs", png, 0, false},
+		{"png", fixture.PNGDPI(png, 192), 192, true},
+		{"jpeg without JFIF density", jpg, 0, false},
+		{"jpeg", fixture.JPEGDPI(jpg, 300), 300, true},
+		{"jpeg in dots per centimeter", dpcm, 127, true},
+		{"jpeg of 0 dots per inch", fixture.JPEGDPI(jpg, 0), 0, false},
+		{"not an image", []byte("GIF89a"), 0, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			x, y, ok := Resolution(test.buf)
+			if ok != test.ok || math.Abs(x-test.want) > 0.5 || math.Abs(y-test.want) > 0.5 {
+				t.Errorf("expected %v %v, got: %v %v %v", test.want, test.ok, x, y, ok)
+			}
+		})
 	}
 }

@@ -9,6 +9,7 @@ package raster
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"image"
@@ -44,6 +45,50 @@ func Config(buf []byte) (image.Point, error) {
 		return image.Point{}, fmt.Errorf("reading image header: %w: %w", ivy.ErrFormat, err)
 	}
 	return image.Pt(cfg.Width, cfg.Height), nil
+}
+
+// Resolution returns the resolution of the JPEG or PNG file in buf, in dots
+// per inch, from the density of its JFIF header or from its pHYs chunk. It
+// returns false if buf gives no resolution, or a resolution outside the
+// range from 1 to 10000 dots per inch.
+func Resolution(buf []byte) (float64, float64, bool) {
+	x, y, ok := resolution(buf)
+	if !ok || !(x >= 1 && x <= 10000) || !(y >= 1 && y <= 10000) {
+		return 0, 0, false
+	}
+	return x, y, true
+}
+
+// resolution reads the resolution of buf without a check of its range.
+func resolution(buf []byte) (float64, float64, bool) {
+	switch {
+	case len(buf) >= 18 && buf[0] == 0xff && buf[1] == 0xd8 && buf[2] == 0xff && buf[3] == 0xe0 &&
+		string(buf[6:11]) == "JFIF\x00":
+		x, y := float64(binary.BigEndian.Uint16(buf[14:])), float64(binary.BigEndian.Uint16(buf[16:]))
+		switch buf[13] {
+		case 1:
+			return x, y, true
+		case 2:
+			// dots per centimeter
+			return x * 2.54, y * 2.54, true
+		}
+	case len(buf) >= 8 && string(buf[:8]) == "\x89PNG\r\n\x1a\n":
+		// the chunks that come before the first IDAT chunk
+		for i := 8; i+12 <= len(buf); {
+			n := int(binary.BigEndian.Uint32(buf[i:]))
+			typ := string(buf[i+4 : i+8])
+			if n < 0 || n > len(buf)-i-12 || typ == "IDAT" {
+				break
+			}
+			if typ == "pHYs" && n >= 9 && buf[i+16] == 1 {
+				// pixels per meter
+				x, y := float64(binary.BigEndian.Uint32(buf[i+8:])), float64(binary.BigEndian.Uint32(buf[i+12:]))
+				return x * 0.0254, y * 0.0254, true
+			}
+			i += n + 12
+		}
+	}
+	return 0, 0, false
 }
 
 // Decode decodes the encoded image in buf. It checks the size of the image

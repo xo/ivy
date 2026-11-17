@@ -364,3 +364,39 @@ func TestImageBrushFlip(t *testing.T) {
 		})
 	}
 }
+
+func TestImageBrushResolution(t *testing.T) {
+	// at 48 dots per inch, each pixel of the image is 2 units of the
+	// Viewbox, and the red pixel covers the units from 0 to 2. The image is
+	// smooth, so the tests read the pixels away from the edges of the red
+	// pixel
+	tests := []struct {
+		name    string
+		viewbox string
+		red     []image.Point
+		none    []image.Point
+	}{
+		{"viewbox at the origin", "0,0,2,2", []image.Point{{20, 20}, {48, 48}}, nil},
+		{"viewbox past the origin", "1,1,2,2", []image.Point{{4, 4}}, []image.Point{{90, 90}, {90, 4}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			brush := `<ImageBrush ImageSource="/red.png" Viewbox="` + test.viewbox + `" Viewport="0,0,96,96"/>`
+			buf := fixture.PNGDPI(pngFile(t), 48)
+			img, err := render(t, pkgFile(fillPage(brush), fixture.Entry{Name: "red.png", Data: buf}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, p := range test.red {
+				if got := rgb(img, p.X, p.Y); got[0] < 200 || got[1] > 80 {
+					t.Errorf("at %v: expected red, got: %v", p, got)
+				}
+			}
+			for _, p := range test.none {
+				if got := rgb(img, p.X, p.Y); got[1] < 180 {
+					t.Errorf("at %v: expected white, got: %v", p, got)
+				}
+			}
+		})
+	}
+}

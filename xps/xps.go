@@ -12,8 +12,9 @@
 // target, and repeats it. The modes FlipX, FlipY and FlipXY repeat a tile of
 // two or four mirrored copies. A VisualBrush nests at most 4 deep, and the
 // tiles and the visuals of a page draw at most Limits.MaxPixels pixels. A
-// sideways glyph run and an image in JPEG XR are left out, and the page that
-// holds one returns an *ivy.PartialError (D5).
+// sideways glyph run turns each glyph about its vertical origin. An image in
+// JPEG XR is left out, and the page that holds one returns an
+// *ivy.PartialError (D5).
 package xps
 
 import (
@@ -72,9 +73,10 @@ type Document struct {
 	pages []*Page
 	rels  []rel
 
-	mu     sync.Mutex
-	fonts  map[string]fontResult
-	images map[string]imageResult
+	mu        sync.Mutex
+	fonts     map[string]fontResult
+	verticals map[string]*vertical
+	images    map[string]imageResult
 }
 
 // fontResult is a font that the document loaded, or the error of its load.
@@ -87,7 +89,10 @@ type fontResult struct {
 // decode.
 type imageResult struct {
 	img image.Image
-	err error
+	// dpiX and dpiY are the resolution of the image in dots per inch, or 0
+	// if the image does not give one.
+	dpiX, dpiY float64
+	err        error
 }
 
 // The capabilities of a document.
@@ -114,11 +119,12 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error
 		return nil, err
 	}
 	d := &Document{
-		pkg:    &pkg{archive: archive, lim: lim},
-		lim:    lim,
-		log:    o.cfg.Log(),
-		fonts:  make(map[string]fontResult),
-		images: make(map[string]imageResult),
+		pkg:       &pkg{archive: archive, lim: lim},
+		lim:       lim,
+		log:       o.cfg.Log(),
+		fonts:     make(map[string]fontResult),
+		verticals: make(map[string]*vertical),
+		images:    make(map[string]imageResult),
 	}
 	d.rels = d.pkg.rels("/")
 	seq, ok := find(d.rels, relFixedRepresentation)
@@ -272,21 +278,22 @@ func (d *Document) font(name string) (*font.Face, error) {
 	return r.face, r.err
 }
 
-// image returns the image part name, which it decodes once.
-func (d *Document) image(ctx context.Context, name string) (image.Image, error) {
+// image returns the image part name, which it decodes once, with its
+// resolution.
+func (d *Document) image(ctx context.Context, name string) imageResult {
 	d.mu.Lock()
 	if r, ok := d.images[name]; ok {
 		d.mu.Unlock()
-		return r.img, r.err
+		return r
 	}
 	d.mu.Unlock()
-	img, err := d.pkg.image(ctx, name)
+	r := d.pkg.image(ctx, name)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if ctx.Err() == nil {
-		d.images[name] = imageResult{img: img, err: err}
+		d.images[name] = r
 	}
-	return img, err
+	return r
 }
 
 // deobfuscate undoes the obfuscation of an embedded font in place. The key is

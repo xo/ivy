@@ -238,14 +238,17 @@ func (r *renderer) gradient(n roxmltree.Node, res *resources, opacity float32) (
 }
 
 // imageBrush returns the brush of an image. Its Viewbox in the image maps
-// onto its Viewport in the space of the brush. ivy takes the units of a Viewbox as
-// pixels of the image at 96 dots per inch, unless the Viewbox starts at the
-// origin, and then it covers the whole image (D5).
+// onto its Viewport in the space of the brush. The units of a Viewbox are
+// 1/96 of an inch of the image, at the resolution that the image gives. If
+// the image gives none, ivy takes the units as pixels at 96 dots per inch,
+// unless the Viewbox starts at the origin, and then it covers the whole
+// image (D5).
 func (r *renderer) imageBrush(n roxmltree.Node, res *resources, opacity float32) (*brush, error) {
-	img, err := r.doc.image(r.ctx, resolve(r.part, attr(n, "ImageSource")))
-	if err != nil {
-		return nil, err
+	ir := r.doc.image(r.ctx, resolve(r.part, attr(n, "ImageSource")))
+	if ir.err != nil {
+		return nil, ir.err
 	}
+	img := ir.img
 	viewbox, ok1 := parseRect(attr(n, "Viewbox"))
 	viewport, ok2 := parseRect(attr(n, "Viewport"))
 	if !ok1 || !ok2 {
@@ -253,7 +256,10 @@ func (r *renderer) imageBrush(n roxmltree.Node, res *resources, opacity float32)
 	}
 	size := img.Bounds().Size()
 	unitX, unitY := float32(1), float32(1)
-	if viewbox.X() == 0 && viewbox.Y() == 0 {
+	switch {
+	case ir.dpiX > 0 && ir.dpiY > 0:
+		unitX, unitY = float32(96/ir.dpiX), float32(96/ir.dpiY)
+	case viewbox.X() == 0 && viewbox.Y() == 0:
 		unitX, unitY = viewbox.Width()/float32(size.X), viewbox.Height()/float32(size.Y)
 	}
 	sx, sy := viewport.Width()/viewbox.Width(), viewport.Height()/viewbox.Height()
@@ -276,6 +282,7 @@ func (r *renderer) imageBrush(n roxmltree.Node, res *resources, opacity float32)
 	// viewport
 	var base *okage.Pixmap
 	if near(dst, viewport) {
+		var err error
 		if base, err = raster.Pixmap(img); err != nil {
 			return nil, err
 		}
