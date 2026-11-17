@@ -80,8 +80,8 @@ func readImageResource(r io.Reader) (resMap map[int]ImageResource, read int, err
 			return nil, read, err
 		}
 		read += l
-		res.Data = make([]byte, readUint32(b, 0))
-		if l, err = io.ReadFull(r, res.Data); err != nil {
+		// ivy: readN, for a length that the file does not hold.
+		if res.Data, l, err = readN(r, int(readUint32(b, 0))); err != nil {
 			return nil, read, err
 		}
 		read += l
@@ -112,7 +112,9 @@ func hasAlphaID0(Res map[int]ImageResource) bool {
 	if !ok {
 		return true
 	}
-	for i, ln := 0, len(aid.Data); i < ln; i += 4 {
+	// ivy: the loop stops before a partial identifier at the end, which
+	// upstream reads past the slice.
+	for i, ln := 0, len(aid.Data); i+4 <= ln; i += 4 {
 		if readUint32(aid.Data, i) == 0 {
 			return true
 		}

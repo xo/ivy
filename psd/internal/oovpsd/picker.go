@@ -112,6 +112,11 @@ func (p *pickerPalette) ColorModel() color.Model                       { return 
 func (p *pickerPalette) Bounds() image.Rectangle                       { return p.Rect }
 func (p *pickerPalette) At(x, y int) color.Color {
 	pos := (y-p.Rect.Min.Y)*p.Rect.Dx() + x - p.Rect.Min.X
+	// ivy: an index past the palette, or a pixel past the data of a depth
+	// other than 8, is transparent. Upstream reads past the slices.
+	if pos < 0 || pos >= len(p.Src) || int(p.Src[pos]) >= len(p.Palette) {
+		return color.NRGBA{}
+	}
 	return p.Palette[p.Src[pos]]
 }
 

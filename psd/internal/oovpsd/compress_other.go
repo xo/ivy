@@ -43,8 +43,8 @@ func decodePackBits(dest []byte, r io.Reader, width int, lines int, large bool) 
 		}
 	}
 
-	buf = make([]byte, total)
-	if l, err = io.ReadFull(r, buf); err != nil {
+	// ivy: readN, for a length that the file does not hold.
+	if buf, l, err = readN(r, total); err != nil {
 		return
 	}
 	read += l

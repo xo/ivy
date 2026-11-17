@@ -2,6 +2,7 @@ package psd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"image"
 	"image/color"
@@ -210,6 +211,16 @@ func FuzzOpen(f *testing.F) {
 	for _, name := range []string{"rgba8.psd", "deep16.psd", "rgb8bit.psd"} {
 		f.Add(read(f, name))
 	}
+	// a file with a spot channel, an alpha channel and an alternate color
+	alt := binary.BigEndian.AppendUint32([]byte{0, 1, 0, 1}, 7)
+	f.Add(psdFile(2, 1, [][]byte{{255, 0}, {255, 0}, {255, 0}, {0, 255}, {0, 0}}, map[uint16][]byte{
+		resAlphaIDs: append(binary.BigEndian.AppendUint32(nil, 7), 0, 0, 0, 9),
+		resDisplayInfo: displayInfoRes(
+			displayEntry(colorStruct(3), 30, kindSpot),
+			displayEntry(colorStruct(spaceRGB, 0xffff), 50, 1),
+		),
+		resAltSpotColors: append(alt, colorStruct(spaceLab, 5000, 0xf000, 0x1000)...),
+	}))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))

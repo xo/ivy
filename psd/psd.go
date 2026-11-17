@@ -4,7 +4,10 @@
 // layers. A file that Photoshop saved without the option "Maximize
 // Compatibility" holds no merged image, and then the page is a composite of
 // the visible layers, with their opacity, in the normal blend mode. The blend
-// modes, the masks and the effects of the layers are left out (D5). A document
+// modes, the masks and the effects of the layers are left out (D5). The spot
+// channels of the merged image draw over it in the color of their ink, as
+// Photoshop shows them, and the alpha channels, which hold a selection, do
+// not draw. A document
 // gives the JPEG thumbnail of the file as its preview (D11).
 //
 // The decoder is a copy of github.com/oov/psd, in internal/oovpsd, with a fix
@@ -112,9 +115,13 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error
 	return d, nil
 }
 
-// checkConfig checks the size of the image against the limits. The merged
-// image takes a plane of bytes for each channel.
+// checkConfig checks the number of channels against the color mode, and the
+// size of the image against the limits. The merged image takes a plane of
+// bytes for each channel.
 func checkConfig(cfg oovpsd.Config, lim ivy.Limits) error {
+	if n := cfg.ColorMode.Channels(); cfg.Channels < n {
+		return fmt.Errorf("psd of %d channels in a color mode of %d: %w", cfg.Channels, n, ivy.ErrFormat)
+	}
 	if err := raster.CheckPixels(cfg.Rect.Size(), lim); err != nil {
 		return err
 	}
@@ -203,12 +210,16 @@ func decode(ctx context.Context, open func() io.Reader, lim ivy.Limits) (image.I
 		return nil, decodeError(err)
 	}
 	if merged {
-		return toNRGBA(p.Picker), nil
+		img := toNRGBA(p.Picker)
+		if err := drawSpots(ctx, img, p); err != nil {
+			return nil, err
+		}
+		return img, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("decoding psd layers: %w", err)
 	}
-	p, _, err = oovpsd.Decode(open(), &oovpsd.DecodeOptions{SkipMergedImage: true})
+	p, _, err = oovpsd.Decode(open(), &oovpsd.DecodeOptions{SkipMergedImage: true, MaxMemory: lim.MaxMemory})
 	if err != nil {
 		return nil, decodeError(err)
 	}
@@ -227,6 +238,9 @@ func hasMergedImage(cfg oovpsd.Config) bool {
 // sentinel error of ivy, such as one of the limits, keeps it, and any other
 // error is a malformed file.
 func decodeError(err error) error {
+	if errors.Is(err, oovpsd.ErrLayerMemory) {
+		return fmt.Errorf("decoding psd layers: %w: %w", ivy.ErrLimit, err)
+	}
 	for _, sentinel := range []error{ivy.ErrLimit, ivy.ErrFormat, ivy.ErrUnsupported} {
 		if errors.Is(err, sentinel) {
 			return err

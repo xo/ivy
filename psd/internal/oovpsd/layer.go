@@ -8,6 +8,7 @@ import (
 	"errors"
 	"image"
 	"io"
+	"math"
 )
 
 // Layer represents layer.
@@ -445,9 +446,12 @@ func readLayerInfo(r io.Reader, cfg *Config, o *DecodeOptions) (layer []Layer, r
 func readLayerImage(lcis []layerChannelInfo, r io.Reader, cfg *Config, o *DecodeOptions) (read int, err error) {
 	var l int
 	b := make([]byte, 2)
+	// ivy: the bytes of the images of the layers, for o.MaxMemory.
+	var total int64
 	for i, lci := range lcis {
 		chMap := map[int]Channel{}
-		pickerChs := make([][]byte, cfg.ColorMode.Channels(), 8)
+		// ivy: a color mode without a picker counts -1 channels.
+		pickerChs := make([][]byte, max(cfg.ColorMode.Channels(), 0), 8)
 		for _, j := range lci.ChannelData {
 			var readCh int
 			if j.DataLen >= 2 {
@@ -473,7 +477,17 @@ func readLayerImage(lcis []layerChannelInfo, r io.Reader, cfg *Config, o *Decode
 			default:
 				rect = lci.Layer.Rect
 			}
-			data := make([]byte, (rect.Dx()*cfg.Depth+7)>>3*rect.Dy())
+			// ivy: a layer can be larger than the image, and its size can
+			// overflow, so the size counts in int64 against o.MaxMemory.
+			line, lines := (int64(rect.Dx())*int64(cfg.Depth)+7)>>3, int64(rect.Dy())
+			if lines > 0 && line > math.MaxInt64/lines {
+				return read, ErrLayerMemory
+			}
+			size := line * lines
+			if total += size; o.MaxMemory > 0 && total > o.MaxMemory {
+				return read, ErrLayerMemory
+			}
+			data := make([]byte, size)
 			pk := findGrayPicker(cfg.Depth)
 			pk.setSource(rect, data)
 
@@ -501,15 +515,26 @@ func readLayerImage(lcis []layerChannelInfo, r io.Reader, cfg *Config, o *Decode
 				Picker: pk,
 			}
 			switch {
+			// ivy: an index past the channels of the color mode is not a
+			// color, and upstream writes past the slice.
+			case j.ChIndex >= len(pickerChs):
 			case j.ChIndex >= 0:
 				pickerChs[j.ChIndex] = data
 			case j.ChIndex == -1:
 				pickerChs = append(pickerChs, data)
 			}
 		}
+		// ivy: a layer of a color mode without a picker, or without one of
+		// the channels of its color mode, has no picker. Upstream panics.
 		pk := findPicker(cfg.Depth, cfg.ColorMode, cfg.ColorMode.Channels() < len(pickerChs))
-		pk.setSource(lci.Layer.Rect, pickerChs...)
-		lci.Layer.Picker = pk
+		complete := pk != nil && len(pickerChs) > 0
+		for _, ch := range pickerChs {
+			complete = complete && ch != nil
+		}
+		if complete {
+			pk.setSource(lci.Layer.Rect, pickerChs...)
+			lci.Layer.Picker = pk
+		}
 		lci.Layer.Channel = chMap
 		if o.LayerImageLoaded != nil {
 			o.LayerImageLoaded(lci.Layer, i, len(lcis))
@@ -854,8 +879,8 @@ func readAdditionalLayerInfo(r io.Reader, infoLen int, cfg *Config, o *DecodeOpt
 			read += l
 			var data []byte
 			if ln := int(readUint(b, 0, intSize)); ln > 0 {
-				data = make([]byte, ln)
-				if l, err = io.ReadFull(r, data); err != nil {
+				// ivy: readN, for a length that the file does not hold.
+				if data, l, err = readN(r, ln); err != nil {
 					return nil, nil, read, err
 				}
 				read += l

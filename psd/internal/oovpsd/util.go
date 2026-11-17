@@ -5,6 +5,8 @@
 package oovpsd
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"io/ioutil"
 	"math"
@@ -140,6 +142,23 @@ func discard(r io.Reader, skip int) (read int, err error) {
 		rd, err := io.CopyN(ioutil.Discard, r, int64(skip))
 		return int(rd), err
 	}
+}
+
+// ivy: readN reads n bytes of r. It grows its buffer as the bytes arrive,
+// so that a length in a broken file does not allocate more than the file
+// holds. Upstream allocates the length before it reads.
+func readN(r io.Reader, n int) ([]byte, int, error) {
+	if n <= 1<<16 {
+		b := make([]byte, n)
+		l, err := io.ReadFull(r, b)
+		return b, l, err
+	}
+	var buf bytes.Buffer
+	l, err := io.CopyN(&buf, r, int64(n))
+	if errors.Is(err, io.EOF) {
+		err = io.ErrUnexpectedEOF
+	}
+	return buf.Bytes(), int(l), err
 }
 
 func readPascalString(r io.Reader) (str string, read int, err error) {

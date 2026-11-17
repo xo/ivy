@@ -97,7 +97,8 @@ func (cfg *Config) Palette() color.Palette {
 	// 0x0417(1046) | (Photoshop 6.0) Transparency Index.
 	//                2 bytes for the index of transparent color, if any.
 	transparentColorIndex := -1
-	if r, ok := cfg.Res[0x0417]; ok {
+	// ivy: the resource must hold its 2 bytes.
+	if r, ok := cfg.Res[0x0417]; ok && len(r.Data) >= 2 {
 		transparentColorIndex = int(readUint16(r.Data, 0))
 	}
 	pal := make(color.Palette, len(cfg.ColorModeData)/3)
@@ -188,8 +189,8 @@ func DecodeConfig(r io.Reader) (cfg Config, read int, err error) {
 	cfg.ColorMode = ColorMode(readUint16(b, 24))
 
 	if ln := readUint32(b, 26); ln > 0 {
-		cfg.ColorModeData = make([]byte, ln)
-		if l, err = io.ReadFull(r, cfg.ColorModeData); err != nil {
+		// ivy: readN, for a length that the file does not hold.
+		if cfg.ColorModeData, l, err = readN(r, int(ln)); err != nil {
 			return Config{}, read, err
 		}
 		read += l
@@ -215,7 +216,14 @@ type DecodeOptions struct {
 	SkipMergedImage  bool
 	ConfigLoaded     func(cfg Config) error
 	LayerImageLoaded func(layer *Layer, index int, total int)
+	// ivy: MaxMemory, if it is above 0, bounds the bytes of the images of
+	// the layers. Decode returns ErrLayerMemory above it.
+	MaxMemory int64
 }
+
+// ivy: ErrLayerMemory is the error of the images of the layers above
+// DecodeOptions.MaxMemory.
+var ErrLayerMemory = errors.New("psd: the images of the layers exceed the memory limit")
 
 // Decode reads a image from r and returns it.
 // Default parameters are used if a nil *DecodeOptions is passed.
