@@ -369,7 +369,7 @@ func FuzzOpen(f *testing.F) {
 }
 
 func TestHTMLEntities(t *testing.T) {
-	text := `<?xml version="1.0" encoding="windows-1251"?><FictionBook><body><p>a&nbsp;b&mdash;c</p></body></FictionBook>`
+	text := `<?xml version="1.0" encoding="windows-1251"?><FictionBook><body><p>a&nbsp;b&mdash;c&Undefined;d</p></body></FictionBook>`
 	d, err := Open(t.Context(), strings.NewReader(text))
 	if err != nil {
 		t.Fatal(err)
@@ -379,8 +379,8 @@ func TestHTMLEntities(t *testing.T) {
 		t.Fatal(err)
 	}
 	buf, _ := fs.ReadFile(src.FS, src.Documents[0])
-	if !strings.Contains(string(buf), "<p>a b—c</p>") {
-		t.Errorf("expected the entities of html as characters, got:\n%s", buf)
+	if !strings.Contains(string(buf), "<p>a b—cd</p>") {
+		t.Errorf("expected the entities of html as characters, and no undefined entity, got:\n%s", buf)
 	}
 }
 

@@ -77,6 +77,9 @@ func TestText(t *testing.T) {
 		{"utf-16le", []byte{0xff, 0xfe, 'h', 0, 'i', 0, '\n', 0, '\n', 0, '<', 0}, "<p>hi</p>\n<p>&lt;</p>"},
 		{"utf-16be", []byte{0xfe, 0xff, 0, 'h', 0, 'i'}, "<p>hi</p>"},
 		{"windows-1252", []byte("\x93caf\xe9\x94"), "<p>“café”</p>"},
+		{"no language", []byte("text"), "<html>"},
+		{"japanese", []byte("吾輩は猫である。"), `<html lang="ja">`},
+		{"gutenberg", []byte("The Project Gutenberg eBook of 紅樓夢\n\nLanguage: Chinese\n\n*** START OF THE PROJECT GUTENBERG EBOOK ***\n\n此開卷第一回也"), `<html lang="zh-Hant">`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d, err := Open(t.Context(), bytes.NewReader(tt.buf))

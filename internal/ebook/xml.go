@@ -19,7 +19,9 @@ import (
 //
 // Some files use the entities of HTML, such as &nbsp;, which XML does not
 // know. If the parse fails on one, ParseXML replaces each entity of HTML with
-// its character and parses again.
+// its character, drops each entity that HTML does not know either, and
+// parses again. calibre also drops such an entity, such as the
+// &FBReaderVersion; of a help file of FBReader.
 //
 // Some files use a namespace prefix that they do not declare, such as l: or
 // xlink: in a FictionBook file. If the parse fails on one, ParseXML declares
@@ -61,7 +63,8 @@ func ParseXML(buf []byte, lim ivy.Limits) (*roxmltree.Document, error) {
 var entity = regexp.MustCompile(`&[A-Za-z][A-Za-z0-9]{0,31};`)
 
 // htmlEntities replaces each named entity of HTML in text with its
-// character, escaped for XML. It keeps the five entities of XML.
+// character, escaped for XML. It keeps the five entities of XML, and it
+// drops an entity that HTML does not know.
 func htmlEntities(text string) string {
 	return entity.ReplaceAllStringFunc(text, func(ref string) string {
 		switch ref {
@@ -70,8 +73,7 @@ func htmlEntities(text string) string {
 		}
 		s := html.UnescapeString(ref)
 		if s == ref {
-			// an unknown entity stays as text
-			return "&amp;" + ref[1:]
+			return ""
 		}
 		return html.EscapeString(s)
 	})
@@ -153,6 +155,22 @@ func declarePrefix(text, prefix string) (string, bool) {
 	return text[:i] + attr + `"` + ns + `"` + text[i:], true
 }
 
+// SetRootAttr returns the document text with the attribute name="value" on
+// its root element. The document is XML, XHTML or HTML. It returns false if
+// it finds no root element, or if the start tag of the root already names
+// the attribute. value must not hold a quote.
+func SetRootAttr(text, name, value string) (string, bool) {
+	i, ok := rootName(text)
+	if !ok {
+		return text, false
+	}
+	end := strings.IndexByte(text[i:], '>')
+	if end < 0 || strings.Contains(text[i:i+end], name+"=") {
+		return text, false
+	}
+	return text[:i] + " " + name + `="` + value + `"` + text[i:], true
+}
+
 // rootName returns the index after the name of the start tag of the root
 // element of text. It skips the declaration of XML, the processing
 // instructions, the comments and the document type, with its internal
@@ -203,4 +221,18 @@ func skipDoctype(text string, i int) int {
 		}
 	}
 	return len(text)
+}
+
+// skipPast returns the index after the first end at or after i, or the
+// length of text.
+func skipPast(text string, i int, end string) int {
+	j := strings.Index(text[i:], end)
+	if j < 0 {
+		return len(text)
+	}
+	return i + j + len(end)
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'
 }

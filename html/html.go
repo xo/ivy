@@ -284,7 +284,7 @@ func (d *Document) Describe(ctx context.Context) (info ivy.Info, err error) {
 	}, nil
 }
 
-// head scans the head of the document.
+// head reads the head of the document.
 func (d *Document) head() (ebook.Head, error) {
 	buf, err := fs.ReadFile(d.fsys, d.index)
 	switch {
@@ -296,7 +296,7 @@ func (d *Document) head() (ebook.Head, error) {
 		// bad checksum, is a malformed file.
 		return ebook.Head{}, fmt.Errorf("reading %s: %w: %w", d.index, ivy.ErrFormat, err)
 	}
-	return ebook.ScanHead(ebook.Text(buf)), nil
+	return ebook.ScanHead(ebook.Text(buf), d.lim), nil
 }
 
 // source returns the file as a source for the layout: the document and its

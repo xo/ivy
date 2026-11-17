@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func TestParseXML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := NodeText(doc.RootElement()), "A B & C &bogus; <"; got != want {
+	if got, want := NodeText(doc.RootElement()), "A B & C <"; got != want {
 		t.Errorf("expected %q, got: %q", want, got)
 	}
 	_, err = ParseXML([]byte("<a><b/><b/><b/><b/></a>"), ivy.Limits{MaxObjects: 3})
@@ -83,6 +84,8 @@ const opf3 = `<?xml version="1.0" encoding="UTF-8"?>
     <dc:publisher>A Press</dc:publisher>
     <dc:date>2020-05-12</dc:date>
     <meta property="dcterms:modified">2021-01-02T03:04:05Z</meta>
+    <meta property="rendition:layout">pre-paginated</meta>
+    <meta property="rendition:viewport">width=600, height=800</meta>
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
@@ -93,7 +96,7 @@ const opf3 = `<?xml version="1.0" encoding="UTF-8"?>
   </manifest>
   <spine>
     <itemref idref="c1"/>
-    <itemref idref="nav" linear="no"/>
+    <itemref idref="nav" linear="no" properties="rendition:layout-reflowable page-spread-left"/>
   </spine>
 </package>`
 
@@ -128,8 +131,12 @@ func TestParseOPF3(t *testing.T) {
 	if it, ok := p.ItemByPath("OEBPS/text/chapter 1.xhtml"); !ok || it.ID != "c1" || !it.IsDocument() {
 		t.Errorf("expected the chapter by its path, got: %+v", it)
 	}
-	if want := []ItemRef{{"c1", true}, {"nav", false}}; !slices.Equal(p.Spine, want) {
-		t.Errorf("expected %v, got: %v", want, p.Spine)
+	if len(p.Spine) != 2 || p.Spine[0].IDRef != "c1" || !p.Spine[0].Linear || len(p.Spine[0].Properties) != 0 ||
+		p.Spine[1].IDRef != "nav" || p.Spine[1].Linear || !p.Spine[1].HasProperty("rendition:layout-reflowable") {
+		t.Errorf("expected the spine of c1 and of nav, not linear and reflowable, got: %+v", p.Spine)
+	}
+	if m.Layout != "pre-paginated" || m.Viewport != "width=600, height=800" {
+		t.Errorf("expected the fixed layout and its viewport, got: %q %q", m.Layout, m.Viewport)
 	}
 	if got := p.Covers(); !slices.Equal(got, []string{"OEBPS/images/cover.jpg"}) {
 		t.Errorf("expected the cover, got: %q", got)
@@ -257,7 +264,7 @@ func TestScanHead(t *testing.T) {
 </head>
 <body><meta name="author" content="Not In Head"><title>Body title</title></body>
 </HTML>`
-	h := ScanHead(doc)
+	h := ScanHead(doc, ivy.Limits{})
 	want := Head{
 		Title:     "Le Titre & la suite",
 		Authors:   []string{"Jean Dupont", "Marie Curie"},
@@ -269,7 +276,7 @@ func TestScanHead(t *testing.T) {
 		h.Language != want.Language || h.Generator != want.Generator {
 		t.Errorf("expected %+v, got: %+v", want, h)
 	}
-	if h := ScanHead(`<html xml:lang="de"><title>x`); h.Language != "de" || h.Title != "x" {
+	if h := ScanHead(`<html xml:lang="de"><title>x`, ivy.Limits{}); h.Language != "de" || h.Title != "x" {
 		t.Errorf("expected the xml:lang and an unclosed title, got: %+v", h)
 	}
 }
@@ -283,30 +290,58 @@ func TestFirstImage(t *testing.T) {
 		`<!-- <img src="no.png"> --><script>"<img src='no.png'>"</script>`:                                     "",
 		`<img src="a&amp;b.png">`:                                                                              "a&b.png",
 		`<p>no image</p>`:                                                                                      "",
-		`<img src="broken`:                                                                                     "broken",
+		`<img src="broken`:                                                                                     "",
 		`<<<<>>>=<a =b c== d='e' "f"/ g>`:                                                                      "",
 	} {
-		got, ok := FirstImage(doc)
+		got, ok := FirstImage(doc, ivy.Limits{})
 		if got != want || ok != (want != "") {
 			t.Errorf("FirstImage(%q): expected %q, got: %q %v", doc, want, got, ok)
 		}
 	}
 }
 
-func TestTagsEnds(t *testing.T) {
-	// each of these ends in the middle of a construct, and the scan must
+func TestElements(t *testing.T) {
+	// each of these ends in the middle of a construct, and the parse must
 	// end without a panic
 	for _, doc := range []string{"<", "<a", "<a b", "<a b=", "<a b='", "<!--", "<!", "</", "<?", "<title", "<a/", "<a =", "x<1"} {
-		for tag := range Tags(doc) {
-			_ = tag
+		for el := range Elements(ParseHTML(doc, ivy.Limits{}).Root()) {
+			_ = el
 		}
 	}
 	var names []string
-	for tag := range Tags(`<A><b-c><d:e/><1x><f g>`) {
-		names = append(names, tag.Name)
+	for el := range Elements(ParseHTML(`<A><b-c><d:e/><1x><f g>`, ivy.Limits{}).Root()) {
+		names = append(names, el.Name())
 	}
-	if want := []string{"a", "b-c", "d:e", "f"}; !slices.Equal(names, want) {
+	if want := []string{"html", "head", "body", "a", "b-c", "d:e", "f"}; !slices.Equal(names, want) {
 		t.Errorf("expected %q, got: %q", want, names)
+	}
+	if n := len(slices.Collect(Elements(nil))); n != 0 {
+		t.Errorf("expected no elements under nil, got: %d", n)
+	}
+}
+
+// TestScanLinear makes sure that ScanHead and FirstImage take time linear
+// in the length of a hostile document: one that nests and misnests many
+// formatting elements, and many tables and lists.
+func TestScanLinear(t *testing.T) {
+	const unit = `<a href=x><b><i><table><tr><td><p><font><ul><li><s>text</a></b></td>` +
+		`<option><select><nobr><nobr><em><strong><u>`
+	elapsed := func(n int) time.Duration {
+		doc := `<html><head><title>t</title></head><body>` + strings.Repeat(unit, n) + `<img src="z.png">`
+		best := time.Duration(math.MaxInt64)
+		for range 3 {
+			start := time.Now()
+			ScanHead(doc, ivy.Limits{})
+			FirstImage(doc, ivy.Limits{})
+			best = min(best, time.Since(start))
+		}
+		return best
+	}
+	small, large := elapsed(2000), elapsed(16000)
+	// time linear in the length gives a ratio near 8, and time in its
+	// square gives 64
+	if ratio := float64(large) / float64(max(small, time.Millisecond)); ratio > 24 {
+		t.Errorf("expected time linear in the length, got: %v for 2000 units and %v for 16000", small, large)
 	}
 }
 
@@ -406,6 +441,56 @@ func TestLCID(t *testing.T) {
 		}
 		if got := LCIDCharset(tt.lcid); got != tt.charset {
 			t.Errorf("LCIDCharset(%#x): expected %q, got: %q", tt.lcid, tt.charset, got)
+		}
+	}
+}
+
+func TestKindleFixedLayout(t *testing.T) {
+	p, err := ParseOPF([]byte(`<package xmlns="http://www.idpf.org/2007/opf" version="2.0"><metadata>
+<meta name="fixed-layout" content="true"/><meta name="original-resolution" content="1072x1448"/>
+</metadata></package>`), ".", ivy.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Metadata.Layout != "pre-paginated" || p.Metadata.Viewport != "width=1072, height=1448" {
+		t.Errorf("expected the fixed layout of the Kindle, got: %q %q", p.Metadata.Layout, p.Metadata.Viewport)
+	}
+}
+
+func TestViewport(t *testing.T) {
+	for s, want := range map[string][2]float64{
+		"width=1200, height=1600":     {1200, 1600},
+		"width = 600px;height=800.5":  {600, 800.5},
+		"height=10,width=20,initial":  {20, 10},
+		"width=device-width":          {},
+		"width=1200":                  {},
+		"width=0, height=10":          {},
+		"width=99999999, height=1000": {},
+		"":                            {},
+	} {
+		w, h, ok := ParseViewport(s)
+		if ok != (want != [2]float64{}) || ok && (w != want[0] || h != want[1]) {
+			t.Errorf("ParseViewport(%q): expected %v, got: %g %g %v", s, want, w, h, ok)
+		}
+	}
+	doc := `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="utf-8"/>` +
+		`<meta name="Viewport" content="width=1200, height=1577"/></head><body><meta name="viewport" content="no"/></body></html>`
+	if got, ok := DocumentViewport(doc, ivy.Limits{}); !ok || got != "width=1200, height=1577" {
+		t.Errorf("expected the viewport of the head, got: %q %v", got, ok)
+	}
+	if got, ok := DocumentViewport(`<html><body><meta name="viewport" content="width=1, height=1"></body></html>`, ivy.Limits{}); ok {
+		t.Errorf("expected no viewport in the body, got: %q", got)
+	}
+}
+
+func TestSetRootAttr(t *testing.T) {
+	got, ok := SetRootAttr(`<?xml version="1.0"?><!-- c --><!DOCTYPE html><html xmlns="x"><head/></html>`, "data-a", "b")
+	if want := `<?xml version="1.0"?><!-- c --><!DOCTYPE html><html data-a="b" xmlns="x"><head/></html>`; !ok || got != want {
+		t.Errorf("expected %q, got: %q %v", want, got, ok)
+	}
+	for _, doc := range []string{"", "no tags", `<html data-a="c">`, "<html"} {
+		if got, ok := SetRootAttr(doc, "data-a", "b"); ok || got != doc {
+			t.Errorf("%q: expected no change, got: %q %v", doc, got, ok)
 		}
 	}
 }

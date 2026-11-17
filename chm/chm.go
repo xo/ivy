@@ -199,7 +199,7 @@ func (d *Document) title() string {
 	}
 	if topic, ok := d.topic(); ok {
 		if buf, err := d.fsys.ReadFile(topic); err == nil {
-			return ebook.ScanHead(ebook.TextIn(buf, d.charset)).Title
+			return ebook.ScanHead(ebook.TextIn(buf, d.charset), d.lim).Title
 		}
 	}
 	return ""
@@ -251,7 +251,7 @@ func (d *Document) contents() []string {
 		d.log.Debug("chm: table of contents left out", "name", clean, "err", err)
 		return nil
 	}
-	return contentsOrder(hhc, path.Dir(clean), d.charset)
+	return contentsOrder(hhc, path.Dir(clean), d.charset, d.lim)
 }
 
 // source returns the help file as a source for the layout: its files, the

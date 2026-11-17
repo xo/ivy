@@ -487,6 +487,22 @@ func TestDecodeFont(t *testing.T) {
 	if ext, ok := resourceType(rec); !ok || ext != "ttf" {
 		t.Errorf("expected a font, got: %q %v", ext, ok)
 	}
+	lim := ivy.Limits{}.WithDefaults()
+	if ext := fontType(rec, lim); ext != "ttf" {
+		t.Errorf("expected a TrueType font, got: %q", ext)
+	}
+	for magic, want := range map[string]string{"OTTO": "otf", "wOFF": "woff", "wOF2": "woff2", "true": "ttf"} {
+		rec := slices.Concat([]byte("FONT"), be(4), be(0), be(fontHeader), be(0), be(0), []byte(magic))
+		if ext := fontType(rec, lim); ext != want {
+			t.Errorf("%s: expected %q, got: %q", magic, want, ext)
+		}
+		if !isFont("resource00001." + want) {
+			t.Errorf("expected resource00001.%s to be a font", want)
+		}
+	}
+	if ext := fontType(rec[:10], lim); ext != "ttf" {
+		t.Errorf("expected ttf for a broken record, got: %q", ext)
+	}
 }
 
 func TestBase32(t *testing.T) {
@@ -687,18 +703,30 @@ func TestPagesDRM(t *testing.T) {
 	}
 }
 
-// replicaText returns the text of a Print Replica book: the header, one
-// table of two sections, the PDF file and a resource.
-func replicaText(pdf []byte) []byte {
+// replicaText returns the text of a Print Replica book: the header, and for
+// each file of pdfs a table of two sections, the file and a resource.
+func replicaText(pdfs ...[]byte) []byte {
 	resource := []byte("resource")
-	header := 4 + 4 + 4 + 2*8
+	header := 4 + 4 + len(pdfs)*(4+2*8)
+	values := make([]int, 0, 1+5*len(pdfs))
+	values = append(values, len(pdfs))
+	for range pdfs {
+		values = append(values, 2)
+	}
+	offset := header
+	for _, pdf := range pdfs {
+		values = append(values, offset, len(pdf), offset+len(pdf), len(resource))
+		offset += len(pdf) + len(resource)
+	}
 	var b bytes.Buffer
 	b.WriteString(replicaMagic)
-	for _, v := range []int{1, 2, header, len(pdf), header + len(pdf), len(resource)} {
+	for _, v := range values {
 		b.Write([]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
 	}
-	b.Write(pdf)
-	b.Write(resource)
+	for _, pdf := range pdfs {
+		b.Write(pdf)
+		b.Write(resource)
+	}
 	return b.Bytes()
 }
 
@@ -765,11 +793,79 @@ func TestReplicaPages(t *testing.T) {
 	}
 }
 
-func TestReplicaFile(t *testing.T) {
+func TestReplicaPagesOfEachFile(t *testing.T) {
+	buf := testBook{text: replicaText(onePagePDF(), twoPagePDF())}.build()
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	n, err := d.PageCount(t.Context())
+	if err != nil || n != 3 {
+		t.Fatalf("expected the 3 pages of the two pdf files, got: %d %v", n, err)
+	}
+	for i, want := range [][2]float32{{100, 200}, {300, 400}, {300, 400}} {
+		p, err := d.Page(t.Context(), i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w, h := p.Size(); w != want[0] || h != want[1] {
+			t.Errorf("page %d: expected %g by %g, got: %g by %g", i, want[0], want[1], w, h)
+		}
+	}
+	for _, i := range []int{-1, 3} {
+		if _, err := d.Page(t.Context(), i); !errors.Is(err, ivy.ErrPageRange) {
+			t.Errorf("page %d: expected ivy.ErrPageRange, got: %v", i, err)
+		}
+	}
+	// a pdf file that does not open fails the book
+	buf = testBook{text: replicaText(onePagePDF(), []byte("%PDF-1.7 broken"))}.build()
+	broken, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broken.PageCount(t.Context()); err == nil {
+		t.Error("expected an error for the broken pdf file")
+	}
+}
+
+// twoPagePDF returns a PDF file of two empty pages of 300 by 400 points.
+func twoPagePDF() []byte {
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 300 400] >>",
+		"<< /Type /Page /Parent 2 0 R >>",
+		"<< /Type /Page /Parent 2 0 R >>",
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.7\n")
+	offsets := make([]int, len(objects))
+	for i, obj := range objects {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, obj)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xref)
+	return b.Bytes()
+}
+
+func TestReplicaFiles(t *testing.T) {
 	pdf := onePagePDF()
 	lim := ivy.Limits{}.WithDefaults()
-	if got, err := replicaFile(replicaText(pdf), lim); err != nil || !bytes.Equal(got, pdf) {
-		t.Errorf("expected the pdf file, got: %d bytes %v", len(got), err)
+	if got, err := replicaFiles(replicaText(pdf), lim); err != nil || len(got) != 1 || !bytes.Equal(got[0], pdf) {
+		t.Errorf("expected the pdf file, got: %d files %v", len(got), err)
+	}
+	got, err := replicaFiles(replicaText(pdf, []byte("not a pdf"), pdf), lim)
+	if err != nil || len(got) != 2 || !bytes.Equal(got[0], pdf) || !bytes.Equal(got[1], pdf) {
+		t.Errorf("expected the two pdf files, got: %d files %v", len(got), err)
 	}
 	for name, text := range map[string][]byte{
 		"short":        []byte(replicaMagic),
@@ -779,7 +875,7 @@ func TestReplicaFile(t *testing.T) {
 		"no pdf":       replicaText([]byte("not a pdf")),
 		"no section":   append([]byte(replicaMagic), 0, 0, 0, 1, 0, 0, 0, 2),
 	} {
-		if _, err := replicaFile(text, lim); !errors.Is(err, ivy.ErrFormat) {
+		if _, err := replicaFiles(text, lim); !errors.Is(err, ivy.ErrFormat) {
 			t.Errorf("%s: expected ivy.ErrFormat, got: %v", name, err)
 		}
 	}

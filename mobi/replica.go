@@ -13,51 +13,102 @@ import (
 	"github.com/xo/ivy/pdf"
 )
 
-// replicaPDF opens the PDF file of a Print Replica book once.
+// replicaPDF opens the PDF files of a Print Replica book once.
 type replicaPDF struct {
-	mu  sync.Mutex
-	doc *pdf.Document
-	err error
+	mu   sync.Mutex
+	docs []*pdf.Document
+	// counts holds the number of pages of each PDF file.
+	counts []int
+	err    error
 }
 
-// open returns the PDF file of the book d. It keeps the error, except the
-// error of ctx, which a later call tries again.
-func (r *replicaPDF) open(ctx context.Context, d *Document) (doc *pdf.Document, err error) {
+// open returns the PDF files of the book d, with the number of pages of
+// each. It keeps the error, except the error of ctx, which a later call
+// tries again.
+func (r *replicaPDF) open(ctx context.Context, d *Document) (docs []*pdf.Document, counts []int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.doc != nil || r.err != nil {
-		return r.doc, r.err
+	if r.docs != nil || r.err != nil {
+		return r.docs, r.counts, r.err
 	}
 	defer func() {
 		if err != nil && ctx.Err() == nil {
 			r.err = err
 		}
 	}()
-	data, err := d.replicaData()
+	files, err := d.replicaData()
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, data := range files {
+		doc, err := pdf.Open(ctx, bytes.NewReader(data), pdf.WithConfig(d.cfg))
+		if err == nil {
+			r.docs = append(r.docs, doc)
+			var n int
+			n, err = doc.PageCount(ctx)
+			r.counts = append(r.counts, n)
+		}
+		if err != nil {
+			err = errors.Join(fmt.Errorf("opening pdf file %d of a print replica book: %w", i+1, err), r.closeAll())
+			return nil, nil, err
+		}
+	}
+	return r.docs, r.counts, nil
+}
+
+// pageCount returns the number of pages of all the PDF files of the book d.
+func (r *replicaPDF) pageCount(ctx context.Context, d *Document) (int, error) {
+	_, counts, err := r.open(ctx, d)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	return total, nil
+}
+
+// page returns page n of the book d: a page of the PDF file that holds it.
+// The pages of the PDF files follow one another in their order in the
+// book.
+func (r *replicaPDF) page(ctx context.Context, d *Document, n int) (ivy.Page, error) {
+	docs, counts, err := r.open(ctx, d)
 	if err != nil {
 		return nil, err
 	}
-	r.doc, err = pdf.Open(ctx, bytes.NewReader(data), pdf.WithConfig(d.cfg))
-	if err != nil {
-		return nil, fmt.Errorf("opening the pdf of a print replica book: %w", err)
+	if n < 0 {
+		return nil, fmt.Errorf("page %d: %w", n, ivy.ErrPageRange)
 	}
-	return r.doc, nil
+	for i, doc := range docs {
+		if n < counts[i] {
+			return doc.Page(ctx, n)
+		}
+		n -= counts[i]
+	}
+	return nil, fmt.Errorf("page past the last page: %w", ivy.ErrPageRange)
 }
 
-// close closes the PDF file, if it is open.
+// close closes the PDF files, if they are open.
 func (r *replicaPDF) close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.doc == nil {
-		return nil
-	}
-	err := r.doc.Close()
-	r.doc = nil
-	return err
+	return r.closeAll()
 }
 
-// replicaData returns the PDF file of a Print Replica book, from its text.
-func (d *Document) replicaData() (data []byte, err error) {
+// closeAll closes the PDF files. The caller holds r.mu.
+func (r *replicaPDF) closeAll() error {
+	errs := make([]error, 0, len(r.docs))
+	for _, doc := range r.docs {
+		errs = append(errs, doc.Close())
+	}
+	r.docs, r.counts = nil, nil
+	return errors.Join(errs...)
+}
+
+// replicaData returns the PDF files of a Print Replica book, from its
+// text.
+func (d *Document) replicaData() (files [][]byte, err error) {
 	defer ebook.Recover("reading print replica", &err)
 	if d.book.encryption != 0 {
 		return nil, fmt.Errorf("mobi text encrypted with type %d: %w", d.book.encryption, ivy.ErrDRM)
@@ -66,18 +117,19 @@ func (d *Document) replicaData() (data []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	return replicaFile(text, d.lim)
+	return replicaFiles(text, d.lim)
 }
 
-// replicaFile returns the PDF file of the text of a Print Replica book.
+// replicaFiles returns the PDF files of the text of a Print Replica book.
 //
 // The text starts with "%MOP" and a table of sections. The 32-bit number at
 // offset 4 is the number of tables. Then each table gives the number of its
 // sections, in 32 bits. Then come the sections of all the tables, in order,
 // each with its offset in the text and its length, in 32 bits each. The
-// first section of a table is a PDF file. The book is the first PDF file;
-// the other sections hold resources of the reader.
-func replicaFile(text []byte, lim ivy.Limits) ([]byte, error) {
+// first section of a table is a PDF file, and the other sections hold
+// resources of the reader. The book is the PDF files of the tables, in
+// order. A table whose first section is not a PDF file is left out.
+func replicaFiles(text []byte, lim ivy.Limits) ([][]byte, error) {
 	bad := func(what string) error {
 		return fmt.Errorf("print replica %s: %w", what, ivy.ErrFormat)
 	}
@@ -89,6 +141,7 @@ func replicaFile(text []byte, lim ivy.Limits) ([]byte, error) {
 		return nil, bad(fmt.Sprintf("of %d tables", tables))
 	}
 	index := 8 + 4*tables
+	var files [][]byte
 	var errs []error
 	for i := range tables {
 		sections := uint64(binary.BigEndian.Uint32(text[8+4*i:]))
@@ -111,9 +164,12 @@ func replicaFile(text []byte, lim ivy.Limits) ([]byte, error) {
 			}
 			data := text[offset : offset+length]
 			if bytes.HasPrefix(data, []byte("%PDF")) {
-				return data, nil
+				files = append(files, data)
 			}
 		}
+	}
+	if len(files) > 0 {
+		return files, nil
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)

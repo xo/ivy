@@ -7,10 +7,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
-
-	okhtml "github.com/xo/okage/html"
 
 	"github.com/xo/ivy"
 )
@@ -118,15 +115,6 @@ func IsCoverPage(fsys fs.FS, name, cover string, lim ivy.Limits) (page, shows bo
 	return first.letters <= maxCoverPageText, true
 }
 
-// pageImage is the first image of a document.
-type pageImage struct {
-	// path is the path of the image in the file system.
-	path string
-	// before counts the letters and digits of the text before the image,
-	// and letters counts those of the whole text.
-	before, letters int
-}
-
 // firstImage returns the first image of the document name of fsys. It reads
 // the document as HTML, so it also reads a document of XHTML or of SVG.
 func firstImage(fsys fs.FS, name string, lim ivy.Limits) (pageImage, bool) {
@@ -134,65 +122,12 @@ func firstImage(fsys fs.FS, name string, lim ivy.Limits) (pageImage, bool) {
 	if err != nil {
 		return pageImage{}, false
 	}
-	tree, err := okhtml.ParseDocument(strings.NewReader(Text(buf)),
-		okhtml.WithCharset("utf-8"),
-		okhtml.WithMaxNodes(lim.MaxObjects),
-		okhtml.WithMaxDepth(lim.MaxDepth))
-	if err != nil {
+	img, ok := scanImage(ParseHTML(Text(buf), lim))
+	if !ok {
 		return pageImage{}, false
 	}
-	var img pageImage
-	var link string
-	found := false
-	var walk func(n *okhtml.Node)
-	walk = func(n *okhtml.Node) {
-		for c := range n.Children() {
-			switch c.Type() {
-			case okhtml.TextNode:
-				for _, r := range c.Data() {
-					if unicode.IsLetter(r) || unicode.IsNumber(r) {
-						img.letters++
-					}
-				}
-			case okhtml.ElementNode:
-				switch c.Name() {
-				case "head", "script", "style", "title", "template", "noscript":
-					continue
-				case "img", "image":
-					if !found {
-						link, found = imageLink(c)
-						img.before = img.letters
-					}
-				}
-				walk(c)
-			}
-		}
-	}
-	walk(tree.Root())
-	if !found {
-		return pageImage{}, false
-	}
-	img.path, found = Resolve(path.Dir(name), link)
-	return img, found
-}
-
-// imageLink returns the link of an img element of HTML, or of an image
-// element of SVG.
-func imageLink(n *okhtml.Node) (string, bool) {
-	if n.Namespace() == okhtml.NamespaceSVG {
-		if href, ok := n.AttrNS(okhtml.NamespaceXLink, "href"); ok && strings.TrimSpace(href) != "" {
-			return href, true
-		}
-		if href, ok := n.Attr("href"); ok && strings.TrimSpace(href) != "" {
-			return href, true
-		}
-		return "", false
-	}
-	if n.Name() != "img" {
-		return "", false
-	}
-	src, ok := n.Attr("src")
-	return src, ok && strings.TrimSpace(src) != ""
+	img.path, ok = Resolve(path.Dir(name), img.link)
+	return img, ok
 }
 
 // maxPageNames is the number of names that ImagePageName tries.

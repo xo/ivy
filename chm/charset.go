@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
 )
 
@@ -54,14 +55,18 @@ func withCharset(doc []byte, charset string) []byte {
 // element that gives its encoding: meta charset, or meta http-equiv with a
 // content that holds charset=.
 func declaresCharset(head []byte) bool {
-	for tag := range ebook.Tags(ebook.Windows1252(head)) {
-		if tag.Name != "meta" {
+	tree := ebook.ParseHTML(ebook.Windows1252(head), ivy.Limits{})
+	if tree == nil {
+		return false
+	}
+	for el := range ebook.Elements(tree.Root()) {
+		if el.Name() != "meta" {
 			continue
 		}
-		if _, ok := tag.Attr("charset"); ok {
+		if _, ok := el.Attr("charset"); ok {
 			return true
 		}
-		if content, ok := tag.Attr("content"); ok && strings.Contains(strings.ToLower(content), "charset=") {
+		if content, ok := el.Attr("content"); ok && strings.Contains(strings.ToLower(content), "charset=") {
 			return true
 		}
 	}

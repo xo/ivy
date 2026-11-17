@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
+	"path"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
@@ -60,6 +61,12 @@ func (r *resources) name(n int) (string, bool) {
 		r.names[n] = ""
 		return "", false
 	}
+	if ext == "ttf" {
+		buf, err := r.d.db.record(rec)
+		if err == nil {
+			ext = fontType(buf, r.d.lim)
+		}
+	}
 	name := fmt.Sprintf("resource%05d.%s", n, ext)
 	r.fsys.AddFunc(name, r.d.db.size(rec), func() (buf []byte, err error) {
 		defer ebook.Recover("reading mobi resource "+name, &err)
@@ -67,6 +74,15 @@ func (r *resources) name(n int) (string, bool) {
 	})
 	r.names[n] = name
 	return name, true
+}
+
+// isFont reports whether the resource with the name name is a font.
+func isFont(name string) bool {
+	switch path.Ext(name) {
+	case ".ttf", ".otf", ".woff", ".woff2":
+		return true
+	}
+	return false
 }
 
 // resourceType returns the extension of a resource from its first bytes.
@@ -86,8 +102,8 @@ func resourceType(head []byte) (string, bool) {
 	case len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WEBP":
 		return "webp", true
 	case bytes.HasPrefix(head, []byte("FONT")):
-		// the type of the font is only known after the decode, and the
-		// layout reads the type from the content
+		// the type of the font is only known after the decode, which
+		// fontType does
 		return "ttf", true
 	}
 	return "", false
@@ -109,33 +125,72 @@ func (d *Document) resource(rec int) ([]byte, error) {
 	return buf, nil
 }
 
-// decodeFont decodes a FONT record. Its header gives, in 4 bytes each after
+// fontType returns the extension of the font of the FONT record buf, from
+// the first bytes of the font: otf, woff, woff2, or else ttf. The layout
+// reads the type from the content, so the extension only names the file.
+func fontType(buf []byte, lim ivy.Limits) string {
+	data, zlibbed, err := fontPayload(buf, lim)
+	if err != nil {
+		return "ttf"
+	}
+	head := data
+	if zlibbed {
+		zr, err := zlib.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return "ttf"
+		}
+		head = make([]byte, 4)
+		n, _ := io.ReadFull(zr, head)
+		head = head[:n]
+	}
+	switch {
+	case bytes.HasPrefix(head, []byte("OTTO")):
+		return "otf"
+	case bytes.HasPrefix(head, []byte("wOFF")):
+		return "woff"
+	case bytes.HasPrefix(head, []byte("wOF2")):
+		return "woff2"
+	}
+	return "ttf"
+}
+
+// fontPayload returns the data of a FONT record, after the XOR of its key,
+// and whether zlib compresses it. Its header gives, in 4 bytes each after
 // "FONT": the size of the font, the flags, the offset of the data, and the
-// length and the offset of the key of the XOR. The XOR comes first, then
-// zlib.
-func decodeFont(buf []byte, lim ivy.Limits) ([]byte, error) {
+// length and the offset of the key of the XOR.
+func fontPayload(buf []byte, lim ivy.Limits) (data []byte, zlibbed bool, err error) {
 	if len(buf) < fontHeader {
-		return nil, fmt.Errorf("font record of %d bytes: %w", len(buf), ivy.ErrFormat)
+		return nil, false, fmt.Errorf("font record of %d bytes: %w", len(buf), ivy.ErrFormat)
 	}
 	size, flags, off := int64(be32(buf, 4)), be32(buf, 8), int64(be32(buf, 12))
 	keyLen, keyOff := int64(be32(buf, 16)), int64(be32(buf, 20))
 	if off > int64(len(buf)) {
-		return nil, fmt.Errorf("font record with its data at %d of %d bytes: %w", off, len(buf), ivy.ErrFormat)
+		return nil, false, fmt.Errorf("font record with its data at %d of %d bytes: %w", off, len(buf), ivy.ErrFormat)
 	}
 	if size > lim.MaxMemory {
-		return nil, fmt.Errorf("font of %d bytes: %w", size, ivy.ErrLimit)
+		return nil, false, fmt.Errorf("font of %d bytes: %w", size, ivy.ErrLimit)
 	}
-	data := bytes.Clone(buf[off:])
+	data = bytes.Clone(buf[off:])
 	if flags&fontXOR != 0 {
 		if keyLen <= 0 || keyOff+keyLen > int64(len(buf)) {
-			return nil, fmt.Errorf("font record with its key out of the record: %w", ivy.ErrFormat)
+			return nil, false, fmt.Errorf("font record with its key out of the record: %w", ivy.ErrFormat)
 		}
 		key := buf[keyOff : keyOff+keyLen]
 		for i := range min(len(data), fontXORBytes) {
 			data[i] ^= key[i%len(key)]
 		}
 	}
-	if flags&fontZlib == 0 {
+	return data, flags&fontZlib != 0, nil
+}
+
+// decodeFont decodes a FONT record. The XOR of fontPayload comes first, then
+// zlib.
+func decodeFont(buf []byte, lim ivy.Limits) ([]byte, error) {
+	data, zlibbed, err := fontPayload(buf, lim)
+	if err != nil {
+		return nil, err
+	}
+	if !zlibbed {
 		return data, nil
 	}
 	zr, err := zlib.NewReader(bytes.NewReader(data))

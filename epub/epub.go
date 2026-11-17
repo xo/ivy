@@ -13,6 +13,12 @@
 // fit the page. An image of the spine, such as an image of SVG, is on a page
 // of its own.
 //
+// A book of fixed layout, whose rendition:layout is pre-paginated, gives the
+// size of each page in a meta element viewport of its document. Each such
+// document is one page of that size, with no margin, and an image of its
+// spine is a page of the size of the image. The book starts with its own
+// first page, and the package adds no page of the cover.
+//
 // The package undoes the obfuscation of fonts of the IDPF and of Adobe,
 // because it is not DRM (D12). A book whose documents DRM encrypts, such as
 // a book of Adobe ADEPT or of Readium LCP, still opens for its cover and its
@@ -315,7 +321,7 @@ func (d *Document) pageImage(name string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	src, ok := ebook.FirstImage(ebook.Text(buf))
+	src, ok := ebook.FirstImage(ebook.Text(buf), d.lim)
 	if !ok {
 		return "", false
 	}
@@ -395,9 +401,30 @@ func (d *Document) source() (src layout.Source, err error) {
 	if title == "" {
 		title = d.ncxTitle()
 	}
+	fixed := newFixedPages(d)
 	p := &imagePages{d: d, title: title}
-	docs = p.withCover(docs)
+	if !fixed.isFixed(docs[0]) {
+		// a book of fixed layout starts with its own page of the cover
+		docs = p.withCover(docs)
+	}
 	for i, name := range docs {
+		switch {
+		case !fixed.isFixed(name):
+		case d.isSpineImage(name):
+			page := ebook.ImagePageName(name, p.exists)
+			if doc, ok := fixed.image(page, name, title); ok {
+				p.fs.Add(page, doc)
+				p.n++
+				docs[i] = page
+				continue
+			}
+		default:
+			if doc, ok := fixed.document(name); ok {
+				p.fs.Add(name, doc)
+				p.n++
+			}
+			continue
+		}
 		if d.isSpineImage(name) {
 			docs[i] = p.add(name)
 		}
@@ -406,10 +433,14 @@ func (d *Document) source() (src layout.Source, err error) {
 	if p.n > 0 {
 		fsys = p.fs.Over(d.fsys)
 	}
+	styles := []string{ebook.BookStyleFor(d.paper)}
+	if style := fixed.style(); style != "" {
+		styles = append(styles, style)
+	}
 	return layout.Source{
 		FS:          fsys,
 		Documents:   docs,
-		StyleSheets: []string{ebook.BookStyleFor(d.paper)},
+		StyleSheets: styles,
 		Title:       title,
 	}, nil
 }
@@ -424,12 +455,15 @@ type imagePages struct {
 	n int
 }
 
+// exists reports whether the pages or the archive hold the file name.
+func (p *imagePages) exists(name string) bool {
+	_, err := p.fs.Stat(name)
+	return err == nil || p.d.exists(name)
+}
+
 // add adds the page of the image name, and returns its path.
 func (p *imagePages) add(name string) string {
-	page := ebook.ImagePageName(name, func(s string) bool {
-		_, err := p.fs.Stat(s)
-		return err == nil || p.d.exists(s)
-	})
+	page := ebook.ImagePageName(name, p.exists)
 	p.fs.Add(page, ebook.ImagePage(ebook.ImagePageLink(page, name), p.title, p.d.paper))
 	p.n++
 	return page

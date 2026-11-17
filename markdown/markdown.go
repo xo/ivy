@@ -6,7 +6,9 @@
 // tables, strikethrough, links without brackets and task lists. It also
 // reads footnotes and definition lists. HTML in the text stays in the
 // document. The layout puts the document on pages of US Letter, and Page
-// lays it out only as far as the page that a program asks for.
+// lays it out only as far as the page that a program asks for. The document
+// takes the East Asian language that the letters of the text show, so that
+// the layout takes the fonts of that language for the CJK characters.
 //
 // An image of the text is a file next to the Markdown file. An ivy.Source
 // gives no folder, so a program gives it with WithDir (D22). Without it, or
@@ -78,6 +80,8 @@ type Document struct {
 	paper ivy.Paper
 	dir   fs.FS
 	text  []byte
+	// lang is the language of the text, or empty.
+	lang  string
 	title string
 
 	mu     sync.Mutex
@@ -126,6 +130,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	}
 	text = text[frontMatter(text):]
 	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, dir: o.dir, text: text}
+	d.lang = ebook.TextLanguage(string(text[:min(len(text), maxLangScan)]))
 	doc := parse(text)
 	if err := checkTree(doc, lim); err != nil {
 		return nil, err

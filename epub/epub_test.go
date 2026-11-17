@@ -526,7 +526,7 @@ func FuzzOpen(f *testing.F) {
 		}
 		for _, name := range src.Documents {
 			if data, err := fs.ReadFile(src.FS, name); err == nil {
-				_ = ebook.ScanHead(ebook.Text(data))
+				_ = ebook.ScanHead(ebook.Text(data), ivy.Limits{})
 			}
 		}
 		ebooktest.RenderFirstPage(t, d)
@@ -623,4 +623,80 @@ func TestPagesDRM(t *testing.T) {
 func TestPaper(t *testing.T) {
 	d := mustOpen(t, book3(), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
 	ebooktest.CheckPaper(t, d)
+}
+
+// fixedBook returns a book of fixed layout: a page of 300 by 400 pixels
+// with a black image that fills it, an image of SVG of 200 by 100 in the
+// spine, a page without a viewport, which takes the viewport of the
+// package, and a reflowable page.
+func fixedBook() []fixture.Entry {
+	opf := `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">` + uuid + `</dc:identifier>
+    <dc:title>Fixed</dc:title>
+    <meta property="rendition:layout">pre-paginated</meta>
+    <meta property="rendition:viewport">width=150, height=250</meta>
+  </metadata>
+  <manifest>
+    <item id="p1" href="p1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="svg" href="p2.svg" media-type="image/svg+xml"/>
+    <item id="p3" href="p3.xhtml" media-type="application/xhtml+xml"/>
+    <item id="p4" href="p4.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img" href="black.png" media-type="image/png" properties="cover-image"/>
+  </manifest>
+  <spine>
+    <itemref idref="p1"/>
+    <itemref idref="svg"/>
+    <itemref idref="p3"/>
+    <itemref idref="p4" properties="rendition:layout-reflowable"/>
+  </spine>
+</package>`
+	page := func(head, body string) []byte {
+		return []byte(`<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head>` + head +
+			`<title>t</title></head><body style="margin: 0">` + body + `</body></html>`)
+	}
+	return []fixture.Entry{
+		{Name: "mimetype", Data: []byte("application/epub+zip"), Store: true},
+		{Name: "META-INF/container.xml", Data: []byte(containerXML("OEBPS/content.opf"))},
+		{Name: "OEBPS/content.opf", Data: []byte(opf)},
+		{Name: "OEBPS/p1.xhtml", Data: page(`<meta name="viewport" content="width=300, height=400"/>`,
+			`<img src="black.png" style="display: block; width: 300px; height: 400px"/>`)},
+		{Name: "OEBPS/p2.svg", Data: []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 200 100"><rect width="200" height="100"/></svg>`)},
+		{Name: "OEBPS/p3.xhtml", Data: page("", `<p>Three</p>`)},
+		{Name: "OEBPS/p4.xhtml", Data: page("", `<p>Four</p>`)},
+		{Name: "OEBPS/black.png", Data: fixture.PNG(30, 40, color.Black)},
+	}
+}
+
+func TestFixedLayout(t *testing.T) {
+	d := mustOpen(t, fixedBook(), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+	n, err := d.PageCount(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// no page of the cover comes first, and each page of fixed layout is
+	// one page
+	if n != 4 {
+		t.Fatalf("expected 4 pages, got: %d", n)
+	}
+	for i, want := range [][2]float32{{225, 300}, {150, 75}, {112.5, 187.5}, {ebooktest.Landscape.Width, ebooktest.Landscape.Height}} {
+		p, err := d.Page(t.Context(), i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w, h := p.Size(); w != want[0] || h != want[1] {
+			t.Errorf("page %d: expected %g by %g points, got: %g by %g", i, want[0], want[1], w, h)
+		}
+	}
+	// the image fills the first page, with no margin and no limit of the
+	// height of the page of a book
+	img := ebooktest.RenderPage(t, d, 0)
+	if b := img.Bounds(); ebooktest.Ink(img, b) != b.Dx()*b.Dy() {
+		t.Errorf("expected the image over the whole page, got %d of %d pixels of ink", ebooktest.Ink(img, b), b.Dx()*b.Dy())
+	}
+	img = ebooktest.RenderPage(t, d, 1)
+	if b := img.Bounds(); ebooktest.Ink(img, b) < b.Dx()*b.Dy()*9/10 {
+		t.Errorf("expected the image of svg over the page, got %d of %d pixels of ink", ebooktest.Ink(img, b), b.Dx()*b.Dy())
+	}
 }

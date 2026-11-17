@@ -11,6 +11,10 @@
 // without one. Text that is not valid UTF-8 is read as windows-1252. Markdown
 // is the package markdown.
 //
+// The document takes the language of the text: the language of the header of
+// a Project Gutenberg file, or else the East Asian language that the letters
+// show. The layout takes the fonts of that language for the CJK characters.
+//
 // The layout of phase 4 puts the document on pages (D10, D15): a page of US
 // Letter in a monospace font for a text file, and the page of an ebook for a
 // TXTZ file. Page lays out the document only as far as the page that a
@@ -250,9 +254,13 @@ func depth(name string) int {
 }
 
 // convert converts the text data into a document of HTML, within the limit
-// of memory.
+// of memory. An empty lang takes the language that the text shows.
 func (d *Document) convert(data []byte, title, lang string) ([]byte, error) {
-	doc := toHTML(ebook.Text(data), title, lang)
+	text := ebook.Text(data)
+	if lang == "" {
+		lang = ebook.TextLanguage(text)
+	}
+	doc := toHTML(text, title, lang)
 	if int64(len(doc)) > d.lim.MaxMemory {
 		return nil, fmt.Errorf("document of html of %d bytes: %w", len(doc), ivy.ErrLimit)
 	}

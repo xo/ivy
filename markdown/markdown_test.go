@@ -120,6 +120,24 @@ func TestSource(t *testing.T) {
 	}
 }
 
+func TestLanguage(t *testing.T) {
+	d, err := Open(t.Context(), strings.NewReader("# 标题\n\n这是中国的文字。"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf, err := fs.ReadFile(src.FS, src.Documents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(buf), `<html lang="zh-Hans">`) {
+		t.Errorf("expected the language of the text, got:\n%s", buf)
+	}
+}
+
 func TestNoFolder(t *testing.T) {
 	d, err := Open(t.Context(), strings.NewReader("![a logo](logo.png) ![inline](data:image/png;base64,AAAA)"))
 	if err != nil {

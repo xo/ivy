@@ -58,6 +58,16 @@ type Metadata struct {
 	// Cover is the id of the item of the cover image, from the meta element
 	// of EPUB 2 whose name is cover.
 	Cover string
+	// Layout is the layout of the documents of the book: "pre-paginated"
+	// for a book of fixed layout, whose documents are pages of a fixed
+	// size, or "reflowable" or empty for a book whose text flows onto the
+	// pages. It comes from the property rendition:layout of EPUB 3, or from
+	// the meta element fixed-layout of the Kindle.
+	Layout string
+	// Viewport is the default size of a page of fixed layout, such as
+	// "width=1200, height=1600", from the property rendition:viewport of
+	// EPUB 3, or from the meta element original-resolution of the Kindle.
+	Viewport string
 }
 
 // Item is an item of the manifest.
@@ -115,6 +125,14 @@ type ItemRef struct {
 	// Linear is false for an item outside of the main order of reading,
 	// such as a note.
 	Linear bool
+	// Properties are the properties of EPUB 3, such as
+	// rendition:layout-pre-paginated.
+	Properties []string
+}
+
+// HasProperty reports whether the item of the spine has the property p.
+func (ref ItemRef) HasProperty(p string) bool {
+	return slices.Contains(ref.Properties, p)
 }
 
 // Reference is a reference of the guide of EPUB 2.
@@ -157,8 +175,9 @@ func ParseOPF(buf []byte, dir string, lim ivy.Limits) (*Package, error) {
 			for ref := range n.Children() {
 				if ref.IsElement() && Local(ref) == "itemref" {
 					p.Spine = append(p.Spine, ItemRef{
-						IDRef:  Attr(ref, "idref"),
-						Linear: strings.TrimSpace(Attr(ref, "linear")) != "no",
+						IDRef:      Attr(ref, "idref"),
+						Linear:     strings.TrimSpace(Attr(ref, "linear")) != "no",
+						Properties: strings.Fields(Attr(ref, "properties")),
 					})
 				}
 			}
@@ -371,6 +390,18 @@ func readMetadata(metadata roxmltree.Node, uniqueID string) Metadata {
 			m.Generator = e.attrs["content"]
 		case strings.EqualFold(e.attrs["name"], "cover"):
 			m.Cover = e.attrs["content"]
+		case e.attrs["property"] == "rendition:layout" && e.text != "":
+			m.Layout = e.text
+		case e.attrs["property"] == "rendition:viewport" && e.text != "" && m.Viewport == "":
+			m.Viewport = e.text
+		case strings.EqualFold(e.attrs["name"], "fixed-layout") && m.Layout == "":
+			if strings.EqualFold(e.attrs["content"], "true") {
+				m.Layout = "pre-paginated"
+			}
+		case strings.EqualFold(e.attrs["name"], "original-resolution") && m.Viewport == "":
+			if w, h, ok := strings.Cut(strings.ToLower(e.attrs["content"]), "x"); ok {
+				m.Viewport = "width=" + strings.TrimSpace(w) + ", height=" + strings.TrimSpace(h)
+			}
 		}
 	}
 	return m

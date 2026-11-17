@@ -19,6 +19,10 @@ import (
 // documentName is the path of the HTML document in the FS of the source.
 const documentName = "index.html"
 
+// maxLangScan is the number of bytes at the start of the text that give
+// its language.
+const maxLangScan = 64 << 10
+
 // styleSheet is the style sheet of the format. It comes after
 // ebook.PaperStyle, which sets the page, and ebook.BodyStyle. The rules
 // match the pages that calibre makes of a Markdown file with a font of
@@ -66,7 +70,11 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		return layout.Source{}, err
 	}
 	var b strings.Builder
-	b.WriteString("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>")
+	b.WriteString("<!DOCTYPE html>\n<html")
+	if d.lang != "" {
+		b.WriteString(` lang="` + escape(d.lang) + `"`)
+	}
+	b.WriteString(">\n<head>\n<meta charset=\"utf-8\">\n<title>")
 	b.WriteString(escape(d.title))
 	b.WriteString("</title>\n</head>\n<body>\n")
 	b.WriteString(body)

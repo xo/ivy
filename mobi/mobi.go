@@ -25,8 +25,8 @@
 // The layout puts the documents on the pages of an ebook (D10, D21), and Page
 // lays them out only as far as the page that a program asks for. As in
 // calibre, the first page shows the cover image, scaled to fit the page. An AZW4
-// book holds a PDF file in its text, and its pages are the pages of that
-// PDF file, which the package pdf renders.
+// book holds PDF files in its text, and its pages are the pages of those
+// PDF files, one after the other, which the package pdf renders.
 package mobi
 
 import (
@@ -87,7 +87,7 @@ const (
 	mobi6
 	// kf8 is a KF8 book, alone or in a joint file.
 	kf8
-	// replica is a Print Replica book, which holds a PDF file.
+	// replica is a Print Replica book, which holds PDF files.
 	replica
 )
 
@@ -129,7 +129,7 @@ type Document struct {
 	srcErr error
 	// pages holds the book of the layout.
 	pages ebook.Pages
-	// replica holds the PDF file of a Print Replica book.
+	// replica holds the PDF files of a Print Replica book.
 	replica replicaPDF
 }
 
@@ -209,11 +209,7 @@ func (d *Document) Close() error {
 // encrypts the text.
 func (d *Document) PageCount(ctx context.Context) (int, error) {
 	if d.kind == replica {
-		doc, err := d.replica.open(ctx, d)
-		if err != nil {
-			return 0, err
-		}
-		return doc.PageCount(ctx)
+		return d.replica.pageCount(ctx, d)
 	}
 	return d.pages.PageCount(ctx, d.layoutSource, d.config())
 }
@@ -222,11 +218,7 @@ func (d *Document) PageCount(ctx context.Context) (int, error) {
 // as page n.
 func (d *Document) Page(ctx context.Context, n int) (ivy.Page, error) {
 	if d.kind == replica {
-		doc, err := d.replica.open(ctx, d)
-		if err != nil {
-			return nil, err
-		}
-		return doc.Page(ctx, n)
+		return d.replica.page(ctx, d, n)
 	}
 	return d.pages.Page(ctx, d.layoutSource, d.config(), n)
 }
@@ -374,7 +366,7 @@ func (d *Document) convert() (layout.Source, error) {
 		return layout.Source{}, fmt.Errorf("mobi text encrypted with type %d: %w", h.encryption, ivy.ErrDRM)
 	}
 	if d.kind == replica {
-		// The pages of a Print Replica book are the pages of the PDF file
+		// The pages of a Print Replica book are the pages of the PDF files
 		// in its text, which the package pdf reads.
 		return layout.Source{}, fmt.Errorf("print replica book: %w", ivy.ErrUnsupported)
 	}
@@ -431,7 +423,7 @@ func (d *Document) withCover(fsys *zipdoc.FS, res *resources, docs []string, tit
 			continue
 		}
 		name, ok := res.name(p.record - d.firstResource + 1)
-		if ok && !strings.HasSuffix(name, ".ttf") {
+		if ok && !isFont(name) {
 			cover = name
 		}
 		break

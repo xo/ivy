@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"strings"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
 )
 
@@ -114,17 +115,21 @@ func cString(b []byte) []byte {
 // is a sitemap of HTML: each entry is an object element whose param element
 // with the name Local gives the file. Text that is not UTF-8 is in the
 // encoding charset.
-func contentsOrder(hhc []byte, dir, charset string) []string {
+func contentsOrder(hhc []byte, dir, charset string, lim ivy.Limits) []string {
 	var out []string
-	for tag := range ebook.Tags(ebook.TextIn(hhc, charset)) {
-		if tag.Name != "param" {
+	tree := ebook.ParseHTML(ebook.TextIn(hhc, charset), lim)
+	if tree == nil {
+		return nil
+	}
+	for el := range ebook.Elements(tree.Root()) {
+		if el.Name() != "param" {
 			continue
 		}
-		name, _ := tag.Attr("name")
+		name, _ := el.Attr("name")
 		if !strings.EqualFold(strings.TrimSpace(name), "local") {
 			continue
 		}
-		value, _ := tag.Attr("value")
+		value, _ := el.Attr("value")
 		if name, ok := resolveLink(dir, value); ok {
 			out = append(out, name)
 		}
