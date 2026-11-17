@@ -13,7 +13,7 @@ import (
 
 // cell is a cell of a ShapeSheet: its value, from the attribute V, and its
 // formula, from the attribute F. The package draws with the values, and
-// computes only the formulas that are trivial (see eval).
+// computes only the formulas of numbers that a shape inherits (see eval).
 type cell struct {
 	v, f string
 }

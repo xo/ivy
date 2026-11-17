@@ -10,9 +10,10 @@
 // colors and the styles of the theme. The package draws the geometry of a
 // shape (lines, arcs, elliptical arcs, ellipses, polylines, B-splines and
 // NURBS), its fill, its line, its arrows, its shadow, its text, its picture
-// and its groups, with internal/drawingml. It computes no formula of the
-// ShapeSheet except the trivial ones, and draws with the values that the
-// file holds. A stencil (.vssx, .vssm) has no pages.
+// and its groups, with internal/drawingml. It draws with the values that
+// the file holds, and computes again the formulas of numbers that a shape
+// inherits from its master, such as Sheet.5!Width*0.5 or IF (see eval). A
+// stencil (.vssx, .vssm) has no pages.
 //
 // The package gives the thumbnail and the properties of a drawing. A file
 // of Office Open XML holds its thumbnail in docProps/thumbnail.emf or in a

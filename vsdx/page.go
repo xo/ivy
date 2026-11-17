@@ -61,6 +61,11 @@ type builder struct {
 	chains  map[*shape]*[4]chain
 	links   map[*shape]*shape
 	virtual map[*shape][]*shape
+	// parents maps each shape of a group that the builder reached to
+	// its group, for the references of the formulas to other shapes, and
+	// sheets caches the shapes that sheetRef found in a group.
+	parents map[*shape]*shape
+	sheets  map[sheetKey]*shape
 }
 
 // fault records a part of the page that the builder could not draw.
@@ -119,6 +124,8 @@ func (dr *drawing) newBuilder(ctx context.Context, n int) *builder {
 		chains:     make(map[*shape]*[4]chain),
 		links:      make(map[*shape]*shape),
 		virtual:    make(map[*shape][]*shape),
+		parents:    make(map[*shape]*shape),
+		sheets:     make(map[sheetKey]*shape),
 		deleted:    make(map[*shape]bool),
 		values:     make(map[cellKey]cachedValue),
 	}
@@ -378,7 +385,7 @@ func (b *builder) value(s *shape, name string) (string, bool) {
 	b.values[key] = cachedValue{c.v, true}
 	if i > 0 && c.f != "" && b.evalDepth < maxEvalDepth {
 		b.evalDepth++
-		v, ok := eval(c.f, b.lookup(s))
+		v, ok := eval(c.f, b.lookup(s, b.owner(s, b.chain(s, category(name))[i])))
 		b.evalDepth--
 		if ok {
 			b.values[key] = cachedValue{formatNum(v), true}
@@ -401,16 +408,208 @@ type cachedValue struct {
 }
 
 // lookup returns the function that gives the value of a cell of the shape
-// to a formula.
-func (b *builder) lookup(s *shape) func(string) (float64, bool) {
+// s to a formula of the sheet of the shape owner, which s inherits. A
+// reference to another shape, such as Sheet.5!Width, names a shape of the
+// page or of the master of owner. owner is nil for a formula of a style.
+func (b *builder) lookup(s, owner *shape) func(string) (float64, bool) {
 	return func(name string) (float64, bool) {
-		v, ok := b.value(s, name)
+		t := s
+		if i := strings.IndexByte(name, '!'); i >= 0 {
+			id, ok := strings.CutPrefix(name[:i], "Sheet.")
+			if !ok || owner == nil {
+				return 0, false
+			}
+			if t = b.sheetRef(s, owner, id); t == nil {
+				return 0, false
+			}
+			name = name[i+1:]
+		}
+		v, ok := b.ref(t, name)
 		if !ok {
 			return 0, false
 		}
 		f, err := strconv.ParseFloat(v, 64)
 		return f, err == nil
 	}
+}
+
+// ref returns the value of the cell of the shape s that a formula names:
+// a cell of the shape, such as Width, or a cell of a row of a section,
+// such as User.Base, Prop.Count.Value, Geometry1.X2, Connections.X1,
+// Controls.Row_1.Y or Scratch.A1.
+func (b *builder) ref(s *shape, name string) (string, bool) {
+	sec, rest, ok := strings.Cut(name, ".")
+	if !ok {
+		return b.value(s, name)
+	}
+	var key, row, cellName string
+	switch sec {
+	case "User", "Prop", "Controls", "Actions", "Hyperlink":
+		key = map[string]string{"User": "User", "Prop": "Property", "Controls": "Control", "Actions": "Actions", "Hyperlink": "Hyperlink"}[sec]
+		row, cellName, _ = strings.Cut(rest, ".")
+		row = "N:" + row
+		if cellName == "" {
+			cellName = map[string]string{"Controls": "X", "Hyperlink": "Address", "Actions": "Action"}[sec]
+		}
+		if cellName == "" {
+			cellName = "Value"
+		}
+	case "Connections", "Scratch":
+		key = map[string]string{"Connections": "Connection", "Scratch": "Scratch"}[sec]
+		if r, c, ok := strings.Cut(rest, "."); ok {
+			// a named row, such as Connections.Top.X
+			row, cellName = "N:"+r, c
+			break
+		}
+		letters, ix, ok := splitIndex(rest)
+		if !ok || ix < 1 {
+			return "", false
+		}
+		row, cellName = strconv.Itoa(ix-1), letters
+	default:
+		n, ok := strings.CutPrefix(sec, "Geometry")
+		g, err := strconv.Atoi(n)
+		if !ok || err != nil || g < 1 {
+			return "", false
+		}
+		letters, ix, ok := splitIndex(rest)
+		if !ok {
+			return "", false
+		}
+		key, row, cellName = "Geometry"+strconv.Itoa(g-1), strconv.Itoa(ix), letters
+	}
+	return b.sectionValue(s, key, row, cellName)
+}
+
+// splitIndex splits a reference to a cell of a row, such as "X1", into the
+// name of the cell and the index of the row.
+func splitIndex(s string) (string, int, bool) {
+	i := strings.IndexAny(s, "0123456789")
+	if i <= 0 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(s[i:])
+	return s[:i], n, err == nil
+}
+
+// sectionValue returns the value of the cell of the row of the section of
+// the shape, with the result of the formula of a cell that the shape
+// inherits, as value does.
+func (b *builder) sectionValue(s *shape, key, row, name string) (string, bool) {
+	ck := cellKey{s, key + "\x00" + row + "\x00" + name}
+	if v, ok := b.values[ck]; ok {
+		return v.v, v.ok
+	}
+	c := b.chain(s, catOther)
+	var r *rowView
+	for _, x := range c.rows(key, maxRows) {
+		if x.key == row {
+			r = x
+			break
+		}
+	}
+	if r == nil {
+		b.values[ck] = cachedValue{}
+		return "", false
+	}
+	v, i, ok := r.cell(name)
+	if !ok {
+		b.values[ck] = cachedValue{}
+		return "", false
+	}
+	b.values[ck] = cachedValue{v.v, true}
+	if i > 0 && v.f != "" && b.evalDepth < maxEvalDepth {
+		b.evalDepth++
+		f, ok := eval(v.f, b.lookup(s, b.owner(s, c[i])))
+		b.evalDepth--
+		if ok {
+			b.values[ck] = cachedValue{formatNum(f), true}
+			return formatNum(f), true
+		}
+	}
+	return v.v, true
+}
+
+// owner returns the shape whose sheet is sh: the shape s or one of its
+// masters, or nil for the sheet of a style.
+func (b *builder) owner(s *shape, sh *sheet) *shape {
+	for depth := 0; s != nil && depth <= b.lim.MaxDepth; depth++ {
+		if &s.sheet == sh {
+			return s
+		}
+		s = b.masterOf(s)
+	}
+	return nil
+}
+
+// maxSheetSearch bounds the shapes that sheetRef visits.
+const maxSheetSearch = 4096
+
+// sheetRef returns the shape that the reference Sheet.id names in a
+// formula of the shape owner, for the shape s that inherits the formula.
+// The ID is an ID of the part of owner: the shape of the page with the ID,
+// or, in a master, the shape of the instance of the master that s belongs
+// to, which inherits from the shape of the master with the ID.
+func (b *builder) sheetRef(s, owner *shape, id string) *shape {
+	is := func(t *shape) bool {
+		for depth := 0; t != nil && depth <= b.lim.MaxDepth; depth++ {
+			if t.id == id && t.part == owner.part {
+				return true
+			}
+			t = b.masterOf(t)
+		}
+		return false
+	}
+	in := func(t *shape) bool {
+		for depth := 0; t != nil && depth <= b.lim.MaxDepth; depth++ {
+			if t.part == owner.part {
+				return true
+			}
+			t = b.masterOf(t)
+		}
+		return false
+	}
+	// the shape itself and its groups, and the outermost group that is
+	// still in the part of owner
+	root := s
+	for t, depth := s, 0; t != nil && depth <= b.lim.MaxDepth; t, depth = b.parents[t], depth+1 {
+		if is(t) {
+			return t
+		}
+		if in(t) {
+			root = t
+		}
+	}
+	// the other shapes of that group, once for each group and ID
+	key := sheetKey{root, owner.part, id}
+	if t, ok := b.sheets[key]; ok {
+		return t
+	}
+	var found *shape
+	queue := []*shape{root}
+	for n := 0; len(queue) > 0 && n < maxSheetSearch; n++ {
+		t := queue[0]
+		queue = queue[1:]
+		if is(t) {
+			found = t
+			break
+		}
+		for _, c := range b.children(t, b.masterOf(t), 0) {
+			if !c.del {
+				b.parents[c] = t
+				queue = append(queue, c)
+			}
+		}
+	}
+	b.sheets[key] = found
+	return found
+}
+
+// sheetKey is a search of sheetRef: the group that it searches, and the
+// part and the ID of the shape.
+type sheetKey struct {
+	root     *shape
+	part, id string
 }
 
 // num returns the value of the cell of the shape with the name as a
@@ -433,7 +632,7 @@ func (b *builder) rowNum(s *shape, r *rowView, name string) float64 {
 	}
 	if i > 0 && c.f != "" && b.evalDepth < maxEvalDepth {
 		b.evalDepth++
-		v, ok := eval(c.f, b.lookup(s))
+		v, ok := eval(c.f, b.lookup(s, b.owner(s, b.chain(s, catOther)[i])))
 		b.evalDepth--
 		if ok {
 			return v
@@ -494,6 +693,9 @@ func (b *builder) drawShape(s *shape, parent affine, ctx *master, depth int) {
 	}
 	if b.num(s, "DisplayMode", 2) != 0 {
 		b.figure(s, m, w, h, true, false)
+	}
+	for _, c := range children {
+		b.parents[c] = s
 	}
 	for _, c := range children {
 		if !c.del {

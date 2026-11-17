@@ -1,11 +1,13 @@
 package vsdx
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"image"
 	"image/color"
+	"io"
 	"strings"
 	"testing"
 
@@ -93,6 +95,69 @@ func TestOpen(t *testing.T) {
 				t.Errorf("expected blue, got: %v", got)
 			}
 		})
+	}
+}
+
+// stencilFile returns a stencil (.vssx): the parts of a drawing with a
+// master and a thumbnail, without the pages.
+func stencilFile(t *testing.T) []byte {
+	t.Helper()
+	v := fixture.VSDX{Masters: []fixture.VSDXMaster{{ID: 1, Shapes: `<Shape ID="5" Type="Shape">` + box(0.5, 0.5, 1, 1) + fixture.VisioRect(0, 1, 1) + `</Shape>`}}}
+	zr, err := zip.NewReader(bytes.NewReader(v.Bytes()), int64(len(v.Bytes())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []fixture.Entry{{Name: "docProps/thumbnail.emf", Data: blueEMF()}}
+	for _, f := range zr.File {
+		if strings.HasPrefix(f.Name, "visio/pages/") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch f.Name {
+		case "[Content_Types].xml":
+			data = bytes.ReplaceAll(data, []byte("visio.drawing.main"), []byte("visio.stencil.main"))
+		case "visio/_rels/document.xml.rels":
+			data = bytes.ReplaceAll(data, []byte(`<Relationship Id="rId1" Type="http://schemas.microsoft.com/visio/2010/relationships/pages" Target="pages/pages.xml"/>`), nil)
+		case "_rels/.rels":
+			data = bytes.ReplaceAll(data, []byte("</Relationships>"), []byte(`<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.emf"/></Relationships>`))
+		}
+		entries = append(entries, fixture.Entry{Name: f.Name, Data: data})
+	}
+	return fixture.Zip(entries...)
+}
+
+func TestStencil(t *testing.T) {
+	data := stencilFile(t)
+	doc, err := Format.Open(t.Context(), bytes.NewReader(data), ivy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc.(ivy.Pager); ok {
+		t.Error("expected a stencil without pages")
+	}
+	img, err := ivy.BestPreview(t.Context(), doc, image.Point{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Size() != image.Pt(288, 144) {
+		t.Errorf("expected the thumbnail of 288 by 144, got: %v", img.Bounds().Size())
+	}
+	d, err := Open(t.Context(), bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.PageCount(t.Context()); err != nil || n != 0 {
+		t.Errorf("expected 0 pages, got: %d, %v", n, err)
+	}
+	if _, err := d.Page(t.Context(), 0); !errors.Is(err, ivy.ErrPageRange) {
+		t.Errorf("expected %v, got: %v", ivy.ErrPageRange, err)
 	}
 }
 

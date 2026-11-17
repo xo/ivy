@@ -33,21 +33,21 @@ type textPara struct {
 }
 
 // textOf returns the element Text of the shape, or of the master that it
-// inherits it from.
-func (b *builder) textOf(s *shape) (roxmltree.Node, bool) {
+// inherits it from, and the depth of the master: 0 for the shape itself.
+func (b *builder) textOf(s *shape) (roxmltree.Node, int, bool) {
 	for depth := 0; s != nil && depth <= b.lim.MaxDepth; depth++ {
 		if s.hasText {
-			return s.text, true
+			return s.text, depth, true
 		}
 		s = b.masterOf(s)
 	}
-	return roxmltree.Node{}, false
+	return roxmltree.Node{}, 0, false
 }
 
 // splitText reads the element Text into paragraphs: its text, its marks of
 // the rows of the sections Character (cp) and Paragraph (pp), and its
-// fields (fld).
-func (b *builder) splitText(s *shape, n roxmltree.Node) []textPara {
+// fields (fld). depth is the depth of the master that n comes from.
+func (b *builder) splitText(s *shape, n roxmltree.Node, depth int) []textPara {
 	paras := []textPara{{pp: "0"}}
 	cp := "0"
 	size := 0
@@ -95,7 +95,7 @@ func (b *builder) splitText(s *shape, n roxmltree.Node) []textPara {
 		case "pp":
 			paras[len(paras)-1].pp = ooxml.Attr(c, "IX")
 		case "fld":
-			add(b.fieldText(fields, c))
+			add(b.fieldText(fields, c, depth))
 		}
 	}
 	// the text ends with a paragraph mark, which starts no paragraph
@@ -107,7 +107,11 @@ func (b *builder) splitText(s *shape, n roxmltree.Node) []textPara {
 
 // fieldText returns the text of the field fld: its text, or the value of
 // its row of the section Field, with the page number and the page count.
-func (b *builder) fieldText(c chain, fld roxmltree.Node) string {
+// The text of fld is the value of the field when Visio saved the element
+// Text. depth is the depth of the master that the element comes from. A
+// value of a nearer sheet, such as the value of an instance of a master,
+// is newer than the text, and the field shows it.
+func (b *builder) fieldText(c chain, fld roxmltree.Node, depth int) string {
 	var text strings.Builder
 	for t := range fld.Children() {
 		if t.IsText() {
@@ -120,7 +124,7 @@ func (b *builder) fieldText(c chain, fld roxmltree.Node) string {
 		if r.key != ix {
 			continue
 		}
-		v, _, _ := r.cell("Value")
+		v, i, _ := r.cell("Value")
 		f := strings.ToUpper(v.f)
 		switch {
 		case strings.Contains(f, "PAGENUMBER"):
@@ -130,7 +134,7 @@ func (b *builder) fieldText(c chain, fld roxmltree.Node) string {
 		case strings.Contains(f, "PAGENAME"):
 			return b.pageName
 		}
-		if text.Len() == 0 {
+		if text.Len() == 0 || i < depth && v.v != "" {
 			return v.v
 		}
 	}
@@ -269,11 +273,11 @@ func (b *builder) textBody(s *shape, q quickStyle) *drawingml.TextBody {
 	if v, _ := b.value(s, "HideText"); isTrue(v) {
 		return nil
 	}
-	n, ok := b.textOf(s)
+	n, depth, ok := b.textOf(s)
 	if !ok {
 		return nil
 	}
-	paras := b.splitText(s, n)
+	paras := b.splitText(s, n, depth)
 	c := b.chain(s, catText)
 	chars := rowsByKey(c.rows("Character", maxRows))
 	pps := rowsByKey(c.rows("Paragraph", maxRows))

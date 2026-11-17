@@ -200,6 +200,31 @@ func TestMasterResized(t *testing.T) {
 	check(t, img, point{1.1, 2, red}, point{2.9, 2, red}, point{2, 2.4, red}, point{0.9, 2, white}, point{3.1, 2, white})
 }
 
+func TestMasterGroupFormulas(t *testing.T) {
+	// the children of a master group size themselves with formulas of
+	// the group (Sheet.5!Width), of a sibling (Sheet.6!Width), of a row of
+	// the section User and with IF. The instance is twice the size of the
+	// master, and does not list the children.
+	geom := `<Section N="Geometry" IX="0">` +
+		`<Row T="MoveTo" IX="1"><Cell N="X" V="0" F="Width*0"/><Cell N="Y" V="0" F="Height*0"/></Row>` +
+		`<Row T="LineTo" IX="2"><Cell N="X" V="1" F="Width*1"/><Cell N="Y" V="0" F="Height*0"/></Row>` +
+		`<Row T="LineTo" IX="3"><Cell N="X" V="1" F="Width*1"/><Cell N="Y" V="1" F="Height*1"/></Row>` +
+		`<Row T="LineTo" IX="4"><Cell N="X" V="0" F="Geometry1.X1"/><Cell N="Y" V="1" F="Height*1"/></Row>` +
+		`<Row T="LineTo" IX="5"><Cell N="X" V="0" F="Geometry1.X1"/><Cell N="Y" V="0" F="Geometry1.Y1"/></Row></Section>`
+	locPin := `<Cell N="LocPinX" V="0" F="Width*0.5"/><Cell N="LocPinY" V="0" F="Height*0.5"/>`
+	v := onePage(`<Shape ID="1" Type="Group" Master="7">` + box(2, 2, 2, 2) + `</Shape>`)
+	v.Masters = []fixture.VSDXMaster{{ID: 7, Shapes: `<Shape ID="5" Type="Group">` + box(0.5, 0.5, 1, 1) + `<Shapes>` +
+		`<Shape ID="6" Type="Shape"><Cell N="PinX" V="0.75" F="Sheet.5!Width*0.75"/><Cell N="PinY" V="0.5" F="Sheet.5!Height*0.5"/>` +
+		`<Cell N="Width" V="0.5" F="Sheet.5!Width*0.5"/><Cell N="Height" V="0.2" F="IF(Sheet.5!Width&gt;1,Sheet.5!Height,User.Small)"/>` +
+		locPin + `<Section N="User"><Row N="Small"><Cell N="Value" V="0.2"/></Row></Section>` + filled("#FF0000") + geom + `</Shape>` +
+		`<Shape ID="8" Type="Shape"><Cell N="PinX" V="0.25" F="Sheet.5!Width*0.25"/><Cell N="PinY" V="0.5" F="Sheet.5!Height*0.5"/>` +
+		`<Cell N="Width" V="0.5" F="Sheet.6!Width"/><Cell N="Height" V="0.25" F="Sheet.5!Height*0.25"/>` +
+		locPin + filled("#00FF00") + geom + `</Shape>` +
+		`</Shapes></Shape>`}}
+	img := render(t, v, 0)
+	check(t, img, point{2.5, 2.5, red}, point{2.5, 1.2, red}, point{1.5, 2, green}, point{1.5, 2.4, white}, point{0.9, 2, white})
+}
+
 func TestCycles(t *testing.T) {
 	// two masters and two styles that inherit from each other
 	v := onePage(`<Shape ID="1" Type="Group" Master="1" FillStyle="1">` + box(2, 2, 1, 1) + `</Shape>`)
@@ -299,6 +324,36 @@ func TestPageNumber(t *testing.T) {
 	}
 }
 
+func TestInstanceFieldValue(t *testing.T) {
+	// the instance gives its field a new value, and inherits the element
+	// Text of its master, which holds the value of the master
+	v := onePage(`<Shape ID="1" Type="Shape" Master="7">` + box(2, 2, 2, 1) +
+		`<Section N="Field"><Row IX="0"><Cell N="Value" V="15 U" U="STR" F="Inh"/></Row></Section></Shape>` +
+		`<Shape ID="2" Type="Shape" Master="7">` + box(2, 1, 2, 1) + `</Shape>`)
+	v.Masters = []fixture.VSDXMaster{{ID: 7, Shapes: `<Shape ID="5" Type="Shape">` + box(1, 0.5, 2, 1) +
+		`<Section N="Field"><Row IX="0"><Cell N="Value" V="42 U" U="STR" F="ROUND(Prop.UCount,0)&amp;&quot; U&quot;"/></Row></Section>` +
+		`<Text><fld IX="0">42 U</fld></Text></Shape>`}}
+	d, err := Open(t.Context(), bytes.NewReader(v.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dr, err := d.drawing(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes, err := dr.pageContents(dr.pages[0].part, &counter{max: 1000})
+	if err != nil || len(shapes) != 2 {
+		t.Fatalf("expected two shapes, got: %d, %v", len(shapes), err)
+	}
+	b := dr.newBuilder(t.Context(), 0)
+	for i, want := range []string{"15 U", "42 U"} {
+		tb := b.textBody(shapes[i], b.quick(shapes[i]))
+		if tb == nil || len(tb.Paragraphs) != 1 || len(tb.Paragraphs[0].Runs) != 1 || tb.Paragraphs[0].Runs[0].Text != want {
+			t.Errorf("shape %d: expected the text %q, got: %+v", i+1, want, tb)
+		}
+	}
+}
+
 func TestArrow(t *testing.T) {
 	// a line of 2 inches with an arrow at its end, at its right
 	geom := `<Section N="Geometry" IX="0">` +
@@ -384,7 +439,7 @@ func TestPageErrors(t *testing.T) {
 }
 
 func TestEval(t *testing.T) {
-	cellsOf := map[string]float64{"Width": 2, "Height": 3}
+	cellsOf := map[string]float64{"Width": 2, "Height": 3, "User.Offset": 0.5, "Sheet.5!Width": 4}
 	lookup := func(name string) (float64, bool) {
 		v, ok := cellsOf[name]
 		return v, ok
@@ -401,11 +456,28 @@ func TestEval(t *testing.T) {
 		{"1.5e1", 15, true},
 		{"Width/0", 0, false},
 		{"THEMEVAL()", 0, false},
-		{"Sheet.5!Width", 0, false},
-		{"User.Offset*2", 0, false},
-		{"0.25 in", 0, false},
+		{`THEMEVAL("LineWeight",0.75pt)`, 0, false},
+		{"Sheet.5!Width", 4, true},
+		{"Sheet.6!Width", 0, false},
+		{"User.Offset*2", 1, true},
+		{"0.25 in", 0.25, true},
+		{"2.54CM+72pt", 2, true},
+		{"90 deg", math.Pi / 2, true},
+		{"50%", 0.5, true},
+		{"2 furlongs", 0, false},
 		{"Inh", 0, false},
 		{"((((((((((((((((((1))))))))))))))))))", 0, false},
+		{"IF(Width>1,Height,Width)", 3, true},
+		{"IF(Width<=1,Unknown,Width)", 2, true},
+		{"IF(AND(Width=2,NOT(FALSE)),1,0)", 1, true},
+		{"IF(OR(Width<>2,FALSE),1,0)", 0, true},
+		{"MIN(Width,Height,1)+MAX(Width,Height)", 4, true},
+		{"GUARD(ROUND(2.345,2))", 2.35, true},
+		{"INT(-1.5)+ABS(-2)+SQRT(9)", 3, true},
+		{"2^3", 8, true},
+		{"IF(Width>1,2,3", 0, false},
+		{"UNKNOWN(1)", 0, false},
+		{`ROUND(Width,0)&" U"`, 0, false},
 	}
 	for _, tt := range tests {
 		got, ok := eval(tt.f, lookup)
