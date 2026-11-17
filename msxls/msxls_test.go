@@ -229,7 +229,9 @@ func TestSynthetic(t *testing.T) {
 	for _, want := range []string{
 		">abc</td>",
 		">defЖ</td>",
-		`<td class="s1 c">2.5x</td>`,
+		// the line of 12 points is higher than the default row of 13.07
+		// points, and keeps its height
+		`<td class="s1 c" style="line-height:13.07pt">2.5x</td>`,
 		">123</td>",
 		">0.01</td>",
 		">5</td>",
@@ -250,6 +252,98 @@ func TestSynthetic(t *testing.T) {
 	}
 	if n, err := d.PageCount(t.Context()); err != nil || n != 3 {
 		t.Errorf("expected 3 pages, got: %d, %v", n, err)
+	}
+}
+
+// setupWorkbook returns a workbook of one sheet with a number, and the
+// record SETUP of the sheet when setup is not nil.
+func setupWorkbook(setup []byte) []byte {
+	var b biff
+	b.record(recBOF, u16(biff8, bofGlobals, 0, 0), u32(0, 0))
+	b.record(recFont, u16(200, 0, 0x7FFF, 400, 0), []byte{0, 0, 0, 0}, []byte{5, 0}, []byte("Arial"))
+	b.record(recXF, u16(0, 0), make([]byte, 16))
+	pos := b.record(recBoundSheet, u32(0), []byte{0, 0}, []byte{5, 0}, []byte("Paper"))
+	b.record(recEOF)
+	binary.LittleEndian.PutUint32(b.buf[pos+4:], uint32(len(b.buf)))
+	b.record(recBOF, u16(biff8, bofWorksheet, 0, 0), u32(0, 0))
+	b.record(recNumber, u16(0, 0, 0), float(1))
+	if setup != nil {
+		b.record(recSetup, setup)
+	}
+	b.record(recEOF)
+	return fixture.CFB(fixture.CFBEntry{Name: "Workbook", Data: b.buf})
+}
+
+func TestPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	// the record SETUP: iPaperSize, iScale, iPageStart, iFitWidth,
+	// iFitHeight, the flags, iRes, iVRes, numHdr, numFtr and iCopies
+	setup := func(paper, flags int) []byte {
+		b := u16(paper, 100, 1, 1, 1, flags, 600, 600)
+		b = append(b, float(0.3)...)
+		b = append(b, float(0.3)...)
+		return append(b, u16(1)...)
+	}
+	for _, test := range []struct {
+		name  string
+		buf   []byte
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", setupWorkbook(nil), ivy.Paper{}, ivy.Letter},
+		{"no setup", setupWorkbook(nil), landscape, landscape},
+		{"fNoPls", setupWorkbook(setup(5, 0x0004)), landscape, landscape},
+		{"fNoOrient", setupWorkbook(setup(0, 0x0040)), landscape, landscape},
+		{"landscape only", setupWorkbook(setup(0, 0)), ivy.A4, landscape},
+		{"own paper", setupWorkbook(setup(5, 0x0002)), landscape, ivy.Legal},
+		{"own paper in landscape", setupWorkbook(setup(5, 0)), ivy.A4, ivy.Legal.Landscape()},
+		{"own paper without orientation", setupWorkbook(setup(5, 0x0040)), landscape, ivy.Legal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(test.buf), WithConfig(ivy.Config{Paper: test.paper}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+}
+
+func TestRowHeights(t *testing.T) {
+	var b biff
+	b.record(recBOF, u16(biff8, bofGlobals, 0, 0), u32(0, 0))
+	b.record(recFont, u16(200, 0, 0x7FFF, 400, 0), []byte{0, 0, 0, 0}, []byte{5, 0}, []byte("Arial"))
+	b.record(recXF, u16(0, 0), make([]byte, 16))
+	pos := b.record(recBoundSheet, u32(0), []byte{0, 0}, []byte{5, 0}, []byte("Heights"))
+	b.record(recEOF)
+	binary.LittleEndian.PutUint32(b.buf[pos+4:], uint32(len(b.buf)))
+	b.record(recBOF, u16(biff8, bofWorksheet, 0, 0), u32(0, 0))
+	// the record DefColWidth gives columns of 10 digits: 80 pixels
+	b.record(recDefColWidth, u16(10))
+	// a row of 30 points that Excel fitted to its cells, without fUnsynced,
+	// and a row of 20 points that a person set
+	b.record(recRow, u16(0, 0, 1, 600, 0, 0, 0, 15))
+	b.record(recRow, u16(1, 0, 1, 400, 0, 0, 0x0040, 15))
+	b.record(recNumber, u16(0, 0, 0), float(1))
+	b.record(recNumber, u16(1, 0, 0), float(2))
+	b.record(recNumber, u16(2, 0, 0), float(3))
+	b.record(recEOF)
+	d, err := Open(t.Context(), bytes.NewReader(fixture.CFB(fixture.CFBEntry{Name: "Workbook", Data: b.buf})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := sheets(t, d)[0]
+	// Excel prints the rows at sheet.RowScale, and the columns in digits
+	// of 46 dots of Arial of 10 points: 80 / 7 * 5.52 points
+	for _, want := range []string{
+		`<col style="width:63.09pt">`,
+		`<tr style="height:29.04pt"><td class="n c">1</td>`,
+		`<tr style="height:19.36pt"><td class="n c">2</td>`,
+		`tr{break-inside:avoid;height:13.07pt}`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the sheet:\n%s", want, doc)
+		}
 	}
 }
 

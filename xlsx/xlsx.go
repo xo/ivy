@@ -19,7 +19,9 @@
 // manual page breaks, the headers and the footers, and the gridlines that
 // printOptions asks for. As Excel prints, a page has no gridlines unless
 // the sheet asks for them. A sheet without a header shows its name in
-// small grey text at the top left of each page.
+// small grey text at the top left of each page. The widths of the columns
+// and the heights of the rows are those that Excel prints, and a row keeps
+// its height as in Excel.
 //
 // The pictures and the charts of the drawings show at their cells, and a
 // chart sheet shows its chart on a page of its own. internal/chart draws
@@ -171,7 +173,7 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 	if err != nil {
 		return layout.Source{}, err
 	}
-	return wb.Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger})
+	return wb.Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger, Paper: d.cfg.Paper})
 }
 
 // workbook reads the workbook: the sheets that are not hidden, in order.
@@ -212,6 +214,7 @@ func (d *Document) workbook(ctx context.Context) (*sheet.Workbook, error) {
 			}
 			log.Warn("xlsx: sheet left out", "sheet", ref.name, "err", err)
 			sh = &sheet.Sheet{Name: ref.name, Page: sheet.DefaultPage}
+			sh.Page.SetPaper(d.cfg.Paper)
 			sh.Rows = []sheet.Row{{Cells: []sheet.Cell{{Text: fmt.Sprintf("ivy cannot show this sheet: %v", err)}}}}
 		}
 		wb.Sheets = append(wb.Sheets, sh)
@@ -227,6 +230,9 @@ func (b *book) readChartSheet(sh *sheet.Sheet, part string) {
 		Left: 0.7 * 72, Right: 0.7 * 72, Top: 0.75 * 72, Bottom: 0.75 * 72,
 		Header: 0.3 * 72, Footer: 0.3 * 72,
 	}
+	// The paper of the program replaces the default paperSize 1, US Letter,
+	// in its orientation (D32).
+	sh.Page.SetPaper(b.cfg.Paper)
 	doc, err := b.parsePart(part)
 	if err == nil {
 		for n := range doc.RootElement().Children() {
@@ -236,10 +242,12 @@ func (b *book) readChartSheet(sh *sheet.Sheet, part string) {
 				p.Left, p.Right = margin(n, "left", p.Left), margin(n, "right", p.Right)
 				p.Top, p.Bottom = margin(n, "top", p.Top), margin(n, "bottom", p.Bottom)
 			case "pageSetup":
-				if w, h, ok := sheet.PaperSize(integer(n, "paperSize", 1)); ok {
-					sh.Page.Width, sh.Page.Height = w, h
+				own := false
+				if w, h, ok := sheet.PaperSize(integer(n, "paperSize", 0)); ok {
+					sh.Page.Width, sh.Page.Height, own = w, h, true
 				}
-				sh.Page.Landscape = attr(n, "orientation") != "portrait"
+				// a chart sheet of Excel is in landscape by default
+				sh.Page.Landscape = orientation(attr(n, "orientation"), sh.Page.Landscape || own)
 			case "drawing":
 				if r, ok := b.sheetRel(part, attr(n, "id")); ok {
 					b.readDrawing(sh, r)

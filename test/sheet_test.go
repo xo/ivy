@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,12 +35,43 @@ const (
 const sheetTolerance = 4
 
 // widthTolerance is the share by which the width of the ink of a page of
-// ivy can differ from the one of LibreOffice. ivy converts the widths of
-// the columns of SpreadsheetML as Excel does, with the width of a digit of
-// the default font in whole pixels: 7 pixels for Calibri of 11 points.
-// LibreOffice converts them with the exact width of a digit, 7.43 pixels,
-// so its columns are up to 8% wider.
+// ivy can differ from the one of LibreOffice, for a sheet without a rule of
+// its own (sheetRule).
 const widthTolerance = 0.1
+
+// sheetRule is the layout that ivy follows for a sheet whose sizes do not
+// come from LibreOffice, such as an Excel file, which ivy prints as Excel
+// 2024 does. LibreOffice still gives the structure of the pages: their
+// number, their size, the top left corner of the ink, the bands of rows
+// that are not rows of data, such as the print titles, and how far the
+// text sits above the bottom of its row. The rule gives the sizes, in
+// pixels at 96 dots per inch, for ivy and for LibreOffice.
+type sheetRule struct {
+	// top is the top of the area of the cells: the top margin.
+	top float64
+	// titles and row are the height of the rows of the print titles and of
+	// a row of data, as ivy prints them, and refTitles and refRow as
+	// LibreOffice prints them.
+	titles, row       float64
+	refTitles, refRow float64
+	// pages holds for each page the number of rows of data that ivy and
+	// LibreOffice print on it, and the width of the band of columns that
+	// ivy prints.
+	pages []rulePage
+}
+
+// rulePage is a page of a sheetRule.
+type rulePage struct {
+	rows, refRows int
+	width         float64
+}
+
+// rowsPerPage returns the number of rows of data of the height row that a
+// page of the height page holds under the print titles of the height
+// titles.
+func rowsPerPage(page, titles, row float64) int {
+	return int((page - titles) / row)
+}
 
 // zipFiles returns a zip archive of the files, in order. The first file is
 // stored, as the mimetype of an OpenDocument file must be.
@@ -275,7 +307,11 @@ type pager interface {
 // the ink of the cells and the bands of the rows that hold text. The cells
 // are between the rows of pixels y0 and y1, outside the header and the
 // footer, whose fonts differ.
-func compareSheet(t *testing.T, name string, d pager, pdf string, y0, y1 int) {
+//
+// With a rule, the width of the ink, its bottom, the number of the bands of
+// rows and the places of the rows of data come from the rule, and not from
+// LibreOffice.
+func compareSheet(t *testing.T, name string, d pager, pdf string, y0, y1 int, rule *sheetRule) {
 	t.Helper()
 	wantPages, err := pdfPageCount(t.Context(), pdf)
 	if err != nil {
@@ -288,6 +324,9 @@ func compareSheet(t *testing.T, name string, d pager, pdf string, y0, y1 int) {
 	t.Logf("pages: ivy %d, LibreOffice %d", gotPages, wantPages)
 	if gotPages != wantPages {
 		t.Errorf("expected %d pages, as LibreOffice, got: %d", wantPages, gotPages)
+	}
+	if rule != nil && len(rule.pages) != wantPages {
+		t.Errorf("expected the %d pages of the rule, as LibreOffice gives, got: %d", len(rule.pages), wantPages)
 	}
 	near := func(a, b int) bool { return a-b <= sheetTolerance && b-a <= sheetTolerance }
 	for i := range min(gotPages, wantPages) {
@@ -316,14 +355,21 @@ func compareSheet(t *testing.T, name string, d pager, pdf string, y0, y1 int) {
 		gotBox, gotInk := inkBox(got)
 		wantBox, wantInk := inkBox(want)
 		t.Logf("page %d: ink box: ivy %v (%d pixels), LibreOffice %v (%d pixels)", i+1, gotBox, gotInk, wantBox, wantInk)
+		gotRows, wantRows := lineBands(inkRows(got)), lineBands(inkRows(want))
+		t.Logf("page %d: rows: ivy %d, LibreOffice %d", i+1, len(gotRows), len(wantRows))
+		if rule != nil && i < len(rule.pages) {
+			if !near(gotBox.Min.X, wantBox.Min.X) || !near(gotBox.Min.Y, wantBox.Min.Y) {
+				t.Errorf("page %d: expected the top left corner of the ink of LibreOffice %v within %d pixels, got: %v", i+1, wantBox.Min, sheetTolerance, gotBox.Min)
+			}
+			rule.check(t, i, gotBox, wantBox, gotRows, wantRows)
+			continue
+		}
 		if !near(gotBox.Min.X, wantBox.Min.X) || !near(gotBox.Min.Y, wantBox.Min.Y) || !near(gotBox.Max.Y, wantBox.Max.Y) {
 			t.Errorf("page %d: expected the ink box of LibreOffice %v within %d pixels, got: %v", i+1, wantBox, sheetTolerance, gotBox)
 		}
 		if w, ww := float64(gotBox.Dx()), float64(wantBox.Dx()); w < ww*(1-widthTolerance) || w > ww*(1+widthTolerance) {
 			t.Errorf("page %d: expected the width of the ink of LibreOffice %v within %v, got: %v", i+1, ww, widthTolerance, w)
 		}
-		gotRows, wantRows := lineBands(inkRows(got)), lineBands(inkRows(want))
-		t.Logf("page %d: rows: ivy %d, LibreOffice %d", i+1, len(gotRows), len(wantRows))
 		if len(gotRows) != len(wantRows) {
 			t.Errorf("page %d: expected %d bands of rows, as LibreOffice, got: %d\nivy: %v\nLibreOffice: %v", i+1, len(wantRows), len(gotRows), gotRows, wantRows)
 		} else {
@@ -340,6 +386,46 @@ func compareSheet(t *testing.T, name string, d pager, pdf string, y0, y1 int) {
 		}
 		gotCols, wantCols := lineBands(inkCols(got)), lineBands(inkCols(want))
 		t.Logf("page %d: bands of columns: ivy %d, LibreOffice %d", i+1, len(gotCols), len(wantCols))
+	}
+}
+
+// check checks page i of ivy against the rule: the box and the bands of
+// rows of the ink of ivy, got and gotRows, and of LibreOffice, want and
+// wantRows.
+func (r *sheetRule) check(t *testing.T, i int, got, want image.Rectangle, gotRows, wantRows [][2]int) {
+	t.Helper()
+	p := r.pages[i]
+	near := func(a, b float64) bool { return math.Abs(a-b) <= sheetTolerance }
+	// The border under the headings runs across the band of columns, so
+	// the ink is as wide as the band.
+	if w := float64(got.Dx()); !near(w, p.width) {
+		t.Errorf("page %d: expected the ink as wide as the band of columns, %.1f pixels, within %d, got: %v", i+1, p.width, sheetTolerance, w)
+	}
+	// The bands that are not rows of data, such as the print titles, are
+	// those of LibreOffice.
+	others := len(wantRows) - p.refRows
+	if others < 0 || len(gotRows) != others+p.rows {
+		t.Errorf("page %d: expected %d bands of rows, %d rows of data and %d others as in LibreOffice, got: %d\nivy: %v\nLibreOffice: %v",
+			i+1, others+p.rows, p.rows, others, len(gotRows), gotRows, wantRows)
+		return
+	}
+	// The text of the last row sits as far above the bottom of its row as
+	// in LibreOffice.
+	refBottom := r.top + r.refTitles + float64(p.refRows)*r.refRow
+	bottom := r.top + r.titles + float64(p.rows)*r.row
+	if exp := bottom - (refBottom - float64(want.Max.Y)); !near(float64(got.Max.Y), exp) {
+		t.Errorf("page %d: expected the bottom of the ink at %.1f within %d pixels, after %d rows of data, got: %d", i+1, exp, sheetTolerance, p.rows, got.Max.Y)
+	}
+	// Each row of data starts one row of the rule after the one before it,
+	// counted from the first one, so that an error of the height adds up.
+	data := gotRows[others:]
+	worst := 0.0
+	for k, band := range data {
+		worst = max(worst, math.Abs(float64(band[0]-data[0][0])-float64(k)*r.row))
+	}
+	t.Logf("page %d: largest shift of a row of data from the rule: %.1f pixels", i+1, worst)
+	if worst > sheetTolerance {
+		t.Errorf("page %d: expected the rows of data %.2f pixels apart within %d pixels, got a shift of %.1f\nivy: %v", i+1, r.row, sheetTolerance, worst, data)
 	}
 }
 
@@ -374,7 +460,54 @@ func TestXLSX(t *testing.T) {
 		}
 	}()
 	// the margins of 0.75 inch: 72 pixels
-	compareSheet(t, "xlsx", d, pdf, 70, sheetPageHeight-70)
+	compareSheet(t, "xlsx", d, pdf, 70, sheetPageHeight-70, xlsxRule(70))
+}
+
+// xlsxRule returns the layout of the sheet of buildXLSX with rows of data,
+// as Excel 2024 prints it, which ivy follows (see internal/sheet), and as
+// LibreOffice prints it.
+//
+// ivy no longer matches LibreOffice here, because Excel is the primary
+// reference of the files of Excel, and Excel prints them otherwise:
+//
+//   - Excel prints a row at 0.968 of its height (sheet.RowScale): a row of
+//     15 points is 14.52 points, 19.36 pixels. LibreOffice prints it at 20
+//     pixels. So a page of ivy holds 44 rows of data, and one of
+//     LibreOffice 42.
+//   - Excel prints a column in the digits of the printer: the pixels of
+//     the screen, in digits of 7 pixels of Calibri of 11 points, times the
+//     digit at 600 dots per inch, 47 dots or 5.64 points. Column A of
+//     30.71 characters is 215 pixels on the screen and 173.2 points on
+//     paper, and the columns B to H of 14.71 characters are 103 pixels
+//     and 83.0 points each. LibreOffice makes them about 1.5% narrower.
+//
+// Both put the columns A to E in the first band and F to H in the second,
+// on 2 pages each, down then over.
+func xlsxRule(rows int) *sheetRule {
+	const px = 96.0 / 72
+	const rowScale = 0.968
+	// the paper of 11 inches less the margins of 0.75 inch
+	page := (792 - 2*54) * px
+	r := &sheetRule{
+		top:       72,
+		titles:    (26 + 15) * rowScale * px,
+		row:       15 * rowScale * px,
+		refTitles: (26 + 15) * px,
+		refRow:    15 * px,
+	}
+	digit := func(pixels float64) float64 { return pixels / 7 * 5.64 * px }
+	bands := []float64{digit(215) + 4*digit(103), 3 * digit(103)}
+	per := rowsPerPage(page, r.titles, r.row)
+	refPer := rowsPerPage(page, r.refTitles, r.refRow)
+	for _, width := range bands {
+		// ivy and LibreOffice print the same number of pages
+		for done, refDone := 0, 0; done < rows; {
+			n, refN := min(per, rows-done), min(refPer, rows-refDone)
+			r.pages = append(r.pages, rulePage{rows: n, refRows: refN, width: width})
+			done, refDone = done+n, refDone+refN
+		}
+	}
+	return r
 }
 
 // TestODS compares the pages of an OpenDocument spreadsheet that ivy draws
@@ -406,5 +539,5 @@ func TestODS(t *testing.T) {
 		}
 	}()
 	// the margins of 0.75 inch and the header of 0.2 inch: 91 pixels
-	compareSheet(t, "ods", d, pdf, 90, sheetPageHeight-90)
+	compareSheet(t, "ods", d, pdf, 90, sheetPageHeight-90, nil)
 }

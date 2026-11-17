@@ -121,9 +121,11 @@ func TestWorkbookHTML(t *testing.T) {
 		`@top-left{content:"Report";vertical-align:top;padding-top:28.8pt;white-space:pre;font-family:"Arial", sans-serif;font-size:12pt;font-weight:bold;}`,
 		`@top-right{content:"Page " counter(page) " of " counter(pages);`,
 		// 20.71 characters with their padding, of 7 pixels: 145 pixels,
-		// and the default of 64 pixels. The hidden column C is left out.
-		`<col style="width:108.75pt"><col style="width:48pt"><col style="width:48pt"><col style="width:48pt">`,
-		`<tr style="height:24pt"><td class="s1 c" colspan="2">Title</td>`,
+		// and the default of 64 pixels. Excel prints them in digits of
+		// 5.64 points. The hidden column C is left out.
+		`<col style="width:116.83pt"><col style="width:51.57pt"><col style="width:51.57pt"><col style="width:51.57pt">`,
+		// Excel prints a row of 24 points 23.23 points high
+		`<tr style="height:23.23pt"><td class="s1 c" colspan="2">Title</td>`,
 		`<td class="c">a &amp; b</td><td class="s4 n c" style="color:#ff0000">-1,234.50</td>`,
 		`<td class="s2 n c">2023-03-15</td><td class="s3 n c">25.60%</td><td class="x c">TRUE</td><td class="x c">#DIV/0!</td>`,
 		`<td class="c">formula text</td><td class="n c">2</td>`,
@@ -169,15 +171,15 @@ func TestPages(t *testing.T) {
 	if out := os.Getenv("IVY_TEST_OUT"); out != "" {
 		writePNG(t, filepath.Join(out, "xlsx-0.png"), img)
 	}
-	// The merged title spans A1 and B1, 156.75 points from the margin of
+	// The merged title spans A1 and B1, 168.4 points from the margin of
 	// 36 points: its fill runs across both columns.
 	fill := color.NRGBA{0xda, 0xe3, 0xf3, 255}
-	for _, x := range []int{40, 188} {
+	for _, x := range []int{40, 200} {
 		if got := nrgba(img.At(x, 80)); !near(got, fill) {
 			t.Errorf("expected the fill of the merged cell at (%d, 80), got: %v", x, got)
 		}
 	}
-	if got := nrgba(img.At(196, 80)); near(got, fill) {
+	if got := nrgba(img.At(208, 80)); near(got, fill) {
 		t.Errorf("expected no fill past the merged cell, got: %v", got)
 	}
 	if !hasInk(img, image.Rect(36, 0, 200, 72)) || !hasInk(img, image.Rect(600, 0, 806, 72)) {
@@ -281,10 +283,11 @@ func TestImageAndChart(t *testing.T) {
 	_, docs := sourceOf(t, d)
 	doc := docs[0]
 	for _, want := range []string{
-		// the image covers 4 rows, and each row shows its slice
-		`<td class="a"><div class="cl" style="width:144pt;height:16pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
-		`<td class="a"><div class="cl" style="width:144pt;height:16pt"><img style="position:absolute;left:0pt;top:-45pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
-		`<img style="position:absolute;left:0pt;top:0pt;width:144pt;height:150pt" src="ivy-object:chart2" alt="">`,
+		// the image covers 4 rows of 14.52 points and 2 columns of 51.57
+		// points, and each row shows its slice
+		`<td class="a"><div class="cl" style="width:103.13pt;height:15.52pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
+		`<td class="a"><div class="cl" style="width:103.13pt;height:15.52pt"><img style="position:absolute;left:0pt;top:-43.56pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
+		`<img style="position:absolute;left:0pt;top:0pt;width:154.7pt;height:145.2pt" src="ivy-object:chart2" alt="">`,
 		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart: Sales</div>`,
 	} {
 		if !strings.Contains(doc, want) {
@@ -302,16 +305,17 @@ func TestImageAndChart(t *testing.T) {
 	if out := os.Getenv("IVY_TEST_OUT"); out != "" {
 		writePNG(t, filepath.Join(out, "xlsx-image.png"), img)
 	}
-	// the image fills B2 and on: 50.4 + 48 points from the left, and
-	// 54 + 15 from the top
+	// the image fills B2 and on: 50.4 + 51.57 points from the left, and
+	// 54 + 14.52 from the top
 	if got := nrgba(img.At(130, 90)); !near(got, color.NRGBA{0, 0, 255, 255}) {
 		t.Errorf("expected the blue image at (130, 90), got: %v", got)
 	}
-	// the red columns of the chart are in its frame of 144 by 150 points
-	// at B9: 50.4 + 48 points from the left, and 54 + 8 * 15 from the top
+	// the red columns of the chart are in its frame of 154.7 by 145.2
+	// points at B9: 50.4 + 51.57 points from the left, and 54 + 8 * 14.52
+	// from the top
 	red := 0
-	for y := 174; y < 324; y++ {
-		for x := 99; x < 242; x++ {
+	for y := 171; y < 315; y++ {
+		for x := 102; x < 256; x++ {
 			if near(nrgba(img.At(x, y)), color.NRGBA{255, 0, 0, 255}) {
 				red++
 			}
@@ -319,6 +323,36 @@ func TestImageAndChart(t *testing.T) {
 	}
 	if red < 500 {
 		t.Errorf("expected the red columns of the chart in its frame, got %d red pixels", red)
+	}
+}
+
+func TestPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	data := `<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Text</t></is></c></row></sheetData>`
+	book := func(setup string) []byte {
+		return fixture.XLSX(fixture.XLSXBook{Sheets: []fixture.XLSXSheet{{Name: "Paper", Body: data + setup}}})
+	}
+	legal := ivy.Legal
+	for _, test := range []struct {
+		name  string
+		buf   []byte
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", book(""), ivy.Paper{}, ivy.Letter},
+		{"no pageSetup", book(""), landscape, landscape},
+		{"no paperSize", book(`<pageSetup scale="100"/>`), landscape, landscape},
+		{"orientation only", book(`<pageSetup orientation="landscape"/>`), ivy.A4, landscape},
+		{"default orientation", book(`<pageSetup orientation="default"/>`), landscape, landscape},
+		{"paperSize", book(`<pageSetup paperSize="5"/>`), landscape, legal},
+		{"paperSize in landscape", book(`<pageSetup paperSize="5" orientation="landscape"/>`), ivy.A4, legal.Landscape()},
+		{"paper of its own", book(`<pageSetup paperWidth="210mm" paperHeight="297mm"/>`), landscape, ivy.A4},
+		{"chart sheet", fixture.XLSX(chartSheetBook("FF0000")), ivy.A4, ivy.A4},
+		{"chart sheet without paper", fixture.XLSX(chartSheetBook("FF0000")), ivy.Paper{}, ivy.Letter.Landscape()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture.CheckPaper(t, open(t, test.buf, ivy.Config{Paper: test.paper}), test.exp)
+		})
 	}
 }
 

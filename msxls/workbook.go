@@ -46,6 +46,8 @@ type workbook struct {
 	xfs      [][]byte
 	sst      []richString
 	sheets   []boundSheet
+	// blips are the pictures of the drawings, by their index from 1.
+	blips []blip
 }
 
 // readWorkbook reads the globals of the workbook stream wb, and decrypts the
@@ -70,6 +72,7 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 		w.codePage = 1252
 	}
 	count := 0
+	var group []byte
 	for rec := range records(wb, 0) {
 		count++
 		if count > lim.MaxObjects {
@@ -125,10 +128,17 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 			if err := w.readSST(ctx, r, lim); err != nil {
 				return nil, err
 			}
+		case recMsoDrawingGroup:
+			// a large group goes on in the records MSODRAWINGGROUP after it
+			if len(group) < maxDrawing {
+				group = append(group, joined(rec)...)
+			}
 		case recEOF:
+			w.blips = readBlips(group, lim.MaxMemory)
 			return w, nil
 		}
 	}
+	w.blips = readBlips(group, lim.MaxMemory)
 	return w, nil
 }
 
@@ -272,6 +282,10 @@ type rawSheet struct {
 	rowBreaks []int
 	colBreaks []int
 	truncated bool
+	// drawing is the stream of Office Drawing of the records MSODRAWING,
+	// and objs are the records OBJ.
+	drawing []byte
+	objs    []drawObj
 }
 
 // The names of the errors of a cell (MS-XLS 2.5.97).
@@ -448,7 +462,9 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 			return
 		}
 		ri := rowInfo{hidden: flags&0x0020 != 0}
-		if flags&0x0040 != 0 && height > 0 && height < 410 {
+		// miyRw is the height of the row that Excel shows, whether a person
+		// set it (fUnsynced) or Excel fitted it to the cells
+		if height > 0 && height < 410 {
 			ri.height = height
 		}
 		if flags&0x0080 != 0 {
@@ -468,6 +484,43 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 		}
 	case recSetup:
 		sh.setup = rec.data
+	case recMsoDrawing:
+		if len(sh.drawing) < maxDrawing {
+			sh.drawing = append(sh.drawing, joined(rec)...)
+		}
+	case recObj:
+		// the structure FtCmo comes first: ft 0x15, cb, and the type
+		if ft := r.u16(); ft == 0x15 && len(sh.objs) < 4096 {
+			r.skip(2)
+			sh.objs = append(sh.objs, drawObj{at: len(sh.drawing), ot: int(r.u16())})
+		}
+		// Excel can write the drawing of the next shape in CONTINUE
+		// records after the record OBJ
+		sh.addDrawing(rec.conts)
+	case recTxo:
+		// the text of the last object and its runs, in the CONTINUE records
+		// after it, and then the drawing of the next shape
+		if len(rec.data) < 14 {
+			sh.addDrawing(rec.conts)
+			return
+		}
+		n, runs := int(le.Uint16(rec.data[10:])), int(le.Uint16(rec.data[12:]))
+		if n == 0 || len(rec.conts) == 0 {
+			sh.addDrawing(rec.conts)
+			return
+		}
+		r.skip(len(rec.data))
+		high := r.u8()&1 != 0
+		text := r.chars(min(n, 32767), high, w.codePage)
+		if len(sh.objs) > 0 {
+			sh.objs[len(sh.objs)-1].text = text
+		}
+		r.skip(runs)
+		if r.bad {
+			return
+		}
+		r.avail()
+		sh.addDrawing(r.segs[min(r.seg, len(r.segs)):])
 	case recWSBool:
 		sh.fit = r.u16()&0x0100 != 0
 	case recPrintGridlines:
@@ -527,6 +580,31 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 			}
 		}
 	}
+}
+
+// addDrawing adds the segments segs to the stream of the drawing.
+func (sh *rawSheet) addDrawing(segs [][]byte) {
+	for _, b := range segs {
+		if len(sh.drawing) >= maxDrawing {
+			return
+		}
+		sh.drawing = append(sh.drawing, b...)
+	}
+}
+
+// joined returns the data of rec and of its CONTINUE records.
+func joined(rec record) []byte {
+	if len(rec.conts) == 0 {
+		return rec.data
+	}
+	out := append([]byte(nil), rec.data...)
+	for _, c := range rec.conts {
+		if len(out) >= maxDrawing {
+			break
+		}
+		out = append(out, c...)
+	}
+	return out
 }
 
 // errorName returns the text of the error v of a cell.

@@ -13,13 +13,14 @@
 //
 // xlsx, msxls, odf and csv share the package. The two formats of Excel,
 // xlsx and msxls, also share the sizes of the papers, the widths of the
-// columns and the codes of the headers and the footers of Excel:
-// PaperSize, MaxDigitWidth, WidthToPoints and ParseHeaderFooter.
+// columns, the heights of the rows and the codes of the headers and the
+// footers of Excel: PaperSize, Digit, RowScale and ParseHeaderFooter.
 package sheet
 
 import (
 	"image/color"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/layout"
 )
 
@@ -84,6 +85,10 @@ type Sheet struct {
 	// Note is a line that the page shows after the cells, such as the
 	// note that a reader stopped at a limit.
 	Note string
+	// FixedRows keeps the height of each row, as Excel prints it: a line of
+	// text that is higher than its row crosses the edges of the row. Without
+	// it, the row grows to hold the line.
+	FixedRows bool
 }
 
 // Range is a rectangle of cells, from the cell (Row0, Col0) to the cell
@@ -236,6 +241,9 @@ type Page struct {
 	FitWidth, FitHeight int
 	// CenterH centers the cells on the page across.
 	CenterH bool
+	// ScaleHeaderFooter scales the text of the header and the footer with
+	// the cells, as Excel does unless a sheet asks otherwise.
+	ScaleHeaderFooter bool
 }
 
 // HeaderFooter is a header or a footer: the text of its three parts.
@@ -306,6 +314,20 @@ var DefaultPage = Page{
 	Width: LetterWidth, Height: LetterHeight,
 	Top: 54, Bottom: 54, Left: 50.4, Right: 50.4,
 	Header: 21.6, Footer: 21.6,
+}
+
+// SetPaper sets the paper of the page to paper, the paper of a program
+// for a sheet whose file gives none, in the orientation of paper. The
+// margins stay. A zero paper keeps the page (D32). A side of the paper
+// stays from 1 inch to 200 inches.
+func (p *Page) SetPaper(paper ivy.Paper) {
+	if !(paper.Width > 0) || !(paper.Height > 0) {
+		return
+	}
+	portrait := paper.Portrait()
+	p.Width = min(max(float64(portrait.Width), 72), 14400)
+	p.Height = min(max(float64(portrait.Height), 72), 14400)
+	p.Landscape = paper.Width > paper.Height
 }
 
 // visible reports whether the style draws something in an empty cell: a

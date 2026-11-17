@@ -13,10 +13,17 @@
 // and odf share, and which puts them on pages with the layout of ivy (D10):
 // the widths of the columns, the heights of the rows, the merged cells, the
 // fonts, the alignment, the borders and the fills of the cells, the setup
-// of the page, the header and the footer. internal/numfmt formats the
-// numbers with their number formats. The package leaves out the charts,
-// the pictures, the comments, the print areas, the print titles and the
-// hidden sheets.
+// of the page, the header and the footer. The widths of the columns and
+// the heights of the rows are those that Excel prints. internal/numfmt
+// formats the numbers with their number formats.
+//
+// The pictures of the drawings in PNG, JPEG, EMF and WMF show at their
+// cells. A chart,
+// a text box, a shape and a picture of another format show as a frame, with
+// the text of a text box. A chart sheet shows a frame on a page of its own,
+// in landscape unless its setup says otherwise. The package does not draw
+// the charts and the shapes. It leaves out the comments, the print areas,
+// the print titles and the hidden sheets.
 //
 // A workbook gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A workbook that a password protects with RC4,
@@ -195,9 +202,9 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 
 // convert puts the worksheets on pages with internal/sheet, as xlsx does.
 func (d *Document) convert(ctx context.Context) (layout.Source, error) {
-	book, err := d.wb.book(ctx, d.summary.Info.Title, d.cfg.Limits)
+	book, err := d.wb.book(ctx, d.summary.Info.Title, d.cfg.Limits, d.cfg.Paper)
 	if err != nil {
 		return layout.Source{}, err
 	}
-	return book.Source(ctx, sheet.Options{Limits: d.cfg.Limits, Logger: d.cfg.Logger})
+	return book.Source(ctx, sheet.Options{Limits: d.cfg.Limits, Logger: d.cfg.Logger, Paper: d.cfg.Paper})
 }

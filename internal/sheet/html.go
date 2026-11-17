@@ -24,6 +24,9 @@ type Options struct {
 	Limits ivy.Limits
 	// Logger receives the log, or nil.
 	Logger *slog.Logger
+	// Paper is the paper of the empty page of a workbook without sheets,
+	// the paper of ivy.Config. The zero Paper keeps DefaultPage (D32).
+	Paper ivy.Paper
 }
 
 // maxImages is the number of images and charts that a sheet shows.
@@ -78,6 +81,7 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 		// A workbook that prints nothing gives one empty page, of the
 		// page of its first sheet.
 		page := DefaultPage
+		page.SetPaper(opts.Paper)
 		if len(wb.Sheets) > 0 {
 			page = wb.Sheets[0].Page
 		}
@@ -114,7 +118,10 @@ type writer struct {
 	// are the cells of their bottom right corners.
 	images []Image
 	ends   [][2]int
-	body   strings.Builder
+	// carry holds the heights that the rows of the table carry, from
+	// carried.
+	carry map[int]float64
+	body  strings.Builder
 }
 
 // newWriter returns the writer of sh.
@@ -338,7 +345,7 @@ func (w *writer) printRange(r Range) error {
 
 // scaleFor returns the scale of the cells of the range r, whose printed
 // columns are width points wide.
-func (w *writer) scaleFor(r Range, width float64) float64 {
+func (w *writer) scaleFor(r Range, width float64) (s float64) {
 	p := w.sh.Page
 	if !p.Fit {
 		s := p.Scale
@@ -348,7 +355,11 @@ func (w *writer) scaleFor(r Range, width float64) float64 {
 		return min(4, max(0.1, s))
 	}
 	pw, ph := w.printable()
-	s := 1.0
+	defer func() {
+		// Excel fits the cells at a whole percent
+		s = max(0.1, math.Floor(s*100+1e-9)/100)
+	}()
+	s = 1.0
 	if p.FitWidth > 0 && width > 0 {
 		s = min(s, float64(p.FitWidth)*pw/width)
 	}
@@ -357,7 +368,7 @@ func (w *writer) scaleFor(r Range, width float64) float64 {
 			s = min(s, float64(p.FitHeight)*ph/h)
 		}
 	}
-	return max(0.1, s)
+	return s
 }
 
 // height returns the height of the rows of r in points.
@@ -452,13 +463,14 @@ func quote(s string) string {
 
 // fontFamily returns the value of font-family for f.
 func fontFamily(f Font, def Font) string {
-	family := f.Family
+	// the generic family follows the family: a font with a family of its
+	// own and no generic family is sans-serif
+	family, generic := f.Family, f.Generic
 	if family == "" {
 		family = def.Family
-	}
-	generic := f.Generic
-	if generic == "" {
-		generic = def.Generic
+		if generic == "" {
+			generic = def.Generic
+		}
 	}
 	if generic == "" {
 		generic = "sans-serif"
@@ -528,12 +540,15 @@ func (w *writer) css(b *strings.Builder) {
 	b.WriteString("table.sh+table.sh{break-before:page}\n")
 	b.WriteString("tr{break-inside:avoid;height:" + pt(w.sh.DefaultRowHeight*s) + "}\n")
 	b.WriteString("tr.pb{break-before:page}\n")
-	b.WriteString("td{padding:0 " + pt(cellPadding*s) + ";vertical-align:bottom;white-space:pre;text-align:left;overflow:visible;line-height:normal")
+	b.WriteString("td{padding:0 " + pt(cellPadding*s) + ";vertical-align:bottom;white-space:pre;text-align:left;overflow:visible;line-height:normal;")
 	if w.sh.Gridlines {
-		b.WriteString(";border:" + pt(max(0.5, 0.5*s)) + " solid " + gridColor)
+		b.WriteString("border:" + pt(max(0.5, 0.5*s)) + " solid " + gridColor + ";")
 	}
+	// the cells of the default style take its fill, its borders and its
+	// alignment
+	w.styleCSS(b, def, false)
 	b.WriteString("}\n")
-	b.WriteString("td.n{text-align:right}\ntd.x{text-align:center}\ntd.c{overflow:hidden}\ntd.a{position:relative}\n")
+	b.WriteString("td.c{overflow:hidden}\ntd.a{position:relative}\n")
 	b.WriteString("div.cl{position:absolute;left:0;top:0;overflow:hidden}\n")
 	b.WriteString("span.r{display:inline-block}\n")
 	b.WriteString("div.ph{position:absolute;border:0.75pt solid #808080;background:#f2f2f2;color:#404040;font-size:9pt;white-space:normal;text-align:center;overflow:hidden}\n")
@@ -544,55 +559,113 @@ func (w *writer) css(b *strings.Builder) {
 	}
 	slices.Sort(ids)
 	for _, i := range ids {
-		st := w.style(i)
 		b.WriteString("td.s" + strconv.Itoa(i) + "{")
-		fontCSS(b, st.Font, def.Font, s)
-		if st.Fill.A != 0 {
-			b.WriteString("background-color:" + hex(st.Fill) + ";")
-		}
-		for k, side := range [4]string{"top", "right", "bottom", "left"} {
-			bd := st.Borders[k]
-			if bd.Width <= 0 {
-				continue
-			}
-			line := bd.Line
-			if line == "" {
-				line = "solid"
-			}
-			width := max(bd.Width*s, 0.5)
-			if line == "double" {
-				width = max(width, 2.25*s)
-			}
-			b.WriteString("border-" + side + ":" + pt(width) + " " + line + " " + hex(bd.Color) + ";")
-		}
-		switch st.HAlign {
-		case "center", "centerContinuous", "distributed":
-			b.WriteString("text-align:center;")
-		case "right":
-			b.WriteString("text-align:right;")
-		case "left", "fill":
-			b.WriteString("text-align:left;")
-		case "justify":
-			b.WriteString("text-align:justify;")
-		}
-		switch st.VAlign {
-		case "top":
-			b.WriteString("vertical-align:top;")
-		case "center", "justify", "distributed":
-			b.WriteString("vertical-align:middle;")
-		}
-		if st.Wrap || st.VAlign == "justify" || st.VAlign == "distributed" || st.HAlign == "justify" || st.HAlign == "distributed" {
-			b.WriteString("white-space:pre-wrap;overflow-wrap:break-word;")
-		}
-		if st.Indent > 0 {
-			side := "left"
-			if st.HAlign == "right" {
-				side = "right"
-			}
-			b.WriteString("padding-" + side + ":" + pt((cellPadding+st.Indent)*s) + ";")
-		}
+		w.styleCSS(b, w.style(i), true)
 		b.WriteString("}\n")
 	}
+	// the alignment General of a number and of a boolean, after the
+	// styles, which can undo the alignment of the default style
+	b.WriteString("td.n{text-align:right}\ntd.x{text-align:center}\n")
+}
+
+// styleCSS writes the declarations of the style st. own is set for a style
+// other than the default style: it writes the font too, and it undoes what
+// the default style sets on each cell and st does not. The cells of the
+// default style take the font of the table.
+func (w *writer) styleCSS(b *strings.Builder, st *Style, own bool) {
+	s := w.scale
+	def := w.style(0)
+	if own {
+		fontCSS(b, st.Font, def.Font, s)
+		w.resetCSS(b, st, def)
+	}
+	if st.Fill.A != 0 {
+		b.WriteString("background-color:" + hex(st.Fill) + ";")
+	}
+	for k, side := range [4]string{"top", "right", "bottom", "left"} {
+		bd := st.Borders[k]
+		if bd.Width <= 0 {
+			continue
+		}
+		line := bd.Line
+		if line == "" {
+			line = "solid"
+		}
+		b.WriteString("border-" + side + ":" + pt(borderWidth(bd, s)) + " " + line + " " + hex(bd.Color) + ";")
+	}
+	switch st.HAlign {
+	case "center", "centerContinuous", "distributed":
+		b.WriteString("text-align:center;")
+	case "right":
+		b.WriteString("text-align:right;")
+	case "left", "fill":
+		b.WriteString("text-align:left;")
+	case "justify":
+		b.WriteString("text-align:justify;")
+	}
+	switch st.VAlign {
+	case "top":
+		b.WriteString("vertical-align:top;")
+	case "center", "justify", "distributed":
+		b.WriteString("vertical-align:middle;")
+	}
+	if wraps(st) {
+		b.WriteString("white-space:pre-wrap;overflow-wrap:break-word;")
+	}
+	if st.Indent > 0 {
+		side := "left"
+		if st.HAlign == "right" {
+			side = "right"
+		}
+		b.WriteString("padding-" + side + ":" + pt((cellPadding+st.Indent)*s) + ";")
+	}
+}
+
+// resetCSS writes the declarations that undo on a cell of the style st what
+// the default style def sets on each cell, when st does not set it.
+func (w *writer) resetCSS(b *strings.Builder, st, def *Style) {
+	if def.Fill.A != 0 && st.Fill.A == 0 {
+		b.WriteString("background-color:transparent;")
+	}
+	grid := "none"
+	if w.sh.Gridlines {
+		grid = pt(max(0.5, 0.5*w.scale)) + " solid " + gridColor
+	}
+	for k, side := range [4]string{"top", "right", "bottom", "left"} {
+		if def.Borders[k].Width > 0 && st.Borders[k].Width <= 0 {
+			b.WriteString("border-" + side + ":" + grid + ";")
+		}
+	}
+	if def.HAlign != "" && st.HAlign == "" {
+		// a number of the alignment General goes to the right with the
+		// class n, which comes after the styles
+		b.WriteString("text-align:left;")
+	}
+	if def.VAlign != "" && def.VAlign != "bottom" && (st.VAlign == "" || st.VAlign == "bottom") {
+		b.WriteString("vertical-align:bottom;")
+	}
+	if wraps(def) && !wraps(st) {
+		b.WriteString("white-space:pre;overflow-wrap:normal;")
+	}
+	if def.Indent > 0 && st.Indent <= 0 {
+		b.WriteString("padding:0 " + pt(cellPadding*w.scale) + ";")
+	}
+}
+
+// wraps reports whether the text of a cell of the style st breaks into
+// lines.
+func wraps(st *Style) bool {
+	return st.Wrap || st.VAlign == "justify" || st.VAlign == "distributed" || st.HAlign == "justify" || st.HAlign == "distributed"
+}
+
+// borderWidth returns the width in points of the border bd at the scale
+// s: at least half a point, so that a border shows at a small scale.
+func borderWidth(bd Border, s float64) float64 {
+	width := max(bd.Width*s, 0.5)
+	if bd.Line == "double" {
+		width = max(width, 2.25*s)
+	}
+	return width
 }
 
 // pageRule writes the rule @page of the sheet, with its header and its
@@ -656,7 +729,11 @@ func (w *writer) marginBoxes(b *strings.Builder, hf HeaderFooter, side string, e
 		b.WriteString("@" + side + "-" + part.name + "{content:" + strings.Join(content, " ") +
 			";vertical-align:" + align + ";padding-" + side + ":" + pt(max(0, min(edge, margin-10))) +
 			";white-space:pre;")
-		fontCSS(b, font, def, 1)
+		s := 1.0
+		if w.sh.Page.ScaleHeaderFooter && w.scale > 0 {
+			s = w.scale
+		}
+		fontCSS(b, font, def, s)
 		b.WriteString("}")
 	}
 }
@@ -751,6 +828,8 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		merges = append(merges, &mergeState{m: m, lo: lo, hi: hi})
 	}
 	slices.SortFunc(merges, func(a, b *mergeState) int { return a.m.Row0 - b.m.Row0 })
+	carried := w.carried(r, band, merges, skipTitles)
+	w.carry = carried
 	var active []*mergeState
 	next := 0
 	cover := make([]*mergeState, len(band))
@@ -796,6 +875,7 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		if w.rowBreaks[i] && !firstRow {
 			w.body.WriteString(` class="pb"`)
 		}
+		h += carried[i]
 		if h != sh.DefaultRowHeight {
 			w.body.WriteString(` style="height:` + pt(h*w.scale) + `"`)
 		}
@@ -922,20 +1002,35 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			b.WriteString(` rowspan="` + strconv.Itoa(rowspan) + `"`)
 		}
 		var inline []string
-		if rowspan > 1 {
-			// A row whose cells a merge covers has no cell of its own, and
-			// the layout gives it no height. The merge holds the height of
-			// its rows.
-			if h := w.spanHeight(i, m.m.Row1, skipTitles); h > 0 {
-				inline = append(inline, "height:"+pt(h*w.scale))
-			}
-		}
 		if hasText && cell.Color.A != 0 {
 			inline = append(inline, "color:"+hex(cell.Color))
 		}
 		if hasText && st.Shrink && !st.Wrap {
 			if f := w.shrink(cell, st, band[k:k+colspan]); f > 0 {
 				inline = append(inline, "font-size:"+pt(f))
+			}
+		}
+		wrap := wraps(st)
+		if hasText && w.sh.FixedRows {
+			h, line := w.sh.rowHeight(srcRowp), 0.0
+			if rowspan > 1 {
+				// the layout makes the row in which a merged cell ends as
+				// high as its text, so a line keeps to that row
+				h = w.spanHeight(i, m.m.Row1, skipTitles)
+				last := w.lastShown(i, min(m.m.Row1, MaxRows-1), skipTitles)
+				line = min(h, w.sh.rowHeight(w.sh.row(last))+w.carry[last])
+			}
+			if wrap && st.Rotation == 0 && w.lines(cell, st, h) < 2 {
+				// Excel shows the first line of a text that wraps in a row
+				// of one line, and the row keeps its height
+				wrap = false
+				inline = append(inline, "white-space:pre", "overflow-wrap:normal")
+			}
+			if line == 0 {
+				line = h
+			}
+			if lh := w.lineHeight(cell, st, line, wrap); lh > 0 {
+				inline = append(inline, "line-height:"+pt(lh))
 			}
 		}
 		if len(inline) > 0 {
@@ -946,7 +1041,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			if hashes := w.overflow(cell, st, band[k:k+colspan]); hashes != "" {
 				b.WriteString(hashes)
 			} else {
-				w.content(cell, st)
+				w.content(cell, st, wrap)
 			}
 		}
 		for _, img := range imgs {
@@ -956,6 +1051,186 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		k += colspan - 1
 	}
 	return flush()
+}
+
+// carried returns the heights that rows of the range r carry for the rows
+// before them that the layout gives no height, by the index of the row.
+// The layout gives a row its height only when a cell ends in it: a cell of
+// one row, or the last row of a merged cell. A row in which merged cells
+// start or go on over the whole band has no height. The next row in which
+// a cell ends carries its height, so that the rows after it keep their
+// places. A merged cell itself has no height: the layout makes the last row
+// of a merged cell as high as the whole cell, and so a height on the cell
+// would make that row too high.
+func (w *writer) carried(r Range, band []int, merges []*mergeState, skipTitles bool) map[int]float64 {
+	if len(band) == 0 {
+		return nil
+	}
+	// the first and the last row that each merge shows in the range
+	type span struct {
+		first, last int
+		m           *mergeState
+	}
+	var spans []span
+	for _, m := range merges {
+		a, z := max(m.m.Row0, r.Row0), min(m.m.Row1, r.Row1)
+		if z <= a || z-a > 4096 {
+			continue
+		}
+		first, last := -1, -1
+		for i := a; i <= z; i++ {
+			if w.shown(i, skipTitles) {
+				if first < 0 {
+					first = i
+				}
+				last = i
+			}
+		}
+		if first >= 0 && last > first {
+			spans = append(spans, span{first: first, last: last, m: m})
+		}
+	}
+	if len(spans) == 0 {
+		return nil
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.first - b.first })
+	out := make(map[int]float64)
+	covered := make([]bool, len(band))
+	var active []span
+	next, pending := 0, 0.0
+	for i := spans[0].first; i <= r.Row1; i++ {
+		if next >= len(spans) && len(active) == 0 {
+			break
+		}
+		for next < len(spans) && spans[next].first <= i {
+			active = append(active, spans[next])
+			next++
+		}
+		active = slices.DeleteFunc(active, func(s span) bool { return s.last < i })
+		if !w.shown(i, skipTitles) {
+			continue
+		}
+		clear(covered)
+		ends := false
+		for _, s := range active {
+			ends = ends || s.last == i
+			for k := s.m.lo; k < s.m.hi; k++ {
+				covered[k] = true
+			}
+		}
+		if !ends && !slices.Contains(covered, false) {
+			pending += w.sh.rowHeight(w.sh.row(i))
+			continue
+		}
+		if pending > 0 {
+			out[i] += pending
+			pending = 0
+		}
+	}
+	return out
+}
+
+// lineHeight returns the height of the line of the text of a cell in rows
+// of the height h, or 0 for the height of its font. Excel keeps the height
+// of a row and lets the text cross its edges (Sheet.FixedRows). The layout
+// makes a row taller for a line of text, so a line of text that is higher
+// than its row gets the height of the row, less its borders. The lines of a
+// text that wraps, and a rotated text, keep their heights.
+func (w *writer) lineHeight(cell *Cell, st *Style, h float64, wrap bool) float64 {
+	if wrap || st.Rotation != 0 || h <= 0 {
+		return 0
+	}
+	size, avail := w.room(cell, st, h)
+	s := w.scale
+	// the normal height of a line is from 1.15 to 1.22 times the size of
+	// the font, such as with Arial and Calibri, and up to 1.5 times with
+	// the fonts of East Asia
+	normal := 1.22
+	if eastAsian(cell) {
+		normal = 1.5
+	}
+	if size*s*normal <= avail {
+		return 0
+	}
+	return max(0.1, min(avail, size*s*1.15))
+}
+
+// room returns the largest size of the font of the text of a cell, and the
+// height within the borders of rows of the height h, at the scale of the
+// cells, in points.
+func (w *writer) room(cell *Cell, st *Style, h float64) (size, avail float64) {
+	size = st.Font.Size
+	for _, r := range cell.Runs {
+		if r.Font != nil {
+			size = max(size, r.Font.Size)
+		}
+	}
+	if size <= 0 {
+		size = w.style(0).Font.Size
+	}
+	if size <= 0 {
+		size = 11
+	}
+	s := w.scale
+	borders := 0.0
+	for _, k := range []int{0, 2} {
+		if bd := st.Borders[k]; bd.Width > 0 {
+			borders += borderWidth(bd, s) / 2
+		} else if w.sh.Gridlines {
+			borders += max(0.5, 0.5*s) / 2
+		}
+	}
+	return size, h*s - borders
+}
+
+// lines returns the number of lines of the text of a cell that rows of the
+// height h hold, with lines of 1.22 times the size of the font, as Excel
+// lays out Calibri and MS PGothic.
+func (w *writer) lines(cell *Cell, st *Style, h float64) int {
+	size, avail := w.room(cell, st, h)
+	return int(avail / (size * w.scale * 1.22))
+}
+
+// eastAsian reports whether the text of a cell holds a character of the
+// scripts of East Asia, whose fonts have higher lines.
+func eastAsian(cell *Cell) bool {
+	has := func(s string) bool {
+		for _, r := range s {
+			if r >= 0x2E80 && r <= 0xFFEF {
+				return true
+			}
+		}
+		return false
+	}
+	if has(cell.Text) {
+		return true
+	}
+	for _, r := range cell.Runs {
+		if has(r.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+// shown reports whether the table shows the row i: a row that is not
+// hidden, and not a row of the print titles when skipTitles is set.
+func (w *writer) shown(i int, skipTitles bool) bool {
+	if skipTitles && w.isTitle(i) {
+		return false
+	}
+	return w.sh.rowHeight(w.sh.row(i)) > 0
+}
+
+// lastShown returns the last row from row0 to row1 that the table shows,
+// or row0.
+func (w *writer) lastShown(row0, row1 int, skipTitles bool) int {
+	for i := row1; i > row0 && row1-i < 4096; i-- {
+		if w.shown(i, skipTitles) {
+			return i
+		}
+	}
+	return row0
 }
 
 // spanHeight returns the height of the rows from row0 to row1 that the
@@ -1148,11 +1423,12 @@ func (w *writer) overflow(cell *Cell, st *Style, cols []int) string {
 	return strings.Repeat("#", max(1, min(256, int(width/(size*0.53)))))
 }
 
-// content writes the text of a cell.
-func (w *writer) content(cell *Cell, st *Style) {
+// content writes the text of a cell. wrap keeps the breaks of the lines of
+// a cell that wraps its text.
+func (w *writer) content(cell *Cell, st *Style, wrap bool) {
 	b := &w.body
 	text := func(s string) string {
-		if !st.Wrap {
+		if !st.Wrap || !wrap {
 			s = strings.ReplaceAll(s, "\r\n", " ")
 			s = strings.ReplaceAll(s, "\n", " ")
 		}

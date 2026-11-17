@@ -50,22 +50,58 @@ func PaperSize(n int) (float64, float64, bool) {
 	return size[0], size[1], ok
 }
 
-// digitWidths are the widths of a digit of the common fonts, as a share of
-// the size of the font. Excel measures the widths of the columns in the
-// digits of the default font.
+// digitWidths are the advances of the widest digit of the common fonts, as
+// a share of the size of the font, from the fonts of Windows. Excel
+// measures the widths of the columns in the digits of the default font. A
+// font that is not in the table has digits of 0.55.
 var digitWidths = map[string]float64{
 	"calibri": 0.5068, "carlito": 0.5068, "aptos": 0.53, "aptos narrow": 0.46,
-	"arial": 0.556, "liberation sans": 0.556, "helvetica": 0.556,
-	"times new roman": 0.5, "liberation serif": 0.5, "times": 0.5,
-	"cambria": 0.5552, "caladea": 0.5552,
-	"courier new": 0.6, "liberation mono": 0.6, "courier": 0.6,
-	"verdana": 0.636, "tahoma": 0.546, "segoe ui": 0.559, "georgia": 0.614,
+	"arial": 0.5562, "liberation sans": 0.5562, "helvetica": 0.5562, "microsoft sans serif": 0.5562,
+	"times new roman": 0.5, "liberation serif": 0.5, "times": 0.5, "palatino linotype": 0.5,
+	"cambria": 0.5537, "caladea": 0.5537, "georgia": 0.6138, "constantia": 0.5464,
+	"courier new": 0.6001, "liberation mono": 0.6001, "courier": 0.6001, "consolas": 0.5498,
+	"verdana": 0.6357, "tahoma": 0.5459, "segoe ui": 0.5391, "trebuchet ms": 0.5244,
+	"candara": 0.5518, "corbel": 0.5244, "franklin gothic medium": 0.5864, "lucida sans unicode": 0.6323,
+	// the fonts of East Asia
+	"ms gothic": 0.5, "ms pgothic": 0.5, "ms ui gothic": 0.5, "ms mincho": 0.5, "ms pmincho": 0.5,
+	"ｍｓ ゴシック": 0.5, "ｍｓ ｐゴシック": 0.5, "ｍｓ 明朝": 0.5, "ｍｓ ｐ明朝": 0.5,
+	"yu gothic": 0.5562, "游ゴシック": 0.5562, "meiryo": 0.5, "メイリオ": 0.5,
+	"simsun": 0.5, "宋体": 0.5, "nsimsun": 0.5, "新宋体": 0.5,
+	"mingliu": 0.5, "細明體": 0.5, "pmingliu": 0.4697, "新細明體": 0.4697,
+	"malgun gothic": 0.5508, "맑은 고딕": 0.5508,
+	"gulim": 0.5, "굴림": 0.5, "dotum": 0.5, "돋움": 0.5, "batang": 0.5, "바탕": 0.5,
 }
 
-// MaxDigitWidth returns the width of the widest digit of the font f, in
-// pixels at 96 dots per inch, as Excel rounds it. A font without a size
-// has the size def.
-func MaxDigitWidth(f Font, def float64) float64 {
+// The resolutions of the screen, on which Excel measures the widths of the
+// columns, and of the printer, on which it prints them, in dots per inch.
+const (
+	screenDPI = 96
+	printDPI  = 600
+)
+
+// RowScale is the ratio of the height of a row that Excel prints to its
+// height in the file. Excel 2024 prints a row of 15 points as 14.52 points,
+// a row of 12.75 points as 12.36 points and a row of 21.75 points as 21
+// points, with Calibri and with Arial as the default font, in the PDF
+// files that it exports. So a sheet of 50000 rows of 15 points has 47 rows
+// on a page of US Letter, not 45.
+const RowScale = 0.968
+
+// Digit is the width of a digit of the default font of a workbook, the
+// unit of the widths of the columns of Excel.
+type Digit struct {
+	// Pixels is the width of the widest digit on the screen, in pixels at
+	// 96 dots per inch, as Excel rounds it.
+	Pixels float64
+	// Print is the advance of a digit that Excel prints, in points: the
+	// advance at the size in whole pixels of 600 dots per inch, rounded to
+	// a dot.
+	Print float64
+}
+
+// DigitOf returns the digit of the font f. A font without a size has the
+// size def.
+func DigitOf(f Font, def float64) Digit {
 	ratio, ok := digitWidths[strings.ToLower(f.Family)]
 	if !ok {
 		ratio = 0.55
@@ -74,19 +110,40 @@ func MaxDigitWidth(f Font, def float64) float64 {
 	if size <= 0 {
 		size = def
 	}
-	return math.Max(1, math.Floor(size*96/72*ratio))
+	if !(size > 0) || size > 409 {
+		size = 11
+	}
+	px := math.Max(1, math.Floor(size*screenDPI/72*ratio))
+	dots := math.Max(1, math.Round(math.Round(size*printDPI/72)*ratio))
+	return Digit{Pixels: px, Print: dots * 72 / printDPI}
 }
 
-// WidthToPoints converts a width of a column of Excel, in characters with
-// their padding, to points (ECMA-376 Part 1, 18.3.1.13). mdw is the width
-// of the widest digit of the default font, from MaxDigitWidth.
-func WidthToPoints(chars, mdw float64) float64 {
-	if chars <= 0 {
+// Column returns the width that Excel prints for a column of chars
+// characters with their padding, in points (ECMA-376 Part 1, 18.3.1.13).
+// Excel rounds the width to pixels of the screen, and prints the pixels in
+// digits of the printer. For example, a column of the default width of
+// 9.140625 characters of Calibri of 11 points is 64 pixels on the screen,
+// 48 points, and Excel prints it 51.6 points wide.
+func (d Digit) Column(chars float64) float64 {
+	if !(chars > 0) || d.Pixels <= 0 {
 		return 0
 	}
 	chars = math.Min(chars, 255)
-	px := math.Trunc((256*chars + math.Trunc(128/mdw)) / 256 * mdw)
-	return px * 0.75
+	px := math.Trunc((256*chars + math.Trunc(128/d.Pixels)) / 256 * d.Pixels)
+	return px / d.Pixels * d.Print
+}
+
+// DefaultColumn returns the width that Excel prints for a column of the
+// default width, from the base width of base digits without the padding
+// (ECMA-376 Part 1, 18.3.1.81): the pixels of the digits and of the
+// padding of 5 pixels, rounded up to a multiple of 8 pixels.
+func (d Digit) DefaultColumn(base float64) float64 {
+	if !(base > 0) || d.Pixels <= 0 {
+		return 0
+	}
+	base = math.Min(base, 255)
+	px := math.Ceil((base*d.Pixels+5)/8) * 8
+	return px / d.Pixels * d.Print
 }
 
 // ParseHeaderFooter parses the text of a header or a footer of Excel, with

@@ -146,8 +146,9 @@ func (w *workbook) numberFormatOf(xf int) string {
 }
 
 // book converts the workbook into the model of internal/sheet: each
-// worksheet that is not hidden, in order.
-func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits) (*sheet.Workbook, error) {
+// worksheet that is not hidden, in order. paper is the paper of the program
+// for a sheet whose file gives none.
+func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits, paper ivy.Paper) (*sheet.Workbook, error) {
 	book := &sheet.Workbook{Title: title}
 	if len(w.xfs) > 0 {
 		book.Styles = make([]sheet.Style, len(w.xfs))
@@ -158,18 +159,33 @@ func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits) (*she
 		book.Styles = []sheet.Style{{Font: w.fonts[0]}}
 	}
 	def := w.font(0)
-	mdw := sheet.MaxDigitWidth(def, 10)
+	digit := sheet.DigitOf(def, 10)
 	cells := 0
+	book.Files = make(map[string][]byte)
 	for _, bs := range w.sheets {
-		if bs.kind != 0 || bs.hidden {
+		if (bs.kind != 0 && bs.kind != 2) || bs.hidden {
 			continue
 		}
 		raw, err := w.readSheet(ctx, bs, lim)
 		if err != nil {
 			return nil, err
 		}
+		if bs.kind == 2 {
+			// a chart sheet of Excel is in landscape by default
+			raw.page.Landscape = true
+		}
+		// The paper of the program replaces US Letter, the paper of a sheet
+		// without the record SETUP, and the margins stay. The record can
+		// give its own paper (D32).
+		raw.page.SetPaper(paper)
+		if bs.kind == 2 {
+			book.Sheets = append(book.Sheets, w.chartSheet(raw))
+			continue
+		}
 		cells += len(raw.cells)
-		book.Sheets = append(book.Sheets, w.toSheet(raw, def, mdw, len(book.Styles)))
+		sh := w.toSheet(raw, def, digit, len(book.Styles))
+		images(sh, raw, w.blips, book.Files)
+		book.Sheets = append(book.Sheets, sh)
 		if cells > lim.MaxObjects {
 			break
 		}
@@ -177,24 +193,32 @@ func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits) (*she
 	return book, nil
 }
 
-// toSheet converts a worksheet into a sheet of internal/sheet.
-func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, mdw float64, styles int) *sheet.Sheet {
+// toSheet converts a worksheet into a sheet of internal/sheet. The widths
+// of the columns and the heights of the rows are those that Excel prints:
+// the widths in the digits of the default font, and the heights at
+// sheet.RowScale.
+func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, styles int) *sheet.Sheet {
 	sh := &sheet.Sheet{
 		Name:             raw.name,
 		DefaultRowHeight: raw.defHeight,
 		Merges:           raw.merges,
 		Page:             raw.page,
 		Gridlines:        raw.gridlines,
+		FixedRows:        true,
 		Header:           sheet.ParseHeaderFooter(raw.header),
 		Footer:           sheet.ParseHeaderFooter(raw.footer),
 	}
+	// Excel scales the header and the footer with the cells, unless the
+	// record HeaderFooter says otherwise, which ivy does not read
+	sh.Page.ScaleHeaderFooter = true
 	if sh.DefaultRowHeight <= 0 {
 		sh.DefaultRowHeight = math.Max(12.75, math.Round(def.Size*1.36*4)/4)
 	}
+	sh.DefaultRowHeight *= sheet.RowScale
 	if raw.stdWidth > 0 {
-		sh.DefaultColWidth = sheet.WidthToPoints(raw.stdWidth, mdw)
+		sh.DefaultColWidth = digit.Column(raw.stdWidth)
 	} else {
-		sh.DefaultColWidth = math.Ceil((raw.defWidth*mdw+5)/8) * 8 * 0.75
+		sh.DefaultColWidth = digit.DefaultColumn(raw.defWidth)
 	}
 	styleOf := func(xf int) int {
 		if xf < 0 || xf >= styles {
@@ -211,7 +235,7 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, mdw float64, styles in
 		}
 		sh.Cols = append(sh.Cols, sheet.Col{
 			Min: c.first, Max: c.last,
-			Width:  sheet.WidthToPoints(c.width, mdw),
+			Width:  digit.Column(c.width),
 			Hidden: c.hidden,
 			Style:  styleOf(c.xf),
 		})
@@ -235,7 +259,7 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, mdw float64, styles in
 	sh.Rows = make([]sheet.Row, 0, len(indexes))
 	for _, r := range indexes {
 		info := raw.rows[r]
-		row := sheet.Row{Index: r, Height: info.height, Hidden: info.hidden, Style: styleOf(info.xf)}
+		row := sheet.Row{Index: r, Height: info.height * sheet.RowScale, Hidden: info.hidden, Style: styleOf(info.xf)}
 		cs := byRow[r]
 		slices.SortStableFunc(cs, func(a, b cell) int { return a.col - b.col })
 		for i, c := range cs {
@@ -251,6 +275,30 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, mdw float64, styles in
 	if raw.truncated {
 		sh.Note = "The workbook holds more cells than the limit of ivy. The sheet stops at the limit."
 	}
+	return sh
+}
+
+// chartSheet converts a chart sheet into a sheet whose page shows a frame
+// for its chart, which the package does not draw.
+func (w *workbook) chartSheet(raw *rawSheet) *sheet.Sheet {
+	sh := &sheet.Sheet{
+		Name:   raw.name,
+		Page:   raw.page,
+		Header: sheet.ParseHeaderFooter(raw.header),
+		Footer: sheet.ParseHeaderFooter(raw.footer),
+	}
+	sh.Page.ScaleHeaderFooter = true
+	w.setup(sh, raw)
+	// The chart fills the page: one cell of the size of the page holds it.
+	p := sh.Page
+	pw, ph := p.Width, p.Height
+	if p.Landscape {
+		pw, ph = ph, pw
+	}
+	cw, rh := max(72, pw-p.Left-p.Right-1), max(72, ph-p.Top-p.Bottom-1)
+	sh.DefaultColWidth, sh.DefaultRowHeight = cw, rh
+	sh.Page.Scale, sh.Page.Fit = 1, false
+	sh.Images = []sheet.Image{{Width: cw - 2, Height: rh - 2, Label: "Chart"}}
 	return sh
 }
 
@@ -318,16 +366,26 @@ func (w *workbook) setup(sh *sheet.Sheet, raw *rawSheet) {
 	}
 	flags := le.Uint16(b[10:])
 	if flags&0x0004 != 0 {
-		// fNoPls: the paper, the scale and the orientation are not set
+		// fNoPls: the paper, the scale and the orientation are not set,
+		// and the sheet keeps the paper of the program, or US Letter
 		return
 	}
+	own := false
 	if w, h, ok := sheet.PaperSize(int(le.Uint16(b))); ok {
-		sh.Page.Width, sh.Page.Height = w, h
+		sh.Page.Width, sh.Page.Height, own = w, h, true
 	}
 	if scale := int(le.Uint16(b[2:])); scale >= 10 && scale <= 400 {
 		sh.Page.Scale = float64(scale) / 100
 	}
-	sh.Page.Landscape = flags&0x0002 == 0
+	switch {
+	case flags&0x0040 == 0:
+		// fPortrait
+		sh.Page.Landscape = flags&0x0002 == 0
+	case own:
+		// fNoOrient: fPortrait is not valid, and the paper of the file is
+		// in portrait
+		sh.Page.Landscape = false
+	}
 	if raw.fit {
 		sh.Page.Fit = true
 		sh.Page.FitWidth = int(le.Uint16(b[6:]))

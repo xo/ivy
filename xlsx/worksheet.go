@@ -21,14 +21,20 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	}
 	root := doc.RootElement()
 	def := b.styles.defaultFont()
-	mdw := sheet.MaxDigitWidth(def, 11)
-	sh.DefaultColWidth = math.Ceil((8*mdw+5)/8) * 8 * 0.75
-	sh.DefaultRowHeight = 15
+	digit := sheet.DigitOf(def, 11)
+	sh.DefaultColWidth = digit.DefaultColumn(8)
+	sh.DefaultRowHeight = 15 * sheet.RowScale
+	sh.FixedRows = true
 	sh.Page = sheet.Page{
 		Width: sheet.LetterWidth, Height: sheet.LetterHeight,
 		Left: 0.7 * 72, Right: 0.7 * 72, Top: 0.75 * 72, Bottom: 0.75 * 72,
 		Header: 0.3 * 72, Footer: 0.3 * 72,
+		ScaleHeaderFooter: true,
 	}
+	// ECMA-376 Part 1, 18.3.1.63, gives paperSize the default 1, US Letter,
+	// and orientation the default "default", portrait. The paper of the
+	// program replaces that default, in its orientation (D32).
+	sh.Page.SetPaper(b.cfg.Paper)
 	fit := false
 	var drawing string
 	for n := range root.Children() {
@@ -39,15 +45,15 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 			}
 		case "sheetFormatPr":
 			if v := number(n, "defaultRowHeight", 0); v > 0 && v < 410 {
-				sh.DefaultRowHeight = v
+				sh.DefaultRowHeight = v * sheet.RowScale
 			}
 			if v := number(n, "defaultColWidth", 0); v > 0 {
-				sh.DefaultColWidth = sheet.WidthToPoints(v, mdw)
+				sh.DefaultColWidth = digit.Column(v)
 			} else if v := number(n, "baseColWidth", 0); v > 0 && v < 256 {
-				sh.DefaultColWidth = math.Ceil((v*mdw+5)/8) * 8 * 0.75
+				sh.DefaultColWidth = digit.DefaultColumn(v)
 			}
 		case "cols":
-			b.readCols(sh, n, mdw)
+			b.readCols(sh, n, digit)
 		case "sheetData":
 			if err := b.readSheetData(sh, n); err != nil {
 				return err
@@ -74,22 +80,23 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 			p.Footer = margin(n, "footer", p.Footer)
 		case "pageSetup":
 			p := &sh.Page
-			if w, h, ok := sheet.PaperSize(integer(n, "paperSize", 1)); ok {
-				p.Width, p.Height = w, h
+			own := false
+			if w, h, ok := sheet.PaperSize(integer(n, "paperSize", 0)); ok {
+				p.Width, p.Height, own = w, h, true
 			}
-			if w, h := number(n, "paperWidth", 0), number(n, "paperHeight", 0); w > 0 && h > 0 {
-				// a size of its own, such as "210mm"
-				if pw, ok := paperLength(attr(n, "paperWidth")); ok {
-					if ph, ok := paperLength(attr(n, "paperHeight")); ok {
-						p.Width, p.Height = pw, ph
-					}
+			// a size of its own, such as "210mm", which wins over paperSize
+			if pw, ok := paperLength(attr(n, "paperWidth")); ok {
+				if ph, ok := paperLength(attr(n, "paperHeight")); ok {
+					p.Width, p.Height, own = pw, ph, true
 				}
 			}
-			p.Landscape = attr(n, "orientation") == "landscape"
+			p.Landscape = orientation(attr(n, "orientation"), p.Landscape && !own)
 			p.Scale = math.Max(10, math.Min(400, number(n, "scale", 100))) / 100
 			p.FitWidth = max(0, integer(n, "fitToWidth", 1))
 			p.FitHeight = max(0, integer(n, "fitToHeight", 1))
 		case "headerFooter":
+			// scaleWithDoc is true by default (ECMA-376 Part 1, 18.3.1.46)
+			sh.Page.ScaleHeaderFooter = flag(n, "scaleWithDoc", true)
 			if h, ok := child(n, "oddHeader"); ok {
 				sh.Header = sheet.ParseHeaderFooter(nodeText(h))
 			}
@@ -158,13 +165,15 @@ func margin(n roxmltree.Node, name string, def float64) float64 {
 }
 
 // paperLength parses a length of a paper, such as "210mm" or "8.5in", in
-// points.
+// points: an ST_PositiveUniversalMeasure of ECMA-376 Part 1.
 func paperLength(s string) (float64, bool) {
 	s = strings.TrimSpace(s)
-	for unit, scale := range map[string]float64{"mm": 72 / 25.4, "cm": 72 / 2.54, "in": 72, "pt": 1} {
+	for unit, scale := range map[string]float64{"mm": 72 / 25.4, "cm": 72 / 2.54, "in": 72, "pt": 1, "pc": 12, "pi": 12} {
 		if v, ok := strings.CutSuffix(s, unit); ok {
+			// a paper smaller than 1 inch or larger than 200 inches is
+			// damaged
 			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-			if err != nil || f <= 0 || f > 10000 {
+			if err != nil || !(f*scale >= 72) || !(f*scale <= 14400) {
 				return 0, false
 			}
 			return f * scale, true
@@ -173,8 +182,21 @@ func paperLength(s string) (float64, bool) {
 	return 0, false
 }
 
-// readCols reads the widths of the columns.
-func (b *book) readCols(sh *sheet.Sheet, n roxmltree.Node, mdw float64) {
+// orientation reports whether the attribute orientation of pageSetup, v,
+// turns the paper. The value "default", or no value, gives def.
+func orientation(v string, def bool) bool {
+	switch v {
+	case "landscape":
+		return true
+	case "portrait":
+		return false
+	}
+	return def
+}
+
+// readCols reads the widths of the columns, as Excel prints them in the
+// digits of the default font.
+func (b *book) readCols(sh *sheet.Sheet, n roxmltree.Node, digit sheet.Digit) {
 	for c := range children(n, "col") {
 		lo, hi := integer(c, "min", 0)-1, integer(c, "max", 0)-1
 		if lo < 0 || hi < lo || lo >= sheet.MaxCols {
@@ -183,7 +205,7 @@ func (b *book) readCols(sh *sheet.Sheet, n roxmltree.Node, mdw float64) {
 		col := sheet.Col{Min: lo, Max: min(hi, sheet.MaxCols-1), Style: integer(c, "style", 0)}
 		col.Hidden = flag(c, "hidden", false)
 		if w := number(c, "width", -1); w >= 0 {
-			col.Width = sheet.WidthToPoints(w, mdw)
+			col.Width = digit.Column(w)
 			if col.Width == 0 {
 				col.Hidden = true
 			}
@@ -212,7 +234,7 @@ func (b *book) readSheetData(sh *sheet.Sheet, n roxmltree.Node) error {
 		next = idx + 1
 		row := sheet.Row{Index: idx}
 		if ht := number(rn, "ht", -1); ht >= 0 && ht < 410 {
-			row.Height = ht
+			row.Height = ht * sheet.RowScale
 			if ht == 0 {
 				row.Hidden = true
 			}

@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,9 @@ func TestSourceHTML(t *testing.T) {
 		`<td class="s1 c">Name</td>`,
 		`<td class="n c">1.50</td>`,
 		`<td class="n c" style="color:#ff0000">-2</td>`,
-		`<td class="c" colspan="3" rowspan="2" style="height:30pt">merged text</td>`,
+		// the row in which the merged cell ends carries the height of the
+		// row in which it starts
+		`<tr><td class="c" colspan="3" rowspan="2">merged text</td></tr><tr style="height:30pt"></tr>`,
 		`td.s1{font-family:"Calibri", sans-serif;font-size:11pt;font-weight:bold;background-color:#ddebf7;border-bottom:0.75pt solid #000000;text-align:center;}`,
 		`<td class="c">alpha</td><td class="n c">1.50</td><td></td>`,
 	} {
@@ -76,9 +79,155 @@ func TestSourceHTML(t *testing.T) {
 			t.Errorf("expected %q in the document:\n%s", want, doc)
 		}
 	}
-	// the empty row under the merge has no cell of its own
-	if !strings.Contains(doc, `rowspan="2" style="height:30pt">merged text</td></tr><tr></tr>`) {
-		t.Errorf("expected the covered row without cells:\n%s", doc)
+}
+
+func TestMergedRows(t *testing.T) {
+	// 60 cells of 3 rows of 15 points each, merged across the band: the
+	// merged cells end in their last rows, which carry the heights of the
+	// rows before them. 2700 points of rows give 4 pages of 684 points, as
+	// without the merges.
+	sheet := func(merged bool) *Workbook {
+		sh := &Sheet{Name: "Merged", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage}
+		for i := range 60 {
+			sh.Rows = append(sh.Rows, Row{Index: 3 * i, Cells: []Cell{{Col: 0, Text: "a"}, {Col: 1, Text: "b"}}})
+			if merged {
+				sh.Merges = append(sh.Merges, Range{Row0: 3 * i, Col0: 0, Row1: 3*i + 2, Col1: 1})
+			} else {
+				sh.Rows = append(sh.Rows, Row{Index: 3*i + 2, Cells: []Cell{{Col: 0, Text: "c"}}})
+			}
+		}
+		return &Workbook{Sheets: []*Sheet{sh}}
+	}
+	src, err := sheet(true).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	if want := `<tr><td class="c" colspan="2" rowspan="3">a</td></tr><tr></tr><tr style="height:45pt"></tr>`; !strings.Contains(doc, want) {
+		t.Errorf("expected %q in the document:\n%s", want, doc)
+	}
+	plain, err := sheet(false).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, exp := pageCount(t, src), pageCount(t, plain); got != exp || got != 4 {
+		t.Errorf("expected 4 pages with and without the merges, got: %d and %d", got, exp)
+	}
+}
+
+func TestDefaultStyle(t *testing.T) {
+	// the default style centers its cells and fills them: a cell of the
+	// default style takes it, and a cell of another style undoes it
+	wb := &Workbook{
+		Styles: []Style{
+			{Font: Font{Family: "Calibri", Size: 11}, Fill: color.NRGBA{0xff, 0xff, 0, 255}, HAlign: "center", VAlign: "center"},
+			{Font: Font{Family: "Calibri", Size: 11}},
+		},
+	}
+	sh := &Sheet{Name: "Default", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage}
+	sh.Rows = []Row{{Index: 0, Cells: []Cell{{Col: 0, Text: "a"}, {Col: 1, Text: "b", Style: 1}, {Col: 2, Text: "1", Style: 1, Kind: KindNumber}}}}
+	wb.Sheets = []*Sheet{sh}
+	src, err := wb.Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	for _, want := range []string{
+		"line-height:normal;background-color:#ffff00;text-align:center;vertical-align:middle;}",
+		"td.s1{font-family:\"Calibri\", sans-serif;font-size:11pt;background-color:transparent;text-align:left;vertical-align:bottom;}",
+		// the alignment General of a number comes after the styles
+		"td.s1{", "}\ntd.n{text-align:right}",
+		`<td class="c">a</td><td class="s1 c">b</td><td class="s1 n c">1</td>`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the document:\n%s", want, doc)
+		}
+	}
+}
+
+func TestFontFamily(t *testing.T) {
+	def := Font{Family: "Times New Roman", Generic: "serif"}
+	for _, test := range []struct {
+		font Font
+		exp  string
+	}{
+		// a family of its own is sans-serif without a generic family
+		{Font{Family: "Arial"}, `"Arial", sans-serif`},
+		{Font{Family: "Courier New", Generic: "monospace"}, `"Courier New", monospace`},
+		// no family takes the default font
+		{Font{}, `"Times New Roman", serif`},
+	} {
+		if got := fontFamily(test.font, def); got != test.exp {
+			t.Errorf("expected %s for %+v, got: %s", test.exp, test.font, got)
+		}
+	}
+}
+
+func TestFixedRows(t *testing.T) {
+	wb := &Workbook{Styles: []Style{
+		{Font: Font{Family: "Arial", Size: 10}},
+		{Font: Font{Family: "Arial", Size: 20}},
+		{Font: Font{Family: "Arial", Size: 10}, Wrap: true},
+	}}
+	sh := &Sheet{
+		Name: "Fixed", DefaultColWidth: 48, DefaultRowHeight: 12.75, Page: DefaultPage, FixedRows: true,
+		Rows: []Row{
+			// a line of 20 points in a row of 12.75 points
+			{Index: 0, Cells: []Cell{{Col: 0, Text: "big", Style: 1}, {Col: 1, Text: "small"}}},
+			// a text that wraps in a row of one line, and in a row of two
+			{Index: 1, Cells: []Cell{{Col: 0, Text: "one\ntwo", Style: 2}}},
+			{Index: 2, Height: 30, Cells: []Cell{{Col: 0, Text: "one\ntwo", Style: 2}}},
+		},
+	}
+	wb.Sheets = []*Sheet{sh}
+	src, err := wb.Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	for _, want := range []string{
+		`<td class="s1 c" style="line-height:12.75pt">big</td><td>small</td>`,
+		`<td class="s2 c" style="white-space:pre;overflow-wrap:normal">one two</td>`,
+		`<tr style="height:30pt"><td class="s2 c">one` + "\n" + `two</td>`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the document:\n%s", want, doc)
+		}
+	}
+	// without FixedRows, the rows grow for their text
+	sh.FixedRows = false
+	if src, err = wb.Source(t.Context(), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if doc := document(t, src, 0); strings.Contains(doc, "line-height:12.75pt") || strings.Contains(doc, "white-space:pre;overflow-wrap:normal\"") {
+		t.Errorf("expected the rows to grow:\n%s", doc)
+	}
+}
+
+func TestHeaderScale(t *testing.T) {
+	wb := &Workbook{Styles: []Style{{Font: Font{Family: "Calibri", Size: 10}}}}
+	sh := &Sheet{
+		Name: "Scaled", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage,
+		Rows:   []Row{{Index: 0, Cells: []Cell{{Col: 0, Text: "x"}}}},
+		Header: ParseHeaderFooter("&CTitle"),
+	}
+	sh.Page.Scale = 0.5
+	wb.Sheets = []*Sheet{sh}
+	for _, test := range []struct {
+		scale bool
+		exp   string
+	}{
+		{false, "font-size:10pt"},
+		{true, "font-size:5pt"},
+	} {
+		sh.Page.ScaleHeaderFooter = test.scale
+		src, err := wb.Source(t.Context(), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc := document(t, src, 0); !strings.Contains(doc, `@top-center{content:"Title";vertical-align:top;padding-top:21.6pt;white-space:pre;font-family:"Calibri", sans-serif;`+test.exp+";}") {
+			t.Errorf("expected the header with %s:\n%s", test.exp, doc)
+		}
 	}
 }
 
@@ -94,6 +243,28 @@ func TestSourceEmpty(t *testing.T) {
 	book := layout.NewBook(src, layout.BookOptions{})
 	if n, err := book.PageCount(t.Context()); err != nil || n != 1 {
 		t.Errorf("expected 1 page, got: %d, %v", n, err)
+	}
+}
+
+func TestSetPaper(t *testing.T) {
+	page := DefaultPage
+	page.SetPaper(ivy.Paper{})
+	if page != DefaultPage {
+		t.Errorf("expected the zero paper to keep the page, got: %+v", page)
+	}
+	page.SetPaper(ivy.A4.Landscape())
+	exp := DefaultPage
+	exp.Width, exp.Height, exp.Landscape = float64(ivy.A4.Width), float64(ivy.A4.Height), true
+	if page != exp {
+		t.Errorf("expected %+v, got: %+v", exp, page)
+	}
+	// a workbook without sheets takes the paper of the options
+	src, err := (&Workbook{}).Source(t.Context(), Options{Paper: ivy.A4.Landscape()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc := document(t, src, 0); !strings.Contains(doc, "@page{size:841.89pt 595.28pt;margin:54pt 50.4pt 54pt 50.4pt;") {
+		t.Errorf("expected A4 in landscape with the margins of Excel, got:\n%s", doc)
 	}
 }
 
@@ -131,8 +302,9 @@ func TestBands(t *testing.T) {
 	if n := strings.Count(doc, `<table class="sh"`); n != 1 {
 		t.Errorf("expected 1 band when the sheet fits one page across, got: %d", n)
 	}
-	if !strings.Contains(doc, `<col style="width:42.6pt">`) {
-		t.Errorf("expected the columns at the scale 0.426:\n%s", doc)
+	// 511.2 / 1200 is 42.6%, and Excel fits at a whole percent
+	if !strings.Contains(doc, `<col style="width:42pt">`) {
+		t.Errorf("expected the columns at the scale 0.42:\n%s", doc)
 	}
 }
 
@@ -264,18 +436,33 @@ func TestParseHeaderFooter(t *testing.T) {
 }
 
 func TestColumnWidths(t *testing.T) {
-	// Calibri of 11 points has a digit of 7 pixels, and the default
-	// column of 8.43 characters is 64 pixels, 48 points
-	mdw := MaxDigitWidth(Font{Family: "Calibri", Size: 11}, 10)
-	if mdw != 7 {
-		t.Errorf("expected a digit of 7 pixels, got: %v", mdw)
+	// Calibri of 11 points has a digit of 7 pixels on the screen, and of
+	// 47 dots at 600 dots per inch. The default column of 8.43 characters
+	// is 64 pixels, and Excel prints it 51.6 points wide.
+	calibri := DigitOf(Font{Family: "Calibri", Size: 11}, 10)
+	if calibri != (Digit{Pixels: 7, Print: 5.64}) {
+		t.Errorf("expected a digit of 7 pixels and 5.64 points, got: %+v", calibri)
 	}
-	if got := WidthToPoints(9.140625, mdw); got != 48 {
-		t.Errorf("expected the default column of 64 pixels, got: %v", got)
+	if got := calibri.Column(9.140625); math.Abs(got-51.566) > 0.01 {
+		t.Errorf("expected the default column of 51.57 points, got: %v", got)
 	}
-	// a font without a size takes the default size
-	if got := MaxDigitWidth(Font{Family: "Arial"}, 10); got != 7 {
-		t.Errorf("expected a digit of 7 pixels for Arial of 10 points, got: %v", got)
+	if got := calibri.DefaultColumn(8); math.Abs(got-51.566) > 0.01 {
+		t.Errorf("expected the default column of 51.57 points from the base width, got: %v", got)
+	}
+	// a font without a size takes the default size: Arial of 10 points
+	// has a digit of 7 pixels and of 46 dots, and Excel prints a column
+	// of 80 pixels 63.1 points wide
+	arial := DigitOf(Font{Family: "Arial"}, 10)
+	if arial != (Digit{Pixels: 7, Print: 5.52}) {
+		t.Errorf("expected a digit of 7 pixels and 5.52 points for Arial of 10 points, got: %+v", arial)
+	}
+	if got := arial.DefaultColumn(10); math.Abs(got-63.086) > 0.01 {
+		t.Errorf("expected a column of 63.09 points, got: %v", got)
+	}
+	for _, chars := range []float64{0, -1, math.NaN()} {
+		if got := arial.Column(chars); got != 0 {
+			t.Errorf("expected no width for %v characters, got: %v", chars, got)
+		}
 	}
 	if w, h, ok := PaperSize(9); !ok || w != 595.28 || h != 841.89 {
 		t.Errorf("expected A4, got: %v by %v, %v", w, h, ok)
