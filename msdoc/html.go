@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // page is the size and the margins of the pages of the first section, in
@@ -210,7 +212,7 @@ func pt(twips int) string {
 func (p *parser) css(pg page) string {
 	family := "serif"
 	if st := p.styles.resolve(0, p.lim.MaxDepth); st != nil && st.stk == stkParagraph {
-		if f := p.fontFamily(st.chp.ftc); f != "" {
+		if f := p.fontFamily(st.chp.ftc, st.chp.ftcEA); f != "" {
 			family = f
 		}
 	}
@@ -244,15 +246,67 @@ td {
 .pgs::before {
   content: counter(pages);
 }
+body {
+  counter-reset: note;
+}
+.fn {
+  float: footnote;
+  counter-increment: note;
+}
+::footnote-call {
+  content: counter(note);
+  vertical-align: super;
+  font-size: 0.65em;
+  line-height: inherit;
+}
+::footnote-marker {
+  content: none;
+}
+.fnref::before {
+  content: counter(note);
+}
+.enref {
+  vertical-align: super;
+  font-size: 0.65em;
+}
+.endnotes {
+  margin-top: 12pt;
+  border-top: 0.5pt solid black;
+  padding-top: 6pt;
+}
+@page {
+  @footnote {
+    margin-top: 6pt;
+    padding-top: 3pt;
+    border-top: 0.5pt solid black;
+  }
+}
 `, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family)
 }
 
-// fontFamily returns the font family of CSS for the font ftc, or "".
-func (p *parser) fontFamily(ftc int) string {
-	if ftc < 0 || ftc >= len(p.fonts) || p.fonts[ftc].name == "" {
+// fontFamily returns the font family of CSS for the font ftc, then the
+// font ftcEA of the East Asian characters, or "". The layout takes a
+// character that the first font does not have from the next one.
+func (p *parser) fontFamily(ftc, ftcEA int) string {
+	valid := func(i int) bool {
+		return i >= 0 && i < len(p.fonts) && p.fonts[i].name != ""
+	}
+	var names []string
+	generic := "serif"
+	if valid(ftc) {
+		names = append(names, cssFont(p.fonts[ftc].name))
+		generic = p.fonts[ftc].generic
+	}
+	if valid(ftcEA) && (!valid(ftc) || p.fonts[ftcEA].name != p.fonts[ftc].name) {
+		names = append(names, cssFont(p.fonts[ftcEA].name))
+		if !valid(ftc) {
+			generic = p.fonts[ftcEA].generic
+		}
+	}
+	if len(names) == 0 {
 		return ""
 	}
-	return cssFont(p.fonts[ftc].name) + ", " + p.fonts[ftc].generic
+	return strings.Join(names, ", ") + ", " + generic
 }
 
 // cssFont quotes the name of a font for CSS.
@@ -327,6 +381,24 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		tag = "h" + strconv.Itoa(min(level, 6))
 	}
 	var style []string
+	if p.inline {
+		// a paragraph of a footnote is in the paragraph of its reference
+		tag = "span"
+		style = append(style, "display: block", "white-space: pre-wrap")
+	}
+	// a text box goes before the paragraph of its anchor, and floats from
+	// there
+	empty := true
+	for _, r := range para.runs {
+		switch {
+		case r.drawn != nil && r.drawn.text:
+			if !p.inline {
+				p.writeDrawn(b, r.drawn)
+			}
+		default:
+			empty = false
+		}
+	}
 	switch para.pap.jc {
 	case 1:
 		style = append(style, "text-align: center")
@@ -362,7 +434,7 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	if hps := para.mark.hps; hps > 0 {
 		style = append(style, "font-size: "+strconv.FormatFloat(float64(hps)/2, 'f', -1, 64)+"pt")
 	}
-	if f := p.fontFamily(para.mark.ftc); f != "" {
+	if f := p.fontFamily(para.mark.ftc, para.mark.ftcEA); f != "" {
 		style = append(style, "font-family: "+f)
 	}
 	b.WriteString("<" + tag)
@@ -379,7 +451,7 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	for _, r := range para.runs {
 		p.writeRun(b, r)
 	}
-	if len(para.runs) == 0 {
+	if empty {
 		// an empty paragraph has the line of the font of its mark
 		b.WriteString("<br>")
 	}
@@ -403,8 +475,17 @@ func (p *parser) writeMarker(b *strings.Builder, text string, c chp, first int) 
 // writeRun writes a run of text in a span with its character properties,
 // or the image of a picture.
 func (p *parser) writeRun(b *strings.Builder, r run) {
-	if r.float != nil {
+	switch {
+	case r.float != nil:
 		p.writeFloating(b, r.float)
+		return
+	case r.drawn != nil:
+		if !r.drawn.text {
+			p.writeDrawn(b, r.drawn)
+		}
+		return
+	case r.note != nil:
+		p.writeNote(b, r.note)
 		return
 	}
 	if r.pic != nil {
@@ -457,32 +538,53 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	if c.hasHighlight {
 		style = append(style, fmt.Sprintf("background-color: #%06x", c.highlight))
 	}
-	if f := p.fontFamily(c.ftc); f != "" {
+	if f := p.fontFamily(c.ftc, c.ftcEA); f != "" {
 		style = append(style, "font-family: "+f)
 	}
 	text := html.EscapeString(r.text)
+	if r.noteMark {
+		text = p.mark
+	}
 	text = strings.NewReplacer("\n", "<br>", string(runePage), `<span class="pg"></span>`,
 		string(runePages), `<span class="pgs"></span>`).Replace(text)
-	if len(style) == 0 {
+	// the East Asian language selects the font of the East Asian text,
+	// as in the package docx
+	lang := ""
+	if c.lidEA != 0 && strings.ContainsFunc(r.text, fontdb.IsCJK) {
+		if v := ebook.LCIDLanguage(uint32(c.lidEA)); v != "" {
+			lang = ` lang="` + html.EscapeString(v) + `"`
+		}
+	}
+	if len(style) == 0 && lang == "" {
 		b.WriteString(text)
 		return
 	}
-	b.WriteString(`<span style="` + html.EscapeString(strings.Join(style, "; ")) + `">`)
+	b.WriteString(`<span` + lang)
+	if len(style) > 0 {
+		b.WriteString(` style="` + html.EscapeString(strings.Join(style, "; ")) + `"`)
+	}
+	b.WriteString(">")
 	b.WriteString(text)
 	b.WriteString("</span>")
 }
 
-// writeFloating writes a picture that floats on the page. A picture that
-// text wraps around floats to the side of the column where it is, a
-// picture above and below text is a block, and a picture that text does not
-// wrap is placed on the page, as the package docx does.
+// writeFloating writes a picture that floats on the page.
 func (p *parser) writeFloating(b *strings.Builder, f *floating) {
+	style := p.floatStyle(f, f.pic.width, f.pic.height)
+	b.WriteString(`<img src="` + html.EscapeString(f.pic.name) + `" alt="" style="` + strings.Join(style, "; ") + `"/>`)
+}
+
+// floatStyle returns the style of an object of w by h points that floats
+// on the page. An object that text wraps around floats to the side of the
+// column where it is, an object above and below text is a block, and an
+// object that text does not wrap is placed on the page, as the package
+// docx does.
+func (p *parser) floatStyle(f *floating, w, h float64) []string {
 	pg := p.page
 	if pg.width == 0 {
 		pg = letter
 	}
 	col := float64(pg.width-pg.left-pg.right) / 20
-	w, h := f.pic.width, f.pic.height
 	x := float64(f.left) / 20
 	if f.bx == 1 {
 		x -= float64(pg.left) / 20
@@ -491,8 +593,14 @@ func (p *parser) writeFloating(b *strings.Builder, f *floating) {
 	if f.by == 1 {
 		y -= float64(pg.top) / 20
 	}
+	wr := f.wr
+	if wr != 1 && wr != 3 && max(x, col-x-w) < 36 {
+		// Word puts the text below an object that leaves less than half
+		// an inch beside it
+		wr = 1
+	}
 	var style []string
-	switch f.wr {
+	switch wr {
 	case 1:
 		style = append(style, "display: block", "margin-left: "+num(max(x, 0))+"pt")
 		if f.by == 2 && y > 0 {
@@ -518,6 +626,5 @@ func (p *parser) writeFloating(b *strings.Builder, f *floating) {
 			style = append(style, "margin-top: "+num(y)+"pt")
 		}
 	}
-	style = append(style, "width: "+num(w)+"pt", "height: "+num(h)+"pt")
-	b.WriteString(`<img src="` + html.EscapeString(f.pic.name) + `" alt="" style="` + strings.Join(style, "; ") + `"/>`)
+	return append(style, "width: "+num(w)+"pt", "height: "+num(h)+"pt")
 }

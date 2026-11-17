@@ -85,11 +85,11 @@ func TestOpen(t *testing.T) {
 	}
 	got := htmlOf(t, doc)
 	for _, want := range []string{
-		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
-		`<span style="font-weight: bold; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, serif">bold text</span>`,
+		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, &#34;Microsoft YaHei&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
+		`<span style="font-weight: bold; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif">bold text</span>`,
 		`<span style="font-style: italic; font-size: 12pt;`,
 		"Unicode: éè € Ω.",
-		`<p style="text-align: center; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, serif"><span style="font-size: 20pt;`,
+		`<p style="text-align: center; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif"><span style="font-size: 20pt;`,
 		"<table ",
 		`<col style="width: 249.3pt"/>`,
 		`border-left: 0.5pt solid #000000`,

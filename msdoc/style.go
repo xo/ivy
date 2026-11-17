@@ -30,15 +30,16 @@ type style struct {
 // styleSheet is the style sheet of a document (MS-DOC 2.9.271).
 type styleSheet struct {
 	styles []style
-	// ftc is the default font, from rgftcStandardChpStsh, or -1.
-	ftc int
+	// ftc is the default font, from rgftcStandardChpStsh, or -1, and
+	// ftcEA the default font of the East Asian characters, or -1.
+	ftc, ftcEA int
 	// word6 is set for the style sheet of Word 6 or Word 95.
 	word6 bool
 }
 
 // defaultChp returns the properties of a character without a style.
 func defaultChp() chp {
-	return chp{hps: 20, ftc: -1, istd: -1}
+	return chp{hps: 20, ftc: -1, ftcEA: -1, istd: -1}
 }
 
 // parseStyles reads the style sheet in buf. It reads what fits, and a
@@ -50,7 +51,7 @@ func parseStyles(buf []byte, maxStyles int) *styleSheet {
 // parseStylesOf reads the style sheet in buf, of Word 6 or Word 95 when
 // word6 is set, whose names have one byte for each character.
 func parseStylesOf(buf []byte, maxStyles int, word6 bool) *styleSheet {
-	ss := &styleSheet{ftc: -1, word6: word6}
+	ss := &styleSheet{ftc: -1, ftcEA: -1, word6: word6}
 	cbStshi := int(u16(buf, 0))
 	if cbStshi < 4 || 2+cbStshi > len(buf) {
 		return ss
@@ -60,6 +61,9 @@ func parseStylesOf(buf []byte, maxStyles int, word6 bool) *styleSheet {
 	cbBase := int(u16(stshi, 2))
 	if len(stshi) >= 14 {
 		ss.ftc = int(u16(stshi, 12))
+	}
+	if len(stshi) >= 16 && !word6 {
+		ss.ftcEA = int(u16(stshi, 14))
 	}
 	off := 2 + cbStshi
 	ss.styles = make([]style, 0, min(cstd, len(buf)/2))
@@ -159,7 +163,7 @@ func (ss *styleSheet) resolve(istd, depth int) *style {
 	}
 	st.inWork = true
 	c := defaultChp()
-	c.ftc = ss.ftc
+	c.ftc, c.ftcEA = ss.ftc, ss.ftcEA
 	p := pap{istd: istd}
 	if b := ss.resolve(st.base, depth-1); b != nil && b.done && b.stk == st.stk {
 		c, p = b.chp, b.pap

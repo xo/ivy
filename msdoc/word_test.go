@@ -246,3 +246,49 @@ func TestInlinePicture(t *testing.T) {
 		t.Errorf("expected the PNG file in the media, got %d files", len(p.media))
 	}
 }
+
+// TestExactRowHeight checks that a row of an exact height does not grow
+// with the empty paragraph after the text of a cell, as in Word: the cell
+// "Jan 2009 – Dec 2009" on page 2 of
+// libreoffice/doc/landscape-letter-form.doc.
+func TestExactRowHeight(t *testing.T) {
+	exact, least := &tap{}, &tap{}
+	applyTap(exact, sprm{op: sprmTDyaRowHeight, operand: u16s(0xFEAC)}) // -340
+	applyTap(least, sprm{op: sprmTDyaRowHeight, operand: u16s(340)})
+	var b strings.Builder
+	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}})
+	html := b.String()
+	if !strings.Contains(html, `<div style="height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
+		t.Errorf("expected the cell of the exact row in a block of its height:\n%s", html)
+	}
+	if strings.Count(html, "<div") != 1 {
+		t.Errorf("expected the row of a least height to grow:\n%s", html)
+	}
+}
+
+// TestEastAsianFont checks that a run gives its East Asian font after its
+// font, and the language of its East Asian text, as the package docx does.
+func TestEastAsianFont(t *testing.T) {
+	p := testParser(nil, nil)
+	p.fonts = []font{{name: "Times New Roman", generic: "serif"}, {name: "SimSun", generic: "serif"}}
+	c := defaultChp()
+	for _, s := range []sprm{
+		{op: sprmCRgFtc0, operand: u16s(0)},
+		{op: sprmCRgFtc1, operand: u16s(1)},
+		{op: sprmCRgLid1, operand: u16s(0x0804)},
+	} {
+		applyChp(&c, s, &c)
+	}
+	var b strings.Builder
+	p.writeRun(&b, run{text: "中文 text", chp: c})
+	p.writeRun(&b, run{text: "Latin", chp: c})
+	html := b.String()
+	for _, want := range []string{
+		`<span lang="zh-CN" style="font-size: 10pt; font-family: &#34;Times New Roman&#34;, &#34;SimSun&#34;, serif">中文 text</span>`,
+		`<span style="font-size: 10pt; font-family: &#34;Times New Roman&#34;, &#34;SimSun&#34;, serif">Latin</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the html:\n%s", want, html)
+		}
+	}
+}

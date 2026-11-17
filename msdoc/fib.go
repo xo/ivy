@@ -62,6 +62,14 @@ const (
 	ccpTextIndex   = 3
 	ccpFtnIndex    = 4
 	ccpHddIndex    = 5
+	ccpHdrTxbxIdx  = 10
+	fcPlcffndRef   = 2
+	fcPlcffndTxt   = 3
+	fcPlcSpaHdr    = 41
+	fcPlcfendRef   = 46
+	fcPlcfendTxt   = 47
+	fcPlcftxbxTxt  = 56
+	fcPlcfHdrTxbx  = 58
 	fcPlcfHdd      = 11
 	fcDop          = 31
 	fcPlcSpaMom    = 40
@@ -87,8 +95,14 @@ type fib struct {
 	flags   uint16
 	ccpText uint32
 	// ccpFtn and ccpHdd are the counts of the characters of the footnotes
-	// and of the headers, which follow the main document.
+	// and of the headers, which follow the main document. The macros, the
+	// comments, the endnotes, the text boxes and the text boxes of the
+	// headers follow them, in that order (MS-DOC 2.4.1).
 	ccpFtn, ccpHdd uint32
+	ccpMcr, ccpAtn uint32
+	ccpEdn         uint32
+	ccpTxbx        uint32
+	ccpHdrTxbx     uint32
 	fcLcb          [][2]uint32
 }
 
@@ -244,6 +258,12 @@ func (fb *fib) parse(word []byte) error {
 	if cslw > ccpHddIndex {
 		fb.ccpFtn = le.Uint32(word[off+2+4*ccpFtnIndex:])
 		fb.ccpHdd = le.Uint32(word[off+2+4*ccpHddIndex:])
+	}
+	if cslw > ccpHdrTxbxIdx {
+		ccp := func(i int) uint32 {
+			return le.Uint32(word[off+2+4*(ccpHddIndex+i):])
+		}
+		fb.ccpMcr, fb.ccpAtn, fb.ccpEdn, fb.ccpTxbx, fb.ccpHdrTxbx = ccp(1), ccp(2), ccp(3), ccp(4), ccp(5)
 	}
 	off += 2 + 4*cslw
 	n := int(u16(word, off))

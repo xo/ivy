@@ -26,6 +26,9 @@ const (
 	sprmCIstd         = 0x4A30
 	sprmCHps          = 0x4A43
 	sprmCRgFtc0       = 0x4A4F
+	sprmCRgFtc1       = 0x4A50
+	sprmCRgLid1_80    = 0x486E
+	sprmCRgLid1       = 0x4874
 	sprmCCv           = 0x6870
 	sprmPIstd         = 0x4600
 	sprmPJc80         = 0x2403
@@ -166,8 +169,11 @@ type chp struct {
 	// hasHighlight is set.
 	color, highlight       uint32
 	hasColor, hasHighlight bool
-	// ftc is the index of the font in the table of fonts, or -1.
-	ftc int
+	// ftc is the index of the font in the table of fonts, or -1, and
+	// ftcEA the index of the font of the East Asian characters, or -1.
+	ftc, ftcEA int
+	// lidEA is the language of the East Asian characters, an LCID, or 0.
+	lidEA uint16
 	// istd is the character style, or -1.
 	istd int
 	// special is set for a character that stands for an object, such as
@@ -273,6 +279,10 @@ func applyChp(c *chp, s sprm, base *chp) {
 		}
 	case sprmCRgFtc0:
 		c.ftc = int(uint16(s.value()))
+	case sprmCRgFtc1:
+		c.ftcEA = int(uint16(s.value()))
+	case sprmCRgLid1, sprmCRgLid1_80:
+		c.lidEA = uint16(s.value())
 	case sprmCFSpec:
 		c.special = v != 0
 	case sprmCFData:

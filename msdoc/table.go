@@ -2,6 +2,7 @@ package msdoc
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,7 +79,12 @@ func (b brc) css() string {
 
 // num returns v as a short decimal number.
 func num(v float64) string {
-	return strconv.FormatFloat(float64(int(v*100+0.5))/100, 'f', -1, 64)
+	r := math.Round(v*100) / 100
+	if r == 0 {
+		// no negative zero
+		r = 0
+	}
+	return strconv.FormatFloat(r, 'f', -1, 64)
 }
 
 // brc80 reads a Brc80 of 4 bytes (MS-DOC 2.9.17). Four bytes of 0xFF are
@@ -483,7 +489,15 @@ func writeTable(b *strings.Builder, rows []tableRow) {
 				b.WriteString(` rowspan="` + strconv.Itoa(rowSpan) + `"`)
 			}
 			b.WriteString(` style="` + cellStyle(t, c, i, r == 0, r+rowSpan >= len(rows)) + `">`)
-			b.WriteString(html)
+			if h := exactHeight(t); h > 0 && rowSpan == 1 {
+				// a row of an exact height does not grow with the text of
+				// its cells, such as the empty paragraph after the text of
+				// a cell. The text that does not fit shows, and is not cut,
+				// so that the shapes that the cell anchors show
+				b.WriteString(`<div style="height: ` + num(h) + `pt">` + html + "</div>")
+			} else {
+				b.WriteString(html)
+			}
 			b.WriteString("</td>")
 		}
 		b.WriteString("</tr>\n")
@@ -558,6 +572,22 @@ func cellStyle(t *tap, c tableCell, i int, top, bottom bool) string {
 		style = append(style, fmt.Sprintf("background-color: #%06x", c.shading.color))
 	}
 	return strings.Join(style, "; ")
+}
+
+// exactHeight returns the height of the content of the cells of the row
+// t in points, when the row has an exact height, or 0. The height of the
+// row holds the padding of the cells at the top and the bottom.
+func exactHeight(t *tap) float64 {
+	if t.rowHeight >= 0 || t.rowHeight <= -31680 {
+		return 0
+	}
+	h := -t.rowHeight
+	for _, k := range [...]int{0, 2} {
+		if t.hasPadding[k] {
+			h -= max(0, min(t.padding[k], 1440))
+		}
+	}
+	return max(float64(h)/20, 0.05)
 }
 
 // pick returns a if ok, else b.

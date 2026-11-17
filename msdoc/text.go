@@ -40,6 +40,12 @@ type run struct {
 	// text, and float the picture that floats on the page.
 	pic   *picture
 	float *floating
+	// drawn is a text box or a shape of Office Drawing, note the footnote
+	// or the endnote of a reference, and noteMark is set for the number of
+	// a note at the start of its text.
+	drawn    *drawn
+	note     *note
+	noteMark bool
 }
 
 // The characters of the private use area that stand for the result of a
@@ -101,6 +107,26 @@ type parser struct {
 	shapes map[uint32]floating
 	// page is the page of the section that the conversion writes.
 	page page
+	// notes holds the ranges of the text of the footnotes and of the
+	// endnotes by the characters of their references, once read.
+	notes []map[uint32][2]uint32
+	// mark is the HTML of the number of the note that the conversion
+	// writes, and inline is set while it writes a footnote, whose
+	// paragraphs are in a paragraph. endnotes holds the HTML of the
+	// endnotes, and endnoteCount their number.
+	mark         string
+	inline       bool
+	endnotes     strings.Builder
+	endnoteCount int
+	// drawing holds the shapes of Office Drawing by their ids, once read,
+	// spas their FSPAs by the characters of their anchors, and txbxs the
+	// ranges of the text of the text boxes by the ids of their shapes,
+	// for the main document and for the headers.
+	drawing drawing
+	spas    [2]map[uint32][]byte
+	txbxs   [2]map[uint32][2]uint32
+	// store holds the entries of the store of the pictures, once read.
+	store [][]byte
 }
 
 // newParser reads the piece table, the formatted disk pages, the styles and
@@ -403,7 +429,7 @@ func (p *parser) paraProps(fc uint32, pieceMods []byte) pap {
 // with the modifiers of their piece.
 func (p *parser) charProps(r *fkpRun, istd int, pieceMods []byte) chp {
 	base := defaultChp()
-	base.ftc = p.styles.ftc
+	base.ftc, base.ftcEA = p.styles.ftc, p.styles.ftcEA
 	if st := p.styles.resolve(istd, p.lim.MaxDepth); st != nil && st.stk == stkParagraph {
 		base = st.chp
 	}
@@ -525,7 +551,10 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 		pending []char
 		total   int
 		secs    = p.sections()
+		errAt   error
 	)
+	mainEnd := p.s.fib.ccpText
+	hdrStart, hdrEnd := p.s.fib.partRange(partHeaders)
 	flushRun := func() {
 		if haveRun && text.Len() > 0 {
 			cur.runs = append(cur.runs, run{text: text.String(), chp: runChp})
@@ -582,14 +611,44 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 			if cp.hidden || cp.deleted {
 				continue
 			}
-			if c.r == 0x08 && cp.special && to <= p.s.fib.ccpText {
+			if c.r == 0x08 && cp.special {
 				// the anchor of a shape of Office Drawing
-				if p.shapes == nil {
-					p.shapes = p.readShapes()
+				if c.cp < mainEnd {
+					if p.shapes == nil {
+						p.shapes = p.readShapes()
+					}
+					if f, ok := p.shapes[c.cp]; ok {
+						flushRun()
+						cur.runs = append(cur.runs, run{chp: cp, float: &f})
+						continue
+					}
 				}
-				if f, ok := p.shapes[c.cp]; ok {
-					flushRun()
-					cur.runs = append(cur.runs, run{chp: cp, float: &f})
+				if c.cp < mainEnd || c.cp >= hdrStart && c.cp < hdrEnd {
+					d, err := p.drawnAt(ctx, c.cp, c.cp >= mainEnd)
+					if err != nil {
+						errAt = err
+					}
+					if d != nil {
+						flushRun()
+						cur.runs = append(cur.runs, run{chp: cp, drawn: d})
+					}
+				}
+				continue
+			}
+			if c.r == 0x02 && cp.special {
+				// the reference of a footnote or of an endnote, or the
+				// number of a note at the start of its text
+				flushRun()
+				if c.cp >= mainEnd {
+					cur.runs = append(cur.runs, run{chp: cp, noteMark: true})
+					continue
+				}
+				n, err := p.readNote(ctx, c.cp)
+				if err != nil {
+					errAt = err
+				}
+				if n != nil {
+					cur.runs = append(cur.runs, run{chp: cp, note: n})
 				}
 				continue
 			}
@@ -651,6 +710,9 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 			continue
 		case 0x0D, 0x07:
 			endPara(c)
+			if errAt != nil {
+				return nil, errAt
+			}
 			if len(paras) > p.lim.MaxObjects {
 				return nil, fmt.Errorf("more than %d paragraphs: %w", p.lim.MaxObjects, ivy.ErrLimit)
 			}
@@ -689,6 +751,9 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 		last := pending[len(pending)-1]
 		last.r = 0x0D
 		endPara(last)
+	}
+	if errAt != nil {
+		return nil, errAt
 	}
 	return paras, nil
 }

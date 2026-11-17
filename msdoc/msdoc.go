@@ -15,14 +15,18 @@
 // tables have the borders, the shading and the merged cells of their rows,
 // the lists have their numbers and their bullets, and the pictures of the
 // stream Data and the pictures of Office Drawing that float on the page
-// show.
+// show. The text boxes show with their text, and the rectangles, the
+// ellipses, the lines, the freeforms and the groups of Office Drawing show
+// as SVG images. A footnote goes at the foot of its page, and the
+// endnotes go at the end of the document. A run gives its East Asian font
+// after its font, and the language of its East Asian text.
 //
-// The package leaves out the footnotes, the comments, the text boxes, and
-// the shapes of Office Drawing that are not pictures. The codes of the
-// fields are left out, and their results stay, but the page numbers of the
-// fields PAGE and NUMPAGES come from the layout. Of a document of Word 6
-// or Word 95, the package leaves out the headers, the footers, the lists,
-// the pictures and the properties of the tables.
+// The package leaves out the comments, the WordArt, and the shapes of
+// Office Drawing whose geometry it does not know. The codes of the fields
+// are left out, and their results stay, but the page numbers of the fields
+// PAGE and NUMPAGES come from the layout. Of a document of Word 6 or Word
+// 95, the package leaves out the headers, the footers, the footnotes, the
+// text boxes, the lists, the pictures and the properties of the tables.
 //
 // A document gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A document that a password protects with RC4,
@@ -233,6 +237,9 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		b.WriteString(running[i])
 	}
 	body := d.parser.body(paras, section)
+	if d.parser.endnotes.Len() > 0 {
+		body += `<div class="endnotes">` + d.parser.endnotes.String() + "</div>\n"
+	}
 	if cur >= 0 {
 		body += "</div>\n"
 	}
