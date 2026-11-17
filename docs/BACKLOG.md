@@ -12,19 +12,6 @@ delete the claim.
 
 1. `pdf`, from 2026-11-17: the option `WithPageBox` (D31), after the move
    of the PostScript interpreter, and the MediaBox rows of the review.
-2. `internal/fontdb` and `internal/font`, from 2026-11-17: the fonts of the
-   system for the CJK scripts.
-3. `csv`, `rtf`, `msdoc`, `docx`, `xlsx`, `msxls` and the text and sheets
-   of `odf`, from 2026-11-17: `Config.Paper` for a file without a paper
-   (D32).
-4. `docx`, `msdoc`, `rtf` and the parts of `internal/layout` that they
-   need, from 2026-11-17: the styles of Word documents, against the PDFs of
-   Microsoft Word.
-5. `pptx`, `msppt` and `internal/drawingml`, from 2026-11-17: the styles of
-   presentations, against the PDFs of Microsoft PowerPoint.
-6. `xlsx`, `msxls`, `internal/sheet`, `internal/numfmt` and
-   `internal/chart`, from 2026-11-17: the styles of Excel workbooks,
-   against the PDFs of Microsoft Excel.
 
 ## Found by the visual review
 
@@ -47,57 +34,128 @@ found these faults. Each item names a file of the corpus.
    not hold, as MuPDF does. ivy draws it with the width DW, and
    `pdfjs/pdf/text-cjk-nonembedded.pdf` moves every glyph after it. Source:
    `pdf`.
-5. Read the properties of the characters and the paragraphs of Word 6 and
-   Word 95, whose sprms have one byte, and return the text of PowerPoint
-   95, which `msppt` refuses with ErrUnsupported. Source: `msdoc` and
-   `msppt`.
-6. Draw the pictures of a Word document: the inline pictures of the Data
-   stream and the floating shapes of Office Drawing.
-   `poi/doc/floating-pictures.doc` gives 6 pages, and LibreOffice gives 8.
-   Source: `msdoc`.
-7. Draw the shapes, the pictures and the charts of an Excel workbook.
-   `poi/xls/drawings.xls` gives 1 page, and LibreOffice gives 10. Move the
-   reader of Office Drawing of `msppt` into a package that `msxls` and
-   `msdoc` share. Source: `msxls`.
-8. Find why the columns of `msxls` are narrower than those of LibreOffice.
-   `poi/xls/basic-expense-template-2011.xls` gives 44 pages, and
-   LibreOffice gives 66. Source: `msxls` and `internal/sheet`.
-9. Draw the date, the footer and the slide number of the master of a .ppt
-   file, as its HeadersFooters atom says, and find why LibreOffice makes the
-   body text of page 2 of `poi/ppt/defense-final.ppt` smaller. Source:
-   `msppt`.
-10. Draw the vertical text of the table cells of DrawingML (`a:tcPr vert="vert"`
-    and `"vert270"`). `poi/pptx/table-test2.pptx` differs by 18. Source:
-    `internal/drawingml`.
-11. Shrink the text of a body with `a:normAutofit` to fit its box, as
-    LibreOffice does. ivy uses the `fontScale` that the file stores. Source:
-    `internal/drawingml`.
-12. Give the columns of an xlsx sheet the widths of LibreOffice, so that the
-    bands of columns break at the same column. `poi/xlsx/picture.xlsx`
-    differs by 36 on pages 2 and 3. Source: `internal/sheet`.
-13. Decide the orientation of a chart sheet without a page setup. ivy prints
-    it landscape, as Excel does, and LibreOffice prints it portrait
-    (`poi/xlsx/chart-sheet.xlsx`). Source: `xlsx`.
-14. Find the blank page before the A5 section with page borders in
-    `aspose/docx/rendering.docx`, which has 6 pages against 5. Source:
-    `docx`.
-15. Draw the check boxes of the form fields of docx. Source: `docx`.
-16. Lay out the tab stops with leaders of the tables of contents of ODF,
+5. Return the text of PowerPoint 95, which `msppt` refuses with
+   ErrUnsupported. Source: `msppt`.
+6. Draw the text boxes of a Word 97 document, whose text is in the story of
+   the text boxes after the headers, and the shapes of Office Drawing that
+   are not pictures. `poi/doc/with-art-shapes.doc` has WordArt and shapes,
+   and `libreoffice/doc/landscape-a4-certificate.doc` has text boxes. The
+   header of `libreoffice/doc/landscape-letter-form.doc` has a text box, and
+   Word puts the text of the body below it, so the form has 4 pages against
+   3 in ivy. Source: `msdoc`.
+7. Draw the shapes and the charts of an Excel 97 workbook, and the
+   pictures in DIB and PICT. `msxls` shows the pictures in PNG, JPEG, EMF
+   and WMF, and a frame for the other objects. `poi/xls/drawings.xls` gives
+   9 pages, and Excel gives 10. Move the reader of Office Drawing of
+   `msppt`, with its pictures, into a package that `msxls`, `msppt` and
+   `msdoc` share. `msxls/drawing.go` holds a second, smaller reader of the
+   pictures until then. Source: `msxls`.
+8. Find the pages that `poi/xls/basic-expense-template-2011.xls` has more
+   or fewer than in Excel: 69 against 66. The sheet ExpenseTypes gives 3
+   blank pages, EmailXpenC gives 28 pages against 30, and the pictures of
+   Receipt images give 25 pages against 22. Source: `msxls` and
+   `internal/sheet`.
+9. Read the HeadersFooters atom of a .ppt file, which shows or hides the
+   date, the footer and the slide number of the master. ivy draws the
+   shapes of the master as they are. No file of the corpus shows a fault:
+   `poi/ppt/defense-final.ppt` has the slide numbers of PowerPoint.
+   Source: `msppt`.
+10. Read the region records of the EMF picture of page 21 of
+    `poi/ppt/defense-final.ppt`. The reader stops with "byte 1844: region
+    data size: malformed metafile", and the plot does not draw. Inkscape
+    draws it. Source: `internal/gowemf`.
+11. Lay out the tab stops with leaders of the tables of contents of ODF,
     which `libreoffice/odt/ooo96040-2.odt` uses. It has 13 pages against 12.
     Source: `odf`.
-17. Measure the height of the paragraph of a footer for the drawings that it
-    places. `docx` estimates one line of 11.5 points. Source: `docx`.
-18. Find why these files have pages that LibreOffice does not:
-    `poi/docx/illustrative-cases.docx` (5 against 4),
-    `poi/xlsx/conditional-formatting-samples.xlsx` (38 against 37) and
-    `datasets/csv/world-cities.csv` (1470 against 1396). Source: `docx` and
-    `internal/sheet`.
-19. Decide whether a text file reflows its paragraphs as calibre does.
+12. Find why these files have pages that LibreOffice does not:
+    `poi/xlsx/conditional-formatting-samples.xlsx` (37 against 36 in Excel,
+    and 37 in LibreOffice) and `datasets/csv/world-cities.csv` (1470 against
+    1396). Source: `internal/sheet`.
+13. Keep empty paragraphs at the bottom of a page when they do not fit, as
+    Word seems to do. On page 3 of `poi/docx/illustrative-cases.docx`, three
+    empty paragraphs after a table need about 2 points more than the page
+    has left. Word keeps them on page 3. ivy moves one of them to page 4,
+    and the empty paragraphs at the end of page 4 then go to a page 5: 5
+    pages against 4. The rule of Word is not known. Source: `docx` and
+    `internal/layout`.
+14. Decide whether a text file reflows its paragraphs as calibre does.
     calibre joins the lines of a paragraph, and ivy keeps them. Source:
     `text`.
-20. Drop an undefined entity of a FictionBook file, as calibre does.
+15. Drop an undefined entity of a FictionBook file, as calibre does.
     `fbreaderj/fb2/minihelp.ja.fb2` shows `&FBReaderVersion;` as text.
     Source: `internal/ebook`.
+16. Find how PowerPoint applies `a:satMod` after `a:tint`. The gradients
+    of the diagram of page 11 of `poi/pptx/custom-geometry.pptx` are
+    lighter in ivy than in PowerPoint. A tint alone, such as the bands of
+    the default table style, has the colors of PowerPoint. Source:
+    `internal/drawingml`.
+17. Draw a funnel chart (`cx:chart` with the layout `funnel`) with its
+    first series only, as bars in the middle with gaps between them, as
+    PowerPoint draws `libreoffice/pptx/funnel-chart.pptx`. ivy draws the
+    three series over each other. Source: `internal/chart`.
+18. Decide the pattern fill and the texture fill of
+    `poi/ppt/backgrounds.ppt`. PowerPoint draws the pattern of page 2 red
+    with green crosses, from a picture of the store that is a photo, and
+    draws the texture of page 3 white. ivy draws the pattern as the mix of
+    its two colors and tiles the texture, as MS-ODRAW describes them.
+    Source: `msppt`.
+19. Shade a gradient of PowerPoint 97 to 2003 with the sigma curve of
+    `fillShadeType`. ivy mixes the colors in linear light, as its gamma
+    flag says. Near their ends, the gradients of
+    `poi/ppt/defense-final.ppt` stay closer to the colors of the ends in
+    PowerPoint. Source: `msppt`.
+20. Find when PowerPoint kerns. The lines of Calibri in
+    `poi/pptx/custom-geometry.pptx` break as without kerning, even with
+    `kern="1200"`, and the lines of Times New Roman in
+    `poi/ppt/defense-final.ppt` are as wide as with kerning. Perhaps
+    PowerPoint reads only the table `kern` of a font, which Calibri does not
+    have. ivy draws the text of the slides without kerning. Source:
+    `internal/drawingml`.
+21. Give a row with a height in which no cell ends its height. The layout
+    gives it the height 0, as WeasyPrint does, and `internal/sheet`
+    carries the heights of such rows to the last row of a merged cell. The
+    layout and `internal/sheet` must change together: the layout alone
+    makes `TestMergedRows` of `internal/sheet` give 7 pages against 4. A
+    merged cell with text that wraps into more lines than its last row
+    holds still makes that row higher. `poi/xls/landscape-a4-drawing.xls`
+    gives 4 pages against 2, because of the labels of 2 and 3 lines in the
+    merged cells of its form. Source: `internal/layout` and
+    `internal/sheet`.
+22. Mark the pages of Excel of the files on A4 as a fault of the reference.
+    Excel 2024 prints `poi/xlsx/picture.xlsx`,
+    `poi/xlsx/landscape-a4-tables.xlsx`, `poi/xls/landscape-a4-drawing.xls`
+    and `poi/xls/landscape-a4-japanese.xls` on US Letter, which the files
+    do not ask for. The cause is probably the option "Scale content for A4
+    or 8.5 x 11 paper sizes" of Excel on the machine of the review, which
+    nobody checked. Legal stays Legal. ivy prints them on A4, as their
+    paperSize 9 says (ECMA-376 Part 1, 18.3.1.63, and MS-XLS). Source:
+    `test/review/reference-faults.tsv`.
+23. Draw the WMF pictures of `poi/xls/landscape-a4-drawing.xls`, which
+    draw blank. A WMF picture of the store of Office Drawing has no
+    placeable header, and its size is in its OfficeArtMetafileHeader. The
+    cause is not checked. Source: `msxls` and `internal/metafile`.
+24. Find the width of a digit of Century Gothic, which no font of the
+    review holds. Excel prints `poi/xlsx/landscape-letter-budget.xlsx` at
+    83% on 1 page, and ivy at 100% on 2 pages, with digits of 0.55 of the
+    size. Source: `internal/sheet`.
+25. Read the record HeaderFooter of BIFF8, whose flag fHFScaleWithDoc can
+    keep the header and the footer at their size. `msxls` scales them with
+    the cells, as Excel does by default. Source: `msxls`.
+26. Draw the shadow of the borders of a page, `w:shadow` of `w:pgBorders`,
+    as Word does on the A5 page of `aspose/docx/rendering.docx`. Source:
+    `docx`.
+27. Place a VML shape that a paragraph anchors from the top of the part of
+    the paragraph on its page. On page 2 of
+    `libreoffice/docx/mixed-orientation.docx`, Word draws the rectangle 81
+    points below the top of the page area, where the paragraph goes on. ivy
+    draws it 81 points below the line of its anchor. Source: `docx`.
+28. Draw the WordArt watermark of `libreoffice/rtf/watermark.rtf`, a shape
+    of `\shp` with the text "ASAP", which Word draws across the page.
+    Source: `rtf`.
+29. Find why Word shows no line for the empty paragraph after the text of a
+    cell, such as the cell "Jan 2009 – Dec 2009" on page 2 of
+    `libreoffice/doc/landscape-letter-form.doc`. ivy gives the paragraph a
+    line, and the row is higher than in Word. Source: `msdoc`.
 
 ## Left by the charts
 
@@ -188,8 +246,9 @@ The pages of Visio came on 2026-11-17 (D30).
    caps. Source: `internal/metafile`.
 6. Shape the text of complex scripts in a metafile. Bidi mirroring covers
    brackets only. Source: `internal/metafile`.
-7. Read the lists, the headers and footers, the footnotes, the text boxes
-   and the pictures of a `.doc` file. Source: `msdoc`.
+7. Read the footnotes and the text boxes of a `.doc` file, and the
+   headers, the footers, the lists and the pictures of a file of Word 6 or
+   Word 95. Source: `msdoc`.
 8. Read the fonts, sizes and colors of the runs of a `.ppt` file, from
    StyleTextPropAtom, and its pictures, masters and backgrounds. Source:
    `msppt`.
@@ -226,13 +285,20 @@ The pages of Visio came on 2026-11-17 (D30).
     shapes in a text. Source: `odf`.
 22. Draw the SmartArt and the canvases of a `.docx` file. Source: `docx`.
 23. Push the body of a page below a header that is taller than its space.
-    The converters estimate one line for each paragraph of the header.
-    Source: `docx`, `odf` and `rtf`.
+    `odf` and `rtf` estimate one line for each paragraph of the header.
+    `docx` and `msdoc` estimate the lines of the text of each paragraph and
+    the rows of the tables, with a mean width of the characters. The layout
+    could measure the margin boxes instead. Source: `odf`, `rtf` and
+    `internal/layout`.
 24. Lay out the text body of a shape as one `layout.Document` instead of a
     `layout.Book`, if that is cheaper. Source: `internal/drawingml`.
 25. Keep the font database of a document for its charts. `fontdb.Of` reads
     an `fs.FS` that is not comparable again for each chart. Source:
     `internal/fontdb`.
+26. Find why the fuzz test of `msppt` stalls after about 17 inputs. A copy
+    of the code before the styles of 2026-11-17 stalls the same way, and the
+    input that the fuzzer saved runs in 5 ms. A file must never make ivy
+    hang (hard rule 10). Source: `msppt`.
 
 ## Left by phase 4
 
