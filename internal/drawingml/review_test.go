@@ -302,3 +302,48 @@ func TestTextXfrm(t *testing.T) {
 		t.Errorf("expected the text in the right half, got %d red pixels on the left and %d on the right", left, right)
 	}
 }
+
+// TestEffects checks the blur of a shadow and a compound line.
+func TestEffects(t *testing.T) {
+	s := NewScene(ivy.Config{})
+	box, _ := okage.RectFromXYWH(0, 0, 40, 40)
+	s.AddFigure(&Figure{
+		Transform: okage.TransformFromTranslate(20, 20), W: 40, H: 40,
+		Paths:  []Path{{Path: okage.PathFromRect(box)}},
+		Fill:   Solid(White),
+		Line:   Line{Paint: Paint{Kind: PaintNone}},
+		Shadow: &Shadow{Color: Black, DX: 40, Blur: 8, SX: 1, SY: 1},
+	})
+	line, _ := okage.RectFromXYWH(0, 0, 60, 20)
+	s.AddFigure(&Figure{
+		Transform: okage.TransformFromTranslate(20, 120), W: 60, H: 20,
+		Paths: []Path{{Path: okage.PathFromRect(line), Fill: FillNone, Stroke: true}},
+		Fill:  Paint{Kind: PaintNone},
+		Line:  Line{Paint: Solid(Black), Width: 9, Compound: "dbl", Cap: okage.LineCapButt, Join: okage.LineJoinMiter},
+	})
+	pix, _ := okage.NewPixmap(160, 160)
+	pix.Fill(okage.ColorWhite)
+	if err := s.Render(t.Context(), pix, okage.IdentityTransform()); err != nil {
+		t.Fatal(err)
+	}
+	gray := func(x, y uint32) uint8 {
+		p, _ := pix.Pixel(x, y)
+		return p.Red()
+	}
+	// the middle of the shadow is dark, and its edge is between dark and
+	// white over the radius of the blur
+	if g := gray(80, 40); g > 20 {
+		t.Errorf("middle of the shadow: %d, expected dark", g)
+	}
+	if g := gray(100, 40); g < 60 || g > 200 {
+		t.Errorf("edge of the shadow: %d, expected gray", g)
+	}
+	if g := gray(112, 40); g < 240 {
+		t.Errorf("past the blur: %d, expected white", g)
+	}
+	// the double line of 9 points: a line of 3, a gap of 3 and a line of 3
+	// across the top edge at y = 120
+	if a, b, c := gray(50, 117), gray(50, 120), gray(50, 123); a > 60 || b < 200 || c > 60 {
+		t.Errorf("double line: %d, %d, %d, expected dark, white, dark", a, b, c)
+	}
+}

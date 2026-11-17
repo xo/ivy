@@ -140,6 +140,9 @@ type fileSet struct {
 	once  sync.Once
 	db    *svg.FontDatabase
 	first int
+	// fsys keeps the files of a set that is shared by the identity of its
+	// map, so that the map stays in memory and its address names it.
+	fsys fs.FS
 }
 
 // setKey is the key of a fileSet: the files, and what changes the faces
@@ -151,16 +154,38 @@ type setKey struct {
 }
 
 // sets holds the sets of font files that the formats share, by the value
-// of their fs.FS. A set whose fs.FS is not comparable is not shared.
+// of their fs.FS, or by the identity of a map, such as fstest.MapFS, which
+// is not comparable. A set of another fs.FS that is not comparable is not
+// shared.
 var sets = struct {
 	sync.Mutex
 	m map[setKey]*fileSet
 }{m: map[setKey]*fileSet{}}
 
+// mapIdentity names a map by its type and its address, for the key of a
+// set whose fs.FS is a map.
+type mapIdentity struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+// Open satisfies fs.FS, so that a mapIdentity can be the fsys of a key. It
+// is never called.
+func (mapIdentity) Open(string) (fs.File, error) {
+	return nil, fs.ErrNotExist
+}
+
 // sharedSet returns the shared set of key, or nil when it cannot be shared.
 func sharedSet(key setKey) (set *fileSet) {
-	if !reflect.TypeOf(key.fsys).Comparable() {
-		return nil
+	var pin fs.FS
+	if t := reflect.TypeOf(key.fsys); !t.Comparable() {
+		// A document reads the fonts for each chart, so a map of fonts,
+		// such as fstest.MapFS, is shared by its identity.
+		if t.Kind() != reflect.Map {
+			return nil
+		}
+		pin = key.fsys
+		key.fsys = mapIdentity{t, reflect.ValueOf(key.fsys).Pointer()}
 	}
 	defer func() {
 		// A comparable type can hold a value that is not comparable, such
@@ -178,7 +203,7 @@ func sharedSet(key setKey) (set *fileSet) {
 	if len(sets.m) >= maxSets {
 		return nil
 	}
-	set = &fileSet{}
+	set = &fileSet{fsys: pin}
 	sets.m[key] = set
 	return set
 }

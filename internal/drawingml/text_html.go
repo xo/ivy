@@ -332,6 +332,9 @@ func writeRunStyle(sb *strings.Builder, s *RunStyle, theme *Theme, scale float64
 		size *= 2.0 / 3
 	}
 	fmt.Fprintf(sb, "font-size:%spt;", num(size))
+	if k := s.Kern.Or(0); k > 0 && s.Size.Or(defaultSize)*scale >= k {
+		sb.WriteString("font-kerning:normal;")
+	}
 	font := s.Latin.Or("")
 	if font == "" || strings.HasPrefix(font, "+") && theme == nil {
 		font = s.EastAsian.Or(font)
@@ -341,7 +344,7 @@ func writeRunStyle(sb *strings.Builder, s *RunStyle, theme *Theme, scale float64
 		// An East Asian font, such as MS Mincho, draws the East Asian
 		// characters that the Latin font does not draw.
 		latin := ThemeFont(font, theme)
-		ea = ThemeFont(ea, theme)
+		ea = ThemeFontLang(ea, theme, s.Lang.Or(""))
 		if _, _, ok := fontdb.ClassifyName(ea); ok && ea != latin {
 			family = cssString(ea) + ", sans-serif"
 			if latin != "" {
@@ -418,6 +421,14 @@ func fontFamily(face string, theme *Theme) string {
 // a typeface of the theme such as "+mj-lt" or "+mn-ea", the font of the
 // theme. An empty face is the minor Latin font of the theme.
 func ThemeFont(face string, theme *Theme) string {
+	return ThemeFontLang(face, theme, "")
+}
+
+// ThemeFontLang returns the typeface that face names, as ThemeFont does,
+// for a run of the language lang. An East Asian font of the theme, such as
+// "+mn-ea", takes the font of the script of lang when the theme gives no
+// a:ea font (Fonts.EastAsianFor).
+func ThemeFontLang(face string, theme *Theme, lang string) string {
 	if face != "" && !strings.HasPrefix(face, "+") {
 		return face
 	}
@@ -430,8 +441,8 @@ func ThemeFont(face string, theme *Theme) string {
 	}
 	switch {
 	case strings.HasSuffix(face, "-ea"):
-		if fonts.EastAsian != "" {
-			return fonts.EastAsian
+		if ea := fonts.EastAsianFor(lang); ea != "" {
+			return ea
 		}
 	case strings.HasSuffix(face, "-cs"):
 		if fonts.ComplexScript != "" {

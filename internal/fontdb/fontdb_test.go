@@ -110,14 +110,23 @@ func TestLoadShared(t *testing.T) {
 		t.Error("Of does not share the database of Load")
 	}
 	mapFS := fstest.MapFS{"a.ttf": &fstest.MapFile{Data: goregular.TTF}}
+	// A map is shared by its identity, as each chart of a document reads
+	// the fonts again.
+	a, first = Load(mapFS, false, lim, testLogger())
+	b, _ = Load(mapFS, false, lim, testLogger())
+	if first != 1 || a != b {
+		t.Errorf("map: %d faces, shared %t, expected 1 face, shared", first, a == b)
+	}
+	other := fstest.MapFS{"a.ttf": &fstest.MapFile{Data: goregular.TTF}}
+	if c, _ := Load(other, false, lim, testLogger()); c == a {
+		t.Error("two maps share a database")
+	}
 	// A struct is comparable, and the map in it panics the comparison.
 	type wrapped struct{ fs.FS }
-	for _, fsys := range []fs.FS{mapFS, wrapped{mapFS}} {
-		a, first := Load(fsys, false, lim, testLogger())
-		b, _ := Load(fsys, false, lim, testLogger())
-		if first != 1 || a == b {
-			t.Errorf("%T: %d faces, shared %t, expected 1 face, not shared", fsys, first, a == b)
-		}
+	a, first = Load(wrapped{mapFS}, false, lim, testLogger())
+	b, _ = Load(wrapped{mapFS}, false, lim, testLogger())
+	if first != 1 || a == b {
+		t.Errorf("wrapped map: %d faces, shared %t, expected 1 face, not shared", first, a == b)
 	}
 }
 

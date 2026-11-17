@@ -9,6 +9,7 @@ import (
 	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // Theme is the theme of an Office Open XML package (ECMA-376 Part 1,
@@ -41,6 +42,33 @@ const maxStyles = 64
 // script.
 type Fonts struct {
 	Latin, EastAsian, ComplexScript string
+	// Scripts maps the code of a script of ISO 15924, such as "Jpan", to
+	// the typeface of the a:font of the script.
+	Scripts map[string]string
+}
+
+// EastAsianFor returns the East Asian font for the language lang, such as
+// "ja-JP": the font of a:ea, or, when a:ea is empty, the font of the
+// script of the language (Jpan, Hans, Hant or Hang), as Word and
+// PowerPoint take it. It returns "" when neither gives a font.
+func (f Fonts) EastAsianFor(lang string) string {
+	if f.EastAsian != "" {
+		return f.EastAsian
+	}
+	var script string
+	switch fontdb.ParseLang(lang) {
+	case fontdb.Japanese:
+		script = "Jpan"
+	case fontdb.SimplifiedChinese:
+		script = "Hans"
+	case fontdb.TraditionalChinese:
+		script = "Hant"
+	case fontdb.Korean:
+		script = "Hang"
+	default:
+		return ""
+	}
+	return f.Scripts[script]
 }
 
 // Color returns the color of the scheme with the name name. It also takes
@@ -188,6 +216,10 @@ func schemeColor(n roxmltree.Node) (color.NRGBA, bool) {
 	return color.NRGBA{}, false
 }
 
+// maxScripts is the number of the fonts of the scripts that a part of a
+// font scheme keeps.
+const maxScripts = 64
+
 // parseFonts reads the fonts of a:majorFont or a:minorFont.
 func parseFonts(n roxmltree.Node) Fonts {
 	var f Fonts
@@ -202,6 +234,15 @@ func parseFonts(n roxmltree.Node) Fonts {
 			f.EastAsian = attr(c, "typeface", "")
 		case "cs":
 			f.ComplexScript = attr(c, "typeface", "")
+		case "font":
+			script, face := attr(c, "script", ""), attr(c, "typeface", "")
+			if script == "" || face == "" || len(f.Scripts) >= maxScripts {
+				continue
+			}
+			if f.Scripts == nil {
+				f.Scripts = make(map[string]string)
+			}
+			f.Scripts[script] = face
 		}
 	}
 	return f

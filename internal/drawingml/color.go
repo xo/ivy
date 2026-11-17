@@ -265,9 +265,9 @@ func transform(c RGBA, n roxmltree.Node) RGBA {
 		case "sat":
 			c = withHSL(c, func(h, _, l float64) (float64, float64, float64) { return h, val, l })
 		case "satMod":
-			c = withHSL(c, func(h, s, l float64) (float64, float64, float64) { return h, s * val, l })
+			c = withSaturation(c, func(s float64) float64 { return s * val })
 		case "satOff":
-			c = withHSL(c, func(h, s, l float64) (float64, float64, float64) { return h, s + val, l })
+			c = withSaturation(c, func(s float64) float64 { return s + val })
 		case "hue":
 			deg := numberAttr(t, "val", 0) / 60000
 			c = withHSL(c, func(_, s, l float64) (float64, float64, float64) { return deg / 360, s, l })
@@ -349,6 +349,20 @@ func withHSL(c RGBA, f func(h, s, l float64) (float64, float64, float64)) RGBA {
 	h, s, l = f(h, s, l)
 	h -= math.Floor(h)
 	c.R, c.G, c.B = hslToRGB(h, unit(s), unit(l))
+	return c
+}
+
+// withSaturation changes the saturation of c in the space of hue,
+// saturation and lightness. As PowerPoint does, it does not limit the new
+// saturation to 1, but limits each channel of the color that it gives.
+// The stops of the gradients of SmartArt in poi/pptx/custom-geometry.pptx,
+// such as a tint of 50% and a satMod of 300% of F79646, have the colors of
+// the PDF of PowerPoint only so: FFBE86, and not FFD2BD.
+func withSaturation(c RGBA, f func(s float64) float64) RGBA {
+	h, s, l := rgbToHSL(c.R, c.G, c.B)
+	s = max(f(s), 0)
+	c.R, c.G, c.B = hslToRGB(h, s, unit(l))
+	c.R, c.G, c.B = unit(c.R), unit(c.G), unit(c.B)
 	return c
 }
 

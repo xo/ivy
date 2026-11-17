@@ -20,8 +20,8 @@ type Line struct {
 	Dash []float64
 	Cap  okage.LineCap
 	Join okage.LineJoin
-	// Compound is the kind of a compound line, such as "dbl". It is drawn
-	// as one line of the whole width.
+	// Compound is the kind of a compound line, such as "dbl", which draws
+	// as two or three lines in the width.
 	Compound string
 	// Head and Tail are the ends of the line.
 	Head, Tail Arrow
@@ -166,8 +166,55 @@ func (l *Line) StrokePath(dev display.Device, p *okage.Path, box okage.Rect) {
 	if !ok {
 		return
 	}
-	dev.StrokePath(p, l.stroke(), sh)
+	if bands := compoundBands[l.Compound]; bands != nil && l.Width > 0 {
+		l.compound(dev, p, bands, sh)
+	} else {
+		dev.StrokePath(p, l.stroke(), sh)
+	}
 	l.arrows(dev, p, sh)
+}
+
+// compoundBands holds the lines of each kind of a compound line (ECMA-376
+// Part 1, 20.1.10.15), as fractions of the width from one side of the line
+// to the other: the start and the end of each line. The lines are
+// symmetric about the middle of the line. A thick line and a thin line
+// (thickThin and thinThick) draw as two lines of 2/5 and 1/5 of the width
+// on each side, not as one thick line on one side and a thin line on the
+// other, because the side of a stroke is not known.
+var compoundBands = map[string][]float64{
+	"dbl":       {0, 1.0 / 3, 2.0 / 3, 1},
+	"tri":       {0, 1.0 / 6, 2.0 / 6, 4.0 / 6, 5.0 / 6, 1},
+	"thickThin": {0, 2.0 / 5, 3.0 / 5, 1},
+	"thinThick": {0, 2.0 / 5, 3.0 / 5, 1},
+}
+
+// compound strokes p as the lines of a compound line. Each line of a
+// symmetric pair is the stroke of its outer width less the stroke of its
+// inner width, which a group erases.
+func (l *Line) compound(dev display.Device, p *okage.Path, bands []float64, sh okage.Shader) {
+	st := l.stroke()
+	width := st.Width
+	for i := 0; i+1 < len(bands); i += 2 {
+		a, c := bands[i], bands[i+1]
+		if a >= 0.5 {
+			break
+		}
+		outer := float32(1-2*a) * width
+		inner := float32(0)
+		if c < 0.5 {
+			inner = float32(1-2*c) * width
+		}
+		dev.BeginGroup(display.Group{Opacity: 1, Isolated: true})
+		st.Width = outer
+		dev.StrokePath(p, st, sh)
+		if inner > 0 {
+			dev.BeginGroup(display.Group{Opacity: 1, Blend: okage.BlendModeDestinationOut})
+			st.Width = inner
+			dev.StrokePath(p, st, okage.SolidColor(okage.ColorBlack))
+			dev.EndGroup()
+		}
+		dev.EndGroup()
+	}
 }
 
 // shader returns the shader of the paint of the line. A picture draws as

@@ -49,8 +49,8 @@ type Shadow struct {
 	Color RGBA
 	// DX and DY are the offset of the shadow, in points.
 	DX, DY float64
-	// Blur is the radius of the blur, in points. The shadow draws without
-	// a blur, with less alpha for a large blur.
+	// Blur is the radius of the blur, in points. The shadow draws with a
+	// blur whose standard deviation is half the radius.
 	Blur float64
 	// SX and SY scale the shadow, from 1.
 	SX, SY float64
@@ -151,12 +151,25 @@ func (s *Scene) AddFigure(f *Figure) {
 		if sh.SX > 0 && sh.SY > 0 && (sh.SX != 1 || sh.SY != 1) {
 			m = m.PreScale(float32(sh.SX), float32(sh.SY))
 		}
-		col := sh.Color
-		if sh.Blur > 0 {
-			// a blur spreads the shadow, and its middle is lighter
-			col = col.WithAlpha(0.7)
-		}
-		s.Add(m, func(_ context.Context, dev display.Device, _ float64) error {
+		s.Add(m, func(_ context.Context, dev display.Device, scale float64) error {
+			col := sh.Color
+			if sh.Blur > 0 {
+				var shape []*okage.Path
+				var stroke []bool
+				for _, p := range paths {
+					switch {
+					case f.Fill.Visible() && p.Fill != FillNone:
+						shape, stroke = append(shape, p.Path), append(stroke, false)
+					case f.Line.Visible() && p.Stroke:
+						shape, stroke = append(shape, p.Path), append(stroke, true)
+					}
+				}
+				if blurredShadow(dev, shape, stroke, f.Line.stroke(), col, sh.Blur, scale) {
+					return nil
+				}
+				// without the mask, a lighter shadow stands for the blur
+				col = col.WithAlpha(0.7)
+			}
 			shader := okage.SolidColor(col.Okage())
 			for _, p := range paths {
 				switch {

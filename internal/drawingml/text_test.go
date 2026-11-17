@@ -59,6 +59,11 @@ func TestColors(t *testing.T) {
 		{`<a:scrgbClr r="100000" g="0" b="0"/>`, color.NRGBA{255, 0, 0, 255}},
 		{`<a:srgbClr val="808080"><a:shade val="50000"/></a:srgbClr>`, color.NRGBA{0x5d, 0x5d, 0x5d, 255}},
 		{`<a:srgbClr val="FF0000"><a:inv/></a:srgbClr>`, color.NRGBA{0, 255, 255, 255}},
+		// the stops of a gradient of SmartArt in the PDF of PowerPoint: the
+		// saturation goes past 1 before the channels are limited
+		{`<a:srgbClr val="F79646"><a:tint val="50000"/><a:satMod val="300000"/></a:srgbClr>`, color.NRGBA{0xff, 0xbe, 0x86, 255}},
+		{`<a:srgbClr val="F79646"><a:tint val="37000"/><a:satMod val="300000"/></a:srgbClr>`, color.NRGBA{0xff, 0xd0, 0xaa, 255}},
+		{`<a:srgbClr val="F79646"><a:tint val="15000"/><a:satMod val="350000"/></a:srgbClr>`, color.NRGBA{0xff, 0xeb, 0xdb, 255}},
 	} {
 		got, ok := c.Of(parse(t, tc.xml))
 		if !ok {

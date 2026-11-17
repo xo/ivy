@@ -61,6 +61,11 @@ type RunStyle struct {
 	Baseline Opt[float64]
 	// Spacing is the spacing of the characters, in points.
 	Spacing Opt[float64]
+	// Kern is the smallest size of the font, in points, at which the run
+	// kerns, from the attribute kern. 0 does not kern. PowerPoint kerns
+	// the runs of 12 points and more of custom-geometry.pptx, which has
+	// kern="1200", and not its runs with kern="0".
+	Kern Opt[float64]
 	// Latin, EastAsian, ComplexScript and Symbol are the typefaces. A
 	// typeface of the theme starts with "+", such as "+mn-lt".
 	Latin, EastAsian, ComplexScript, Symbol Opt[string]
@@ -87,6 +92,7 @@ func (s *RunStyle) Over(o *RunStyle) {
 	s.Caps.over(o.Caps)
 	s.Baseline.over(o.Baseline)
 	s.Spacing.over(o.Spacing)
+	s.Kern.over(o.Kern)
 	s.Latin.over(o.Latin)
 	s.EastAsian.over(o.EastAsian)
 	s.ComplexScript.over(o.ComplexScript)
@@ -256,8 +262,8 @@ type TextBody struct {
 	Body       BodyStyle
 	Paragraphs []Paragraph
 	// NoKerning draws the text without the kerning of its fonts, as
-	// PowerPoint draws its slides: the lines of a text break where they
-	// break in PowerPoint, whatever the attribute kern of its runs.
+	// PowerPoint draws its slides, except the runs that RunStyle.Kern
+	// kerns.
 	NoKerning bool
 }
 
@@ -333,6 +339,9 @@ func (c *Colors) ParseRunStyle(n roxmltree.Node) RunStyle {
 	}
 	if v, ok := number(attr(n, "spc", "")); ok {
 		s.Spacing.Set(min(max(v/100, -100), 100))
+	}
+	if v, ok := number(attr(n, "kern", "")); ok && v >= 0 {
+		s.Kern.Set(min(v/100, 4000))
 	}
 
 	for _, a := range [...]string{"lang", "altLang"} {
