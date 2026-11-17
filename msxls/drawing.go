@@ -2,19 +2,32 @@ package msxls
 
 import (
 	"bytes"
-	"compress/zlib"
+	"context"
+	"image/color"
+	"math"
+	"slices"
 	"strconv"
+	"strings"
+	"unicode/utf16"
 
-	"github.com/xo/ivy/internal/raster"
+	"github.com/xo/okage"
+
+	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/layout"
+	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
 )
 
-// This file reads where the drawing objects of a sheet are: the charts,
-// the pictures, the text boxes and the shapes. A worksheet holds them in
-// the records MSODRAWING, as Office Drawing (MS-ODRAW), each followed by a
-// record OBJ that gives its type (MS-XLS 2.4.181). The package shows a
-// picture in PNG, JPEG, EMF or WMF, and a frame for each other object, with
-// the text of a text box. It does not draw the shapes and the charts.
+// This file draws the drawing objects of a sheet: the shapes, the groups,
+// the text boxes and the pictures. A worksheet holds them in the records
+// MSODRAWING, as Office Drawing (MS-ODRAW), and internal/odraw reads them.
+// A record OBJ after the drawing of each shape gives the type of the
+// object, and a record TXO the text of a shape (MS-XLS 2.4.181 and
+// 2.4.329). Each shape at the top of the drawing, or each group, is an
+// object of the layout at its cells. A chart shows as a frame, since the
+// package does not draw the charts of BIFF8.
 
 // The records of the drawings.
 const (
@@ -22,20 +35,6 @@ const (
 	recMsoDrawing      = 0x00EC
 	recObj             = 0x005D
 	recTxo             = 0x01B6
-)
-
-// The records of Office Drawing that the package reads (MS-ODRAW 2.2).
-const (
-	odrawBStore       = 0xF001
-	odrawFSP          = 0xF00A
-	odrawOPT          = 0xF00B
-	odrawFBSE         = 0xF007
-	odrawClientAnchor = 0xF010
-	odrawBlipEMF      = 0xF01A
-	odrawBlipWMF      = 0xF01B
-	odrawBlipJPEG     = 0xF01D
-	odrawBlipPNG      = 0xF01E
-	odrawBlipJPEGCMYK = 0xF02A
 )
 
 // The types of the objects of the record OBJ, in its structure FtCmo.
@@ -48,219 +47,413 @@ const (
 	objNote     = 0x19
 )
 
+// cmoPrint is the bit fPrint of an FtCmo: the object shows on the printed
+// pages.
+const cmoPrint = 0x0010
+
 // maxDrawing bounds the bytes of the drawing of one sheet and of the
 // pictures of the workbook.
 const maxDrawing = 64 << 20
 
-// shape is a shape of the drawing of a sheet: where its anchor ends in the
-// stream of the drawing, its anchor, and the index of its picture.
-type shape struct {
-	end    int
-	anchor [8]int
-	pib    int
-	used   bool
-}
+// shapeScale is the number of pixels for a point that a shape takes for its
+// patterns and its text. The layout does not give the resolution of the
+// page to an object, so a shape takes the resolution of 144 dots per inch.
+const shapeScale = 2
 
 // drawObj is a record OBJ of a sheet: the offset of the stream of the
-// drawing when it comes, its type, and the text of its record TXO.
+// drawing when it comes, its type and its flags, and the text of its
+// record TXO with its runs and its alignment.
 type drawObj struct {
-	at   int
-	ot   int
-	text string
+	at    int
+	ot    int
+	flags uint16
+	text  string
+	runs  []fontRun
+	// hAlign and vAlign are the alignments of the text of the TXO: 1 for
+	// left or top, 2 for centered, 3 for right or bottom, 4 for justified
+	// and 7 for distributed.
+	hAlign, vAlign int
 }
 
-// odrawRecords iterates over the records of Office Drawing in b, from the
-// offset base of b in its stream, and over the records in their
-// containers. f gets the type, the instance, the offset after the header in
-// the stream, and the data of each record.
-func odrawRecords(b []byte, base int, f func(typ, inst uint16, at int, data []byte), depth int) {
-	for off := 0; off+8 <= len(b) && depth < 16; {
-		vi := le.Uint16(b[off:])
-		typ := le.Uint16(b[off+2:])
-		n := int(le.Uint32(b[off+4:]))
-		at := off + 8
-		end := at + n
-		if n < 0 || end > len(b) || end < at {
-			end = len(b)
-		}
-		if vi&0x0F == 0x0F {
-			// a container: its records follow its header
-			odrawRecords(b[at:end], base+at, f, depth+1)
-		} else {
-			f(typ, vi>>4, base+at, b[at:end])
-		}
-		off = end
-	}
+// drawing is the drawing of a sheet, with the objects of its shapes.
+type drawing struct {
+	w    *workbook
+	sh   *sheet.Sheet
+	raw  *rawSheet
+	book *sheet.Workbook
+	ctx  context.Context
+	pics *odraw.Pictures
+	cfg  ivy.Config
+	// objs maps a shape to its record OBJ.
+	objs  map[*odraw.Shape]*drawObj
+	style *odraw.Style
 }
 
-// blip is a picture of the store of a workbook: the file and its
-// extension, such as ".png".
-type blip struct {
-	data []byte
-	ext  string
-}
-
-// readBlips reads the pictures of the records MSODRAWINGGROUP, by their
-// index from 1. A picture in a format that the package does not read has
-// no data. A metafile stays within limit bytes.
-func readBlips(b []byte, limit int64) []blip {
-	var blips []blip
-	odrawRecords(b, 0, func(typ, _ uint16, _ int, data []byte) {
-		if typ != odrawFBSE {
-			return
-		}
-		// OfficeArtFBSE (MS-ODRAW 2.2.32): 36 bytes, the name, and the
-		// picture
-		var bl blip
-		if len(data) >= 36 {
-			name := int(data[33])
-			if rest := data[min(36+name, len(data)):]; len(rest) >= 8 {
-				bl = blipData(le.Uint16(rest[2:]), le.Uint16(rest)>>4, rest[8:min(8+int(le.Uint32(rest[4:])), len(rest))], limit)
-			}
-		}
-		if len(blips) < 4096 {
-			blips = append(blips, bl)
-		}
-	}, 0)
-	return blips
-}
-
-// blipData returns the file of a picture record of the type typ and the
-// instance inst, without its header, or no data for a format that the
-// package does not read, such as a DIB. The file follows one id of 16
-// bytes, or two when the instance is odd. A JPEG or PNG image follows a
-// tag of 1 byte (MS-ODRAW 2.2.27, 2.2.28). An EMF or WMF file follows an
-// OfficeArtMetafileHeader of 34 bytes, compressed with DEFLATE unless the
-// header says otherwise (MS-ODRAW 2.2.24, 2.2.25, 2.2.31).
-func blipData(typ, inst uint16, b []byte, limit int64) blip {
-	uids := 16
-	if inst&1 == 1 {
-		uids = 32
-	}
-	switch typ {
-	case odrawBlipJPEG, odrawBlipJPEGCMYK, odrawBlipPNG:
-		if len(b) <= uids+1 {
-			return blip{}
-		}
-		data := b[uids+1:]
-		if bytes.HasPrefix(data, []byte("\x89PNG")) {
-			return blip{data: data, ext: ".png"}
-		}
-		return blip{data: data, ext: ".jpg"}
-	case odrawBlipEMF, odrawBlipWMF:
-		if len(b) < uids+34 {
-			return blip{}
-		}
-		ext := ".emf"
-		if typ == odrawBlipWMF {
-			ext = ".wmf"
-		}
-		mh, data := b[uids:], b[uids+34:]
-		if mh[32] == 0xFE {
-			return blip{data: data, ext: ext}
-		}
-		size := int64(le.Uint32(mh))
-		if size <= 0 || size > limit {
-			return blip{}
-		}
-		zr, err := zlib.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return blip{}
-		}
-		out, err := raster.ReadAll(zr, size)
-		if err != nil {
-			return blip{}
-		}
-		return blip{data: out, ext: ext}
-	}
-	return blip{}
-}
-
-// readShapes reads the shapes of the drawing of a sheet: each shape with a
-// cell anchor, the structure OfficeArtClientAnchorSheet of MS-XLS, with the
-// index of its picture.
-func readShapes(b []byte) []shape {
-	var shapes []shape
-	pib := 0
-	odrawRecords(b, 0, func(typ, inst uint16, at int, data []byte) {
-		switch typ {
-		case odrawFSP:
-			pib = 0
-		case odrawOPT:
-			// the properties: inst of them, of 6 bytes each, and the
-			// property pib (0x0104) is the index of the picture
-			for i := 0; i < int(inst) && 6*i+6 <= len(data); i++ {
-				if le.Uint16(data[6*i:])&0x3FFF == 0x0104 {
-					pib = int(le.Uint32(data[6*i+2:]))
-				}
-			}
-		case odrawClientAnchor:
-			if len(data) < 18 || len(shapes) >= 4096 {
-				return
-			}
-			s := shape{end: at + len(data), pib: pib}
-			for i := range 8 {
-				s.anchor[i] = int(le.Uint16(data[2+2*i:]))
-			}
-			shapes = append(shapes, s)
-		}
-	}, 0)
-	return shapes
-}
-
-// images converts the drawing objects of raw into images of sh. blips are
-// the pictures of the workbook, and files gets the pictures that the
-// images show.
-func images(sh *sheet.Sheet, raw *rawSheet, blips []blip, files map[string][]byte) {
-	if len(raw.objs) == 0 {
+// drawings adds the drawing objects of raw to the images of sh, and their
+// objects to book.
+func (w *workbook) drawings(ctx context.Context, sh *sheet.Sheet, raw *rawSheet, book *sheet.Workbook, pics *odraw.Pictures, cfg ivy.Config) {
+	if len(raw.objs) == 0 || len(raw.drawing) < 8 {
 		return
 	}
-	shapes := readShapes(raw.drawing)
-	for _, o := range raw.objs {
-		// the object takes the last shape before it that no other object
-		// took: the shapes in a group have no cell anchor
-		var s *shape
-		for i := len(shapes) - 1; i >= 0; i-- {
-			if shapes[i].end <= o.at {
-				if !shapes[i].used {
-					s = &shapes[i]
-				}
-				break
-			}
+	h, _ := odraw.ReadHeader(raw.drawing)
+	if h.Type != odraw.RecDgContainer {
+		return
+	}
+	lim := cfg.Limits
+	body := raw.drawing[8 : 8+int(min(uint64(h.Size), uint64(len(raw.drawing)-8)))]
+	od := odraw.ReadDrawing(body, lim.MaxObjects, lim.MaxDepth)
+	if od.Root == nil {
+		return
+	}
+	d := &drawing{w: w, sh: sh, raw: raw, book: book, ctx: ctx, pics: pics, cfg: cfg, objs: make(map[*odraw.Shape]*drawObj)}
+	d.style = &odraw.Style{
+		Scheme:     d.paletteColor,
+		Picture:    d.picture,
+		Background: drawingml.White,
+		Log:        cfg.Log(),
+	}
+	d.matchObjs(od.Root, lim.MaxDepth)
+	for _, top := range od.Root.Children {
+		if len(sh.Images) >= 4096 {
+			break
 		}
-		if s == nil {
-			continue
+		if top.Flags&odraw.FSPDeleted == 0 {
+			d.add(top)
 		}
-		s.used = true
-		img, ok := anchorImage(sh, s.anchor)
-		if !ok {
-			continue
-		}
-		switch o.ot {
-		case objNote, objComboBox:
-			// a comment shows only when a person points at its cell, and
-			// a combo box is the button of a filter
-			continue
-		case objChart:
-			img.Label = "Chart"
-		case objPicture:
-			if s.pib > 0 && s.pib <= len(blips) && blips[s.pib-1].data != nil {
-				bl := blips[s.pib-1]
-				img.Path = "media/image" + strconv.Itoa(s.pib) + bl.ext
-				files[img.Path] = bl.data
-			} else {
-				img.Label = "Picture"
-			}
-		default:
-			img.Label = o.text
-		}
-		sh.Images = append(sh.Images, img)
 	}
 }
 
-// anchorImage returns the image of a cell anchor: the column and the
-// offset in 1/1024 of its width, and the row and the offset in 1/256 of
-// its height, of the top left corner and of the bottom right corner.
+// paletteColor returns the color of the index i of the palette of the
+// workbook, which an OfficeArtCOLORREF of a sheet names by fSchemeIndex.
+func (d *drawing) paletteColor(i uint32) drawingml.RGBA {
+	c := d.w.color(int(min(i, 0xFFFF)))
+	return odraw.RGB(c.R, c.G, c.B)
+}
+
+// picture returns the picture of the store of the workbook.
+func (d *drawing) picture(pib int, key uint32, keyed bool) *drawingml.Picture {
+	return d.pics.Get(d.ctx, pib, key, keyed)
+}
+
+// matchObjs gives each shape of the group g the record OBJ that follows
+// its client data in the stream of the drawing.
+func (d *drawing) matchObjs(g *odraw.Shape, depth int) {
+	type end struct {
+		at int
+		sh *odraw.Shape
+	}
+	var ends []end
+	var walk func(sh *odraw.Shape, depth int)
+	walk = func(sh *odraw.Shape, depth int) {
+		if sh.ClientData != nil {
+			// the client data is a slice of the stream of the drawing
+			at := cap(d.raw.drawing) - cap(sh.ClientData) + len(sh.ClientData)
+			ends = append(ends, end{at: at, sh: sh})
+		}
+		if depth > 0 {
+			for _, c := range sh.Children {
+				walk(c, depth-1)
+			}
+		}
+	}
+	walk(g, depth)
+	slices.SortStableFunc(ends, func(a, b end) int { return a.at - b.at })
+	for i := range d.raw.objs {
+		o := &d.raw.objs[i]
+		// the object takes the last shape before it, unless an object took
+		// it
+		k, _ := slices.BinarySearchFunc(ends, o.at+1, func(e end, at int) int { return e.at - at })
+		if k == 0 {
+			continue
+		}
+		if sh := ends[k-1].sh; d.objs[sh] == nil {
+			d.objs[sh] = o
+		}
+	}
+}
+
+// add adds the shape or the group top, which a cell anchor places on the
+// sheet, as an image.
+func (d *drawing) add(top *odraw.Shape) {
+	o := d.objs[top]
+	if o == nil {
+		return
+	}
+	switch {
+	case o.ot == objNote || o.ot == objComboBox:
+		// a comment shows only when a person points at its cell, and a combo
+		// box is the button of a filter
+		return
+	case o.flags&cmoPrint == 0:
+		return
+	}
+	a, ok := clientAnchor(top.ClientAnchor)
+	if !ok {
+		return
+	}
+	img, ok := anchorImage(d.sh, a)
+	if !ok {
+		return
+	}
+	if o.ot == objChart {
+		if img.Width >= 1 && img.Height >= 1 {
+			img.Label = "Chart"
+			d.sh.Images = append(d.sh.Images, img)
+		}
+		return
+	}
+	if d.plainPicture(top, &img) {
+		d.sh.Images = append(d.sh.Images, img)
+		return
+	}
+	// The box takes the lines, the arrowheads and the shadows that go past
+	// it, since the layout clips an object to its box.
+	pad := 0.0
+	d.shapes(top, img.Width, img.Height, 0, func(sh *odraw.Shape, r odraw.Rect) {
+		pad = max(pad, d.pad(sh, r))
+	})
+	pad = math.Ceil(min(pad, 1000))
+	obj := &shapeObject{scene: drawingml.NewScene(d.cfg)}
+	d.shapes(top, img.Width, img.Height, pad, func(sh *odraw.Shape, r odraw.Rect) {
+		if len(obj.figures) < d.cfg.Limits.MaxObjects {
+			if f := d.figure(sh, r); f != nil {
+				obj.figures = append(obj.figures, f)
+				obj.scene.AddFigure(f)
+			}
+		}
+	})
+	obj.w, obj.h = img.Width+2*pad, img.Height+2*pad
+	if len(obj.figures) == 0 || !(obj.w >= 1 && obj.h >= 1) {
+		return
+	}
+	name := "shape" + strconv.Itoa(len(d.book.Objects)+1)
+	if d.book.Objects == nil {
+		d.book.Objects = make(map[string]layout.Object)
+	}
+	d.book.Objects[name] = obj
+	img.DX, img.DY, img.Width, img.Height = img.DX-pad, img.DY-pad, obj.w, obj.h
+	img.Object = name
+	d.sh.Images = append(d.sh.Images, img)
+}
+
+// plainPicture sets the path of the image img to the file of the picture
+// of the shape sh, when sh is a picture without a crop, a turn, a line, a
+// color key or a shadow, in a raster format. The layout
+// then draws the picture as an image of the sheet, as it draws the
+// pictures of xlsx.
+func (d *drawing) plainPicture(sh *odraw.Shape, img *sheet.Image) bool {
+	c := odraw.Chain{&sh.Props}
+	pib := int(c.Value(odraw.PropPib, 0))
+	if sh.IsGroup() || sh.Type != odraw.SptPictureFrame || pib <= 0 || !(img.Width >= 1 && img.Height >= 1) {
+		return false
+	}
+	for _, id := range []uint16{odraw.PropRotation, odraw.PropCropTop, odraw.PropCropBottom, odraw.PropCropLeft, odraw.PropCropRight, odraw.PropPictureTransparent} {
+		if v, ok := c.Get(id); ok && v != 0 {
+			return false
+		}
+	}
+	if l := d.style.Line(c, false); l.Visible() || d.style.Shadow(c) != nil || sh.Flags&(odraw.FSPFlipH|odraw.FSPFlipV) != 0 {
+		return false
+	}
+	data := d.pics.Data(pib)
+	ext := pictureExt(data)
+	if ext == "" {
+		return false
+	}
+	img.Path = "media/image" + strconv.Itoa(pib) + ext
+	d.book.Files[img.Path] = data
+	return true
+}
+
+// pictureExt returns the extension of the file of a raster picture, or "".
+// A metafile draws in the scene of a shape: the layout draws a WMF file
+// without a placeable header blank as an image of a sheet.
+func pictureExt(data []byte) string {
+	switch {
+	case len(data) < 4:
+		return ""
+	case bytes.HasPrefix(data, []byte("\x89PNG")):
+		return ".png"
+	case bytes.HasPrefix(data, []byte("\xff\xd8")):
+		return ".jpg"
+	case bytes.HasPrefix(data, []byte("BM")):
+		return ".bmp"
+	}
+	return ""
+}
+
+// shapes calls f for each shape of top that draws, with its box in points
+// in the space of an object of w by h points, plus pad on each side.
+func (d *drawing) shapes(top *odraw.Shape, w, h, pad float64, f func(sh *odraw.Shape, r odraw.Rect)) {
+	box := odraw.Rect{Left: pad, Top: pad, Right: pad + w, Bottom: pad + h}
+	if !top.IsGroup() {
+		f(top, box)
+		return
+	}
+	anchor := func(*odraw.Shape) (odraw.Rect, bool) {
+		return box, true
+	}
+	odraw.Walk(top, nil, anchor, func(sh *odraw.Shape, t *odraw.Transform) {
+		if sh.HasAnchor {
+			f(sh, t.Apply(sh.Anchor))
+		}
+	})
+}
+
+// pad returns the width that the shape sh in the box r draws outside the
+// box: its corners when it turns, half its line, its arrowheads and its
+// shadow.
+func (d *drawing) pad(sh *odraw.Shape, r odraw.Rect) float64 {
+	c := odraw.Chain{&sh.Props}
+	l := d.style.Line(c, true)
+	pad := 0.0
+	if rot := odraw.Fixed(c.Value(odraw.PropRotation, 0)); rot != 0 && !math.IsNaN(rot) {
+		w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
+		ww, hh := w, h
+		if a := math.Mod(math.Abs(rot), 180); a >= 45 && a < 135 {
+			// the shape turns with its sides swapped, as odraw.Figure
+			// draws it
+			ww, hh = h, w
+		}
+		sin, cos := math.Abs(math.Sin(rot*math.Pi/180)), math.Abs(math.Cos(rot*math.Pi/180))
+		pad = max((ww*cos+hh*sin-w)/2, (ww*sin+hh*cos-h)/2, 0)
+	}
+	if l.Visible() {
+		pad += l.Width / 2
+		if l.Head.Type != "" || l.Tail.Type != "" {
+			pad += 3*l.Width + 3
+		}
+	}
+	if s := d.style.Shadow(c); s != nil {
+		pad += max(math.Abs(s.DX), math.Abs(s.DY))
+	}
+	return pad + 1
+}
+
+// figure returns the figure of the shape sh in the box r, with the text of
+// its record TXO, or nil.
+func (d *drawing) figure(sh *odraw.Shape, r odraw.Rect) *drawingml.Figure {
+	c := odraw.Chain{&sh.Props}
+	if odraw.Hidden(c) {
+		return nil
+	}
+	o := d.objs[sh]
+	if o != nil && (o.ot == objNote || o.ot == objComboBox || o.ot == objChart || o.flags&cmoPrint == 0) {
+		return nil
+	}
+	f := d.style.Figure(sh, c, r)
+	if f == nil {
+		return nil
+	}
+	if o != nil && o.text != "" {
+		f.Text = d.textBody(o, c)
+	}
+	return f
+}
+
+// textBody returns the text of the record TXO o, in a shape with the
+// properties c. The runs give the fonts of the characters, and a
+// character without a run takes the default font of the workbook.
+func (d *drawing) textBody(o *drawObj, c odraw.Chain) *drawingml.TextBody {
+	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c)}
+	switch o.vAlign {
+	case 2:
+		tb.Body.Anchor.Set("ctr")
+	case 3:
+		tb.Body.Anchor.Set("b")
+	case 1, 4, 7:
+		tb.Body.Anchor.Set("t")
+	}
+	var align string
+	switch o.hAlign {
+	case 2:
+		align = "ctr"
+	case 3:
+		align = "r"
+	case 4:
+		align = "just"
+	case 7:
+		align = "dist"
+	default:
+		align = "l"
+	}
+	units := utf16.Encode([]rune(o.text))
+	font := d.w.font(0)
+	runs := o.runs
+	para := drawingml.Paragraph{}
+	para.Style.Align.Set(align)
+	flush := func(rs drawingml.RunStyle, text []uint16) {
+		if s := strings.ReplaceAll(string(utf16.Decode(text)), "\r", ""); s != "" {
+			para.Runs = append(para.Runs, drawingml.Run{Text: s, Style: rs})
+		}
+	}
+	start := 0
+	rs := d.runStyle(font)
+	for i := 0; i <= len(units); i++ {
+		if len(runs) > 0 && runs[0].ich <= i {
+			flush(rs, units[start:i])
+			start = i
+			rs = d.runStyle(d.w.font(runs[0].ifnt))
+			runs = runs[1:]
+			i--
+			continue
+		}
+		if i == len(units) || units[i] == '\n' {
+			flush(rs, units[start:i])
+			para.End = rs
+			tb.Paragraphs = append(tb.Paragraphs, para)
+			para = drawingml.Paragraph{}
+			para.Style.Align.Set(align)
+			start = i + 1
+		}
+	}
+	return tb
+}
+
+// runStyle returns the style of a run of the font f.
+func (d *drawing) runStyle(f sheet.Font) drawingml.RunStyle {
+	var rs drawingml.RunStyle
+	if f.Family != "" {
+		rs.Latin.Set(f.Family)
+	}
+	if f.Size > 0 {
+		rs.Size.Set(f.Size)
+	}
+	rs.Bold.Set(f.Bold)
+	rs.Italic.Set(f.Italic)
+	rs.Underline.Set(f.Underline > 0)
+	rs.Strike.Set(f.Strike)
+	col := f.Color
+	if col.A == 0 {
+		col = color.NRGBA{0, 0, 0, 255}
+	}
+	rs.Paint.Set(drawingml.Solid(odraw.RGB(col.R, col.G, col.B)))
+	switch f.VertAlign {
+	case 1:
+		rs.Baseline.Set(0.3)
+	case 2:
+		rs.Baseline.Set(-0.25)
+	}
+	return rs
+}
+
+// clientAnchor reads the cell anchor of a shape, an
+// OfficeArtClientAnchorSheet of MS-XLS: the flags, then the column and the
+// offset in 1/1024 of its width, and the row and the offset in 1/256 of its
+// height, of the top left corner and of the bottom right corner.
+func clientAnchor(b []byte) ([8]int, bool) {
+	var a [8]int
+	if len(b) < 18 {
+		return a, false
+	}
+	for i := range a {
+		a[i] = int(le.Uint16(b[2+2*i:]))
+	}
+	return a, true
+}
+
+// anchorImage returns the image of a cell anchor a. A line across or down
+// has a box of no height or no width.
 func anchorImage(sh *sheet.Sheet, a [8]int) (sheet.Image, bool) {
 	col0, dx0, row0, dy0 := a[0], a[1], a[2], a[3]
 	col1, dx1, row1, dy1 := a[4], a[5], a[6], a[7]
@@ -279,8 +472,36 @@ func anchorImage(sh *sheet.Sheet, a [8]int) (sheet.Image, bool) {
 		y1 += sh.RowHeight(r)
 	}
 	img.Width, img.Height = x1-img.DX, y1-img.DY
-	if !(img.Width >= 1) || !(img.Height >= 1) || img.Width > 14400 || img.Height > 14400 {
+	if !(img.Width >= 0) || !(img.Height >= 0) || img.Width > 14400 || img.Height > 14400 {
 		return sheet.Image{}, false
 	}
 	return img, true
+}
+
+// shapeObject is a shape of a sheet, or a group of shapes, in its box. It
+// satisfies the interface Object of the layout.
+type shapeObject struct {
+	scene *drawingml.Scene
+	w, h  float64
+	// figures are the figures of the scene, for the tests.
+	figures []*drawingml.Figure
+}
+
+// Size satisfies the interface Object of the layout.
+func (o *shapeObject) Size() (float64, float64) {
+	return o.w, o.h
+}
+
+// Draw satisfies the interface Object of the layout. It draws the box of
+// the shape onto rect.
+func (o *shapeObject) Draw(ctx context.Context, dev display.Device, rect okage.Rect) error {
+	rw, rh := float64(rect.Width()), float64(rect.Height())
+	if !(rw > 0) || !(rh > 0) || math.IsInf(rw, 0) || math.IsInf(rh, 0) {
+		return nil
+	}
+	m := okage.TransformFromRow(float32(rw/o.w), 0, 0, float32(rh/o.h), rect.X(), rect.Y())
+	dev.Save()
+	defer dev.Restore()
+	dev.Concat(m)
+	return o.scene.Draw(ctx, dev, okage.TransformFromScale(shapeScale, shapeScale).PreConcat(m))
 }

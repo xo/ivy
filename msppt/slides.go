@@ -2,6 +2,8 @@ package msppt
 
 import (
 	"unicode/utf16"
+
+	"github.com/xo/ivy/internal/odraw"
 )
 
 // The types of a text of MS-PPT 2.13.33.
@@ -60,6 +62,11 @@ type text struct {
 	// links are the ranges of the characters of the hyperlinks, from the
 	// TxInteractiveInfoAtom records: the first and the end after the last.
 	links [][2]int
+	// si are the runs of the TextSpecialInfoAtom, with the languages.
+	si []siRun
+	// styleLen is the number of the characters that the style counts, when
+	// the text replaces the text of the style, or 0.
+	styleLen int
 }
 
 // schemeHyperlink is the index of the color of the hyperlinks in a color
@@ -135,11 +142,6 @@ func readRuler(b []byte) [masterLevels]rulerLevel {
 	return levels
 }
 
-// rect is a rectangle in master units, 576 to the inch.
-type rect struct {
-	left, top, right, bottom float64
-}
-
 // slideRef is a slide of the slide list: its persist object and its texts.
 type slideRef struct {
 	persist uint32
@@ -157,14 +159,19 @@ type document struct {
 	fonts   []string
 	// defaults are the styles of the text that the masters inherit.
 	defaults masterStyle
-	// blips are the entries of the store of pictures, from index 1.
-	blips []blipEntry
+	// store is the store of pictures, from index 1.
+	store []odraw.Entry
+	// lang is the East Asian language of the text without a run of the
+	// special information, from the TextSpecialInfoDefaultAtom.
+	lang string
+	// hf is the date, the slide number and the footer of the slides.
+	hf headersFooters
 }
 
 // readDocument reads the DocumentContainer of s.
 func readDocument(s *stream) (*document, bool) {
 	h, body, ok := s.object(s.docRef)
-	if !ok || h.typ != rtDocument {
+	if !ok || h.Type != rtDocument {
 		return nil, false
 	}
 	d := &document{width: 5760, height: 4320, masters: make(map[uint32]uint32)}
@@ -174,20 +181,21 @@ func readDocument(s *stream) (*document, bool) {
 			d.width, d.height = w, ht
 		}
 	}
+	d.hf = readHeadersFooters(body)
 	for h, b := range children(body) {
 		switch {
-		case h.typ == rtSlideListWithText && h.inst == 0:
+		case h.Type == rtSlideListWithText && h.Inst == 0:
 			d.readSlideList(b, s.lim.MaxObjects)
-		case h.typ == rtSlideListWithText && h.inst == rtMasterListWithText:
+		case h.Type == rtSlideListWithText && h.Inst == rtMasterListWithText:
 			for ch, a := range children(b) {
-				if ch.typ == rtSlidePersistAtom && len(a) >= 16 && len(d.masters) < s.lim.MaxObjects {
+				if ch.Type == rtSlidePersistAtom && len(a) >= 16 && len(d.masters) < s.lim.MaxObjects {
 					d.masters[le.Uint32(a[12:])] = le.Uint32(a)
 				}
 			}
-		case h.typ == rtEnvironment:
+		case h.Type == rtEnvironment:
 			d.readEnvironment(b, s.lim.MaxObjects)
-		case h.typ == rtPPDrawingGroup:
-			d.readDrawingGroup(child(b, rtOfficeArtDggContainer), s.lim.MaxObjects)
+		case h.Type == rtPPDrawingGroup:
+			d.store = odraw.ReadStore(child(b, odraw.RecDggContainer), s.lim.MaxObjects)
 		}
 	}
 	return d, true
@@ -198,7 +206,7 @@ func readDocument(s *stream) (*document, bool) {
 func (d *document) readSlideList(b []byte, maxObjects int) {
 	var cur *slideRef
 	for ch, a := range children(b) {
-		if ch.typ == rtSlidePersistAtom {
+		if ch.Type == rtSlidePersistAtom {
 			if len(a) >= 4 && len(d.slides) < maxObjects {
 				d.slides = append(d.slides, slideRef{persist: le.Uint32(a)})
 				cur = &d.slides[len(d.slides)-1]
@@ -215,7 +223,7 @@ func (d *document) readSlideList(b []byte, maxObjects int) {
 // list: a TextHeaderAtom starts a new text, and the records after it give
 // its characters and its style.
 func addText(texts []text, h header, b []byte) []text {
-	if h.typ == rtTextHeaderAtom {
+	if h.Type == rtTextHeaderAtom {
 		var kind uint32 = txOther
 		if len(b) >= 4 {
 			kind = le.Uint32(b)
@@ -226,13 +234,15 @@ func addText(texts []text, h header, b []byte) []text {
 		return texts
 	}
 	t := &texts[len(texts)-1]
-	switch h.typ {
+	switch h.Type {
 	case rtTextCharsAtom, rtTextBytesAtom:
-		t.units = decodeText(h.typ, b)
+		t.units = decodeText(h.Type, b)
 	case rtStyleTextProp:
 		t.style = b
 	case rtTextRulerAtom:
 		t.ruler = readRuler(b)
+	case rtTextSpecialInfoAtom:
+		t.si = readSIRuns(b, len(t.units))
 	case rtTxInteractiveInfo:
 		if len(b) >= 8 && len(t.links) < maxLinks {
 			first, last := int(int32(le.Uint32(b))), int(int32(le.Uint32(b[4:])))
@@ -252,13 +262,15 @@ func addText(texts []text, h header, b []byte) []text {
 // the DocumentTextInfoContainer.
 func (d *document) readEnvironment(b []byte, maxObjects int) {
 	for h, a := range children(b) {
-		switch h.typ {
+		switch h.Type {
 		case rtFontCollection:
 			for ch, e := range children(a) {
-				if ch.typ == rtFontEntity && len(d.fonts) < maxObjects {
+				if ch.Type == rtFontEntity && len(d.fonts) < maxObjects {
 					d.fonts = append(d.fonts, fontName(e))
 				}
 			}
+		case rtTextSpecialInfoDefaultAtom:
+			d.lang, _, _ = readSI(a)
 		case rtTextCFException:
 			if cf, _, ok := readCF(a); ok {
 				for i := range d.defaults {
@@ -274,7 +286,7 @@ func (d *document) readEnvironment(b []byte, maxObjects int) {
 				}
 			}
 		case rtTextMasterStyle:
-			if st, ok := readMasterStyle(a, h.inst); ok {
+			if st, ok := readMasterStyle(a, h.Inst); ok {
 				for i := range d.defaults {
 					d.defaults[i].over(&st[i])
 				}
@@ -295,22 +307,6 @@ func fontName(b []byte) string {
 		units = append(units, u)
 	}
 	return string(utf16.Decode(units))
-}
-
-// readDrawingGroup reads the store of pictures from the
-// OfficeArtDggContainer.
-func (d *document) readDrawingGroup(b []byte, maxObjects int) {
-	for h, a := range children(b) {
-		if h.typ != rtOfficeArtBStore {
-			continue
-		}
-		for ch, e := range children(a) {
-			if len(d.blips) >= maxObjects {
-				break
-			}
-			d.blips = append(d.blips, readFBSE(ch, e))
-		}
-	}
 }
 
 // decodeText decodes a TextCharsAtom, in UTF-16, or a TextBytesAtom, whose

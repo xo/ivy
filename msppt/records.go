@@ -10,6 +10,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/msole"
+	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/offcrypto"
 )
 
@@ -17,30 +18,21 @@ var le = binary.LittleEndian
 
 // The types of the records that the package reads (MS-PPT 2.13.24).
 const (
-	rtDocument            = 0x03E8
-	rtDocumentAtom        = 0x03E9
-	rtSlide               = 0x03EE
-	rtSlidePersistAtom    = 0x03F3
-	rtPPDrawing           = 0x040C
-	rtPlaceholderAtom     = 0x0BC3
-	rtOutlineTextRefAtom  = 0x0F9E
-	rtTextHeaderAtom      = 0x0F9F
-	rtTextCharsAtom       = 0x0FA0
-	rtTextBytesAtom       = 0x0FA8
-	rtSlideListWithText   = 0x0FF0
-	rtUserEditAtom        = 0x0FF5
-	rtCurrentUserAtom     = 0x0FF6
-	rtPersistDirectory    = 0x1772
-	rtCryptSession10      = 0x2F14
-	rtOfficeArtDg         = 0xF002
-	rtOfficeArtSpgr       = 0xF003
-	rtOfficeArtSp         = 0xF004
-	rtOfficeArtFSPGR      = 0xF009
-	rtOfficeArtFSP        = 0xF00A
-	rtOfficeArtClientText = 0xF00D
-	rtOfficeArtChild      = 0xF00F
-	rtOfficeArtClientAnch = 0xF010
-	rtOfficeArtClientData = 0xF011
+	rtDocument           = 0x03E8
+	rtDocumentAtom       = 0x03E9
+	rtSlide              = 0x03EE
+	rtSlidePersistAtom   = 0x03F3
+	rtPPDrawing          = 0x040C
+	rtPlaceholderAtom    = 0x0BC3
+	rtOutlineTextRefAtom = 0x0F9E
+	rtTextHeaderAtom     = 0x0F9F
+	rtTextCharsAtom      = 0x0FA0
+	rtTextBytesAtom      = 0x0FA8
+	rtSlideListWithText  = 0x0FF0
+	rtUserEditAtom       = 0x0FF5
+	rtCurrentUserAtom    = 0x0FF6
+	rtPersistDirectory   = 0x1772
+	rtCryptSession10     = 0x2F14
 )
 
 // The tokens of the CurrentUserAtom (MS-PPT 2.3.2).
@@ -49,48 +41,25 @@ const (
 	tokenEncrypted = 0xF3D1C4DF
 )
 
-// header is the header of a record (MS-PPT 2.3.1).
-type header struct {
-	ver, inst uint16
-	typ       uint16
-	size      uint32
-}
+// header is the header of a record (MS-PPT 2.3.1), which is the header of
+// a record of Office Drawing.
+type header = odraw.Header
 
 // readHeader reads the header of the record at the start of b.
 func readHeader(b []byte) (header, bool) {
-	if len(b) < 8 {
-		return header{}, false
-	}
-	vi := le.Uint16(b)
-	return header{ver: vi & 0xF, inst: vi >> 4, typ: le.Uint16(b[2:]), size: le.Uint32(b[4:])}, true
+	return odraw.ReadHeader(b)
 }
 
 // children iterates over the records in the body b of a container. It stops
 // at a record that b cuts.
 func children(b []byte) iter.Seq2[header, []byte] {
-	return func(yield func(header, []byte) bool) {
-		for len(b) >= 8 {
-			h, _ := readHeader(b)
-			if uint64(h.size) > uint64(len(b)-8) {
-				return
-			}
-			if !yield(h, b[8:8+h.size]) {
-				return
-			}
-			b = b[8+h.size:]
-		}
-	}
+	return odraw.Children(b)
 }
 
 // child returns the body of the first child of the type typ in the body b
 // of a container, or nil.
 func child(b []byte, typ uint16) []byte {
-	for h, body := range children(b) {
-		if h.typ == typ {
-			return body
-		}
-	}
-	return nil
+	return odraw.Child(b, typ)
 }
 
 // stream is the stream "PowerPoint Document" with its persist directory,
@@ -116,7 +85,7 @@ func readStream(ctx context.Context, f *cfb.File, cfg ivy.Config) (*stream, erro
 		return nil, err
 	}
 	h, ok := readHeader(cu)
-	if !ok || h.typ != rtCurrentUserAtom || len(cu) < 20 {
+	if !ok || h.Type != rtCurrentUserAtom || len(cu) < 20 {
 		// PowerPoint 95 writes a stream "Header", and a "Current User" in
 		// another format
 		if msole.Has(f, "Header") {
@@ -175,10 +144,10 @@ func (s *stream) record(off uint32, typ uint16) ([]byte, bool) {
 		return nil, false
 	}
 	h, ok := readHeader(s.data[off:])
-	if !ok || h.typ != typ || uint64(off)+8+uint64(h.size) > uint64(len(s.data)) {
+	if !ok || h.Type != typ || uint64(off)+8+uint64(h.Size) > uint64(len(s.data)) {
 		return nil, false
 	}
-	return s.data[off+8 : off+8+h.size], true
+	return s.data[off+8 : off+8+h.Size], true
 }
 
 // readDirectory adds the entries of the PersistDirectoryAtom at off that a
@@ -246,10 +215,10 @@ func (s *stream) object(id uint32) (header, []byte, bool) {
 	raw := s.data[off:]
 	if s.key == nil {
 		h, _ := readHeader(raw)
-		if uint64(h.size) > uint64(len(raw)-8) {
+		if uint64(h.Size) > uint64(len(raw)-8) {
 			return header{}, nil, false
 		}
-		return h, raw[8 : 8+h.size], true
+		return h, raw[8 : 8+h.Size], true
 	}
 	c, err := s.key.Stream(id)
 	if err != nil {
@@ -258,13 +227,13 @@ func (s *stream) object(id uint32) (header, []byte, bool) {
 	var hb [8]byte
 	c.XORKeyStream(hb[:], raw[:8])
 	h, _ := readHeader(hb[:])
-	if uint64(h.size) > uint64(len(raw)-8) || int64(h.size) > s.lim.MaxMemory {
+	if uint64(h.Size) > uint64(len(raw)-8) || int64(h.Size) > s.lim.MaxMemory {
 		return header{}, nil, false
 	}
-	plain := make([]byte, 8+h.size)
+	plain := make([]byte, 8+h.Size)
 	if c, err = s.key.Stream(id); err != nil {
 		return header{}, nil, false
 	}
-	c.XORKeyStream(plain, raw[:8+h.size])
+	c.XORKeyStream(plain, raw[:8+h.Size])
 	return h, plain[8:], true
 }

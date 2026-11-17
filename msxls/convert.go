@@ -9,6 +9,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/numfmt"
+	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
 )
 
@@ -148,7 +149,9 @@ func (w *workbook) numberFormatOf(xf int) string {
 // book converts the workbook into the model of internal/sheet: each
 // worksheet that is not hidden, in order. paper is the paper of the program
 // for a sheet whose file gives none.
-func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits, paper ivy.Paper) (*sheet.Workbook, error) {
+func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*sheet.Workbook, error) {
+	lim, paper := cfg.Limits, cfg.Paper
+	pics := odraw.NewPictures(w.store, nil, cfg)
 	book := &sheet.Workbook{Title: title}
 	if len(w.xfs) > 0 {
 		book.Styles = make([]sheet.Style, len(w.xfs))
@@ -162,7 +165,7 @@ func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits, paper
 	digit := sheet.DigitOf(def, 10)
 	cells := 0
 	book.Files = make(map[string][]byte)
-	for _, bs := range w.sheets {
+	for i, bs := range w.sheets {
 		if (bs.kind != 0 && bs.kind != 2) || bs.hidden {
 			continue
 		}
@@ -184,7 +187,10 @@ func (w *workbook) book(ctx context.Context, title string, lim ivy.Limits, paper
 		}
 		cells += len(raw.cells)
 		sh := w.toSheet(raw, def, digit, len(book.Styles))
-		images(sh, raw, w.blips, book.Files)
+		if p := w.prints[i]; p != nil {
+			sh.PrintAreas, sh.TitleRows, sh.TitleCols = p.areas, p.rows, p.cols
+		}
+		w.drawings(ctx, sh, raw, book, pics, cfg)
 		book.Sheets = append(book.Sheets, sh)
 		if cells > lim.MaxObjects {
 			break
@@ -208,9 +214,7 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, sty
 		Header:           sheet.ParseHeaderFooter(raw.header),
 		Footer:           sheet.ParseHeaderFooter(raw.footer),
 	}
-	// Excel scales the header and the footer with the cells, unless the
-	// record HeaderFooter says otherwise, which ivy does not read
-	sh.Page.ScaleHeaderFooter = true
+	sh.Page.ScaleHeaderFooter = raw.scaleHeaderFooter()
 	if sh.DefaultRowHeight <= 0 {
 		sh.DefaultRowHeight = math.Max(12.75, math.Round(def.Size*1.36*4)/4)
 	}
@@ -287,7 +291,7 @@ func (w *workbook) chartSheet(raw *rawSheet) *sheet.Sheet {
 		Header: sheet.ParseHeaderFooter(raw.header),
 		Footer: sheet.ParseHeaderFooter(raw.footer),
 	}
-	sh.Page.ScaleHeaderFooter = true
+	sh.Page.ScaleHeaderFooter = raw.scaleHeaderFooter()
 	w.setup(sh, raw)
 	// The chart fills the page: one cell of the size of the page holds it.
 	p := sh.Page

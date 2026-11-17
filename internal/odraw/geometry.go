@@ -1,4 +1,4 @@
-package msppt
+package odraw
 
 import (
 	"github.com/xo/okage"
@@ -6,16 +6,23 @@ import (
 	"github.com/xo/ivy/internal/drawingml"
 )
 
+// geoSize is the size of the space of the geometry of a shape, and of its
+// adjust values.
+const geoSize = 21600
+
 // The types of shapes of MS-ODRAW 2.4.24 that are not a preset of their own.
 const (
-	sptNotPrimitive  = 0
-	sptRoundRect     = 2
-	sptLine          = 20
-	sptStraightConn  = 32
-	sptPictureFrame  = 75
-	sptTextBox       = 202
-	sptTextEffectMin = 136
-	sptTextEffectMax = 175
+	SptNotPrimitive  = 0
+	SptRectangle     = 1
+	SptRoundRect     = 2
+	SptLine          = 20
+	SptArc           = 19
+	SptStraightConn  = 32
+	SptPictureFrame  = 75
+	SptHostControl   = 201
+	SptTextBox       = 202
+	SptTextEffectMin = 136
+	SptTextEffectMax = 175
 )
 
 // presets maps the types of shapes of MS-ODRAW 2.4.24 onto the preset
@@ -73,18 +80,19 @@ var presets = map[int]string{
 	199: "actionButtonSound", 200: "actionButtonMovie",
 }
 
-// geometry returns the paths of the shape sh in its box of w by h points,
-// and whether its fill draws. A line and a connector are not filled.
-func (b *builder) geometry(sh *shape, c chain, w, h float64) ([]drawingml.Path, bool) {
+// Geometry returns the paths of the shape sh with the properties c in its
+// box of w by h points, and whether its fill draws. A line and a connector
+// are not filled.
+func (s *Style) Geometry(sh *Shape, c Chain, w, h float64) ([]drawingml.Path, bool) {
 	box, _ := okage.RectFromXYWH(0, 0, float32(max(w, 1e-3)), float32(max(h, 1e-3)))
 	rectPath := []drawingml.Path{{Path: okage.PathFromRect(box), Stroke: true}}
-	if c.complex(propVertices) != nil {
-		if paths, ok := b.custom(c, w, h); ok {
+	if c.Complex(PropVertices) != nil {
+		if paths, ok := custom(c, w, h); ok {
 			return paths, true
 		}
 	}
-	switch sh.typ {
-	case sptLine, sptStraightConn:
+	switch sh.Type {
+	case SptLine, SptStraightConn:
 		pb := okage.NewPathBuilder()
 		pb.MoveTo(0, 0)
 		pb.LineTo(float32(w), float32(h))
@@ -93,10 +101,10 @@ func (b *builder) geometry(sh *shape, c chain, w, h float64) ([]drawingml.Path, 
 			return nil, false
 		}
 		return []drawingml.Path{{Path: p, Fill: drawingml.FillNone, Stroke: true}}, false
-	case sptNotPrimitive, sptPictureFrame, sptTextBox:
+	case SptNotPrimitive, SptPictureFrame, SptTextBox, SptHostControl:
 		return rectPath, true
 	}
-	name, ok := presets[sh.typ]
+	name, ok := presets[sh.Type]
 	if !ok {
 		return rectPath, true
 	}
@@ -105,13 +113,13 @@ func (b *builder) geometry(sh *shape, c chain, w, h float64) ([]drawingml.Path, 
 		return rectPath, true
 	}
 	var adjust []drawingml.Guide
-	if v, ok := c.get(propAdjust1); ok && sh.typ == sptRoundRect {
+	if v, ok := c.Get(PropAdjust1); ok && sh.Type == SptRoundRect {
 		names := g.AdjustNames()
 		if len(names) > 0 {
 			adjust = append(adjust, drawingml.AdjustValue(names[0], float64(int32(v))*100000/geoSize))
 		}
 	}
-	paths, _ := drawingml.Evaluated(g, adjust, w, h, b.log)
+	paths, _ := drawingml.Evaluated(g, adjust, w, h, s.log())
 	if len(paths) == 0 {
 		return rectPath, true
 	}
@@ -137,15 +145,15 @@ const (
 
 // custom returns the paths of the custom geometry of the properties c: its
 // vertices, and the segments that join them (MS-ODRAW 2.3.6).
-func (b *builder) custom(c chain, w, h float64) ([]drawingml.Path, bool) {
-	verts := msoArray(c.complex(propVertices), 4)
+func custom(c Chain, w, h float64) ([]drawingml.Path, bool) {
+	verts := Array(c.Complex(PropVertices), 4)
 	if len(verts) == 0 {
 		return nil, false
 	}
-	left := float64(int32(c.value(0x0140, 0)))
-	top := float64(int32(c.value(0x0141, 0)))
-	right := float64(int32(c.value(propGeoRight, geoSize)))
-	bottom := float64(int32(c.value(propGeoBottom, geoSize)))
+	left := float64(int32(c.Value(PropGeoLeft, 0)))
+	top := float64(int32(c.Value(PropGeoTop, 0)))
+	right := float64(int32(c.Value(PropGeoRight, geoSize)))
+	bottom := float64(int32(c.Value(PropGeoBottom, geoSize)))
 	sx, sy := w/nonzero(right-left), h/nonzero(bottom-top)
 	pt := func(i int) (float32, float32, bool) {
 		if i >= len(verts) {
@@ -160,7 +168,7 @@ func (b *builder) custom(c chain, w, h float64) ([]drawingml.Path, bool) {
 		}
 		return float32((x - left) * sx), float32((y - top) * sy), true
 	}
-	segs := msoArray(c.complex(propSegmentInfo), 2)
+	segs := Array(c.Complex(PropSegmentInfo), 2)
 	var paths []drawingml.Path
 	pb := okage.NewPathBuilder()
 	fill, stroke := true, true

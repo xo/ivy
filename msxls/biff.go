@@ -64,6 +64,8 @@ const (
 	recMulBlank             = 0x00BE
 	recBlank                = 0x0201
 	recDefaultRowHeight     = 0x0225
+	recHeaderFooter         = 0x089C
+	recName                 = 0x0018
 )
 
 // The versions of the BOF.

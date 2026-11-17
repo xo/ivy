@@ -17,13 +17,14 @@
 // the heights of the rows are those that Excel prints. internal/numfmt
 // formats the numbers with their number formats.
 //
-// The pictures of the drawings in PNG, JPEG, EMF and WMF show at their
-// cells. A chart,
-// a text box, a shape and a picture of another format show as a frame, with
-// the text of a text box. A chart sheet shows a frame on a page of its own,
-// in landscape unless its setup says otherwise. The package does not draw
-// the charts and the shapes. It leaves out the comments, the print areas,
-// the print titles and the hidden sheets.
+// The drawings of a sheet show at their cells: the shapes, the groups, the
+// text boxes with their text, and the pictures in PNG, JPEG, DIB, EMF and
+// WMF, which internal/odraw reads as msppt does. A chart shows as a frame,
+// and a chart sheet shows a frame on a page of its own, in landscape
+// unless its setup says otherwise. The package does not draw the charts
+// and the pictures in PICT. It leaves out the comments, the objects that do
+// not print and the hidden sheets. The print areas and the print titles of
+// a workbook of BIFF8 limit and repeat the cells on the pages.
 //
 // A workbook gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A workbook that a password protects with RC4,
@@ -202,7 +203,7 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 
 // convert puts the worksheets on pages with internal/sheet, as xlsx does.
 func (d *Document) convert(ctx context.Context) (layout.Source, error) {
-	book, err := d.wb.book(ctx, d.summary.Info.Title, d.cfg.Limits, d.cfg.Paper)
+	book, err := d.wb.book(ctx, d.summary.Info.Title, d.cfg)
 	if err != nil {
 		return layout.Source{}, err
 	}

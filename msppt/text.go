@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/odraw"
 )
 
 // baseType returns the type of text whose master style a type of text
@@ -229,13 +230,17 @@ func (b *builder) bullet(p *pf) (string, string) {
 
 // textBody converts a text with its style, in a shape with the properties
 // c. The text of a slide number takes the number of the slide.
-func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
+func (b *builder) textBody(t *text, c odraw.Chain) *drawingml.TextBody {
 	units := t.units
 	if len(units) == 0 {
 		return nil
 	}
-	tb := &drawingml.TextBody{Body: bodyStyle(c), NoKerning: true}
-	paras, chars := readStyleRuns(t.style, len(units))
+	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c), NoKerning: true}
+	n := len(units)
+	if t.styleLen > 0 {
+		n = t.styleLen
+	}
+	paras, chars := readStyleRuns(t.style, n)
 	fields := make(map[int]bool, len(t.fields))
 	for _, f := range t.fields {
 		fields[f] = true
@@ -245,6 +250,11 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 	// offset of its end
 	runAt := func(runs []styleRun, ends []int, i int) (*styleRun, int) {
 		k := sort.SearchInts(ends, i+1)
+		if k >= len(runs) && t.styleLen > 0 && len(runs) > 0 {
+			// the text replaces the text of the style, whose last run goes
+			// on to its end
+			return &runs[len(runs)-1], len(units) + 1
+		}
 		if k >= len(runs) {
 			return nil, len(units) + 1
 		}
@@ -281,6 +291,11 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 			rs := b.runStyle(&full)
 			link, linkEnd := t.linkAt(i)
 			runEnd = min(runEnd, linkEnd)
+			lang, langEnd := t.langAt(i, b.d.doc.lang)
+			runEnd = min(runEnd, langEnd)
+			if lang != "" {
+				rs.Lang.Set(lang)
+			}
 			if link {
 				// a hyperlink takes the color of the scheme for the
 				// hyperlinks, and an underline, as PowerPoint draws it
@@ -365,34 +380,6 @@ func runEnds(runs []styleRun) []int {
 		ends[i] = end
 	}
 	return ends
-}
-
-// bodyStyle returns the style of the text body of a shape: the insets, the
-// anchor and the wrap of the properties c.
-func bodyStyle(c chain) drawingml.BodyStyle {
-	var bs drawingml.BodyStyle
-	ins := []struct {
-		id  uint16
-		def uint32
-	}{{propTextLeft, defaultInsetLR}, {propTextTop, defaultInsetTB}, {propTextRight, defaultInsetLR}, {propTextBottom, defaultInsetTB}}
-	for i, in := range ins {
-		v := float64(int32(c.value(in.id, in.def))) / emuPerPoint
-		bs.Insets[i].Set(max(0, min(v, 1000)))
-	}
-	switch c.value(propAnchorText, 0) {
-	case 1, 4:
-		bs.Anchor.Set("ctr")
-	case 2, 5, 7, 9:
-		bs.Anchor.Set("b")
-	default:
-		bs.Anchor.Set("t")
-	}
-	switch c.value(propAnchorText, 0) {
-	case 3, 4, 5, 8, 9:
-		bs.AnchorCenter.Set(true)
-	}
-	bs.Wrap.Set(c.value(propWrapText, 0) != 2)
-	return bs
 }
 
 // privateChar returns the character of Unicode of the character u of the

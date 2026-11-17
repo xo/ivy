@@ -165,8 +165,8 @@ func TestShapes(t *testing.T) {
 	if run.Size.V != 28 || !run.Bold.V || run.Paint.V.Color.NRGBA() != (color.NRGBA{255, 0, 0, 255}) {
 		t.Errorf("expected red bold text of 28 points, got: %+v", run)
 	}
-	// the two colors mix in linear light, with stops between them
-	if g := p.figures[2].Fill; g.Kind != drawingml.PaintGradient || len(g.Gradient.Stops) != gammaSteps+1 || g.Gradient.Angle != 90 {
+	// the two colors mix in linear light, with 7 stops between them
+	if g := p.figures[2].Fill; g.Kind != drawingml.PaintGradient || len(g.Gradient.Stops) != 9 || g.Gradient.Angle != 90 {
 		t.Errorf("expected a vertical gradient, got: %+v", g)
 	}
 	if paths := p.figures[3].Paths; len(paths) != 1 || paths[0].Fill != drawingml.FillNorm {
@@ -328,18 +328,6 @@ func TestOpenErrors(t *testing.T) {
 	}
 }
 
-func TestTransform(t *testing.T) {
-	tr := &transform{from: rect{0, 0, 100, 100}, to: rect{10, 20, 210, 120}}
-	got := tr.apply(rect{50, 50, 100, 100})
-	if got != (rect{110, 70, 210, 120}) {
-		t.Errorf("expected the rectangle in the slide, got: %+v", got)
-	}
-	var none *transform
-	if got := none.apply(rect{1, 2, 3, 4}); got != (rect{1, 2, 3, 4}) {
-		t.Errorf("expected the same rectangle, got: %+v", got)
-	}
-}
-
 func TestStyleRuns(t *testing.T) {
 	le := binary.LittleEndian
 	var b []byte
@@ -367,62 +355,6 @@ func TestStyleRuns(t *testing.T) {
 	// a record that ends early gives the runs before its end
 	if paras, _ := readStyleRuns(b[:8], 5); len(paras) != 0 {
 		t.Errorf("expected no paragraph, got: %+v", paras)
-	}
-}
-
-func TestArrayWithoutHeader(t *testing.T) {
-	le := binary.LittleEndian
-	arr := le.AppendUint16(nil, 2)
-	arr = le.AppendUint16(arr, 2)
-	arr = le.AppendUint16(arr, 0xFFF0)
-	arr = append(arr, 1, 0, 2, 0, 3, 0, 4, 0)
-	for _, size := range []uint32{8, 14} {
-		var fopt []byte
-		fopt = le.AppendUint16(fopt, propVertices|0x8000)
-		fopt = le.AppendUint32(fopt, size)
-		fopt = le.AppendUint16(fopt, propFillColor)
-		fopt = le.AppendUint32(fopt, 0x123456)
-		fopt = append(fopt, arr...)
-		var p props
-		p.readProps(fopt, 2)
-		if got := msoArray(p.complex[propVertices], 4); len(got) != 2 {
-			t.Errorf("size %d: expected 2 vertices, got: %d", size, len(got))
-		}
-	}
-}
-
-func TestBlips(t *testing.T) {
-	le := binary.LittleEndian
-	// a DIB of 1 by 1 pixel of 24 bits
-	dib := make([]byte, 40, 44)
-	le.PutUint32(dib, 40)
-	le.PutUint32(dib[4:], 1)
-	le.PutUint32(dib[8:], 1)
-	le.PutUint16(dib[12:], 1)
-	le.PutUint16(dib[14:], 24)
-	dib = append(dib, 0, 0, 255, 0)
-	body := append(make([]byte, 17), dib...)
-	rec := le.AppendUint16(nil, 0x7A8<<4)
-	rec = le.AppendUint16(rec, rtOfficeArtBlipDIB)
-	rec = le.AppendUint32(rec, uint32(len(body)))
-	rec = append(rec, body...)
-	data := blipData(rec, 1<<20)
-	if len(data) != 14+len(dib) || string(data[:2]) != "BM" || le.Uint32(data[10:]) != 54 {
-		t.Fatalf("expected a BMP file, got: %q", data)
-	}
-	keyed, ok := colorKey(t.Context(), data, 255, 0, 0, ivy.Limits{}.WithDefaults())
-	if !ok {
-		t.Fatal("expected the picture with a color key")
-	}
-	img, err := png.Decode(bytes.NewReader(keyed))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c := pixel(img, 0, 0); c.A != 0 {
-		t.Errorf("expected a transparent pixel, got: %v", c)
-	}
-	if blipData(rec[:20], 1<<20) != nil {
-		t.Error("expected no picture of a cut record")
 	}
 }
 

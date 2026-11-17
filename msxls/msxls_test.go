@@ -399,6 +399,8 @@ func FuzzOpen(f *testing.F) {
 	for _, name := range []string{"sheet.xls", "rc4_password.xls", "plain.xls", "xor_password.xls"} {
 		f.Add(readFile(f, name))
 	}
+	f.Add(drawingWorkbook(fixture.PNG(4, 2, color.NRGBA{0, 0, 255, 255})))
+	f.Add(printWorkbook([][]byte{builtinName(namePrintArea, 1, area3d(0, 3, 0, 3))}))
 	cfg := ivy.Config{
 		Password: loPassword,
 		// the password of the XOR obfuscation, after the password of RC4

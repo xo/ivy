@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
 )
 
@@ -46,8 +47,12 @@ type workbook struct {
 	xfs      [][]byte
 	sst      []richString
 	sheets   []boundSheet
-	// blips are the pictures of the drawings, by their index from 1.
-	blips []blip
+	// prints are the print areas and the print titles of the sheets, by
+	// the index of the sheet from 0.
+	prints map[int]*printNames
+	// store is the store of the pictures of the drawings, by their index
+	// from 1.
+	store []odraw.Entry
 }
 
 // readWorkbook reads the globals of the workbook stream wb, and decrypts the
@@ -128,18 +133,30 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 			if err := w.readSST(ctx, r, lim); err != nil {
 				return nil, err
 			}
+		case recName:
+			w.readName(rec.data)
 		case recMsoDrawingGroup:
 			// a large group goes on in the records MSODRAWINGGROUP after it
 			if len(group) < maxDrawing {
 				group = append(group, joined(rec)...)
 			}
 		case recEOF:
-			w.blips = readBlips(group, lim.MaxMemory)
+			w.store = readStore(group, lim)
 			return w, nil
 		}
 	}
-	w.blips = readBlips(group, lim.MaxMemory)
+	w.store = readStore(group, lim)
 	return w, nil
+}
+
+// readStore reads the store of pictures of the OfficeArtDggContainer of
+// the records MSODRAWINGGROUP.
+func readStore(group []byte, lim ivy.Limits) []odraw.Entry {
+	h, ok := odraw.ReadHeader(group)
+	if !ok || h.Type != odraw.RecDggContainer {
+		return nil
+	}
+	return odraw.ReadStore(group[8:8+int(min(uint64(h.Size), uint64(len(group)-8)))], lim.MaxObjects)
 }
 
 // readFont reads a record FONT (MS-XLS 2.4.122).
@@ -279,6 +296,10 @@ type rawSheet struct {
 	gridlines bool
 	header    string
 	footer    string
+	// hfFlags are the flags of the record HeaderFooter of the sheet, when
+	// hasHF is set.
+	hfFlags   uint16
+	hasHF     bool
 	rowBreaks []int
 	colBreaks []int
 	truncated bool
@@ -489,10 +510,14 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 			sh.drawing = append(sh.drawing, joined(rec)...)
 		}
 	case recObj:
-		// the structure FtCmo comes first: ft 0x15, cb, and the type
+		// the structure FtCmo comes first: ft 0x15, cb, the type, the id
+		// and the flags
 		if ft := r.u16(); ft == 0x15 && len(sh.objs) < 4096 {
 			r.skip(2)
-			sh.objs = append(sh.objs, drawObj{at: len(sh.drawing), ot: int(r.u16())})
+			o := drawObj{at: len(sh.drawing), ot: int(r.u16())}
+			r.skip(2)
+			o.flags = r.u16()
+			sh.objs = append(sh.objs, o)
 		}
 		// Excel can write the drawing of the next shape in CONTINUE
 		// records after the record OBJ
@@ -509,13 +534,29 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 			sh.addDrawing(rec.conts)
 			return
 		}
+		grbit := le.Uint16(rec.data)
 		r.skip(len(rec.data))
 		high := r.u8()&1 != 0
 		text := r.chars(min(n, 32767), high, w.codePage)
-		if len(sh.objs) > 0 {
-			sh.objs[len(sh.objs)-1].text = text
+		// the runs of the fonts: the first character, the font and 4
+		// bytes each, and a last run at the end of the text
+		var fr []fontRun
+		for range runs / 8 {
+			ich, ifnt := int(r.u16()), int(r.u16())
+			r.skip(4)
+			if r.bad {
+				break
+			}
+			if ich < n && len(fr) < 1024 {
+				fr = append(fr, fontRun{ich: ich, ifnt: ifnt})
+			}
 		}
-		r.skip(runs)
+		r.skip(runs % 8)
+		if len(sh.objs) > 0 {
+			o := &sh.objs[len(sh.objs)-1]
+			o.text, o.runs = text, fr
+			o.hAlign, o.vAlign = int(grbit>>1&7), int(grbit>>4&7)
+		}
 		if r.bad {
 			return
 		}
@@ -561,6 +602,12 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 		} else {
 			sh.footer = s
 		}
+	case recHeaderFooter:
+		// an FrtHeader of 12 bytes, the GUID of the custom view, which is
+		// zero for the sheet itself, and the flags (MS-XLS 2.4.137)
+		if len(rec.data) >= 30 && !sh.hasHF && allZero(rec.data[12:28]) {
+			sh.hfFlags, sh.hasHF = le.Uint16(rec.data[28:]), true
+		}
 	case recHorizontalPageBreaks, recVerticalPageBreaks:
 		n := int(r.u16())
 		size := 6
@@ -580,6 +627,27 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 			}
 		}
 	}
+}
+
+// allZero reports whether each byte of b is zero.
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// hfScaleWithDoc is the flag fHFScaleWithDoc of the record HeaderFooter:
+// the header and the footer scale with the cells.
+const hfScaleWithDoc = 0x0004
+
+// scaleHeaderFooter reports whether the header and the footer of the sheet
+// scale with the cells. Excel scales them unless the record HeaderFooter
+// clears fHFScaleWithDoc.
+func (sh *rawSheet) scaleHeaderFooter() bool {
+	return !sh.hasHF || sh.hfFlags&hfScaleWithDoc != 0
 }
 
 // addDrawing adds the segments segs to the stream of the drawing.

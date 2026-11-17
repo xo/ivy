@@ -2,12 +2,15 @@ package msppt
 
 import (
 	"encoding/binary"
+	"slices"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/xo/okage"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/odraw"
 )
 
 // The tests of this file come from the faults that the visual review found
@@ -22,25 +25,33 @@ func testBuilder(fonts []string, m *master) *builder {
 	d := &Document{
 		cfg:         cfg,
 		doc:         &document{fonts: fonts},
+		stream:      &stream{},
 		masterCache: map[uint32]*master{},
-		pictures:    map[int]*drawingml.Picture{},
-		rawPictures: map[int][]byte{},
-		keyed:       map[pictureKey]*drawingml.Picture{},
 	}
-	return &builder{d: d, scene: drawingml.NewScene(cfg), scheme: defaultScheme, master: m, log: cfg.Log()}
+	d.pics = odraw.NewPictures(nil, nil, cfg)
+	b := &builder{d: d, scene: drawingml.NewScene(cfg), scheme: defaultScheme, master: m, log: cfg.Log()}
+	b.style = &odraw.Style{
+		Scheme:     func(i uint32) drawingml.RGBA { return b.scheme[i&7] },
+		Picture:    d.picture,
+		Background: b.scheme[0],
+		Log:        b.log,
+	}
+	return b
 }
 
 // testShape returns a shape of the type typ at (8, 16) of 80 by 40 points,
 // with the properties.
 func testShape(typ int, flags uint32, vals map[uint16]uint32) *shape {
-	return &shape{
-		typ:       typ,
-		flags:     flags,
-		props:     props{vals: vals},
-		anchor:    rect{left: 64, top: 128, right: 704, bottom: 448},
+	sh := &shape{
+		Shape:     &odraw.Shape{Type: typ, Flags: flags},
+		anchor:    odraw.Rect{Left: 64, Top: 128, Right: 704, Bottom: 448},
 		hasAnchor: true,
 		textRef:   -1,
 	}
+	for id, v := range vals {
+		sh.Props.Set(id, v)
+	}
+	return sh
 }
 
 // TestFlipTurns checks that a shape that flips once turns the other way,
@@ -49,9 +60,9 @@ func testShape(typ int, flags uint32, vals map[uint16]uint32) *shape {
 func TestFlipTurns(t *testing.T) {
 	b := testBuilder(nil, nil)
 	rot := uint32(30 << 16)
-	b.addShape(testShape(3, 0, map[uint16]uint32{propRotation: rot}), nil)
-	b.addShape(testShape(3, fspFlipH, map[uint16]uint32{propRotation: rot}), nil)
-	b.addShape(testShape(3, fspFlipH|fspFlipV, map[uint16]uint32{propRotation: rot}), nil)
+	b.addShape(testShape(3, 0, map[uint16]uint32{odraw.PropRotation: rot}), nil)
+	b.addShape(testShape(3, odraw.FSPFlipH, map[uint16]uint32{odraw.PropRotation: rot}), nil)
+	b.addShape(testShape(3, odraw.FSPFlipH|odraw.FSPFlipV, map[uint16]uint32{odraw.PropRotation: rot}), nil)
 	for i, want := range []okage.Transform{
 		drawingml.ShapeTransform(8, 16, 80, 40, 30, false, false),
 		drawingml.ShapeTransform(8, 16, 80, 40, 330, true, false),
@@ -69,8 +80,8 @@ func TestFlipTurns(t *testing.T) {
 // outline.
 func TestShapeDefaults(t *testing.T) {
 	b := testBuilder(nil, nil)
-	b.addShape(testShape(1, 0, map[uint16]uint32{propFillBools: fillFilled | fillUseFilled}), nil)
-	b.addShape(testShape(sptPictureFrame, 0, nil), nil)
+	b.addShape(testShape(1, 0, map[uint16]uint32{odraw.PropFillBools: odraw.FillFilled | odraw.FillUseFilled}), nil)
+	b.addShape(testShape(odraw.SptPictureFrame, 0, nil), nil)
 	f := b.figures[0]
 	if f.Fill.Kind != drawingml.PaintSolid || f.Fill.Color != drawingml.White {
 		t.Errorf("expected a white fill, got %+v", f.Fill)
@@ -80,30 +91,6 @@ func TestShapeDefaults(t *testing.T) {
 	}
 	if b.figures[1].Line.Visible() {
 		t.Errorf("expected a picture without an outline, got %+v", b.figures[1].Line)
-	}
-}
-
-// TestPathGradient checks that a gradient from the center starts at the
-// focus with the back color, as page 4 of backgrounds.ppt shows it, and
-// that the colors of a shading mix in linear light.
-func TestPathGradient(t *testing.T) {
-	b := testBuilder(nil, nil)
-	pt := b.fill(chain{&props{vals: map[uint16]uint32{
-		propFillType:      fillShadeCenter,
-		propFillColor:     0x404040,
-		propFillBackColor: 0xFFFFFF,
-	}}})
-	g := pt.Gradient
-	if pt.Kind != drawingml.PaintGradient || g.Path != "rect" || len(g.Stops) != gammaSteps+1 {
-		t.Fatalf("expected a path gradient, got %+v", pt)
-	}
-	if first, last := g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color; first != drawingml.White || last.NRGBA().R != 0x40 {
-		t.Errorf("expected white at the focus and gray at the edge, got %v and %v", first, last)
-	}
-	// the middle of white and of 40% gray in linear light is lighter than
-	// the middle of their values
-	if mid := g.Stops[gammaSteps/2].Color.NRGBA().R; mid < 0xb4 {
-		t.Errorf("expected a light middle, got %#x", mid)
 	}
 }
 
@@ -168,11 +155,11 @@ func TestPrivateChar(t *testing.T) {
 func TestLinks(t *testing.T) {
 	b := testBuilder(nil, nil)
 	var texts []text
-	texts = addText(texts, header{typ: rtTextHeaderAtom}, binary.LittleEndian.AppendUint32(nil, txOther))
-	texts = addText(texts, header{typ: rtTextBytesAtom}, []byte("see www.x.org now"))
+	texts = addText(texts, header{Type: rtTextHeaderAtom}, binary.LittleEndian.AppendUint32(nil, txOther))
+	texts = addText(texts, header{Type: rtTextBytesAtom}, []byte("see www.x.org now"))
 	link := binary.LittleEndian.AppendUint32(nil, 4)
 	link = binary.LittleEndian.AppendUint32(link, 13)
-	texts = addText(texts, header{typ: rtTxInteractiveInfo}, link)
+	texts = addText(texts, header{Type: rtTxInteractiveInfo}, link)
 	tb := b.textBody(&texts[0], nil)
 	runs := tb.Paragraphs[0].Runs
 	if len(runs) != 3 || runs[1].Text != "www.x.org" {
@@ -204,4 +191,81 @@ func TestNoBulletIndent(t *testing.T) {
 	if ps.MarL.V != 27 || ps.Indent.V != -27 {
 		t.Errorf("expected a hanging bullet, got %v and %v", ps.MarL.V, ps.Indent.V)
 	}
+}
+
+// TestHeadersFooters checks that the placeholders of the date, the slide
+// number and the footer of the master show as the HeadersFootersAtom of
+// the slide says, with the footer and the date that it gives.
+func TestHeadersFooters(t *testing.T) {
+	ph := func(typ int, s string) *shape {
+		sh := testShape(1, 0, nil)
+		sh.placeholder = typ
+		sh.text = &text{kind: txOther, units: units16(s)}
+		if s == "*" {
+			sh.text.fields = []int{0}
+		}
+		return sh
+	}
+	shapes := []*shape{ph(phMasterDate, "date"), ph(phMasterSlideNumber, "*"), ph(phMasterFooter, "master footer"), ph(1, "title")}
+	root := &odraw.Shape{}
+	dr := &drawing{od: &odraw.Drawing{Root: root}, byShape: map[*odraw.Shape]*shape{}}
+	for _, sh := range shapes {
+		root.Children = append(root.Children, sh.Shape)
+		dr.byShape[sh.Shape] = sh
+	}
+	m := &master{drawing: dr, spids: map[uint32]*shape{}}
+	for _, tt := range []struct {
+		name string
+		hf   headersFooters
+		want []string
+	}{
+		{"none", headersFooters{}, []string{}},
+		{"number and footer", headersFooters{flags: hfHasSlideNumber | hfHasFooter, footer: units16("Footer")}, []string{"7", "Footer"}},
+		{"user date and master footer", headersFooters{flags: hfHasDate | hfHasUserDate | hfHasFooter, userDate: units16("May 1")}, []string{"May 1", "master footer"}},
+		{"date of today", headersFooters{flags: hfHasDate}, []string{}},
+	} {
+		b := testBuilder(nil, m)
+		b.number = 7
+		b.hf = tt.hf
+		b.masterObjects(m, 2)
+		got := make([]string, 0, len(b.figures))
+		for _, f := range b.figures {
+			got = append(got, textOf(f))
+		}
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("%s: expected %q, got: %q", tt.name, tt.want, got)
+		}
+	}
+}
+
+// TestReadHeadersFooters checks the flags and the strings of a
+// HeadersFootersContainer of the slides, and that the one of the notes is
+// left out.
+func TestReadHeadersFooters(t *testing.T) {
+	le := binary.LittleEndian
+	rec := func(typ, inst uint16, body []byte) []byte {
+		b := le.AppendUint16(nil, inst<<4)
+		b = le.AppendUint16(b, typ)
+		b = le.AppendUint32(b, uint32(len(body)))
+		return append(b, body...)
+	}
+	str := func(s string) []byte {
+		var b []byte
+		for _, u := range units16(s) {
+			b = le.AppendUint16(b, u)
+		}
+		return b
+	}
+	atom := func(flags uint16) []byte { return rec(rtHeadersFootersAtom, 0, le.AppendUint16([]byte{0, 0}, flags)) }
+	notes := rec(rtHeadersFooters, 4, atom(hfHasSlideNumber))
+	slides := rec(rtHeadersFooters, hfSlides, append(append(atom(hfHasFooter|hfHasDate|hfHasUserDate), rec(rtCString, 0, str("1 May"))...), rec(rtCString, 2, str("Foot"))...))
+	hf := readHeadersFooters(append(notes, slides...))
+	if !hf.ok || hf.flags != hfHasFooter|hfHasDate|hfHasUserDate || string(utf16.Decode(hf.footer)) != "Foot" || string(utf16.Decode(hf.userDate)) != "1 May" {
+		t.Errorf("expected the footer Foot and the date 1 May, got: %+v", hf)
+	}
+}
+
+// units16 returns the characters of s in UTF-16.
+func units16(s string) []uint16 {
+	return utf16.Encode([]rune(s))
 }
