@@ -29,13 +29,36 @@ func open(t *testing.T, name string) *Document {
 	return d
 }
 
-func TestTIFFPreviewUnsupported(t *testing.T) {
+func TestTIFFPreviewPacked(t *testing.T) {
 	// ImageMagick writes a TIFF preview with a palette of 4 bits, which
-	// golang.org/x/image/tiff does not decode
-	d := open(t, "tiff4-preview.eps")
-	if _, err := ivy.BestPreview(t.Context(), d, image.Point{}); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ErrUnsupported, got: %v", err)
+	// golang.org/x/image/tiff does not decode. It holds the same gradient as
+	// the preview of 8 bits, in 16 colors
+	img, err := ivy.BestPreview(t.Context(), open(t, "tiff4-preview.eps"), image.Point{})
+	if err != nil {
+		t.Fatal(err)
 	}
+	want, err := ivy.BestPreview(t.Context(), open(t, "tiff8-preview.eps"), image.Point{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Size() != image.Pt(16, 8) {
+		t.Fatalf("expected 16x8, got: %v", img.Bounds().Size())
+	}
+	for _, p := range []image.Point{{0, 0}, {7, 4}, {15, 7}} {
+		r1, g1, b1, _ := img.At(p.X, p.Y).RGBA()
+		r2, g2, b2, _ := want.At(p.X, p.Y).RGBA()
+		if diff(r1, r2) > 0x1800 || diff(g1, g2) > 0x1800 || diff(b1, b2) > 0x1800 {
+			t.Errorf("at %v: expected %v, got: %v", p, want.At(p.X, p.Y), img.At(p.X, p.Y))
+		}
+	}
+}
+
+// diff returns the distance of a and b.
+func diff(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 func TestTIFFPreview(t *testing.T) {

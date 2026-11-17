@@ -29,8 +29,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/image/tiff"
-
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/raster"
 )
@@ -379,45 +377,6 @@ func (d *Document) Previews(context.Context) iter.Seq2[ivy.Preview, error] {
 			yield(d.epsi.preview(d.lim), nil)
 		}
 	}
-}
-
-// tiffPreview returns the TIFF preview of a DOS EPS file.
-func (d *Document) tiffPreview() ivy.Preview {
-	var size image.Point
-	if cfg, err := tiff.DecodeConfig(io.NewSectionReader(d.tiff, 0, d.tiff.Size())); err == nil {
-		size = image.Pt(cfg.Width, cfg.Height)
-	}
-	return ivy.Preview{
-		Kind: ivy.Thumbnail,
-		Size: size,
-		Decode: func(ctx context.Context) (image.Image, error) {
-			if err := ctx.Err(); err != nil {
-				return nil, fmt.Errorf("decoding tiff preview: %w", err)
-			}
-			cfg, err := tiff.DecodeConfig(io.NewSectionReader(d.tiff, 0, d.tiff.Size()))
-			if err != nil {
-				return nil, tiffError(err)
-			}
-			if err := raster.CheckPixels(image.Pt(cfg.Width, cfg.Height), d.lim); err != nil {
-				return nil, err
-			}
-			img, err := tiff.Decode(io.NewSectionReader(d.tiff, 0, d.tiff.Size()))
-			if err != nil {
-				return nil, tiffError(err)
-			}
-			return img, nil
-		},
-	}
-}
-
-// tiffError wraps an error of the TIFF decoder with ivy.ErrUnsupported for a
-// feature that the decoder does not support, and with ivy.ErrFormat for any
-// other.
-func tiffError(err error) error {
-	if _, ok := errors.AsType[tiff.UnsupportedError](err); ok {
-		return fmt.Errorf("decoding tiff preview: %w: %w", ivy.ErrUnsupported, err)
-	}
-	return fmt.Errorf("decoding tiff preview: %w: %w", ivy.ErrFormat, err)
 }
 
 // epsiPreview is the bitmap of an EPSI file.

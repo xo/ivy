@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"image/color"
 	"os"
 	"path/filepath"
@@ -68,5 +69,37 @@ func TestPS(t *testing.T) {
 					fmt.Sprint(got.Bounds().Size(), want.Bounds().Size()))
 			}
 		})
+	}
+}
+
+// TestEPSPreviewPacked compares the TIFF preview of 4 bits of
+// tiff4-preview.eps, which ImageMagick wrote with a palette of 16 colors,
+// with the page that Ghostscript renders (D13). The gradient of the page is
+// 16 pixels wide, so the palette holds each of its colors. On 2026-11-17 the
+// mean difference is 0.00.
+func TestEPSPreviewPacked(t *testing.T) {
+	path := filepath.Join("..", "ps", "testdata", "tiff4-preview.eps")
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := ps.Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ivy.BestPreview(t.Context(), d, image.Point{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := run(t.Context(), "gs", "-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-sDEVICE=png16m", "-r72",
+		"-dEPSCrop", "-sOutputFile=-", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := meanDiff(got, want)
+	t.Logf("mean difference: %.2f", diff)
+	if diff < 0 || diff > 3 {
+		t.Errorf("expected the page of Ghostscript within a mean difference of 3, got: %.2f (ivy %v, gs %v)",
+			diff, got.Bounds().Size(), want.Bounds().Size())
 	}
 }
