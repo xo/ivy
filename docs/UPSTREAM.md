@@ -93,3 +93,8 @@ ivy also keeps files that are data, not code:
    ECMA-376, with the copyright notice of Ecma, and the package generates
    its tables from it (D24). A standard is not a project, so it has no row
    in `upstream/upstreams.tsv`.
+3. `pptx/tablestyles` keeps the default table style of PowerPoint, "Medium
+   Style 2 - Accent 1". It is a copy from a test file of Apache POI, which
+   PowerPoint wrote. The folder keeps the `LICENSE` and the `NOTICE` of
+   Apache POI, and its `README.md` names the file and the commit. It has a
+   row in `upstream/upstreams.tsv` of the kind `copy`.

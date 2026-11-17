@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/xo/ivy/internal/drawingml"
 )
@@ -24,7 +25,10 @@ func baseType(kind uint32) uint32 {
 
 // levelStyle returns the style of the level of a type of text: the
 // defaults of the document, the style of the master for the base type, and
-// the style of the master for the type.
+// the style of the master for the type. A level of a master style holds
+// only what differs from the level above it, so a level takes the styles
+// of the levels above it first, as PowerPoint shows them: the second level
+// of a body has the bullet of the first level.
 func (b *builder) levelStyle(kind uint32, level int) levelStyle {
 	level = max(0, min(level, masterLevels-1))
 	if kind >= txTypes {
@@ -37,10 +41,14 @@ func (b *builder) levelStyle(kind uint32, level int) levelStyle {
 	m := b.master.mainMaster()
 	base := baseType(kind)
 	if m.hasStyle[base] {
-		st.over(&m.styles[base][level])
+		for l := range level + 1 {
+			st.over(&m.styles[base][l])
+		}
 	}
 	if kind != base && m.hasStyle[kind] {
-		st.over(&m.styles[kind][level])
+		for l := range level + 1 {
+			st.over(&m.styles[kind][l])
+		}
 	}
 	return st
 }
@@ -83,6 +91,11 @@ func (b *builder) runStyle(c *cf) drawingml.RunStyle {
 	if c.font.ok {
 		if name, ok := b.font(c.font.v); ok {
 			rs.Latin.Set(name)
+		}
+	}
+	if c.eaFont.ok {
+		if name, ok := b.font(c.eaFont.v); ok {
+			rs.EastAsian.Set(name)
 		}
 	}
 	if c.color.ok {
@@ -160,6 +173,12 @@ func (b *builder) paraStyle(p *pf, c *cf) drawingml.ParaStyle {
 		}
 	default:
 		ps.Bullet.Set(drawingml.Bullet{Kind: drawingml.BulletNone})
+		// the indent is the place of the bullet, and the text of a
+		// paragraph without a bullet starts at its left margin, as
+		// PowerPoint draws it
+		if p.leftMargin.ok {
+			ps.Indent.Set(0)
+		}
 	}
 	ps.Run = b.runStyle(c)
 	return ps
@@ -215,7 +234,7 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 	if len(units) == 0 {
 		return nil
 	}
-	tb := &drawingml.TextBody{Body: bodyStyle(c)}
+	tb := &drawingml.TextBody{Body: bodyStyle(c), NoKerning: true}
 	paras, chars := readStyleRuns(t.style, len(units))
 	fields := make(map[int]bool, len(t.fields))
 	for _, f := range t.fields {
@@ -244,6 +263,11 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 		}
 		ls := b.levelStyle(t.kind, level)
 		p := ls.pf
+		// the ruler of the text gives the margins of its levels
+		if r := t.ruler[max(0, min(level, masterLevels-1))]; r.margin.ok || r.indent.ok {
+			p.leftMargin.over(r.margin)
+			p.indent.over(r.indent)
+		}
 		p.over(&own)
 		para := drawingml.Paragraph{Level: max(0, min(level, masterLevels-1)), Style: b.paraStyle(&p, &ls.cf)}
 		for i := start; i < end; {
@@ -255,6 +279,15 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 			full := ls.cf
 			full.over(&cc)
 			rs := b.runStyle(&full)
+			link, linkEnd := t.linkAt(i)
+			runEnd = min(runEnd, linkEnd)
+			if link {
+				// a hyperlink takes the color of the scheme for the
+				// hyperlinks, and an underline, as PowerPoint draws it
+				rs.Paint.Set(drawingml.Solid(b.scheme[schemeHyperlink]))
+				rs.Underline.Set(true)
+				rs.Link.Set(true)
+			}
 			symbol := strings.EqualFold(rs.Latin.V, "symbol")
 			if symbol {
 				// the characters of the font Symbol take their characters of
@@ -287,6 +320,13 @@ func (b *builder) textBody(t *text, c chain) *drawingml.TextBody {
 						sb.WriteRune(r)
 						continue
 					}
+				}
+				if u >= 0xF000 && u <= 0xF0FF {
+					// a character of a symbol font in the private area
+					// takes the symbol font of the run, as PowerPoint draws
+					// it
+					sb.WriteRune(b.privateChar(u, &full))
+					continue
 				}
 				if utf16.IsSurrogate(rune(u)) && j+1 < runEnd {
 					if r := utf16.DecodeRune(rune(u), rune(units[j+1])); r != 0xFFFD {
@@ -353,6 +393,32 @@ func bodyStyle(c chain) drawingml.BodyStyle {
 	}
 	bs.Wrap.Set(c.value(propWrapText, 0) != 2)
 	return bs
+}
+
+// privateChar returns the character of Unicode of the character u of the
+// private area from 0xF000, which is the character u-0xF000 of the symbol
+// font of the style c: Symbol by default. A character of a font that the
+// package does not map is a bullet.
+func (b *builder) privateChar(u uint16, c *cf) rune {
+	font := "Symbol"
+	if c.symFont.ok {
+		if name, ok := b.font(c.symFont.v); ok {
+			font = name
+		}
+	}
+	lower := strings.ToLower(font)
+	switch {
+	case lower == "symbol":
+		if r, ok := symbolChar(u); ok {
+			return r
+		}
+	case strings.HasPrefix(lower, "wingdings"):
+		if s, ok := wingdingsBullets[u-0xF000]; ok {
+			r, _ := utf8.DecodeRuneInString(s)
+			return r
+		}
+	}
+	return '•'
 }
 
 // symbolChars maps the characters of the font Symbol from 0x20 onto

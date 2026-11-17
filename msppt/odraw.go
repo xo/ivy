@@ -20,6 +20,13 @@ const (
 	rtOfficeArtBlipJPEG2    = 0xF02A
 )
 
+// The flags of the property fillShadeType of MS-ODRAW. The default is a
+// shading with gamma and sigma.
+const (
+	shadeGamma   = 0x1
+	shadeDefault = 0x3
+)
+
 // The flags of an OfficeArtFSP (MS-ODRAW 2.2.40).
 const (
 	fspGroup      = 0x0001
@@ -64,6 +71,7 @@ const (
 	propFillToRight        = 0x018F
 	propFillToBottom       = 0x0190
 	propFillShadeCols      = 0x0197
+	propFillShadeType      = 0x0199
 	propFillBools          = 0x01BF
 	propLineColor          = 0x01C0
 	propLineOpacity        = 0x01C1

@@ -125,3 +125,180 @@ func encodePNG(t *testing.T, img image.Image) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestTextSpacing checks the spacing of the lines and the paragraphs of a
+// text body, as PowerPoint draws backgrounds.pptx: a line of single
+// spacing is 1.2 times the size of the text, and a space before of 20
+// percent is 20 percent of that line. A break at the end of a paragraph
+// starts an empty line, as in the titles of custom-geometry.ppt.
+func TestTextSpacing(t *testing.T) {
+	c := &Colors{Theme: testTheme}
+	body := parse(t, `<a:txBody><a:bodyPr/>`+
+		`<a:p><a:pPr><a:spcBef><a:spcPct val="20000"/></a:spcBef></a:pPr><a:r><a:rPr sz="3200"/><a:t>one</a:t></a:r></a:p>`+
+		`<a:p><a:pPr><a:spcBef><a:spcPct val="20000"/></a:spcBef></a:pPr><a:r><a:rPr sz="3200"/><a:t>two</a:t></a:r><a:br/></a:p>`+
+		`</a:txBody>`)
+	var list ListStyle
+	tb := c.ParseTextBody(body, &list, nil, BodyStyle{}, Fields{})
+	box, ok := tb.Box(testTheme, 300, 200)
+	if !ok {
+		t.Fatal("expected a text box")
+	}
+	for _, want := range []string{
+		`line-height:1.2;`,
+		`margin-top:7.68pt;`,
+		`two</span><br><br></p>`,
+	} {
+		if !strings.Contains(box.HTML, want) {
+			t.Errorf("expected the document to hold %q:\n%s", want, box.HTML)
+		}
+	}
+	// the first paragraph has no space before
+	if n := strings.Count(box.HTML, "margin-top"); n != 1 {
+		t.Errorf("expected one space before a paragraph, got %d", n)
+	}
+}
+
+// TestTableVertical checks the text of a table cell that goes up, with
+// vert="vert270", as in table-test2.pptx: the text turns in a box out of
+// the flow, with lines as long as the rows of the cell, which grow to hold
+// the text of their other cells.
+func TestTableVertical(t *testing.T) {
+	c := &Colors{Theme: testTheme}
+	var list ListStyle
+	text := func(s string) *TextBody {
+		return c.ParseTextBody(parse(t, `<a:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1000"/><a:t>`+s+`</a:t></a:r></a:p></a:txBody>`),
+			&list, nil, BodyStyle{}, Fields{})
+	}
+	insets := [4]float64{7.2, 3.6, 7.2, 3.6}
+	tab := &Table{
+		Cols: []float64{50, 100},
+		Rows: []TableRow{
+			{Height: 20, Cells: []TableCell{
+				{ColSpan: 1, RowSpan: 2, Insets: insets, Anchor: "t", Vert: "vert270", Text: text("up")},
+				{ColSpan: 1, RowSpan: 1, Insets: insets, Anchor: "t", Text: text("a")},
+			}},
+			{Height: 40, Cells: []TableCell{
+				{ColSpan: 1, RowSpan: 1, Insets: insets, Anchor: "t", Text: c.ParseTextBody(parse(t,
+					`<a:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1000"/><a:t>b</a:t></a:r><a:br/><a:r><a:rPr sz="1000"/><a:t>c</a:t></a:r></a:p></a:txBody>`),
+					&list, nil, BodyStyle{}, Fields{})},
+			}},
+		},
+	}
+	doc, _, _ := tab.html(150, 40, testTheme)
+	// the lines of the text that goes up are as long as the two rows
+	// without the insets of the cell, 20 + 40 - 7.2 points, and the box is
+	// as wide as the column without its insets
+	for _, want := range []string{
+		`transform:translate(0,52.8pt) rotate(-90deg)`,
+		`width:52.8pt;`,
+		`<tr style="height:35.59`,
+		`up</span>`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected the document to hold %q:\n%s", want, doc)
+		}
+	}
+	// the row where the cell ends gives its height to its other cell, as
+	// the layout gives the row the height of the whole cell
+	if !strings.Contains(doc, `<tr><td style="vertical-align:top;padding:3.6pt 7.2pt 3.6pt 7.2pt;height:32.8pt`) {
+		t.Errorf("expected the height of the row on its cell:\n%s", doc)
+	}
+}
+
+// TestPictureDuotone checks the colors of a:duotone: the luminance of a
+// pixel takes it from the first color to the second.
+func TestPictureDuotone(t *testing.T) {
+	black, red := RGBA{0, 0, 0, 1}, RGBA{1, 0, 0, 1}
+	for _, c := range []struct {
+		in   color.NRGBA
+		want color.NRGBA
+	}{
+		{color.NRGBA{255, 255, 255, 255}, color.NRGBA{255, 0, 0, 255}},
+		{color.NRGBA{0, 0, 0, 255}, color.NRGBA{0, 0, 0, 255}},
+		{color.NRGBA{255, 255, 255, 128}, color.NRGBA{255, 0, 0, 128}},
+	} {
+		base := NewPicture(fixture.PNG(2, 2, c.in), ivy.Config{})
+		p := base.Duotone(black, red)
+		if base.Duotone(black, red) != p {
+			t.Error("expected the picture of the same colors once")
+		}
+		if err := p.decode(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if got := color.NRGBAModel.Convert(p.img.At(0, 0)).(color.NRGBA); got != c.want {
+			t.Errorf("expected %v for %v, got %v", c.want, c.in, got)
+		}
+	}
+}
+
+// TestTextLink checks the text of a hyperlink, as PowerPoint draws the
+// links of custom-geometry.pptx: the color hlink of the theme and an
+// underline, when the run gives no color. The bullet keeps the color of
+// the paragraph, the space after the last paragraph does not move the
+// text, and the text does not kern.
+func TestTextLink(t *testing.T) {
+	theme := &Theme{Colors: map[string]color.NRGBA{"dk1": {0, 0, 0, 255}, "hlink": {0x05, 0x63, 0xc1, 255}}, Minor: Fonts{Latin: "Calibri"}}
+	c := &Colors{Theme: theme}
+	body := parse(t, `<a:txBody><a:bodyPr anchor="ctr"/><a:p><a:pPr><a:spcAft><a:spcPts val="1200"/></a:spcAft><a:buChar char="•"/></a:pPr>`+
+		`<a:r><a:rPr><a:hlinkClick r:id="rId1"/></a:rPr><a:t>link</a:t></a:r>`+
+		`<a:r><a:rPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:hlinkClick r:id="rId1"/></a:rPr><a:t>red</a:t></a:r></a:p></a:txBody>`)
+	var list ListStyle
+	list[1].Run.Paint.Set(Solid(Black))
+	tb := c.ParseTextBody(body, &list, nil, BodyStyle{}, Fields{})
+	runs := tb.Paragraphs[0].Runs
+	if got := runs[0].Style.Paint.V.Color; got != RGBAFrom(color.NRGBA{0x05, 0x63, 0xc1, 255}) || !runs[0].Style.Underline.V {
+		t.Errorf("expected an underlined link of the color hlink, got %+v", runs[0].Style)
+	}
+	if got := runs[1].Style.Paint.V.Color; got != RGBAFrom(color.NRGBA{255, 0, 0, 255}) {
+		t.Errorf("expected a red link, got %v", got)
+	}
+	box, ok := tb.Box(theme, 300, 200)
+	if !ok {
+		t.Fatal("expected a text box")
+	}
+	for _, want := range []string{
+		`font-kerning: none`,
+		`color:rgba(0,0,0,1.000)">• </span>`,
+	} {
+		if !strings.Contains(box.HTML, want) {
+			t.Errorf("expected the document to hold %q:\n%s", want, box.HTML)
+		}
+	}
+	if strings.Contains(box.HTML, "margin-bottom") {
+		t.Errorf("expected no space after the last paragraph:\n%s", box.HTML)
+	}
+}
+
+// TestTextXfrm checks that the text of a shape of a drawing of SmartArt
+// goes into the box of its dsp:txXfrm, as PowerPoint draws the diagrams of
+// custom-geometry.pptx.
+func TestTextXfrm(t *testing.T) {
+	tree := parse(t, `<dsp:spTree xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:sp><dsp:spPr>`+
+		`<a:xfrm><a:off x="0" y="0"/><a:ext cx="2540000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></dsp:spPr>`+
+		`<dsp:txBody><a:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr"/><a:p><a:pPr algn="ctr"/><a:r><a:rPr sz="2000"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:rPr><a:t>MM</a:t></a:r></a:p></dsp:txBody>`+
+		`<dsp:txXfrm><a:off x="1270000" y="0"/><a:ext cx="1270000" cy="1270000"/></dsp:txXfrm></dsp:sp></dsp:spTree>`)
+	s := NewScene(ivy.Config{})
+	tr := &Tree{Ctx: t.Context(), Scene: s, Colors: &Colors{Theme: testTheme}}
+	tr.Draw(tree, okage.IdentityTransform())
+	pix, _ := okage.NewPixmap(200, 100)
+	pix.Fill(okage.ColorWhite)
+	if err := s.Render(t.Context(), pix, okage.IdentityTransform()); err != nil {
+		t.Fatal(err)
+	}
+	left, right := 0, 0
+	for y := range 100 {
+		for x := range 200 {
+			p, _ := pix.Pixel(uint32(x), uint32(y))
+			if p.Red() > 180 && p.Green() < 80 {
+				if x < 100 {
+					left++
+				} else {
+					right++
+				}
+			}
+		}
+	}
+	if left > 0 || right < 20 {
+		t.Errorf("expected the text in the right half, got %d red pixels on the left and %d on the right", left, right)
+	}
+}

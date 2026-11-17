@@ -165,7 +165,8 @@ func TestShapes(t *testing.T) {
 	if run.Size.V != 28 || !run.Bold.V || run.Paint.V.Color.NRGBA() != (color.NRGBA{255, 0, 0, 255}) {
 		t.Errorf("expected red bold text of 28 points, got: %+v", run)
 	}
-	if g := p.figures[2].Fill; g.Kind != drawingml.PaintGradient || len(g.Gradient.Stops) != 2 || g.Gradient.Angle != 90 {
+	// the two colors mix in linear light, with stops between them
+	if g := p.figures[2].Fill; g.Kind != drawingml.PaintGradient || len(g.Gradient.Stops) != gammaSteps+1 || g.Gradient.Angle != 90 {
 		t.Errorf("expected a vertical gradient, got: %+v", g)
 	}
 	if paths := p.figures[3].Paths; len(paths) != 1 || paths[0].Fill != drawingml.FillNorm {
@@ -184,7 +185,7 @@ func TestShapes(t *testing.T) {
 	}{
 		{5, 5, color.NRGBA{0, 0x33, 0x66, 255}},
 		{200, 120, color.NRGBA{0, 255, 0, 255}},
-		{453, 35, color.NRGBA{255, 11, 0, 255}},
+		{453, 35, color.NRGBA{255, 33, 0, 255}},
 		{453, 190, color.NRGBA{255, 243, 0, 255}},
 		{140, 400, color.NRGBA{255, 255, 255, 255}},
 		{453, 340, color.NRGBA{0, 0, 255, 255}},

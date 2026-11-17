@@ -269,7 +269,11 @@ func (b *builder) masterObjects(m *master, depth int) {
 }
 
 // chain is the properties of a shape, then of the shape of the master that
-// it inherits from, then the defaults of the document.
+// it inherits from. The default properties of the drawing group of the
+// document are for the new shapes that a person draws in PowerPoint, and a
+// shape does not take them: PowerPoint draws a shape without a fill color
+// white, and a line without a width 0.75 points wide, as MS-ODRAW gives
+// the defaults of the properties.
 type chain []*props
 
 // chain returns the properties of sh.
@@ -283,7 +287,7 @@ func (b *builder) chain(sh *shape) chain {
 			}
 		}
 	}
-	return append(c, &b.d.doc.shapeDefaults)
+	return c
 }
 
 func (c chain) get(id uint16) (uint32, bool) {
@@ -419,12 +423,47 @@ func (b *builder) gradient(c chain, col, back drawingml.RGBA, alpha float64) dra
 			R: 1 - unit(fixed(c.value(propFillToRight, 0))),
 			B: 1 - unit(fixed(c.value(propFillToBottom, 0))),
 		}
-		// a path gradient goes from the focus to the edge
-		for i, j := 0, len(g.Stops)-1; i < j; i, j = i+1, j-1 {
-			g.Stops[i].Color, g.Stops[j].Color = g.Stops[j].Color, g.Stops[i].Color
-		}
+		// a path gradient goes from the focus to the edge, as the vector
+		// of a linear one goes from its start to its end: the back color
+		// is at the focus for a focus of 0, as PowerPoint draws it
+	}
+	if c.value(propFillShadeType, shadeDefault)&shadeGamma != 0 {
+		g.Stops = gammaStops(g.Stops)
 	}
 	return drawingml.Paint{Kind: drawingml.PaintGradient, Gradient: g}
+}
+
+// gammaSteps is the number of the stops that gammaStops puts between two
+// stops.
+const gammaSteps = 8
+
+// gammaStops returns the stops of a gradient whose colors mix in linear
+// light, as the shading of msoshadeGamma does: a gradient from blue to
+// purple stays lighter in its middle than a mix of the values of sRGB. The
+// stops between two stops follow the curve of the mix.
+func gammaStops(stops []drawingml.Stop) []drawingml.Stop {
+	if len(stops) < 2 {
+		return stops
+	}
+	out := make([]drawingml.Stop, 0, (len(stops)-1)*gammaSteps+1)
+	for i := range len(stops) - 1 {
+		a, b := stops[i], stops[i+1]
+		for k := range gammaSteps {
+			t := float64(k) / gammaSteps
+			out = append(out, drawingml.Stop{Pos: a.Pos + (b.Pos-a.Pos)*t, Color: linearMix(a.Color, b.Color, t)})
+		}
+	}
+	return append(out, stops[len(stops)-1])
+}
+
+// linearMix returns the color the fraction t of the way from a to b, mixed
+// in linear light. The alpha mixes as it is.
+func linearMix(a, b drawingml.RGBA, t float64) drawingml.RGBA {
+	mix := func(x, y float64) float64 {
+		lx, ly := math.Pow(unit(x), 2.2), math.Pow(unit(y), 2.2)
+		return math.Pow(lx+(ly-lx)*t, 1/2.2)
+	}
+	return drawingml.RGBA{R: mix(a.R, b.R), G: mix(a.G, b.G), B: mix(a.B, b.B), A: a.A + (b.A-a.A)*t}
 }
 
 // shadeColors reads the stops of fillShadeColors, an array of a color and a
@@ -552,7 +591,14 @@ func (b *builder) addShape(sh *shape, t *transform) {
 	if !(w < 1e6 && h < 1e6) || math.IsNaN(x) || math.IsNaN(y) {
 		return
 	}
-	rot := math.Mod(fixed(c.value(propRotation, 0)), 360)
+	flipH, flipV := sh.flags&fspFlipH != 0, sh.flags&fspFlipV != 0
+	rot := fixed(c.value(propRotation, 0))
+	if flipH != flipV {
+		// the shape flips after it turns, so a shape that flips once
+		// turns the other way, as PowerPoint draws it
+		rot = -rot
+	}
+	rot = math.Mod(rot, 360)
 	if rot < 0 {
 		rot += 360
 	}
@@ -563,7 +609,6 @@ func (b *builder) addShape(sh *shape, t *transform) {
 		w, h = h, w
 		x, y = cx-w/2, cy-h/2
 	}
-	flipH, flipV := sh.flags&fspFlipH != 0, sh.flags&fspFlipV != 0
 	f := &drawingml.Figure{
 		Transform:     drawingml.ShapeTransform(x, y, w, h, rot, flipH, flipV),
 		W:             w,
@@ -597,9 +642,7 @@ func (b *builder) addShape(sh *shape, t *transform) {
 		}
 	}
 	if tx := b.textOf(sh); tx != nil {
-		// the defaults of the document are for new shapes: the text of a
-		// shape does not take them, as LibreOffice and PowerPoint show it
-		f.Text = b.textBody(tx, c[:len(c)-1])
+		f.Text = b.textBody(tx, c)
 	}
 	b.add(f)
 }

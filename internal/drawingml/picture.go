@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"sync"
 
@@ -42,6 +43,14 @@ type Picture struct {
 	cfg  ivy.Config
 	lim  ivy.Limits
 
+	// base and duo are the picture and the colors of a picture that
+	// Duotone made, or nil.
+	base *Picture
+	duo  *[2]RGBA
+	// duotones holds the pictures that Duotone made from this one, by
+	// their colors.
+	duotones map[[2]RGBA]*Picture
+
 	once sync.Once
 	kind pictureKind
 	img  image.Image
@@ -57,8 +66,43 @@ func NewPicture(data []byte, cfg ivy.Config) *Picture {
 	return &Picture{data: data, cfg: cfg, lim: cfg.Limits.WithDefaults()}
 }
 
+// duotoneMu guards the duotones of the pictures.
+var duotoneMu sync.Mutex
+
+// Duotone returns the picture with the colors of a:duotone: each pixel of
+// a raster picture takes the color between dark and light that its
+// luminance gives, and keeps its alpha. A metafile and SVG keep their
+// colors. The picture is made once for each pair of colors.
+func (p *Picture) Duotone(dark, light RGBA) *Picture {
+	duotoneMu.Lock()
+	defer duotoneMu.Unlock()
+	key := [2]RGBA{dark, light}
+	if q, ok := p.duotones[key]; ok {
+		return q
+	}
+	q := &Picture{data: p.data, cfg: p.cfg, lim: p.lim, base: p, duo: &key}
+	if p.duotones == nil {
+		p.duotones = make(map[[2]RGBA]*Picture)
+	}
+	p.duotones[key] = q
+	return q
+}
+
 // decode decodes the data of the picture once.
 func (p *Picture) decode(ctx context.Context) error {
+	if p.base != nil {
+		p.once.Do(func() {
+			if p.err = p.base.decode(ctx); p.err != nil {
+				return
+			}
+			b := p.base
+			p.kind, p.img, p.meta, p.tree = b.kind, b.img, b.meta, b.tree
+			if p.kind == pictureRaster {
+				p.img = duotone(p.img, p.duo[0], p.duo[1])
+			}
+		})
+		return p.err
+	}
 	p.once.Do(func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -95,6 +139,23 @@ func (p *Picture) decode(ctx context.Context) error {
 		}
 	})
 	return p.err
+}
+
+// duotone returns img with each pixel between the colors dark and light, by
+// its luminance, as a:duotone of ECMA-376 Part 1, 20.1.8.23 gives it.
+func duotone(img image.Image, dark, light RGBA) image.Image {
+	b := img.Bounds()
+	out := image.NewNRGBA(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			lum := (0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)) / 255
+			m := dark.Mix(light, lum).NRGBA()
+			m.A = c.A
+			out.SetNRGBA(x, y, m)
+		}
+	}
+	return out
 }
 
 // isMetafile reports whether data starts as a WMF or an EMF file.

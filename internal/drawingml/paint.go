@@ -258,6 +258,17 @@ func (c *Colors) picturePaint(n roxmltree.Node, pics Pictures) Paint {
 			if t, ok := child(e, "alphaModFix"); ok {
 				pt.Opacity = unit(pct(numberAttr(t, "amt", 100000)))
 			}
+			if d, ok := child(e, "duotone"); ok && pt.Picture != nil {
+				var cols []RGBA
+				for ce := range d.Children() {
+					if col, ok := c.Of(ce); ok && ce.IsElement() {
+						cols = append(cols, col)
+					}
+				}
+				if len(cols) == 2 {
+					pt.Picture = pt.Picture.Duotone(cols[0], cols[1])
+				}
+			}
 		case "srcRect":
 			pt.Crop = ParseInsets(e)
 		case "stretch":

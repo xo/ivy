@@ -275,10 +275,13 @@ func (p *presentation) readTableStyles(name string) {
 	}
 }
 
-// tableStyle returns the table style with the ID.
+// tableStyle returns the table style with the ID: the style of the
+// package, or the default table style of PowerPoint.
 func (p *presentation) tableStyle(id string) (roxmltree.Node, bool) {
-	n, ok := p.tableStyles[id]
-	return n, ok
+	if n, ok := p.tableStyles[id]; ok {
+		return n, true
+	}
+	return builtinTableStyle(id)
 }
 
 // partPictures gives the pictures of the relationships of a part.

@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/xo/okage"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // The defaults of a text body, from ECMA-376 Part 1, 21.1.2.1.1 and
@@ -102,9 +104,9 @@ func (tb *TextBody) html(theme *Theme, w, h, page float64) string {
 html, body { margin: 0; padding: 0 }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed; width: 100%% }
 td { padding: 0; overflow-wrap: break-word }
-p { margin: 0; white-space: %s; overflow-wrap: break-word; hyphens: none }
-span.b { display: inline-block; text-indent: 0; white-space: pre }
-</style></head><body>`, num(w), num(page), whiteSpace)
+p { margin: 0; white-space: %s; overflow-wrap: break-word; hyphens: none%s }
+span.b { display: inline-block; text-indent: 0; white-space: pre; line-height: 0 }
+</style></head><body>`, num(w), num(page), whiteSpace, kerning(tb.NoKerning))
 	align := "top"
 	switch b.Anchor.Or("t") {
 	case "ctr":
@@ -119,15 +121,26 @@ span.b { display: inline-block; text-indent: 0; white-space: pre }
 		sb.WriteString("<div>")
 	}
 	for i := range tb.Paragraphs {
-		writeParagraph(&sb, &tb.Paragraphs[i], theme, scale, reduction, i == 0)
+		writeParagraph(&sb, &tb.Paragraphs[i], theme, scale, reduction, i == 0, i == len(tb.Paragraphs)-1)
 	}
 	sb.WriteString("</div></td></tr></table></body></html>")
 	return sb.String()
 }
 
+// kerning returns the declaration of CSS of the elements p that turns the
+// kerning off, or nothing.
+func kerning(off bool) string {
+	if off {
+		return "; font-kerning: none"
+	}
+	return ""
+}
+
 // writeParagraph writes a paragraph as an element p. The space before the
-// first paragraph of a body is left out, as PowerPoint does.
-func writeParagraph(sb *strings.Builder, p *Paragraph, theme *Theme, scale, reduction float64, first bool) {
+// first paragraph of a body and the space after its last one are left
+// out, as PowerPoint does: they do not move the text of a box that centers
+// it.
+func writeParagraph(sb *strings.Builder, p *Paragraph, theme *Theme, scale, reduction float64, first, last bool) {
 	s := &p.Style
 	run := p.End
 	for _, r := range p.Runs {
@@ -162,15 +175,18 @@ func writeParagraph(sb *strings.Builder, p *Paragraph, theme *Theme, scale, redu
 	if v, ok := spacing(s.SpaceBefore, size); ok && !first {
 		fmt.Fprintf(sb, "margin-top:%spt;", num(v))
 	}
-	if v, ok := spacing(s.SpaceAfter, size); ok {
+	if v, ok := spacing(s.SpaceAfter, size); ok && !last {
 		fmt.Fprintf(sb, "margin-bottom:%spt;", num(v))
 	}
+	// a line of single spacing is 1.2 times the size of its text in
+	// PowerPoint, whatever the font. The line of the layout follows the
+	// metrics of the font, which can be shorter, as for Carlito.
 	switch ls := s.LineSpacing; {
 	case ls.OK && ls.V.Points:
 		fmt.Fprintf(sb, "line-height:%spt;", num(ls.V.Pt*scale))
 	case ls.OK:
 		fmt.Fprintf(sb, "line-height:%s;", num(max(ls.V.Pct-reduction, 0.1)*lineFactor))
-	case reduction > 0:
+	default:
 		fmt.Fprintf(sb, "line-height:%s;", num(max(1-reduction, 0.1)*lineFactor))
 	}
 	sb.WriteString(`">`)
@@ -187,17 +203,71 @@ func writeParagraph(sb *strings.Builder, p *Paragraph, theme *Theme, scale, redu
 		if r.Text == "" {
 			continue
 		}
-		sb.WriteString(`<span style="`)
+		sb.WriteString(`<span`)
+		if lang := r.Style.Lang.Or(""); lang != "" && strings.ContainsFunc(r.Text, fontdb.IsCJK) {
+			// The language selects the font of the East Asian text. The
+			// span of a Latin text keeps the language of the paragraph.
+			sb.WriteString(` lang="` + html.EscapeString(lang) + `"`)
+		}
+		sb.WriteString(` style="`)
 		writeRunStyle(sb, &r.Style, theme, scale)
 		sb.WriteString(`">`)
 		sb.WriteString(escapeText(r.Text, &r.Style))
 		sb.WriteString("</span>")
 	}
+	if n := len(p.Runs); n > 0 && p.Runs[n-1].Break {
+		// a break at the end of a paragraph starts an empty line, which a
+		// last element br of HTML does not make
+		sb.WriteString("<br>")
+	}
 	sb.WriteString("</p>")
 }
 
+// lineHeights returns the height of the lines of the text body in points,
+// with a line for each paragraph and for each break, and the spaces
+// between the paragraphs. A line that wraps does not count. A line of
+// single spacing is lineFactor times the size of its text.
+func (tb *TextBody) lineHeights() float64 {
+	scale := tb.Body.FontScale.Or(1)
+	total := 0.0
+	for i := range tb.Paragraphs {
+		p := &tb.Paragraphs[i]
+		size := 0.0
+		lines := 1
+		for _, r := range p.Runs {
+			switch {
+			case r.Break:
+				lines++
+			case r.Text != "":
+				size = max(size, r.Style.Size.Or(defaultSize))
+			}
+		}
+		if size == 0 {
+			// an empty paragraph takes the size of its end
+			size = p.End.Size.Or(defaultSize)
+		}
+		size *= scale
+		line := size * lineFactor
+		if ls := p.Style.LineSpacing; ls.OK && ls.V.Points {
+			line = ls.V.Pt * scale
+		} else if ls.OK {
+			line *= ls.V.Pct
+		}
+		total += float64(lines) * line
+		if v, ok := spacing(p.Style.SpaceBefore, size); ok && i > 0 {
+			total += v
+		}
+		if v, ok := spacing(p.Style.SpaceAfter, size); ok && i < len(tb.Paragraphs)-1 {
+			total += v
+		}
+	}
+	return total
+}
+
 // spacing returns the space before or after a paragraph in points. A
-// percentage is of the size of the text, as LibreOffice reads it.
+// percentage is of a line of single spacing, 1.2 times the size of the
+// text, as PowerPoint draws it: a space of 20 percent before a paragraph of
+// 32 points is 7.68 points. LibreOffice takes the percentage of the size.
 func spacing(o Opt[Spacing], size float64) (float64, bool) {
 	if !o.OK {
 		return 0, false
@@ -205,7 +275,7 @@ func spacing(o Opt[Spacing], size float64) (float64, bool) {
 	if o.V.Points {
 		return o.V.Pt, true
 	}
-	return o.V.Pct * size, true
+	return o.V.Pct * size * lineFactor, true
 }
 
 // writeBullet writes the bullet of a paragraph, in a box as wide as the
@@ -241,6 +311,11 @@ func writeBullet(sb *strings.Builder, p *Paragraph, first *RunStyle, theme *Them
 		}
 	}
 	color := first.Paint.Or(Solid(Black)).Mean()
+	if first.Link.Or(false) {
+		// the bullet of a paragraph that starts with a hyperlink keeps the
+		// color of the text of the paragraph
+		color = s.Run.Paint.Or(Solid(Black)).Mean()
+	}
 	if bc := s.BulletColor.V; s.BulletColor.OK && bc != nil {
 		color = *bc
 	}
@@ -261,7 +336,20 @@ func writeRunStyle(sb *strings.Builder, s *RunStyle, theme *Theme, scale float64
 	if font == "" || strings.HasPrefix(font, "+") && theme == nil {
 		font = s.EastAsian.Or(font)
 	}
-	fmt.Fprintf(sb, "font-family:%s;", fontFamily(font, theme))
+	family := fontFamily(font, theme)
+	if ea := s.EastAsian.Or(""); ea != "" {
+		// An East Asian font, such as MS Mincho, draws the East Asian
+		// characters that the Latin font does not draw.
+		latin := ThemeFont(font, theme)
+		ea = ThemeFont(ea, theme)
+		if _, _, ok := fontdb.ClassifyName(ea); ok && ea != latin {
+			family = cssString(ea) + ", sans-serif"
+			if latin != "" {
+				family = cssString(latin) + ", " + family
+			}
+		}
+	}
+	fmt.Fprintf(sb, "font-family:%s;", family)
 	if s.Bold.Or(false) {
 		sb.WriteString("font-weight:bold;")
 	}
@@ -284,6 +372,7 @@ func writeRunStyle(sb *strings.Builder, s *RunStyle, theme *Theme, scale float64
 	if v := s.Spacing.Or(0); v != 0 {
 		fmt.Fprintf(sb, "letter-spacing:%spt;", num(v))
 	}
+
 	paint := s.Paint.Or(Solid(Black))
 	color := paint.Mean()
 	if paint.Kind == PaintNone {

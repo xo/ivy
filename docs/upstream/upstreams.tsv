@@ -10,3 +10,4 @@ carlito	https://github.com/googlefonts/carlito	copy	OFL-1.1	a46ae30787d4a0c9817a
 caladea	https://github.com/huertatipografica/Caladea	copy	OFL-1.1	336a529cfad3d103d6527752686f8331d13e820a	336a529cfad3d103d6527752686f8331d13e820a	fonts/caladea
 dejapdf	https://github.com/sergev/dejapdf	copy	MIT	2b6ca0c1123cc45f868cca3be99dd8123d5cdc6f	2b6ca0c1123cc45f868cca3be99dd8123d5cdc6f	djvu/internal
 droid-sans-fallback	https://android.googlesource.com/platform/frameworks/base	copy	Apache-2.0	1cdfff555f4a21f71ccc978290e2e212e2f8b168	1cdfff555f4a21f71ccc978290e2e212e2f8b168	fonts/droid
+poi	https://github.com/apache/poi	copy	Apache-2.0	8d9b40ac4cb62b1c61759c900fb422abfeac4367	8d9b40ac4cb62b1c61759c900fb422abfeac4367	pptx/tablestyles

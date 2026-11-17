@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/xo/okage/roxmltree"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // The limits of the text of a shape.
@@ -68,6 +70,11 @@ type RunStyle struct {
 	Highlight Opt[RGBA]
 	// Link reports a hyperlink.
 	Link Opt[bool]
+	// Lang is the language of the East Asian text of the run, such as
+	// ja-JP: the lang of the run when it is an East Asian language, or else
+	// its altLang. The fallback of an East Asian character prefers a font
+	// of the language.
+	Lang Opt[string]
 }
 
 // Over sets each field of s that o sets.
@@ -87,6 +94,7 @@ func (s *RunStyle) Over(o *RunStyle) {
 	s.Paint.over(o.Paint)
 	s.Highlight.over(o.Highlight)
 	s.Link.over(o.Link)
+	s.Lang.over(o.Lang)
 }
 
 // Spacing is the spacing of lines or of paragraphs: a percentage of the
@@ -247,6 +255,10 @@ func (s *BodyStyle) Over(o *BodyStyle) {
 type TextBody struct {
 	Body       BodyStyle
 	Paragraphs []Paragraph
+	// NoKerning draws the text without the kerning of its fonts, as
+	// PowerPoint draws its slides: the lines of a text break where they
+	// break in PowerPoint, whatever the attribute kern of its runs.
+	NoKerning bool
 }
 
 // Empty reports whether the body holds no text to draw.
@@ -322,6 +334,13 @@ func (c *Colors) ParseRunStyle(n roxmltree.Node) RunStyle {
 	if v, ok := number(attr(n, "spc", "")); ok {
 		s.Spacing.Set(min(max(v/100, -100), 100))
 	}
+
+	for _, a := range [...]string{"lang", "altLang"} {
+		if v := attr(n, a, ""); fontdb.ParseLang(v) != fontdb.NoLang {
+			s.Lang.Set(v)
+			break
+		}
+	}
 	for e := range n.Children() {
 		if !e.IsElement() {
 			continue
@@ -345,6 +364,16 @@ func (c *Colors) ParseRunStyle(n roxmltree.Node) RunStyle {
 			}
 		case "hlinkClick":
 			s.Link.Set(true)
+		}
+	}
+	if s.Link.Or(false) {
+		// a hyperlink without a color of its own takes the color hlink of
+		// the theme, and an underline, as PowerPoint draws it
+		if v, ok := c.linkColor(); ok && !s.Paint.OK {
+			s.Paint.Set(Solid(v))
+		}
+		if !s.Underline.OK {
+			s.Underline.Set(true)
 		}
 	}
 	return s
@@ -526,7 +555,7 @@ func ParseBodyStyle(n roxmltree.Node) BodyStyle {
 // list style of n goes over both, and the styles of the paragraphs and the
 // runs come from them.
 func (c *Colors) ParseTextBody(n roxmltree.Node, list *ListStyle, run *RunStyle, body BodyStyle, fields Fields) *TextBody {
-	tb := &TextBody{Body: body}
+	tb := &TextBody{Body: body, NoKerning: true}
 	styles := *list
 	if run != nil {
 		for i := range styles {
@@ -660,4 +689,12 @@ func paragraphEmpty(p *Paragraph) bool {
 		}
 	}
 	return true
+}
+
+// linkColor returns the color hlink of the theme, for a hyperlink.
+func (c *Colors) linkColor() (RGBA, bool) {
+	if c == nil || c.Theme == nil {
+		return RGBA{}, false
+	}
+	return c.scheme("hlink")
 }

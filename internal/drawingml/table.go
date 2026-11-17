@@ -344,6 +344,7 @@ func (t *Tree) cell(c roxmltree.Node, style *cellStyle, list *ListStyle, pics Pi
 			}
 		}
 		cell.Anchor = attr(pr, "anchor", "t")
+		cell.Vert = attr(pr, "vert", "horz")
 		if pt, ok := t.Colors.PaintIn(pr, pics); ok {
 			cell.Fill = pt
 		}
@@ -396,6 +397,9 @@ type TableCell struct {
 	Insets [4]float64
 	// Anchor is "t", "ctr" or "b".
 	Anchor string
+	// Vert is the direction of the text, as in BodyStyle. An empty value
+	// is "horz".
+	Vert string
 	// Text is the text of the cell, or nil.
 	Text *TextBody
 }
@@ -407,21 +411,34 @@ func (s *Scene) AddTable(tab *Table, w, h float64, m okage.Transform, theme *The
 	if len(tab.Cols) == 0 || len(tab.Rows) == 0 {
 		return
 	}
+	doc, pageW, page := tab.html(w, h, theme)
+	s.AddHTML(doc, pageW, page, m)
+}
+
+// html returns the table as a document of HTML for a box of w by h points,
+// and the size of the page of the document.
+func (tab *Table) html(w, h float64, theme *Theme) (string, float64, float64) {
 	tableW := 0.0
 	for _, c := range tab.Cols {
 		tableW += c
 	}
 	pageW := max(tableW, w, 1)
 	page := max(h*overflowLines, h+720)
+	noKerning := false
+	for _, r := range tab.Rows {
+		for _, c := range r.Cells {
+			noKerning = noKerning || c.Text != nil && c.Text.NoKerning
+		}
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
 @page { size: %spt %spt; margin: 0 }
 html, body { margin: 0; padding: 0 }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed }
 td { overflow-wrap: break-word; padding: 0 }
-p { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; hyphens: none }
-span.b { display: inline-block; text-indent: 0; white-space: pre }
-</style></head><body><table style="width:%spt`, num(pageW), num(page), num(tableW))
+p { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; hyphens: none%s }
+span.b { display: inline-block; text-indent: 0; white-space: pre; line-height: 0 }
+</style></head><body><table style="width:%spt`, num(pageW), num(page), kerning(noKerning), num(tableW))
 	if c := tab.Fill.Mean(); tab.Fill.Visible() && c.A > 0 {
 		sb.WriteString(";background-color:" + c.CSS())
 	}
@@ -430,19 +447,84 @@ span.b { display: inline-block; text-indent: 0; white-space: pre }
 		fmt.Fprintf(&sb, `<col style="width:%spt">`, num(c))
 	}
 	sb.WriteString("</colgroup>")
-	for _, r := range tab.Rows {
-		fmt.Fprintf(&sb, `<tr style="height:%spt">`, num(r.Height))
+	// busy holds, for each column, the first row that a cell above with a
+	// span of rows leaves free
+	busy := make([]int, len(tab.Cols))
+	heights := rowHeights(tab)
+	// ends holds the rows where a cell with a span of rows ends
+	ends := make([]bool, len(tab.Rows))
+	for ri, r := range tab.Rows {
+		// a row where a cell with a span of rows ends gives its height to
+		// its other cells: the layout gives such a row the height of the
+		// whole cell, and not of its part in the row
+		cellHeight := false
+		if ends[ri] {
+			for _, c := range r.Cells {
+				cellHeight = cellHeight || c.RowSpan <= 1
+			}
+		}
+		if cellHeight {
+			sb.WriteString("<tr>")
+		} else {
+			fmt.Fprintf(&sb, `<tr style="height:%spt">`, num(r.Height))
+		}
+		col := 0
 		for i := range r.Cells {
-			writeCell(&sb, &r.Cells[i], theme)
+			c := &r.Cells[i]
+			for col < len(busy) && busy[col] > ri {
+				col++
+			}
+			span := min(max(c.ColSpan, 1), len(busy)-min(col, len(busy)))
+			rows := min(max(c.RowSpan, 1), len(tab.Rows)-ri)
+			// the size of the cell, for a text that goes down or up
+			var cw, ch float64
+			for j := col; j < col+span; j++ {
+				cw += tab.Cols[j]
+				busy[j] = ri + rows
+			}
+			for _, h := range heights[ri : ri+rows] {
+				ch += h
+			}
+			col += span
+			if rows > 1 {
+				ends[ri+rows-1] = true
+			}
+			least := 0.0
+			if cellHeight && rows == 1 {
+				least = max(r.Height-c.Insets[1]-c.Insets[3], 0)
+			}
+			writeCell(&sb, c, cw, ch, least, theme)
 		}
 		sb.WriteString("</tr>")
 	}
 	sb.WriteString("</table></body></html>")
-	s.AddHTML(sb.String(), pageW, page, m)
+	return sb.String(), pageW, page
 }
 
-// writeCell writes a cell as an element td.
-func writeCell(sb *strings.Builder, c *TableCell, theme *Theme) {
+// rowHeights returns the heights of the rows of a table, for the length of
+// the lines of a vertical text: the height of the row in the file, or the
+// height of the text of its horizontal cells, if it is more. A row grows
+// to hold its text, and the height of the file is the least height. The
+// height of a text counts a line for each paragraph and each break, so a
+// line that wraps does not count.
+func rowHeights(tab *Table) []float64 {
+	heights := make([]float64, len(tab.Rows))
+	for i, r := range tab.Rows {
+		heights[i] = r.Height
+		for _, c := range r.Cells {
+			if c.RowSpan > 1 || c.Text == nil || c.Vert != "" && c.Vert != "horz" {
+				continue
+			}
+			heights[i] = max(heights[i], c.Insets[1]+c.Insets[3]+c.Text.lineHeights())
+		}
+	}
+	return heights
+}
+
+// writeCell writes a cell as an element td. w and h are the size of the
+// columns and the rows of the cell. least is the least height of the text
+// of the cell, or 0.
+func writeCell(sb *strings.Builder, c *TableCell, w, h, least float64, theme *Theme) {
 	sb.WriteString("<td")
 	if c.ColSpan > 1 {
 		fmt.Fprintf(sb, ` colspan="%d"`, min(c.ColSpan, maxSpan))
@@ -459,6 +541,9 @@ func writeCell(sb *strings.Builder, c *TableCell, theme *Theme) {
 	}
 	in := c.Insets
 	fmt.Fprintf(sb, ` style="vertical-align:%s;padding:%spt %spt %spt %spt`, anchor, num(in[1]), num(in[2]), num(in[3]), num(in[0]))
+	if least > 0 {
+		sb.WriteString(";height:" + num(least) + "pt")
+	}
 	if c.Fill.Visible() {
 		sb.WriteString(";background-color:" + c.Fill.Mean().CSS())
 	}
@@ -478,9 +563,51 @@ func writeCell(sb *strings.Builder, c *TableCell, theme *Theme) {
 	}
 	sb.WriteString(`">`)
 	if c.Text != nil {
-		for i := range c.Text.Paragraphs {
-			writeParagraph(sb, &c.Text.Paragraphs[i], theme, 1, 0, i == 0)
+		if !writeVertical(sb, c, w, h, theme) {
+			for i := range c.Text.Paragraphs {
+				writeParagraph(sb, &c.Text.Paragraphs[i], theme, 1, 0, i == 0, i == len(c.Text.Paragraphs)-1)
+			}
 		}
 	}
 	sb.WriteString("</td>")
+}
+
+// writeVertical writes the text of a cell whose text goes down or up, such
+// as with vert="vert270", and returns false for a horizontal text. w and h
+// are the size of the columns and the rows of the cell. The text is in a
+// box that turns, with lines as long as the rows of the cell are high, as
+// PowerPoint draws it. The box is out of the flow, so it does not change
+// the size of the cell.
+func writeVertical(sb *strings.Builder, c *TableCell, w, h float64, theme *Theme) bool {
+	in := c.Insets
+	// length is the length of a line, and across is the width of the cell
+	// without its insets
+	length := max(h-in[1]-in[3], 1)
+	across := max(w-in[0]-in[2], 1)
+	var turn string
+	switch c.Vert {
+	case "vert", "eaVert", "wordArtVert", "mongolianVert", "wordArtVertRtl":
+		// the lines go down, and the first line is on the right
+		turn = "translate(" + num(across) + "pt,0) rotate(90deg)"
+	case "vert270":
+		// the lines go up, and the first line is on the left
+		turn = "translate(0," + num(length) + "pt) rotate(-90deg)"
+	default:
+		return false
+	}
+	align := "top"
+	switch c.Anchor {
+	case "ctr":
+		align = "middle"
+	case "b":
+		align = "bottom"
+	}
+	fmt.Fprintf(sb, `<div style="position:relative;height:%spt">`, num(length))
+	fmt.Fprintf(sb, `<table style="position:absolute;left:0;top:0;width:%spt;transform-origin:0 0;transform:%s"><tr style="height:%spt"><td style="vertical-align:%s">`,
+		num(length), turn, num(across), align)
+	for i := range c.Text.Paragraphs {
+		writeParagraph(sb, &c.Text.Paragraphs[i], theme, 1, 0, i == 0, i == len(c.Text.Paragraphs)-1)
+	}
+	sb.WriteString("</td></tr></table></div>")
+	return true
 }

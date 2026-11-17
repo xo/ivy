@@ -29,6 +29,8 @@ const (
 	rtTextMasterStyle    = 0x0FA3
 	rtTextCFException    = 0x0FA4
 	rtTextPFException    = 0x0FA5
+	rtTextRulerAtom      = 0x0FA6
+	rtTxInteractiveInfo  = 0x0FDF
 	rtFontEntity         = 0x0FB7
 	rtSlideNumberMC      = 0x0FD8
 	rtMasterListWithText = 1
@@ -52,6 +54,85 @@ type text struct {
 	style []byte
 	// fields are the offsets of the slide numbers in text.
 	fields []int
+	// ruler holds the left margins and the indents of the levels of the
+	// TextRulerAtom, which go over the styles of the master.
+	ruler [masterLevels]rulerLevel
+	// links are the ranges of the characters of the hyperlinks, from the
+	// TxInteractiveInfoAtom records: the first and the end after the last.
+	links [][2]int
+}
+
+// schemeHyperlink is the index of the color of the hyperlinks in a color
+// scheme: "accent and hyperlink" of MS-PPT 2.12.8.
+const schemeHyperlink = 6
+
+// maxLinks is the number of the hyperlinks of a text that the package
+// reads.
+const maxLinks = 1024
+
+// linkAt reports whether the character i of the text is in a hyperlink,
+// and returns the offset where the hyperlink, or the text out of a
+// hyperlink, ends.
+func (t *text) linkAt(i int) (bool, int) {
+	end := len(t.units) + 1
+	for _, l := range t.links {
+		switch {
+		case i >= l[0] && i < l[1]:
+			return true, l[1]
+		case l[0] > i:
+			end = min(end, l[0])
+		}
+	}
+	return false, end
+}
+
+// rulerLevel is the left margin and the indent of a level of a
+// TextRulerAtom, in master units.
+type rulerLevel struct {
+	margin, indent opt[int]
+}
+
+// The bits of the rulerMask of a TextRulerAtom (MS-PPT 2.9.57).
+const (
+	rulerDefaultTab = 0x0001
+	rulerLevels     = 0x0002
+	rulerTabs       = 0x0004
+	rulerMargin1    = 0x0008
+	rulerIndent1    = 0x0100
+)
+
+// readRuler reads the left margins and the indents of a TextRulerAtom:
+// rulerMask, cLevels, defaultTabSize, the tab stops, then leftMargin1,
+// indent1, leftMargin2 and so on to the fifth level.
+func readRuler(b []byte) [masterLevels]rulerLevel {
+	var levels [masterLevels]rulerLevel
+	r := reader{b: b}
+	m := r.u32()
+	if m&rulerLevels != 0 {
+		r.u16()
+	}
+	if m&rulerDefaultTab != 0 {
+		r.u16()
+	}
+	if m&rulerTabs != 0 {
+		n := int(r.u16())
+		if n > 1024 {
+			return levels
+		}
+		r.off += 4 * n
+	}
+	for i := range levels {
+		if m&(rulerMargin1<<i) != 0 {
+			levels[i].margin.set(int(r.u16()))
+		}
+		if m&(rulerIndent1<<i) != 0 {
+			levels[i].indent.set(int(r.u16()))
+		}
+	}
+	if r.bad {
+		return [masterLevels]rulerLevel{}
+	}
+	return levels
 }
 
 // rect is a rectangle in master units, 576 to the inch.
@@ -76,8 +157,6 @@ type document struct {
 	fonts   []string
 	// defaults are the styles of the text that the masters inherit.
 	defaults masterStyle
-	// shapeDefaults are the properties of a shape that it does not give.
-	shapeDefaults props
 	// blips are the entries of the store of pictures, from index 1.
 	blips []blipEntry
 }
@@ -152,6 +231,15 @@ func addText(texts []text, h header, b []byte) []text {
 		t.units = decodeText(h.typ, b)
 	case rtStyleTextProp:
 		t.style = b
+	case rtTextRulerAtom:
+		t.ruler = readRuler(b)
+	case rtTxInteractiveInfo:
+		if len(b) >= 8 && len(t.links) < maxLinks {
+			first, last := int(int32(le.Uint32(b))), int(int32(le.Uint32(b[4:])))
+			if first >= 0 && last > first {
+				t.links = append(t.links, [2]int{first, last})
+			}
+		}
 	case rtSlideNumberMC:
 		if len(b) >= 4 && len(t.fields) < 64 {
 			t.fields = append(t.fields, int(int32(le.Uint32(b))))
@@ -209,20 +297,18 @@ func fontName(b []byte) string {
 	return string(utf16.Decode(units))
 }
 
-// readDrawingGroup reads the store of pictures and the default properties
-// of the shapes from the OfficeArtDggContainer.
+// readDrawingGroup reads the store of pictures from the
+// OfficeArtDggContainer.
 func (d *document) readDrawingGroup(b []byte, maxObjects int) {
 	for h, a := range children(b) {
-		switch h.typ {
-		case rtOfficeArtBStore:
-			for ch, e := range children(a) {
-				if len(d.blips) >= maxObjects {
-					break
-				}
-				d.blips = append(d.blips, readFBSE(ch, e))
+		if h.typ != rtOfficeArtBStore {
+			continue
+		}
+		for ch, e := range children(a) {
+			if len(d.blips) >= maxObjects {
+				break
 			}
-		case rtOfficeArtFOPT:
-			d.shapeDefaults.readProps(a, int(h.inst))
+			d.blips = append(d.blips, readFBSE(ch, e))
 		}
 	}
 }

@@ -57,6 +57,11 @@ type cf struct {
 	size                    opt[int]
 	color                   opt[uint32]
 	position                opt[int]
+	// eaFont is the font of the East Asian text, from oldEATypeface.
+	eaFont opt[int]
+	// symFont is the font of the characters of a symbol font, from
+	// symbolTypeface.
+	symFont opt[int]
 }
 
 // over sets each field of c that o sets.
@@ -65,6 +70,8 @@ func (c *cf) over(o *cf) {
 	c.italic.over(o.italic)
 	c.underline.over(o.underline)
 	c.font.over(o.font)
+	c.eaFont.over(o.eaFont)
+	c.symFont.over(o.symFont)
 	c.size.over(o.size)
 	c.color.over(o.color)
 	c.position.over(o.position)
@@ -238,13 +245,13 @@ func readCF(b []byte) (cf, int, bool) {
 		c.font.set(int(r.u16()))
 	}
 	if m&cfOldEATypeface != 0 {
-		r.u16()
+		c.eaFont.set(int(r.u16()))
 	}
 	if m&cfANSITypeface != 0 {
 		r.u16()
 	}
 	if m&cfSymbolFace != 0 {
-		r.u16()
+		c.symFont.set(int(r.u16()))
 	}
 	if m&cfSize != 0 {
 		c.size.set(r.i16())

@@ -572,6 +572,14 @@ func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures,
 	}
 	if text {
 		f.Text = t.text(n, sp, ph)
+		if e, ok := child(n, "txXfrm"); ok {
+			// the shape of a drawing of SmartArt gives the box of its
+			// text, in the space of the shape
+			tx := gs.place(ParseXfrm(e))
+			if r, ok := okage.RectFromXYWH(float32(tx.X-x.X), float32(tx.Y-x.Y), float32(tx.W), float32(tx.H)); ok && tx.W > 0 && tx.H > 0 {
+				f.TextRect = r
+			}
+		}
 	}
 	t.Scene.AddFigure(f)
 }
