@@ -75,6 +75,9 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 		}
 		name := "sheet" + strconv.Itoa(i+1) + ".html"
 		fsys.Add(name, []byte(doc))
+		for path, data := range w.files {
+			fsys.Add(path, data)
+		}
 		src.Documents = append(src.Documents, name)
 	}
 	if len(src.Documents) == 0 {
@@ -118,10 +121,24 @@ type writer struct {
 	// are the cells of their bottom right corners.
 	images []Image
 	ends   [][2]int
-	// carry holds the heights that the rows of the table carry, from
-	// carried.
-	carry map[int]float64
+	// cond holds what the conditional formats make of the cells, by their
+	// row and their column. extra holds the styles that they make, after
+	// the styles of the workbook, and derived their indexes.
+	cond    map[[2]int]*condResult
+	extra   []Style
+	derived map[derivedKey]int
+	// files holds the images that the document adds, such as the icons
+	// of the conditional formats.
+	files map[string][]byte
 	body  strings.Builder
+}
+
+// derivedKey names a style that conditional formats make: the style of
+// the cell and what they change.
+type derivedKey struct {
+	style int
+	diffs string
+	fill  color.NRGBA
 }
 
 // newWriter returns the writer of sh.
@@ -152,6 +169,7 @@ func newWriter(ctx context.Context, wb *Workbook, sh *Sheet, lim ivy.Limits) *wr
 	for _, i := range sh.ColBreaks {
 		w.colBreaks[i] = true
 	}
+	w.cond = sh.evalCond()
 	w.images = sh.Images[:min(len(sh.Images), maxImages)]
 	w.ends = make([][2]int, len(w.images))
 	for i, img := range w.images {
@@ -164,6 +182,9 @@ func newWriter(ctx context.Context, wb *Workbook, sh *Sheet, lim ivy.Limits) *wr
 func (w *writer) style(i int) *Style {
 	if i > 0 && i < len(w.wb.Styles) {
 		return &w.wb.Styles[i]
+	}
+	if base := max(1, len(w.wb.Styles)); i >= base && i-base < len(w.extra) {
+		return &w.extra[i-base]
 	}
 	if len(w.wb.Styles) > 0 {
 		return &w.wb.Styles[0]
@@ -258,6 +279,7 @@ func (w *writer) document() (string, bool, error) {
 		w.body.WriteString(html.EscapeString(fmt.Sprintf("The sheet continues past the limit of %d cells, which ivy does not show.", w.max)))
 		w.body.WriteString("</p>")
 	}
+	w.comments()
 	if w.sh.Note != "" {
 		w.body.WriteString(`<p class="note">`)
 		w.body.WriteString(html.EscapeString(w.sh.Note))
@@ -272,6 +294,48 @@ func (w *writer) document() (string, bool, error) {
 	b.WriteString(w.body.String())
 	b.WriteString("</body></html>\n")
 	return b.String(), true, nil
+}
+
+// comments writes the comments of the cells on pages after the cells, as
+// Excel prints them at the end of a sheet: the cell, the author and the
+// text of each comment, in the order of the rows.
+func (w *writer) comments() {
+	sh := w.sh
+	if !sh.Page.CommentsAtEnd || len(sh.Comments) == 0 || w.stopped {
+		return
+	}
+	list := slices.Clone(sh.Comments)
+	slices.SortStableFunc(list, func(a, b Comment) int {
+		if a.Row != b.Row {
+			return a.Row - b.Row
+		}
+		return a.Col - b.Col
+	})
+	def := w.style(0).Font
+	var font strings.Builder
+	fontCSS(&font, def, def, 1)
+	w.body.WriteString(`<div class="cm" style="` + html.EscapeString(font.String()) + `">`)
+	for _, c := range list {
+		if !w.spend(2) {
+			break
+		}
+		text := c.Text
+		if c.Author != "" {
+			text = c.Author + ":\n" + text
+		}
+		w.body.WriteString("<p>Cell: " + html.EscapeString(CellName(c.Row, c.Col)) + "\nComment: " + html.EscapeString(text) + "</p>")
+	}
+	w.body.WriteString("</div>")
+}
+
+// CellName returns the name of the cell of the row and the column, from 0,
+// such as B3.
+func CellName(row, col int) string {
+	var letters []byte
+	for c := col + 1; c > 0; c = (c - 1) / 26 {
+		letters = append([]byte{byte('A' + (c-1)%26)}, letters...)
+	}
+	return string(letters) + strconv.Itoa(row+1)
 }
 
 // spend counts n nodes, and reports whether the sheet can still write
@@ -332,8 +396,21 @@ func (w *writer) printRange(r Range) error {
 	}
 	w.scale = w.scaleFor(r, width)
 	bands := w.bands(cols, titleCols)
-	for _, band := range bands {
-		if err := w.table(r, band); err != nil {
+	if w.sh.Page.OverThenDown && len(bands) > 1 {
+		return w.overThenDown(r, bands, titleCols)
+	}
+	for i, band := range bands {
+		// Excel prints no page without ink: a band ends at its last row
+		// that shows something. A band that shows nothing keeps its rows.
+		own := band
+		if i > 0 && len(titleCols) > 0 {
+			own = slices.DeleteFunc(slices.Clone(band), func(c int) bool { return slices.Contains(titleCols, c) })
+		}
+		br := r
+		if last := w.lastRow(r, own); last >= r.Row0 {
+			br.Row1 = last
+		}
+		if err := w.table(br, band); err != nil {
 			return err
 		}
 		if w.stopped {
@@ -341,6 +418,113 @@ func (w *writer) printRange(r Range) error {
 		}
 	}
 	return nil
+}
+
+// overThenDown writes the tables of the range r in the order over, then
+// down: the rows that fit on a page, in each band, then the next rows. The
+// writer finds the rows of each page from their heights, which the rows of
+// Excel keep. A table that shows nothing has no page.
+func (w *writer) overThenDown(r Range, bands [][]int, titleCols []int) error {
+	for _, rows := range w.rowPages(r) {
+		for i, band := range bands {
+			own := band
+			if i > 0 && len(titleCols) > 0 {
+				own = slices.DeleteFunc(slices.Clone(band), func(c int) bool { return slices.Contains(titleCols, c) })
+			}
+			last := w.lastRow(rows, own)
+			if last < rows.Row0 {
+				continue
+			}
+			if err := w.table(rows, band); err != nil {
+				return err
+			}
+			if w.stopped {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+// rowPages cuts the rows of the range r into the runs of rows that fit on
+// a page, below the rows of the print titles. A manual break starts a
+// run. A run leaves 2 points free for the borders of the table.
+func (w *writer) rowPages(r Range) []Range {
+	sh := w.sh
+	_, ph := w.printable()
+	avail := ph/w.scale - 2
+	if t := sh.TitleRows; t != nil {
+		for i := max(0, t.First); i <= min(t.Last, MaxRows-1) && i-t.First < 4096; i++ {
+			avail -= sh.rowHeight(sh.row(i))
+		}
+	}
+	avail = max(avail, 1)
+	var out []Range
+	run := r
+	used := 0.0
+	ri := sort.Search(len(sh.Rows), func(i int) bool { return sh.Rows[i].Index >= r.Row0 })
+	for i := r.Row0; i <= r.Row1; i++ {
+		var row *Row
+		for ri < len(sh.Rows) && sh.Rows[ri].Index < i {
+			ri++
+		}
+		if ri < len(sh.Rows) && sh.Rows[ri].Index == i {
+			row = &sh.Rows[ri]
+		}
+		h := sh.rowHeight(row)
+		if w.isTitle(i) {
+			h = 0
+		}
+		if i > run.Row0 && ((used > 0 && used+h > avail) || (w.rowBreaks[i] && h > 0)) {
+			run.Row1 = i - 1
+			out = append(out, run)
+			run.Row0, used = i, 0
+		}
+		used += h
+	}
+	run.Row1 = r.Row1
+	return append(out, run)
+}
+
+// lastRow returns the last row of the range r that shows something in the
+// columns of band, or r.Row0-1 when no row does: a cell with text or with
+// a style that draws, a merged cell, or an image. The columns of band are
+// sorted.
+func (w *writer) lastRow(r Range, band []int) int {
+	if len(band) == 0 {
+		return r.Row0 - 1
+	}
+	in := func(c0, c1 int) bool {
+		k := sort.SearchInts(band, c0)
+		return k < len(band) && band[k] <= c1
+	}
+	last := r.Row0 - 1
+	for _, m := range w.sh.Merges {
+		if m.Row0 <= r.Row1 && m.Row1 >= r.Row0 && in(m.Col0, m.Col1) {
+			last = max(last, min(m.Row1, r.Row1))
+		}
+	}
+	for i, img := range w.images {
+		if img.Row <= r.Row1 && w.ends[i][0] >= r.Row0 && in(img.Col, w.ends[i][1]) {
+			last = max(last, min(w.ends[i][0], r.Row1))
+		}
+	}
+	hi := sort.Search(len(w.sh.Rows), func(i int) bool { return w.sh.Rows[i].Index > r.Row1 })
+	for i := hi - 1; i >= 0 && w.sh.Rows[i].Index > last && w.sh.Rows[i].Index >= r.Row0; i-- {
+		row := &w.sh.Rows[i]
+		if row.Hidden {
+			continue
+		}
+		if row.Style != 0 && w.style(row.Style).visible() {
+			return row.Index
+		}
+		for _, c := range row.Cells {
+			if in(c.Col, c.Col) && (c.Text != "" || len(c.Runs) > 0 || w.style(c.Style).visible()) {
+				return row.Index
+			}
+		}
+	}
+	return last
 }
 
 // scaleFor returns the scale of the cells of the range r, whose printed
@@ -550,9 +734,13 @@ func (w *writer) css(b *strings.Builder) {
 	b.WriteString("}\n")
 	b.WriteString("td.c{overflow:hidden}\ntd.a{position:relative}\n")
 	b.WriteString("div.cl{position:absolute;left:0;top:0;overflow:hidden}\n")
+	b.WriteString("div.db,img.ic{position:absolute}\nspan.t{position:relative}\n")
 	b.WriteString("span.r{display:inline-block}\n")
+	b.WriteString("span.sl,span.sb{display:inline-block;width:0}\nspan.sl>span,span.sb>span{display:inline-block}\n")
+	b.WriteString("span.sl>span{transform:translateX(-100%)}\nspan.sb>span{transform:translateX(-50%)}\n")
 	b.WriteString("div.ph{position:absolute;border:0.75pt solid #808080;background:#f2f2f2;color:#404040;font-size:9pt;white-space:normal;text-align:center;overflow:hidden}\n")
 	b.WriteString("p.note{margin:6pt 0 0;font-family:sans-serif;font-size:9pt;color:#606060}\n")
+	b.WriteString("div.cm{break-before:page;white-space:pre-wrap}\ndiv.cm p{margin:0 0 10pt}\n")
 	ids := make([]int, 0, len(w.used))
 	for i := range w.used {
 		ids = append(ids, i)
@@ -828,8 +1016,6 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		merges = append(merges, &mergeState{m: m, lo: lo, hi: hi})
 	}
 	slices.SortFunc(merges, func(a, b *mergeState) int { return a.m.Row0 - b.m.Row0 })
-	carried := w.carried(r, band, merges, skipTitles)
-	w.carry = carried
 	var active []*mergeState
 	next := 0
 	cover := make([]*mergeState, len(band))
@@ -875,7 +1061,6 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		if w.rowBreaks[i] && !firstRow {
 			w.body.WriteString(` class="pb"`)
 		}
-		h += carried[i]
 		if h != sh.DefaultRowHeight {
 			w.body.WriteString(` style="height:` + pt(h*w.scale) + `"`)
 		}
@@ -952,6 +1137,10 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		}
 		cell = srcRowp.cell(srcCol)
 		style := w.cellStyle(srcRowp, cell, srcCol)
+		res := w.cond[[2]int{srcRow, srcCol}]
+		if res != nil {
+			style = w.derive(style, res)
+		}
 		imgs := w.imagesAt(i, k, band, m)
 		hasText := cell != nil && (cell.Text != "" || len(cell.Runs) > 0)
 		if m != nil && w.firstCol(m.m) != c {
@@ -965,7 +1154,8 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		if !flush() {
 			return false
 		}
-		if !w.spend(2) {
+		// a cell counts once, with its text
+		if !w.spend(1) {
 			return false
 		}
 		if style != 0 {
@@ -984,11 +1174,15 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 				class = append(class, "x")
 			}
 		}
+		spill := w.spill(cell, st, m, k, text)
 		clipped := m != nil || st.Wrap || (hasText && cell.Kind != KindText) ||
-			(k+1 < len(band) && text[k+1]) || (hasText && st.HAlign != "" && st.HAlign != "left" && st.HAlign != "general")
-		if len(imgs) > 0 {
+			(k+1 < len(band) && text[k+1] && spill != "left") ||
+			(hasText && st.HAlign != "" && st.HAlign != "left" && st.HAlign != "general" && spill == "")
+		marks := res != nil && m == nil && hasText && (res.bar != nil || res.icon != nil)
+		if len(imgs) > 0 || marks {
 			class = append(class, "a")
-		} else if clipped {
+		}
+		if clipped && len(imgs) == 0 {
 			class = append(class, "c")
 		}
 		b.WriteString("<td")
@@ -1012,13 +1206,11 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		}
 		wrap := wraps(st)
 		if hasText && w.sh.FixedRows {
-			h, line := w.sh.rowHeight(srcRowp), 0.0
+			h := w.sh.rowHeight(srcRowp)
 			if rowspan > 1 {
-				// the layout makes the row in which a merged cell ends as
-				// high as its text, so a line keeps to that row
+				// the rows of a merged cell keep their heights in the
+				// layout, so a line can take the height of them all
 				h = w.spanHeight(i, m.m.Row1, skipTitles)
-				last := w.lastShown(i, min(m.m.Row1, MaxRows-1), skipTitles)
-				line = min(h, w.sh.rowHeight(w.sh.row(last))+w.carry[last])
 			}
 			if wrap && st.Rotation == 0 && w.lines(cell, st, h) < 2 {
 				// Excel shows the first line of a text that wraps in a row
@@ -1026,10 +1218,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 				wrap = false
 				inline = append(inline, "white-space:pre", "overflow-wrap:normal")
 			}
-			if line == 0 {
-				line = h
-			}
-			if lh := w.lineHeight(cell, st, line, wrap); lh > 0 {
+			if lh := w.lineHeight(cell, st, h, wrap); lh > 0 {
 				inline = append(inline, "line-height:"+pt(lh))
 			}
 		}
@@ -1037,12 +1226,43 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			b.WriteString(` style="` + strings.Join(inline, ";") + `"`)
 		}
 		b.WriteString(">")
-		if hasText {
-			if hashes := w.overflow(cell, st, band[k:k+colspan]); hashes != "" {
-				b.WriteString(hashes)
+		over := false
+		if marks {
+			if w.marks(res, srcRowp, band[k:k+colspan]) {
+				hasText = false
 			} else {
+				// the text goes over the bar, and after the icon
+				b.WriteString(`<span class="t"`)
+				if res.icon != nil {
+					b.WriteString(` style="padding-left:` + pt(iconRoom(w.sh.rowHeight(srcRowp))*w.scale) + `"`)
+				}
+				b.WriteString(">")
+				over = true
+			}
+		}
+		if hasText {
+			switch hashes := w.overflow(cell, st, band[k:k+colspan]); {
+			case hashes != "":
+				b.WriteString(hashes)
+			case anchored(cell, st, m) && w.mayOverflow(cell, st, band[k:k+colspan]):
+				// an inline block of no width takes the place of the end
+				// or the middle of the text, and its text moves back by
+				// the whole or the half of its width, so that it goes
+				// past the cell on the left or on both sides, or is cut
+				// on both sides as Excel cuts it
+				side := "l"
+				if st.HAlign != "right" {
+					side = "b"
+				}
+				b.WriteString(`<span class="s` + side + `"><span>`)
+				w.content(cell, st, wrap)
+				b.WriteString("</span></span>")
+			default:
 				w.content(cell, st, wrap)
 			}
+		}
+		if over {
+			b.WriteString("</span>")
 		}
 		for _, img := range imgs {
 			w.image(img)
@@ -1053,81 +1273,146 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 	return flush()
 }
 
-// carried returns the heights that rows of the range r carry for the rows
-// before them that the layout gives no height, by the index of the row.
-// The layout gives a row its height only when a cell ends in it: a cell of
-// one row, or the last row of a merged cell. A row in which merged cells
-// start or go on over the whole band has no height. The next row in which
-// a cell ends carries its height, so that the rows after it keep their
-// places. A merged cell itself has no height: the layout makes the last row
-// of a merged cell as high as the whole cell, and so a height on the cell
-// would make that row too high.
-func (w *writer) carried(r Range, band []int, merges []*mergeState, skipTitles bool) map[int]float64 {
-	if len(band) == 0 {
-		return nil
+// spill returns the side to which the text of the cell of the column
+// band[k] goes past the cell, into the empty cells next to it, as Excel
+// shows it: "right" for text that is aligned left, "left" for text that is
+// aligned right, "both" for centered text, or "" for none. text says which
+// cells of the band hold text or a merged cell. Text that is aligned right
+// or centered stays in the band.
+func (w *writer) spill(cell *Cell, st *Style, m *mergeState, k int, text []bool) string {
+	if cell == nil || m != nil || cell.Kind != KindText || (cell.Text == "" && len(cell.Runs) == 0) ||
+		wraps(st) || st.Shrink || st.Rotation != 0 {
+		return ""
 	}
-	// the first and the last row that each merge shows in the range
-	type span struct {
-		first, last int
-		m           *mergeState
-	}
-	var spans []span
-	for _, m := range merges {
-		a, z := max(m.m.Row0, r.Row0), min(m.m.Row1, r.Row1)
-		if z <= a || z-a > 4096 {
-			continue
+	prev := k > 0 && !text[k-1]
+	next := k+1 < len(text) && !text[k+1]
+	switch st.HAlign {
+	case "", "left", "general":
+		if next {
+			return "right"
 		}
-		first, last := -1, -1
-		for i := a; i <= z; i++ {
-			if w.shown(i, skipTitles) {
-				if first < 0 {
-					first = i
-				}
-				last = i
-			}
+	case "right":
+		if prev {
+			return "left"
 		}
-		if first >= 0 && last > first {
-			spans = append(spans, span{first: first, last: last, m: m})
+	case "center", "centerContinuous":
+		if prev && next {
+			return "both"
 		}
 	}
-	if len(spans) == 0 {
-		return nil
+	return ""
+}
+
+// derive returns the index of the style that the conditional formats of
+// res make of the style of the index style.
+func (w *writer) derive(style int, res *condResult) int {
+	if len(res.diffs) == 0 && res.fill.A == 0 {
+		return style
 	}
-	slices.SortFunc(spans, func(a, b span) int { return a.first - b.first })
-	out := make(map[int]float64)
-	covered := make([]bool, len(band))
-	var active []span
-	next, pending := 0, 0.0
-	for i := spans[0].first; i <= r.Row1; i++ {
-		if next >= len(spans) && len(active) == 0 {
-			break
-		}
-		for next < len(spans) && spans[next].first <= i {
-			active = append(active, spans[next])
-			next++
-		}
-		active = slices.DeleteFunc(active, func(s span) bool { return s.last < i })
-		if !w.shown(i, skipTitles) {
-			continue
-		}
-		clear(covered)
-		ends := false
-		for _, s := range active {
-			ends = ends || s.last == i
-			for k := s.m.lo; k < s.m.hi; k++ {
-				covered[k] = true
-			}
-		}
-		if !ends && !slices.Contains(covered, false) {
-			pending += w.sh.rowHeight(w.sh.row(i))
-			continue
-		}
-		if pending > 0 {
-			out[i] += pending
-			pending = 0
-		}
+	var key strings.Builder
+	for _, d := range res.diffs {
+		fmt.Fprintf(&key, "%p,", d)
 	}
-	return out
+	k := derivedKey{style: style, diffs: key.String(), fill: res.fill}
+	if i, ok := w.derived[k]; ok {
+		return i
+	}
+	if len(w.extra) >= maxDerived {
+		return style
+	}
+	if w.derived == nil {
+		w.derived = map[derivedKey]int{}
+	}
+	w.extra = append(w.extra, applyDiffs(*w.style(style), res.diffs, res.fill))
+	i := max(1, len(w.wb.Styles)) + len(w.extra) - 1
+	w.derived[k] = i
+	return i
+}
+
+// iconSize returns the size of the icon of a conditional format in a row
+// of the height h, and iconRoom the room that the text leaves for it.
+func iconSize(h float64) float64 { return max(1, min(h-2, 12)) }
+
+func iconRoom(h float64) float64 { return iconSize(h) + 1.5 }
+
+// maxDerived is the number of the styles that the conditional formats of
+// a sheet make.
+const maxDerived = 4096
+
+// marks writes the data bar and the icon of the conditional formats of a
+// cell of row in the columns cols. It reports whether they hide the text
+// of the cell.
+func (w *writer) marks(res *condResult, row *Row, cols []int) bool {
+	s := w.scale
+	width := 0.0
+	for _, c := range cols {
+		width += w.sh.colWidth(c)
+	}
+	h := w.sh.rowHeight(row)
+	b := &w.body
+	hide := false
+	left := 1.5
+	if ic := res.icon; ic != nil && w.spend(1) {
+		size := iconSize(h)
+		path := iconPath(ic.set.Name, ic.index, ic.count)
+		if w.files == nil {
+			w.files = map[string][]byte{}
+		}
+		if _, ok := w.files[path]; !ok {
+			w.files[path] = iconSVG(ic.set.Name, ic.index, ic.count)
+		}
+		b.WriteString(`<img class="ic" src="` + html.EscapeString(path) + `" alt="" style="left:` + pt(left*s) +
+			";top:" + pt((h-size-1)*s) + ";width:" + pt(size*s) + ";height:" + pt(size*s) + `">`)
+		hide = ic.hide
+	}
+	if bar := res.bar; bar != nil && w.spend(1) {
+		// Excel draws a bar from a tenth of the cell to nine tenths
+		length := (width - 3) * (0.1 + 0.8*min(max(bar.frac, 0), 1))
+		fill := "background-color:" + hex(bar.bar.Color)
+		if bar.bar.Gradient {
+			fill = "background-image:linear-gradient(to right," + hex(bar.bar.Color) + ",#ffffff)"
+		}
+		b.WriteString(`<div class="db" style="left:` + pt(1.5*s) + ";top:" + pt(1.5*s) + ";width:" + pt(max(0, length)*s) +
+			";height:" + pt(max(0, h-3)*s) + ";" + fill + `"></div>`)
+		hide = hide || bar.bar.HideValue
+	}
+	return hide
+}
+
+// anchored reports whether the text of a cell is aligned right or
+// centered on one line, and so holds its place at its end or at its middle
+// when it is wider than its cell.
+func anchored(cell *Cell, st *Style, m *mergeState) bool {
+	if cell == nil || m != nil || cell.Kind != KindText || wraps(st) || st.Shrink || st.Rotation != 0 {
+		return false
+	}
+	return st.HAlign == "right" || st.HAlign == "center" || st.HAlign == "centerContinuous"
+}
+
+// mayOverflow reports whether the text of a cell can be wider than its
+// columns. It measures the text in Calibri, with a margin for the fonts
+// that are wider.
+func (w *writer) mayOverflow(cell *Cell, st *Style, cols []int) bool {
+	size := st.Font.Size
+	if size <= 0 {
+		size = w.style(0).Font.Size
+	}
+	if size <= 0 {
+		size = 11
+	}
+	text := cell.Text
+	if len(cell.Runs) > 0 {
+		var b strings.Builder
+		for _, r := range cell.Runs {
+			b.WriteString(r.Text)
+		}
+		text = b.String()
+	}
+	width := -2 * cellPadding
+	for _, c := range cols {
+		width += w.sh.colWidth(c)
+	}
+	return TextWidth(text, size)*1.25 > width
 }
 
 // lineHeight returns the height of the line of the text of a cell in rows
@@ -1211,26 +1496,6 @@ func eastAsian(cell *Cell) bool {
 		}
 	}
 	return false
-}
-
-// shown reports whether the table shows the row i: a row that is not
-// hidden, and not a row of the print titles when skipTitles is set.
-func (w *writer) shown(i int, skipTitles bool) bool {
-	if skipTitles && w.isTitle(i) {
-		return false
-	}
-	return w.sh.rowHeight(w.sh.row(i)) > 0
-}
-
-// lastShown returns the last row from row0 to row1 that the table shows,
-// or row0.
-func (w *writer) lastShown(row0, row1 int, skipTitles bool) int {
-	for i := row1; i > row0 && row1-i < 4096; i-- {
-		if w.shown(i, skipTitles) {
-			return i
-		}
-	}
-	return row0
 }
 
 // spanHeight returns the height of the rows from row0 to row1 that the

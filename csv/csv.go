@@ -5,8 +5,9 @@
 // prints them, with the package sheet and the layout of D10. The table has
 // light gridlines, because a file of values has no style that separates its
 // cells. A field that holds a number is aligned to the right, and the other
-// fields to the left. Each column is as wide as its longest field, from 48
-// to 300 points, and a longer field breaks into lines.
+// fields to the left. Each column is as wide as its longest field in
+// Calibri, from 48 to 300 points, and a longer field breaks into lines. A
+// row is as high as Excel prints a row of 15 points.
 //
 // The package finds the separator in the first records: the one that
 // gives the same number of fields, more than one, to the most records. It
@@ -293,10 +294,11 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 	return d.workbook().Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger, Paper: d.cfg.Paper})
 }
 
-// The sizes of the columns, in points: the width of a character of
-// Calibri of 11 points, as a mean, and the bounds of a column.
+// The sizes of the columns, in points: the size of the font, Calibri of 11
+// points, and the bounds of a column. The padding holds the padding of the
+// cell on both sides and a little room.
 const (
-	charWidth    = 5.6
+	fontSize     = 11
 	minColWidth  = 48
 	maxColWidth  = 300
 	colPadding   = 6
@@ -309,7 +311,7 @@ func (d *Document) workbook() *sheet.Workbook {
 	wb.Styles[1].Wrap = true
 	sh := &sheet.Sheet{
 		DefaultColWidth:  minColWidth,
-		DefaultRowHeight: 15,
+		DefaultRowHeight: 15 * sheet.RowScale,
 		Gridlines:        true,
 		Page:             sheet.DefaultPage,
 	}
@@ -330,7 +332,7 @@ func (d *Document) workbook() *sheet.Workbook {
 				for len(widths) <= c {
 					widths = append(widths, 0)
 				}
-				widths[c] = max(widths[c], float64(utf8.RuneCountInString(longestLine(f)))*charWidth+colPadding)
+				widths[c] = max(widths[c], textWidth(f)+colPadding)
 			}
 			if f == "" {
 				continue
@@ -367,18 +369,16 @@ func (d *Document) workbook() *sheet.Workbook {
 	return wb
 }
 
-// longestLine returns the longest line of s.
-func longestLine(s string) string {
+// textWidth returns the width in points of the widest line of s.
+func textWidth(s string) float64 {
 	if !strings.ContainsAny(s, "\r\n") {
-		return s
+		return sheet.TextWidth(s, fontSize)
 	}
-	longest := ""
+	width := 0.0
 	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r", "\n"), "\n") {
-		if len(line) > len(longest) {
-			longest = line
-		}
+		width = max(width, sheet.TextWidth(line, fontSize))
 	}
-	return longest
+	return width
 }
 
 // isNumber reports whether a field holds a number, such as "-1.5",

@@ -28,6 +28,8 @@ type styles struct {
 	// formats their format codes.
 	cells   []sheet.Style
 	formats []*numfmt.Format
+	// dxfs are the differential formats of the conditional formats.
+	dxfs []sheet.Diff
 }
 
 // defaultPalette is the palette of the indexed colors of Excel. The index
@@ -103,6 +105,12 @@ func (s *styles) read(doc *roxmltree.Document) {
 		case "borders":
 			for b := range children(n, "border") {
 				s.borders = append(s.borders, s.border(b))
+			}
+		case "dxfs":
+			for d := range children(n, "dxf") {
+				if len(s.dxfs) < maxCondRules {
+					s.dxfs = append(s.dxfs, s.dxf(d))
+				}
 			}
 		}
 	}

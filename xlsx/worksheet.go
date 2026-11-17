@@ -36,6 +36,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	// program replaces that default, in its orientation (D32).
 	sh.Page.SetPaper(b.cfg.Paper)
 	fit := false
+	rules := 0
 	var drawing string
 	for n := range root.Children() {
 		switch local(n) {
@@ -58,6 +59,8 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 			if err := b.readSheetData(sh, n); err != nil {
 				return err
 			}
+		case "conditionalFormatting":
+			b.readCondFormat(sh, n, &rules)
 		case "mergeCells":
 			for m := range children(n, "mergeCell") {
 				if r, ok := parseRange(attr(m, "ref")); ok && (r.Row0 != r.Row1 || r.Col0 != r.Col1) {
@@ -94,6 +97,8 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 			p.Scale = math.Max(10, math.Min(400, number(n, "scale", 100))) / 100
 			p.FitWidth = max(0, integer(n, "fitToWidth", 1))
 			p.FitHeight = max(0, integer(n, "fitToHeight", 1))
+			p.OverThenDown = attr(n, "pageOrder") == "overThenDown"
+			p.CommentsAtEnd = attr(n, "cellComments") == "atEnd"
 		case "headerFooter":
 			// scaleWithDoc is true by default (ECMA-376 Part 1, 18.3.1.46)
 			sh.Page.ScaleHeaderFooter = flag(n, "scaleWithDoc", true)
@@ -127,7 +132,64 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	if drawing != "" {
 		b.readDrawing(sh, drawing)
 	}
+	if sh.Page.CommentsAtEnd {
+		b.readComments(sh, part)
+	}
 	return nil
+}
+
+// maxComments bounds the comments of a sheet.
+const maxComments = 4096
+
+// readComments reads the comments of the cells of a worksheet, from the
+// part of the comments that the worksheet names.
+func (b *book) readComments(sh *sheet.Sheet, part string) {
+	// sheetRel reads the relationships of the part
+	b.sheetRel(part, "")
+	var target string
+	for _, r := range b.partRels[part] {
+		if !r.External && r.TypeIs("comments") && (target == "" || r.Target < target) {
+			target = r.Target
+		}
+	}
+	if target == "" {
+		return
+	}
+	doc, err := b.parsePart(target)
+	if err != nil {
+		return
+	}
+	var authors []string
+	if a, ok := child(doc.RootElement(), "authors"); ok {
+		for n := range children(a, "author") {
+			if len(authors) < maxComments {
+				authors = append(authors, nodeText(n))
+			}
+		}
+	}
+	list, ok := child(doc.RootElement(), "commentList")
+	if !ok {
+		return
+	}
+	for n := range children(list, "comment") {
+		row, col, ok := parseRef(attr(n, "ref"))
+		if !ok {
+			continue
+		}
+		c := sheet.Comment{Row: row, Col: col}
+		if id := integer(n, "authorId", -1); id >= 0 && id < len(authors) {
+			c.Author = authors[id]
+		}
+		if t, ok := child(n, "text"); ok {
+			c.Text = b.richText(t).text
+		}
+		// Excel writes the author at the start of the text too
+		c.Text = strings.TrimPrefix(c.Text, c.Author+":\n")
+		sh.Comments = append(sh.Comments, c)
+		if len(sh.Comments) >= maxComments {
+			break
+		}
+	}
 }
 
 // sheetRel returns the target of the relationship id of the part. It
@@ -356,6 +418,7 @@ func (b *book) setText(c *sheet.Cell, rt richText, format *numfmt.Format) {
 // setNumber sets the text of a cell that holds a number.
 func (b *book) setNumber(c *sheet.Cell, v float64, format *numfmt.Format) {
 	c.Kind = sheet.KindNumber
+	c.Value = v
 	res := format.Number(v, b.date1904)
 	c.Text = res.Text
 	c.Color = b.styles.paletteColor(res.Color)

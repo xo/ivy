@@ -1,13 +1,18 @@
 package xlsx
 
 import (
+	"context"
+	"math"
 	"path"
 	"strconv"
 	"strings"
 
+	"github.com/xo/okage"
 	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy/internal/chart"
+	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/drawingml"
 	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/sheet"
@@ -62,8 +67,9 @@ func readAnchor(n roxmltree.Node) anchor {
 	return a
 }
 
-// readDrawing reads the drawing part of a worksheet: its pictures and its
-// charts, each anchored at a cell. Shapes and groups are left out.
+// readDrawing reads the drawing part of a worksheet: its pictures, its
+// charts and its shapes, each anchored at a cell. A shape that does not
+// print, whose xdr:clientData has fPrintsWithSheet 0, is left out.
 func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 	doc, err := b.parsePart(part)
 	if err != nil {
@@ -81,6 +87,8 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 		var hasTo bool
 		var cx, cy float64
 		var objs []roxmltree.Node
+		var shape roxmltree.Node
+		hasShape, prints := false, true
 		for c := range n.Children() {
 			switch local(c) {
 			case "from":
@@ -95,9 +103,13 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 				objs = append(objs, c)
 			case "AlternateContent":
 				objs = append(objs, alternates(c)...)
+			case "sp", "grpSp", "cxnSp":
+				shape, hasShape = c, true
+			case "clientData":
+				prints = flag(c, "fPrintsWithSheet", true)
 			}
 		}
-		if len(objs) == 0 {
+		if !prints || (len(objs) == 0 && !hasShape) {
 			continue
 		}
 		img := sheet.Image{Row: from.row, Col: from.col, DX: from.dx, DY: from.dy, Width: cx, Height: cy}
@@ -112,6 +124,9 @@ func (b *book) readDrawing(sh *sheet.Sheet, part string) {
 		// fallback of a chart of Office 2016, and shows as a frame when it
 		// is the last one.
 		shown := false
+		if len(objs) == 0 {
+			shown = b.shape(&img, n, shape)
+		}
 		for i, obj := range objs {
 			try := img
 			switch local(obj) {
@@ -209,6 +224,73 @@ func (b *book) picture(img *sheet.Image, pic roxmltree.Node, part string) bool {
 	}
 	img.Path = target
 	return true
+}
+
+// shape reads the shape, the group or the connector of the anchor n into
+// img, as an object that internal/drawingml draws as it draws the shapes
+// of a slide. The box of the shape fills the box of its anchor. It returns
+// false for a shape that draws nothing.
+func (b *book) shape(img *sheet.Image, anchor, shape roxmltree.Node) bool {
+	var box drawingml.Xfrm
+	for d := range shape.Descendants() {
+		if local(d) == "xfrm" {
+			box = drawingml.ParseXfrm(d)
+			break
+		}
+	}
+	if !box.OK || !(box.W > 0) || !(box.H > 0) {
+		return false
+	}
+	scene := drawingml.NewScene(b.cfg)
+	tree := &drawingml.Tree{
+		Ctx:    b.ctx,
+		Config: b.cfg,
+		Scene:  scene,
+		Colors: &drawingml.Colors{Theme: b.theme},
+	}
+	sx, sy := img.Width/box.W, img.Height/box.H
+	tree.Draw(anchor, okage.TransformFromRow(float32(sx), 0, 0, float32(sy), float32(-box.X*sx), float32(-box.Y*sy)))
+	if scene.Len() == 0 {
+		return false
+	}
+	name := "shape" + strconv.Itoa(b.objects+1)
+	if b.chartObjects == nil {
+		b.chartObjects = make(map[string]layout.Object)
+		b.chartParts = make(map[string]string)
+	}
+	b.chartObjects[name] = &sceneObject{scene: scene, w: img.Width, h: img.Height}
+	img.Object = name
+	return true
+}
+
+// sceneScale is the number of pixels for a point that the pictures and the
+// text of a shape take for their resolution, before the transform of the
+// page.
+const sceneScale = 2
+
+// sceneObject is a shape of a sheet as an object of the layout.
+type sceneObject struct {
+	scene *drawingml.Scene
+	w, h  float64
+}
+
+// Size satisfies the interface Object of the layout.
+func (o *sceneObject) Size() (float64, float64) {
+	return o.w, o.h
+}
+
+// Draw satisfies the interface Object of the layout. It draws the scene
+// onto rect.
+func (o *sceneObject) Draw(ctx context.Context, dev display.Device, rect okage.Rect) error {
+	rw, rh := float64(rect.Width()), float64(rect.Height())
+	if !(rw > 0) || !(rh > 0) || math.IsInf(rw, 0) || math.IsInf(rh, 0) {
+		return nil
+	}
+	m := okage.TransformFromRow(float32(rw/o.w), 0, 0, float32(rh/o.h), rect.X(), rect.Y())
+	dev.Save()
+	defer dev.Restore()
+	dev.Concat(m)
+	return o.scene.Draw(ctx, dev, okage.TransformFromScale(sceneScale, sceneScale).PreConcat(m))
 }
 
 // chart reads the chart of xdr:graphicFrame into img. It returns false for

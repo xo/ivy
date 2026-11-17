@@ -436,7 +436,7 @@ func TestEmptyWorkbook(t *testing.T) {
 
 func TestLimits(t *testing.T) {
 	var rows strings.Builder
-	for r := 1; r <= 400; r++ {
+	for r := 1; r <= 600; r++ {
 		fmt.Fprintf(&rows, `<row r="%d"><c r="A%d"><v>%d</v></c></row>`, r, r, r)
 	}
 	book := fixture.XLSXBook{Sheets: []fixture.XLSXSheet{{Name: "Long", Body: "<sheetData>" + rows.String() + "</sheetData>"}}}

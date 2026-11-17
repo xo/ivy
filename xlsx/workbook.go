@@ -35,9 +35,9 @@ type book struct {
 	// sheet in the workbook, for the print areas and the print titles.
 	printAreas  map[int]string
 	printTitles map[int]string
-	// files and chartObjects collect the images and the charts, and
-	// objects counts them. chartParts holds the part of each chart of
-	// chartObjects, by its name.
+	// files and chartObjects collect the images, and the charts and the
+	// shapes, and objects counts them. chartParts holds the part of each
+	// chart of chartObjects, by its name.
 	files        map[string][]byte
 	chartObjects map[string]layout.Object
 	chartParts   map[string]string

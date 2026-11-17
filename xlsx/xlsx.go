@@ -5,9 +5,9 @@
 // docProps/thumbnail.* (D11), and the pages of its sheets, as printing does
 // (D24): each sheet that is not hidden, in order, with the cells that hold
 // data or a visible style, or with its print area. A sheet that is wider
-// than its page is cut into bands of columns, down then over. The package
-// converts the sheets into HTML tables for the layout of D10, with the
-// package sheet.
+// than its page is cut into bands of columns, down then over, or over then
+// down when the page setup asks for it. The package converts the sheets
+// into HTML tables for the layout of D10, with the package sheet.
 //
 // The cells show the values that the file holds, formatted with their
 // number formats. No formula is computed: a formula shows the value that
@@ -23,12 +23,18 @@
 // and the heights of the rows are those that Excel prints, and a row keeps
 // its height as in Excel.
 //
-// The pictures and the charts of the drawings show at their cells, and a
-// chart sheet shows its chart on a page of its own. internal/chart draws
-// the charts (D27), with the colors of the theme and the fonts of
-// ivy.Config. A chart that cannot be read shows as a frame with its title.
-// The conditional formats, the comments, the shapes and the sparklines are
-// left out.
+// The pictures, the charts and the shapes of the drawings show at their
+// cells, and a chart sheet shows its chart on a page of its own.
+// internal/chart draws the charts (D27), and internal/drawingml the shapes,
+// with the colors of the theme and the fonts of ivy.Config. A chart that
+// cannot be read shows as a frame with its title. A shape that does not
+// print is left out.
+//
+// The conditional formats change the look of the cells, as Excel shows
+// them: the highlights of the cells, the color scales, the data bars and
+// the icon sets. A rule with a formula of its own needs the formulas, and
+// is left out. The comments of the cells show on pages after the cells
+// when the page setup asks for it. The sparklines are left out.
 //
 // A document describes the core properties of the file: its title, its
 // creator and its dates.

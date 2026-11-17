@@ -9,6 +9,7 @@
 package layout
 
 import (
+	"fmt"
 	"log/slog"
 	"math"
 	"strings"
@@ -1614,8 +1615,7 @@ func TestTableRowHeight3(t *testing.T) {
 // TestTableRowHeightSpan checks that the row with a height in which a cell
 // that spans rows ends gets only the part of the cell past the rows before
 // it. WeasyPrint gives the row the whole height of the cell. This port
-// differs on purpose. A row in which no cell ends still gets the height 0,
-// as in WeasyPrint, which internal/sheet works around.
+// differs on purpose.
 func TestTableRowHeightSpan(t *testing.T) {
 	_, table := tableRender(t, `
       <table style="border-spacing: 0">
@@ -1628,6 +1628,34 @@ func TestTableRowHeightSpan(t *testing.T) {
 	tableEq(t, "row1.height", rows[0].Height, 30)
 	tableEq(t, "row2.height", rows[1].Height, 20)
 	tableEq(t, "row_group.height", rowGroup.Height, 50)
+}
+
+// TestTableRowHeightNoEnd checks that a row with a height in which no cell
+// ends keeps its height, as in a browser. WeasyPrint gives it the height 0.
+// The cells that span the rows end in the last row, which gets only the
+// part of the cells past the rows before it. A row without a height in
+// which no cell ends still gets the height 0, as TestTableRowHeight3
+// checks.
+func TestTableRowHeightNoEnd(t *testing.T) {
+	_, table := tableRender(t, `
+      <table style="border-spacing: 0">
+        <tr style="height: 15px"><td rowspan="3" style="vertical-align: top"><div style="height: 10px"></div></td><td rowspan="3"></td></tr>
+        <tr style="height: 15px"></tr>
+        <tr style="height: 15px"></tr>
+        <tr style="height: 15px"><td rowspan="3" style="vertical-align: top"><div style="height: 60px"></div></td></tr>
+        <tr style="height: 15px"></tr>
+        <tr style="height: 15px"></tr>
+      </table>
+    `)
+	rowGroup := only(t, table)
+	rows := unpack(t, rowGroup, 6)
+	for i, want := range []float64{15, 15, 15, 15, 15, 30} {
+		tableEq(t, fmt.Sprintf("row%d.height", i+1), rows[i].Height, want)
+		tableEq(t, fmt.Sprintf("row%d.position_y", i+1), rows[i].PositionY, 15*float64(i))
+	}
+	tableEq(t, "row_group.height", rowGroup.Height, 105)
+	cells := rows[0].Children
+	tableEq(t, "cell1.border_height", cells[0].BorderHeight(), 45)
 }
 
 func TestTableRowHeight4(t *testing.T) {

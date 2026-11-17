@@ -735,7 +735,8 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				endingCellsByRow = endingCellsByRow[1:]
 			}
 			var rowBottomY float64
-			if len(endingCells) > 0 { // in this row
+			switch {
+			case len(endingCells) > 0: // in this row
 				// Port: each part of a row that a page break splits takes
 				// the height of its content. Upstream keeps the height of
 				// the row, which then overflows the page, so that a row
@@ -758,7 +759,14 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 					row.Height = height
 					rowBottomY = row.PositionY + row.Height
 				}
-			} else {
+			case row.Height != Auto && len(resumeAt) == 0 && len(skip) == 0:
+				// Port: a row with a height in which no cell ends keeps its
+				// height, as browsers and spreadsheets keep it. Upstream
+				// gives the row the height 0. A cell that spans rows and
+				// ends in a later row then starts at the same place as in
+				// a browser.
+				rowBottomY = row.PositionY + row.Height
+			default:
 				rowBottomY = row.PositionY
 				row.Height = 0
 			}

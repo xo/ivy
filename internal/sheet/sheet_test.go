@@ -69,9 +69,8 @@ func TestSourceHTML(t *testing.T) {
 		`<td class="s1 c">Name</td>`,
 		`<td class="n c">1.50</td>`,
 		`<td class="n c" style="color:#ff0000">-2</td>`,
-		// the row in which the merged cell ends carries the height of the
-		// row in which it starts
-		`<tr><td class="c" colspan="3" rowspan="2">merged text</td></tr><tr style="height:30pt"></tr>`,
+		// the rows of the merged cell keep their own heights
+		`<tr><td class="c" colspan="3" rowspan="2">merged text</td></tr><tr></tr>`,
 		`td.s1{font-family:"Calibri", sans-serif;font-size:11pt;font-weight:bold;background-color:#ddebf7;border-bottom:0.75pt solid #000000;text-align:center;}`,
 		`<td class="c">alpha</td><td class="n c">1.50</td><td></td>`,
 	} {
@@ -83,9 +82,8 @@ func TestSourceHTML(t *testing.T) {
 
 func TestMergedRows(t *testing.T) {
 	// 60 cells of 3 rows of 15 points each, merged across the band: the
-	// merged cells end in their last rows, which carry the heights of the
-	// rows before them. 2700 points of rows give 4 pages of 684 points, as
-	// without the merges.
+	// rows in which no cell ends keep their heights in the layout. 2700
+	// points of rows give 4 pages of 684 points, as without the merges.
 	sheet := func(merged bool) *Workbook {
 		sh := &Sheet{Name: "Merged", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage}
 		for i := range 60 {
@@ -103,7 +101,7 @@ func TestMergedRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := document(t, src, 0)
-	if want := `<tr><td class="c" colspan="2" rowspan="3">a</td></tr><tr></tr><tr style="height:45pt"></tr>`; !strings.Contains(doc, want) {
+	if want := `<tr><td class="c" colspan="2" rowspan="3">a</td></tr><tr></tr><tr></tr><tr>`; !strings.Contains(doc, want) {
 		t.Errorf("expected %q in the document:\n%s", want, doc)
 	}
 	plain, err := sheet(false).Source(t.Context(), Options{})
@@ -323,8 +321,8 @@ func TestLimit(t *testing.T) {
 	if !strings.Contains(doc, "past the limit of 250 cells") {
 		t.Error("expected the note of the limit")
 	}
-	if n := strings.Count(doc, "<tr"); n > 60 {
-		t.Errorf("expected at most 60 rows, got: %d", n)
+	if n := strings.Count(doc, "<tr"); n > 90 {
+		t.Errorf("expected at most 90 rows, got: %d", n)
 	}
 }
 
@@ -458,6 +456,16 @@ func TestColumnWidths(t *testing.T) {
 	}
 	if got := arial.DefaultColumn(10); math.Abs(got-63.086) > 0.01 {
 		t.Errorf("expected a column of 63.09 points, got: %v", got)
+	}
+	// Century Gothic of 9 points has a digit of 6.65 pixels, which Excel
+	// rounds to 7, and of 42 dots: Excel prints a column of 22.43
+	// characters 113.04 points wide
+	gothic := DigitOf(Font{Family: "Century Gothic", Size: 9}, 11)
+	if gothic != (Digit{Pixels: 7, Print: 5.04}) {
+		t.Errorf("expected a digit of 7 pixels and 5.04 points for Century Gothic of 9 points, got: %+v", gothic)
+	}
+	if got := gothic.Column(22.42578125); math.Abs(got-113.04) > 0.01 {
+		t.Errorf("expected a column of 113.04 points, got: %v", got)
 	}
 	for _, chars := range []float64{0, -1, math.NaN()} {
 		if got := arial.Column(chars); got != 0 {

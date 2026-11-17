@@ -100,7 +100,7 @@ func TestLimit(t *testing.T) {
 }
 
 func TestHTML(t *testing.T) {
-	buf := []byte("Name,Amount,Note\nalpha,\"1,234.50\",short\nbeta,-2," + strings.Repeat("long ", 80) + "\n")
+	buf := []byte("Name,Amount in US dollars,Note\nalpha,\"1,234.50\",short\nbeta,-2," + strings.Repeat("long ", 80) + "\n")
 	d := open(t, buf, ivy.Config{})
 	src, err := d.source(t.Context())
 	if err != nil {
@@ -111,8 +111,8 @@ func TestHTML(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`<col style="width:48pt"><col style="width:50.8pt"><col style="width:300pt">`,
-		`<td class="c">Name</td><td class="c">Amount</td><td class="s1 c">Note</td>`,
+		`<col style="width:48pt"><col style="width:100.11pt"><col style="width:300pt">`,
+		`<td class="c">Name</td><td class="c">Amount in US dollars</td><td class="s1 c">Note</td>`,
 		`<td class="c">alpha</td><td class="n c">1,234.50</td>`,
 		`<td class="n c">-2</td><td class="s1 c">long long`,
 		"border:0.5pt solid #c8c8c8",

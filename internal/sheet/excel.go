@@ -62,6 +62,10 @@ var digitWidths = map[string]float64{
 	"courier new": 0.6001, "liberation mono": 0.6001, "courier": 0.6001, "consolas": 0.5498,
 	"verdana": 0.6357, "tahoma": 0.5459, "segoe ui": 0.5391, "trebuchet ms": 0.5244,
 	"candara": 0.5518, "corbel": 0.5244, "franklin gothic medium": 0.5864, "lucida sans unicode": 0.6323,
+	// Century Gothic has the widths of ITC Avant Garde Gothic: the digits
+	// are 554 units of 1000 in the widths of the font that Excel puts in
+	// the PDF files that it exports
+	"century gothic": 0.554, "itc avant garde gothic": 0.554,
 	// the fonts of East Asia
 	"ms gothic": 0.5, "ms pgothic": 0.5, "ms ui gothic": 0.5, "ms mincho": 0.5, "ms pmincho": 0.5,
 	"ｍｓ ゴシック": 0.5, "ｍｓ ｐゴシック": 0.5, "ｍｓ 明朝": 0.5, "ｍｓ ｐ明朝": 0.5,
@@ -91,7 +95,10 @@ const RowScale = 0.968
 // unit of the widths of the columns of Excel.
 type Digit struct {
 	// Pixels is the width of the widest digit on the screen, in pixels at
-	// 96 dots per inch, as Excel rounds it.
+	// 96 dots per inch, rounded to the nearest pixel. Calibri of 11
+	// points (7.43 pixels), Arial of 10 points (7.41 pixels) and Century
+	// Gothic of 9 points (6.65 pixels) all have digits of 7 pixels in
+	// Excel.
 	Pixels float64
 	// Print is the advance of a digit that Excel prints, in points: the
 	// advance at the size in whole pixels of 600 dots per inch, rounded to
@@ -113,7 +120,7 @@ func DigitOf(f Font, def float64) Digit {
 	if !(size > 0) || size > 409 {
 		size = 11
 	}
-	px := math.Max(1, math.Floor(size*screenDPI/72*ratio))
+	px := math.Max(1, math.Round(size*screenDPI/72*ratio))
 	dots := math.Max(1, math.Round(math.Round(size*printDPI/72)*ratio))
 	return Digit{Pixels: px, Print: dots * 72 / printDPI}
 }

@@ -7,9 +7,15 @@
 //
 // A sheet that is wider than its page is cut into bands of columns. The
 // pages show the rows of the first band, then the rows of the next band, as
-// Excel prints "down, then over". The rows of the print titles repeat at
-// the top of each page, and the columns of the print titles at the left of
-// each band.
+// Excel prints "down, then over", or the first rows of each band, then the
+// next rows, as Excel prints "over, then down". The rows of the print
+// titles repeat at the top of each page, and the columns of the print
+// titles at the left of each band. A band ends at its last row that shows
+// something, as Excel prints no page without ink.
+//
+// The conditional formats of a sheet change the look of its cells: a
+// style, a color scale, a data bar or an icon. The comments of the cells
+// can follow the cells on pages of their own.
 //
 // xlsx, msxls, odf and csv share the package. The two formats of Excel,
 // xlsx and msxls, also share the sizes of the papers, the widths of the
@@ -89,6 +95,17 @@ type Sheet struct {
 	// text that is higher than its row crosses the edges of the row. Without
 	// it, the row grows to hold the line.
 	FixedRows bool
+	// CondFormats are the conditional formats of the cells.
+	CondFormats []CondFormat
+	// Comments are the comments of the cells, which the pages show after
+	// the cells when Page.CommentsAtEnd is set, as Excel prints them.
+	Comments []Comment
+}
+
+// Comment is the comment of a cell: its author and its text.
+type Comment struct {
+	Row, Col     int
+	Author, Text string
 }
 
 // Range is a rectangle of cells, from the cell (Row0, Col0) to the cell
@@ -155,6 +172,9 @@ type Cell struct {
 	// Style is the index of the style of the cell in Workbook.Styles.
 	Style int
 	Kind  Kind
+	// Value is the number of a cell of KindNumber, which the conditional
+	// formats compare.
+	Value float64
 	// Color is the color of the section of the format code, such as
 	// [Red], or transparent.
 	Color color.NRGBA
@@ -244,6 +264,14 @@ type Page struct {
 	// ScaleHeaderFooter scales the text of the header and the footer with
 	// the cells, as Excel does unless a sheet asks otherwise.
 	ScaleHeaderFooter bool
+	// OverThenDown prints the pages in the order over, then down: the
+	// first rows of each band of columns, then the next rows. Without it,
+	// the pages go down, then over: all the rows of the first band, then
+	// of the next band.
+	OverThenDown bool
+	// CommentsAtEnd prints the comments of the cells on pages after the
+	// cells.
+	CommentsAtEnd bool
 }
 
 // HeaderFooter is a header or a footer: the text of its three parts.
