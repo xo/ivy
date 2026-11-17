@@ -48,3 +48,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D26 | [ivy reads DjVu with a copy of the decoders of dejapdf](D026-ivy-reads-djvu-with-a-copy-of-the-decoders-of-dejapdf.md) | Decided |
 | D27 | [ivy draws the charts of Office itself](D027-ivy-draws-the-charts-of-office-itself.md) | Decided. Amends D24 |
 | D28 | [ivy reads fonts with the typesetting of okage, and fills small glyphs finely](D028-ivy-reads-fonts-with-the-typesetting-of-okage-and-fills-small-glyphs-finely.md) | Decided |
+| D29 | [ivy interprets PostScript](D029-ivy-interprets-postscript.md) | Decided |
+| D30 | [vsdx draws the pages of Visio](D030-vsdx-draws-the-pages-of-visio.md) | Decided |
+| D31 | [pdf can render another page box](D031-pdf-can-render-another-page-box.md) | Decided |
+| D32 | [A program chooses the paper of a document without one](D032-a-program-chooses-the-paper-of-a-document-without-one.md) | Decided |
