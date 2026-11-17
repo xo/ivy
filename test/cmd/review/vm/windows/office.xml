@@ -1,0 +1,28 @@
+<!--
+  The configuration of the Office Deployment Tool for the Windows VM of the
+  review: Office Professional Plus 2024 and Visio Professional 2024, retail,
+  64-bit, in English. The maintainer enters the product keys once, in the
+  desktop of the VM, when Word asks for them. Publisher is not part of
+  Office 2024. Outlook, Teams, OneDrive, Groove, Lync and OneNote are left
+  out, because the review does not use them.
+-->
+<Configuration>
+  <Add OfficeClientEdition="64" Channel="Current">
+    <Product ID="ProPlus2024Retail">
+      <Language ID="en-us" />
+      <ExcludeApp ID="Groove" />
+      <ExcludeApp ID="Lync" />
+      <ExcludeApp ID="OneDrive" />
+      <ExcludeApp ID="OneNote" />
+      <ExcludeApp ID="Outlook" />
+      <ExcludeApp ID="Teams" />
+    </Product>
+    <Product ID="VisioPro2024Retail">
+      <Language ID="en-us" />
+    </Product>
+  </Add>
+  <Updates Enabled="FALSE" />
+  <Display Level="None" AcceptEULA="TRUE" />
+  <Property Name="AUTOACTIVATE" Value="0" />
+  <Property Name="FORCEAPPSHUTDOWN" Value="TRUE" />
+</Configuration>

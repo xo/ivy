@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // thumbWidth is the width in pixels of the images of the grid of the
@@ -140,6 +141,48 @@ func pnmHeader(r *bufio.Reader, magic *string, w, h, maxval *int) error {
 		if _, err := fmt.Sscan(tokens[i+1], p); err != nil {
 			return fmt.Errorf("bad header field %q", tokens[i+1])
 		}
+	}
+	return nil
+}
+
+// rename is os.Rename. A test replaces it to make a move across file
+// systems.
+var rename = os.Rename
+
+// moveFile moves the file src to dst. If the two are on different file
+// systems, rename cannot move the file. Then moveFile copies src to a
+// temporary file in the folder of dst, renames that file to dst, and
+// removes src. dst never holds a part of the file.
+func moveFile(src, dst string) error {
+	err := rename(src, dst)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, syscall.EXDEV) {
+		return fmt.Errorf("moving %s: %w", src, err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", src, err)
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.CreateTemp(filepath.Dir(dst), ".move-*")
+	if err != nil {
+		return fmt.Errorf("making a temporary file: %w", err)
+	}
+	defer func() { _ = os.Remove(out.Name()) }()
+	_, err = io.Copy(out, in)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("copying %s: %w", src, err)
+	}
+	if err := rename(out.Name(), dst); err != nil {
+		return fmt.Errorf("moving %s: %w", out.Name(), err)
+	}
+	if err := os.Remove(src); err != nil {
+		return fmt.Errorf("removing %s: %w", src, err)
 	}
 	return nil
 }

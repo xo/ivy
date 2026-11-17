@@ -267,9 +267,10 @@ type ivyDoc struct {
 	pages int
 }
 
-// openIvy opens the file at path with the format of kind. It returns the
-// document, and the time to open it and to count its pages.
-func openIvy(ctx context.Context, path, kind, password, fonts string) (*ivyDoc, time.Duration, error) {
+// openIvy opens the file at path with the format of kind, with the
+// configuration cfg and a logger of its own. It returns the document, and
+// the time to open it and to count its pages.
+func openIvy(ctx context.Context, path, kind string, cfg ivy.Config) (*ivyDoc, time.Duration, error) {
 	format, ok := formatFor(kind)
 	if !ok {
 		return nil, 0, fmt.Errorf("ivy has no format for the kind %q", kind)
@@ -284,11 +285,7 @@ func openIvy(ctx context.Context, path, kind, password, fonts string) (*ivyDoc, 
 		return nil, 0, fmt.Errorf("reading the size of the file: %w", err)
 	}
 	d := &ivyDoc{file: f, log: newLogCollector()}
-	cfg := ivy.Config{
-		Password: password,
-		Logger:   slog.New(d.log),
-		Fonts:    os.DirFS(fonts),
-	}
+	cfg.Logger = slog.New(d.log)
 	start := time.Now()
 	doc, err := call(ctx, func() (ivy.Document, error) {
 		src := io.NewSectionReader(f, 0, st.Size())
@@ -351,4 +348,19 @@ func (d *ivyDoc) close() {
 	if d.file != nil {
 		_ = d.file.Close()
 	}
+}
+
+// errNoMediaBox is the error of ivyMediaBox until the package pdf has the
+// option WithPageBox (D31).
+var errNoMediaBox = errors.New("ivy cannot render the MediaBox yet (D31)")
+
+// ivyMediaBox renders page n, from 0, of the PDF file at path at its
+// MediaBox, at dpi over white. password opens a file with a password, and
+// fonts is the folder of the fonts of ivy. It will open the file with
+// pdf.Open and the option pdf.WithPageBox(pdf.MediaBox) of D31. Until the
+// package pdf has that option, it returns errNoMediaBox, and the cell of
+// ivy of a row of the MediaBox has the status unsupported.
+func ivyMediaBox(ctx context.Context, path, password, fonts string, n int, dpi float32) (image.Image, error) {
+	_, _, _, _, _, _ = ctx, path, password, fonts, n, dpi
+	return nil, errNoMediaBox
 }

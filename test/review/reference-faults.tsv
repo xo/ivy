@@ -1,0 +1,10 @@
+# The known faults of the references of the review. The review marks such a
+# cell, shows its note, and leaves it out of the worst numbers and of
+# "references disagree". The columns are separated by tabs: the name of the
+# document in corpus.tsv, the page from 1 or * for each page, the id of the
+# reference (soffice, msoffice, calibre, weasyprint, pdf, xps, winxps, gs,
+# inkscape, gdiplus, djvu, magick, iwork) or * for each one, and a note that
+# says what the reference does wrong and what is right.
+name	page	reference	note
+poi/vsdx/60489.vsdx	*	soffice	LibreOffice draws the actor shapes broken and wraps their labels.
+poi/vsdx/60973.vsdx	*	soffice	LibreOffice draws square corners where the Rounding cell asks for round ones, draws green boxes around the cloud and the router pictures that the file does not have, and draws a stray column of vertical text.

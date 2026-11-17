@@ -16,3 +16,12 @@ func killGroup(cmd *exec.Cmd) {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 }
+
+// killRest kills each process that is left in the process group of cmd
+// after cmd ends. A child of soffice can keep running after the program
+// that started it stops.
+func killRest(cmd *exec.Cmd) {
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}

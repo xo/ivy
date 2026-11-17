@@ -7,7 +7,10 @@
 //
 //	review fetch [-cache DIR] [-manifest FILE] [-j N]
 //	review render -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
-//		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR]
+//		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR] [-retry]
+//		[-papers LIST] [-system-fonts=BOOL] [-font-dirs LIST] [-faults FILE]
+//	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
+//		[-kind LIST]
 //
 // The manifest is test/review/corpus.tsv of the repository, by default.
 // Each line names a document: name, kind, url, sha256, size, license,
@@ -25,9 +28,15 @@
 // with the reference programs of the kind, compares each page of ivy with
 // each reference, and writes index.html, report.json and the images into
 // the folder of -out. It keeps the images of the references in the cache,
-// because LibreOffice and calibre are slow. ivy renders each time. If the
-// references convert a document to PDF, ivy renders that PDF file too, as
-// the column "ivy PDF", and compares it with MuPDF.
+// because LibreOffice and calibre are slow, and it keeps the failures of the
+// reference programs. -retry tries those failures again. ivy renders each
+// time. If the references convert a document to PDF, ivy renders that PDF
+// file too, as the column "ivy PDF", and compares it with MuPDF. A
+// document of a kind without a paper, such as a text file or an ebook,
+// renders once on each paper of -papers (D32).
+//
+// bundle copies the files of the corpus into a folder, at their names, with
+// the file passwords.tsv, for Microsoft Office on Windows.
 //
 // The cache is test/review/cache of the repository, by default. Git
 // ignores it. The command finds the repository from the current folder.
@@ -67,9 +76,13 @@ Usage:
 
 	review fetch [-cache DIR] [-manifest FILE] [-j N]
 	review render -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
-		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR]
+		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR] [-retry]
+		[-papers LIST] [-system-fonts=BOOL] [-font-dirs LIST] [-faults FILE]
+	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
+		[-kind LIST]
 
-Run "review fetch -h" or "review render -h" for the flags.
+Run "review fetch -h", "review render -h" or "review bundle -h" for the
+flags.
 `
 
 // run runs the command with the arguments args.
@@ -77,7 +90,7 @@ func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprint(os.Stderr, usage)
 		if len(args) == 0 {
-			return errors.New("expected a command: fetch or render")
+			return errors.New("expected a command: fetch, render or bundle")
 		}
 		return nil
 	}
@@ -91,6 +104,24 @@ func run(ctx context.Context, args []string) error {
 	cache := fs.String("cache", filepath.Join(repo, "test", "review", "cache"), "the cache `folder` of the files and of the references")
 	manifest := fs.String("manifest", filepath.Join(repo, "test", "review", "corpus.tsv"), "the manifest `file` of the corpus")
 	jobs := fs.Int("j", max(1, runtime.GOMAXPROCS(0)/2), "the `number` of documents at the same time")
+	match := fs.String("match", "", "take only the documents whose name matches the `regexp`")
+	kinds := fs.String("kind", "", "take only the documents of these kinds, a comma-separated `list` such as pdf,docx")
+	selection := func() (*regexp.Regexp, []string, error) {
+		var re *regexp.Regexp
+		if *match != "" {
+			var err error
+			if re, err = regexp.Compile(*match); err != nil {
+				return nil, nil, fmt.Errorf("reading -match: %w", err)
+			}
+		}
+		var list []string
+		for k := range strings.SplitSeq(*kinds, ",") {
+			if k = strings.TrimSpace(strings.ToLower(k)); k != "" {
+				list = append(list, k)
+			}
+		}
+		return re, list, nil
+	}
 	switch args[0] {
 	case "fetch":
 		fs.Usage = func() {
@@ -109,11 +140,18 @@ func run(ctx context.Context, args []string) error {
 		})
 	case "render":
 		out := fs.String("out", "", "the `folder` of the report, which must be new, empty or an earlier report (required)")
-		match := fs.String("match", "", "render only the documents whose name matches the `regexp`")
-		kinds := fs.String("kind", "", "render only the documents of these kinds, a comma-separated `list` such as pdf,docx")
 		pages := fs.Int("pages", 3, "render the first `N` pages and the last page; 0 renders each page")
 		dpi := fs.Int("dpi", 96, "the `resolution` in dots per inch")
 		timeout := fs.Duration("timeout", 5*time.Minute, "the `time` that ivy, and then the references, can take on one document")
+		retry := fs.Bool("retry", false, "try again each failure of the references that the cache keeps from an earlier run")
+		papers := fs.String("papers", review.DefaultPapers,
+			"the papers of a document whose file gives none, a comma-separated `list` of letter, legal, a4 and a5, "+
+				"each with -landscape or not, and default; an empty list renders such a document once (D32)")
+		systemFonts := fs.Bool("system-fonts", true, "give ivy the fonts of the system, as the references have them")
+		fontDirs := fs.String("font-dirs", strings.Join(review.DefaultFontDirs(), ","),
+			"a comma-separated `list` of font folders more for ivy and for the references; the default is the font folders of the account")
+		faults := fs.String("faults", filepath.Join(repo, "test", "review", "reference-faults.tsv"),
+			"the `file` of the known faults of the references")
 		fs.Usage = func() {
 			_, _ = fmt.Fprint(fs.Output(), "Usage: review render -out DIR [flags]\n\nRenders the corpus with ivy and with the references, and writes the report.\n\n")
 			fs.PrintDefaults()
@@ -127,18 +165,23 @@ func run(ctx context.Context, args []string) error {
 		}
 		opts := review.RenderOptions{
 			Repo: repo, Cache: *cache, Out: *out, Pages: *pages, DPI: *dpi, Jobs: *jobs,
-			Timeout: *timeout, Log: os.Stdout,
+			Timeout: *timeout, Retry: *retry, Log: os.Stdout, SystemFonts: *systemFonts,
 		}
-		if *match != "" {
-			re, err := regexp.Compile(*match)
-			if err != nil {
-				return fmt.Errorf("reading -match: %w", err)
+		var err error
+		if opts.Match, opts.Kinds, err = selection(); err != nil {
+			return err
+		}
+		if opts.Papers, err = review.ParsePapers(*papers); err != nil {
+			return fmt.Errorf("reading -papers: %w", err)
+		}
+		for d := range strings.SplitSeq(*fontDirs, ",") {
+			if d = strings.TrimSpace(d); d != "" {
+				opts.FontDirs = append(opts.FontDirs, d)
 			}
-			opts.Match = re
 		}
-		for k := range strings.SplitSeq(*kinds, ",") {
-			if k = strings.TrimSpace(strings.ToLower(k)); k != "" {
-				opts.Kinds = append(opts.Kinds, k)
+		if *faults != "" {
+			if opts.Faults, err = review.LoadFaults(*faults); err != nil {
+				return err
 			}
 		}
 		entries, err := review.LoadManifest(*manifest)
@@ -150,8 +193,34 @@ func run(ctx context.Context, args []string) error {
 			fmt.Printf("%d documents in %.0f s: %s\n", len(rep.Docs), rep.Elapsed, filepath.Join(*out, "index.html"))
 		}
 		return err
+	case "bundle":
+		out := fs.String("out", "", "the `folder` of the bundle (required)")
+		fs.Usage = func() {
+			_, _ = fmt.Fprint(fs.Output(), "Usage: review bundle -out DIR [flags]\n\n"+
+				"Copies the files of the corpus into DIR at their names, with passwords.tsv, for Microsoft Office on Windows.\n\n")
+			fs.PrintDefaults()
+		}
+		if err := fs.Parse(args[1:]); err != nil {
+			return fmt.Errorf("reading the flags: %w", err)
+		}
+		if *out == "" {
+			fs.Usage()
+			return errors.New("expected the folder of the bundle: -out DIR")
+		}
+		opts := review.BundleOptions{Repo: repo, Cache: *cache, Out: *out, Log: os.Stdout}
+		var err error
+		if opts.Match, opts.Kinds, err = selection(); err != nil {
+			return err
+		}
+		entries, err := review.LoadManifest(*manifest)
+		if err != nil {
+			return err
+		}
+		n, err := review.Bundle(entries, opts)
+		fmt.Printf("%d files in %s\n", n, *out)
+		return err
 	}
-	return fmt.Errorf("unknown command %q: expected fetch or render", args[0])
+	return fmt.Errorf("unknown command %q: expected fetch, render or bundle", args[0])
 }
 
 // findRepo returns the root of the repository of ivy: the first folder

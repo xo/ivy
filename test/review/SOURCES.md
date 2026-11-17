@@ -8,7 +8,7 @@ Nothing in this list is committed to the repository or shipped with ivy.
 A row whose URL starts with `repo:` names a file that is already in this
 repository. The review command reads that file in place.
 
-The manifest holds 285 rows: 269 files to download, about 129 MB, and 16
+The manifest holds 305 rows: 289 files to download, about 131 MB, and 16
 files of this repository. 57 of the rows are assets: the style sheets, the
 fonts and the images that an HTML file links to. The review command
 downloads an asset and does not render it. A note of the form `password=XYZ` gives the
@@ -24,7 +24,7 @@ apply.
 - URL: https://github.com/apache/poi, folder `test-data/`.
 - Commit: `8d9b40ac4cb62b1c61759c900fb422abfeac4367`.
 - License: Apache-2.0, the license of the repository.
-- Rows: 63.
+- Rows: 70.
 
 The rows cover docx, doc, xlsx, xls, pptx, ppt, vsdx, vsd, pub, EMF, WMF and
 one XPS file. POI took some test files from bug reports and from the web.
@@ -49,7 +49,7 @@ reports. `freeculture.pdf` is a book under CC BY-NC 1.0. The password of
   `sd/qa` and `chart2/qa`.
 - Commit: `7b2a56bf86c19b48ffc46873785bd0e6fefd96cd`.
 - License: MPL-2.0, the license of the repository.
-- Rows: 30.
+- Rows: 40.
 
 The rows cover odt, ods, odp, odg, rtf, docx, xlsx, pptx and doc. MPL-2.0 is
 a copyleft license. The review downloads these files, and the repository
@@ -192,6 +192,21 @@ repository must never hold them. The license column of each row says "none
   Chinese and Vietnamese. 11 files.
 - datasets/country-codes, commit `2d84034a0cae19ea5444b78c2131304a5c7f4bb9`.
   A CSV file of 56 columns, with names in many scripts. 1 file.
+
+## Apache Tika
+
+- URL: https://github.com/apache/tika, folder
+  `tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-apple-module/src/test/resources/test-documents/`.
+- Commit: `3756dbd60d2e8552fd6c721d13f651cab07a5d12`.
+- License: Apache-2.0, in `LICENSE.txt`. `NOTICE.txt` says nothing about
+  the test documents.
+- Rows: 4.
+
+The rows cover Pages, Keynote and Numbers. Three files have the form of
+2013 and later: a zip of `Index/*.iwa` with `preview.jpg`. The Keynote file
+of 2018 is a zip of a folder `.key` with `Index.zip`, and it holds no
+preview image. The manifest leaves out the files of iWork '09, because the
+applications of Apple do not open them now.
 
 ## Other sources
 

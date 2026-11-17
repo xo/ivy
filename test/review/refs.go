@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,9 +17,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/sheet"
 )
 
 // disagreeBlurred is the blurred difference above which two references
@@ -30,6 +34,10 @@ const disagreeBlurred = 4.0
 type refEnv struct {
 	cache string
 	dpi   int
+	// retry makes the references try a failure that the cache keeps again.
+	retry bool
+	// unoScript is the path of unopdf.py in the folder of the run.
+	unoScript string
 	// env is the environment of each program: HOME in a temporary folder,
 	// and the fonts of ivy for fontconfig.
 	env []string
@@ -41,6 +49,38 @@ type refEnv struct {
 	mu       sync.Mutex
 	keys     map[string]string
 	versions map[string]string
+
+	// cachedFailures counts the failures that came from the cache.
+	cachedFailures atomic.Int64
+	// pipes numbers the pipes of UNO, so that each soffice has its own.
+	pipes atomic.Int64
+
+	unoOnce sync.Once
+	uno     unoPython
+	unoErr  error
+}
+
+// toolError is an error of a reference program: the program failed, did
+// not finish in time, or wrote no result. The cache keeps a toolError,
+// because the next run gets the same error. It does not keep another
+// error, such as an error of the file system, because the next run can
+// succeed.
+type toolError struct {
+	err error
+}
+
+func (e *toolError) Error() string {
+	return e.err.Error()
+}
+
+func (e *toolError) Unwrap() error {
+	return e.err
+}
+
+// isToolError reports whether the cache keeps err.
+func isToolError(err error) bool {
+	var te *toolError
+	return errors.As(err, &te)
 }
 
 // refJob is the work of the references on one document.
@@ -55,6 +95,9 @@ type refJob struct {
 	hash string
 	// tmp is a temporary folder of the document.
 	tmp string
+	// paper is the paper of a document whose file gives none, or the zero
+	// paper for the default of the kind (D32).
+	paper ivy.Paper
 }
 
 // pageRenderer draws one page of a file to a PNG file.
@@ -91,45 +134,83 @@ type route struct {
 	// column "ivy PDF", and compare it with MuPDF. Only a route that
 	// converts the document to PDF sets it.
 	ivyPDF bool
+	// uno makes the route convert a file with a password through the UNO
+	// API of LibreOffice, with unopdf.py and the Python of unoPython.
+	uno bool
+	// mediaBox makes the route add a row of the MediaBox for a page of a
+	// PDF file whose MediaBox differs from its CropBox (D31).
+	mediaBox bool
+	// variant returns the options of the conversion of a job, such as the
+	// options of calibre. The name of the conversion in the cache holds a
+	// hash of it, so a change of the options converts the file again. A nil
+	// variant or an empty string adds nothing to the name.
+	variant func(j *refJob) string
 }
 
-// The page renderers.
+// The page renderers of a PDF file. They draw the CropBox, as ivy does.
+// MuPDF draws it by default, and Poppler draws it with -cropbox. The tag
+// "crop" changes the key of the cache of Poppler, which drew the MediaBox
+// before.
 var (
-	mupdfRenderer  = pageRenderer{id: "mupdf", name: "MuPDF", tools: []string{"mutool"}, render: mutoolDraw}
-	splashRenderer = pageRenderer{id: "splash", name: "Poppler Splash", tools: []string{"pdftoppm"},
+	mupdfRenderer = pageRenderer{id: "mupdf", name: "MuPDF", tools: []string{"mutool"},
 		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
-			return popplerDraw(ctx, j, "pdftoppm", []string{"-aa", "yes", "-aaVector", "yes"}, in, n, out)
+			return mutoolDraw(ctx, j, nil, in, n, out)
+		}}
+	splashRenderer = pageRenderer{id: "splash", name: "Poppler Splash", tag: "crop", tools: []string{"pdftoppm"},
+		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
+			return popplerDraw(ctx, j, "pdftoppm", []string{"-aa", "yes", "-aaVector", "yes", "-cropbox"}, in, n, out)
 		}}
 	// The anti-aliasing "best" of pdftocairo breaks the glyphs of text,
 	// and "gray" draws them as "default" does, without subpixels.
-	cairoRenderer = pageRenderer{id: "cairo", name: "Poppler Cairo", tag: "gray", tools: []string{"pdftocairo"},
+	cairoRenderer = pageRenderer{id: "cairo", name: "Poppler Cairo", tag: "graycrop", tools: []string{"pdftocairo"},
 		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
-			return popplerDraw(ctx, j, "pdftocairo", []string{"-antialias", "gray"}, in, n, out)
+			return popplerDraw(ctx, j, "pdftocairo", []string{"-antialias", "gray", "-cropbox"}, in, n, out)
 		}}
 	pdfRenderers = []pageRenderer{mupdfRenderer, splashRenderer, cairoRenderer}
 )
 
+// The page renderers of the rows of the MediaBox of a PDF file (D31).
+var (
+	mupdfMediaRenderer = pageRenderer{id: "mupdf", name: "MuPDF", tag: "media", tools: []string{"mutool"},
+		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
+			return mutoolDraw(ctx, j, []string{"-b", "mediabox"}, in, n, out)
+		}}
+	splashMediaRenderer = pageRenderer{id: "splash", name: "Poppler Splash", tag: "media", tools: []string{"pdftoppm"},
+		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
+			return popplerDraw(ctx, j, "pdftoppm", []string{"-aa", "yes", "-aaVector", "yes"}, in, n, out)
+		}}
+	cairoMediaRenderer = pageRenderer{id: "cairo", name: "Poppler Cairo", tag: "graymedia", tools: []string{"pdftocairo"},
+		render: func(ctx context.Context, j *refJob, in string, n int, out string) error {
+			return popplerDraw(ctx, j, "pdftocairo", []string{"-antialias", "gray"}, in, n, out)
+		}}
+	mediaRenderers = []pageRenderer{mupdfMediaRenderer, splashMediaRenderer, cairoMediaRenderer}
+)
+
 // The routes.
 var (
-	pdfRoute     = &route{id: "pdf", count: pdfCount, renderers: pdfRenderers}
+	pdfRoute     = &route{id: "pdf", count: pdfCount, renderers: pdfRenderers, mediaBox: true}
 	sofficeRoute = &route{id: "soffice", name: "LibreOffice", tools: []string{"soffice"},
-		prepare: sofficePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
+		prepare: sofficePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true, uno: true,
+		variant: func(j *refJob) string { return j.unoPage() }}
 	calibreRoute = &route{id: "calibre", name: "calibre", tools: []string{"ebook-convert"},
-		prepare: calibrePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
+		prepare: calibrePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true,
+		variant: func(j *refJob) string { return strings.Join(calibreOptions(j.kind, j.paper), "\x00") }}
 	// weasyprintRoute lays out HTML with WeasyPrint, whose layout ivy ports
 	// (D15), with the style sheet that ivy gives an HTML file.
 	weasyprintRoute = &route{id: "weasyprint", name: "WeasyPrint", tools: []string{"weasyprint"},
-		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
-	xpsRoute = &route{id: "xps", renderers: []pageRenderer{{id: "xpstopng", name: "libgxps", tools: []string{"xpstopng"}, render: xpstopng}}}
-	gsRoute  = &route{id: "gs", name: "Ghostscript", tools: []string{"gs"}, perDPI: true,
+		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true,
+		variant: func(j *refJob) string { return ebook.PaperStyleFor(j.paper) }}
+	xpsRoute = &route{id: "xps", name: "libgxps",
+		renderers: []pageRenderer{{id: "xpstopng", name: "libgxps", tools: []string{"xpstopng"}, render: xpstopng}}}
+	gsRoute = &route{id: "gs", name: "Ghostscript", tools: []string{"gs"}, perDPI: true,
 		prepare: ghostscript, count: countPages,
 		renderers: []pageRenderer{{id: "gs", name: "Ghostscript", render: pickPage}}}
-	inkscapeRoute = &route{id: "inkscape", count: one,
+	inkscapeRoute = &route{id: "inkscape", name: "Inkscape", count: one,
 		renderers: []pageRenderer{{id: "inkscape", name: "Inkscape", tools: []string{"inkscape"}, render: inkscape}}}
-	djvuRoute = &route{id: "djvu", count: djvuCount,
+	djvuRoute = &route{id: "djvu", name: "DjVuLibre", count: djvuCount,
 		renderers: []pageRenderer{{id: "ddjvu", name: "DjVuLibre", tools: []string{"ddjvu"}, render: ddjvu}}}
-	magickRoute = &route{id: "magick", count: one, native: true,
-		renderers: []pageRenderer{{id: "magick", name: "ImageMagick", tools: []string{"magick"}, render: magick}}}
+	magickRoute = &route{id: "magick", name: "ImageMagick", count: one, native: true,
+		renderers: []pageRenderer{{id: "magick", name: "ImageMagick", tag: "srgb", tools: []string{"magick"}, render: magick}}}
 	// noRoute is the route of a kind without a reference.
 	noRoute = &route{id: "none"}
 	// rasterRoute is the route of an archive of images without a
@@ -183,10 +264,16 @@ var (
 	textKinds = []string{"txt", "text"}
 )
 
+// markdownExtensions are the extensions of Python-Markdown that calibre
+// turns on for a Markdown file. Without them, calibre shows a block of
+// fenced code as text with its backticks.
+const markdownExtensions = "footnotes,tables,toc,fenced_code,def_list,meta,sane_lists"
+
 // calibreOptions returns the options of ebook-convert that give the page
-// and the font of ivy for kind. The other kinds take a page of US Letter,
-// margins of 0.75 inch and a font of 12 points.
-func calibreOptions(kind string) []string {
+// and the font of ivy for kind, on the paper p. The zero p is the default
+// paper of the kind. The other kinds take a page of US Letter, margins of
+// 0.75 inch and a font of 12 points.
+func calibreOptions(kind string, p ivy.Paper) []string {
 	opts := []string{
 		"--margin-left", "0", "--margin-right", "0", "--margin-top", "0", "--margin-bottom", "0",
 		"--disable-font-rescaling", "--minimum-line-height", "0",
@@ -198,18 +285,31 @@ func calibreOptions(kind string) []string {
 		return []string{"--pdf-page-margin-top", tb, "--pdf-page-margin-bottom", tb,
 			"--pdf-page-margin-left", lr, "--pdf-page-margin-right", lr}
 	}
+	// size returns the options of the size of the page: def for the zero
+	// p, or else the size of p in points
+	size := func(def ...string) []string {
+		if p.Width <= 0 || p.Height <= 0 {
+			return def
+		}
+		return []string{"--custom-size", points(p.Width) + "x" + points(p.Height), "--unit", "point"}
+	}
 	switch {
 	case contains(bookKinds, kind):
-		opts = append(opts, "--custom-size", "6x9", "--unit", "inch", "--pdf-default-font-size", "15", "--pdf-standard-font", "serif")
+		// ivy keeps the aspect ratio of a cover, and calibre stretches it to
+		// the page without this option
+		opts = append(opts, size("--custom-size", "6x9", "--unit", "inch")...)
+		opts = append(opts, "--pdf-default-font-size", "15", "--pdf-standard-font", "serif", "--preserve-cover-aspect-ratio")
 		opts = append(opts, margins("43.2", "36")...)
 	case contains(textKinds, kind):
-		opts = append(opts, "--paper-size", "letter", "--pdf-default-font-size", "13", "--pdf-standard-font", "mono",
-			"--formatting-type", "plain")
+		opts = append(opts, size("--paper-size", "letter")...)
+		opts = append(opts, "--pdf-default-font-size", "13", "--pdf-standard-font", "mono", "--formatting-type", "plain")
 		opts = append(opts, margins("54", "54")...)
 	default:
-		opts = append(opts, "--paper-size", "letter", "--pdf-default-font-size", "16")
+		opts = append(opts, size("--paper-size", "letter")...)
+		opts = append(opts, "--pdf-default-font-size", "16")
 		if kind == "md" || kind == "markdown" {
-			opts = append(opts, "--formatting-type", "markdown", "--pdf-standard-font", "sans")
+			opts = append(opts, "--formatting-type", "markdown", "--pdf-standard-font", "sans",
+				"--markdown-extensions", markdownExtensions)
 		} else {
 			opts = append(opts, "--pdf-standard-font", "serif")
 		}
@@ -324,16 +424,17 @@ func runTool(ctx context.Context, env []string, dir, name string, args ...string
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err = cmd.Run()
+	killRest(cmd)
 	text := out.String()
 	if err != nil {
 		if ctx.Err() != nil {
-			return text, fmt.Errorf("%s did not finish in time: %w", name, ctx.Err())
+			return text, &toolError{fmt.Errorf("%s did not finish in time: %w", name, ctx.Err())}
 		}
 		tail := strings.TrimSpace(text)
 		if len(tail) > maxToolOutput {
 			tail = "..." + tail[len(tail)-maxToolOutput:]
 		}
-		return text, fmt.Errorf("running %s: %w: %s", name, err, tail)
+		return text, &toolError{fmt.Errorf("running %s: %w: %s", name, err, tail)}
 	}
 	return text, nil
 }
@@ -364,7 +465,45 @@ func pdfCount(ctx context.Context, j *refJob, in string) (int, error) {
 			return n, nil
 		}
 	}
-	return 0, errors.New("pdfinfo gives no page count")
+	return 0, &toolError{errors.New("pdfinfo gives no page count")}
+}
+
+// pdfBoxesDiffer reports whether the MediaBox of page n, from 1, of the PDF
+// file in differs from its CropBox, from pdfinfo.
+func pdfBoxesDiffer(ctx context.Context, j *refJob, in string, n int) (bool, error) {
+	page := strconv.Itoa(n)
+	args := slices.Concat([]string{"-box", "-f", page, "-l", page}, j.passwordArgs(), []string{in})
+	out, err := runTool(ctx, j.env, "", "pdfinfo", args...)
+	if err != nil {
+		return false, err
+	}
+	boxes := map[string][]float64{}
+	for line := range strings.SplitSeq(out, "\n") {
+		f := strings.Fields(line)
+		// Page 1 MediaBox: 0.00 0.00 612.00 792.00
+		if len(f) != 7 || f[0] != "Page" || f[1] != page || !strings.HasSuffix(f[2], "Box:") {
+			continue
+		}
+		var box []float64
+		for _, v := range f[3:] {
+			x, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return false, fmt.Errorf("reading the boxes of pdfinfo: %w", err)
+			}
+			box = append(box, x)
+		}
+		boxes[strings.TrimSuffix(f[2], ":")] = box
+	}
+	media, crop := boxes["MediaBox"], boxes["CropBox"]
+	if media == nil || crop == nil {
+		return false, &toolError{fmt.Errorf("pdfinfo gives no MediaBox or no CropBox for page %d", n)}
+	}
+	for i := range media {
+		if math.Abs(media[i]-crop[i]) > 0.01 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // djvuCount returns the number of pages of the DjVu file in.
@@ -396,9 +535,10 @@ func countPages(_ context.Context, _ *refJob, in string) (int, error) {
 	return len(names), nil
 }
 
-// mutoolDraw draws page n of the PDF file in with MuPDF.
-func mutoolDraw(ctx context.Context, j *refJob, in string, n int, out string) error {
-	args := []string{"draw", "-q", "-r", strconv.Itoa(j.dpi), "-A", "8", "-o", out}
+// mutoolDraw draws page n of the PDF file in with MuPDF, with the options
+// opts more.
+func mutoolDraw(ctx context.Context, j *refJob, opts []string, in string, n int, out string) error {
+	args := slices.Concat([]string{"draw", "-q", "-r", strconv.Itoa(j.dpi), "-A", "8"}, opts, []string{"-o", out})
 	if j.password != "" {
 		args = append(args, "-p", j.password)
 	}
@@ -430,8 +570,11 @@ func xpstopng(ctx context.Context, j *refJob, in string, n int, out string) erro
 		return err
 	}
 	names, err := filepath.Glob(prefix + "-*.png")
-	if err != nil || len(names) != 1 {
-		return fmt.Errorf("xpstopng wrote %d images for page %d", len(names), n)
+	if err != nil {
+		return fmt.Errorf("listing the images of xpstopng: %w", err)
+	}
+	if len(names) != 1 {
+		return &toolError{fmt.Errorf("xpstopng wrote %d images for page %d", len(names), n)}
 	}
 	return linkOrCopy(names[0], out)
 }
@@ -455,7 +598,7 @@ func ghostscript(ctx context.Context, j *refJob, doc, dir string) (string, error
 func pickPage(_ context.Context, _ *refJob, in string, n int, out string) error {
 	src := filepath.Join(in, fmt.Sprintf("p-%04d.png", n))
 	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("ghostscript drew no page %d", n)
+		return &toolError{fmt.Errorf("ghostscript drew no page %d", n)}
 	}
 	return linkOrCopy(src, out)
 }
@@ -463,7 +606,7 @@ func pickPage(_ context.Context, _ *refJob, in string, n int, out string) error 
 // inkscape draws the metafile in with Inkscape.
 func inkscape(ctx context.Context, j *refJob, in string, n int, out string) error {
 	if n != 1 {
-		return fmt.Errorf("a metafile has no page %d", n)
+		return &toolError{fmt.Errorf("a metafile has no page %d", n)}
 	}
 	_, err := runTool(ctx, j.env, "", "inkscape", "--export-type=png", "--export-dpi="+strconv.Itoa(j.dpi),
 		"--export-background=white", "--export-background-opacity=1", "-o", out, in)
@@ -485,43 +628,176 @@ func ddjvu(ctx context.Context, j *refJob, in string, n int, out string) error {
 	return writePNG(out, img)
 }
 
-// magick draws the first image of in with ImageMagick, over white.
+// magick draws the first image of in with ImageMagick, over white. The image
+// turns into sRGB before it goes over white: in CMYK, the color white is the
+// full ink of cyan, magenta and yellow, which is almost black.
 func magick(ctx context.Context, j *refJob, in string, n int, out string) error {
 	if n != 1 {
-		return fmt.Errorf("an image has no page %d", n)
+		return &toolError{fmt.Errorf("an image has no page %d", n)}
 	}
-	_, err := runTool(ctx, j.env, "", "magick", in+"[0]", "-background", "white", "-alpha", "remove", "-alpha", "off", "png24:"+out)
+	_, err := runTool(ctx, j.env, "", "magick", in+"[0]", "-colorspace", "sRGB", "-background", "white", "-alpha", "remove", "-alpha", "off", "png24:"+out)
 	return err
 }
 
-// sofficePDF converts doc to PDF with LibreOffice, in the profile of the
-// worker.
-func sofficePDF(ctx context.Context, j *refJob, doc, dir string) (string, error) {
-	if j.password != "" {
-		return "", errors.New("LibreOffice cannot open a file with a password from the command line")
-	}
+// sofficeProfile returns the profile of LibreOffice of the worker of j,
+// without the lock that a killed soffice leaves.
+func sofficeProfile(j *refJob) string {
 	profile := filepath.Join(j.cache, "profiles", fmt.Sprintf("soffice-%d", j.slot))
-	// a profile that a killed soffice left keeps its lock
 	_ = os.Remove(filepath.Join(profile, ".lock"))
 	_ = os.Remove(filepath.Join(profile, "user", ".lock"))
+	return profile
+}
+
+// sofficePDF converts doc to PDF with LibreOffice, in the profile of the
+// worker. A file with a password, and a CSV file, which needs the page of
+// ivy, go through sofficeUNO.
+func sofficePDF(ctx context.Context, j *refJob, doc, dir string) (string, error) {
+	if j.password != "" || j.unoPage() != "" {
+		return sofficeUNO(ctx, j, doc, dir)
+	}
+	profile := sofficeProfile(j)
 	outdir, err := os.MkdirTemp(j.tmp, "soffice-")
 	if err != nil {
 		return "", fmt.Errorf("making a folder: %w", err)
 	}
 	env := slices.Concat(j.env, []string{"SAL_USE_VCLPLUGIN=svp"})
-	if _, err := runTool(ctx, env, "", "soffice", "--headless", "--norestore", "--nologo", "--nodefault",
+	_, err = runTool(ctx, env, "", "soffice", "--headless", "--norestore", "--nologo", "--nodefault",
 		"--nolockcheck", "-env:UserInstallation=file://"+profile,
-		"--convert-to", "pdf", "--outdir", outdir, doc); err != nil {
-		return "", err
-	}
+		"--convert-to", "pdf", "--outdir", outdir, doc)
 	pdf := filepath.Join(outdir, strings.TrimSuffix(filepath.Base(doc), filepath.Ext(doc))+".pdf")
-	if _, err := os.Stat(pdf); err != nil {
-		return "", errors.New("soffice wrote no PDF file")
+	if err != nil {
+		// LibreOffice 26.8 can crash as it ends, after it wrote the whole PDF
+		// file, as with some files of Excel 97. pdfinfo then reads the file.
+		if ctx.Err() != nil || !fileExists(pdf) {
+			return "", err
+		}
+		if _, cerr := pdfCount(ctx, j, pdf); cerr != nil {
+			return "", err
+		}
 	}
-	if err := os.Rename(pdf, filepath.Join(dir, "out.pdf")); err != nil {
+	if _, err := os.Stat(pdf); err != nil {
+		return "", &toolError{errors.New("soffice wrote no PDF file")}
+	}
+	if err := moveFile(pdf, filepath.Join(dir, "out.pdf")); err != nil {
 		return "", fmt.Errorf("moving the PDF file: %w", err)
 	}
 	return "out.pdf", nil
+}
+
+// sofficeUNO converts doc, a file with a password or a CSV file, to PDF
+// with LibreOffice. The command line of soffice cannot take a password or a
+// page, so the script unopdf.py starts soffice in the profile of the
+// worker, opens doc through the UNO API with the password, sets the page of
+// a CSV file, and stores it as PDF.
+func sofficeUNO(ctx context.Context, j *refJob, doc, dir string) (string, error) {
+	py, err := j.unoPython(ctx)
+	if err != nil {
+		return "", err
+	}
+	profile := sofficeProfile(j)
+	soffice, err := exec.LookPath("soffice")
+	if err != nil {
+		return "", fmt.Errorf("the program soffice is not installed: %w", err)
+	}
+	pipe := fmt.Sprintf("ivy-review-%d-%d-%d", os.Getpid(), j.slot, j.pipes.Add(1))
+	env := slices.Concat(j.env, py.env, []string{"SAL_USE_VCLPLUGIN=svp", "IVY_REVIEW_PASSWORD=" + j.password})
+	if page := j.unoPage(); page != "" {
+		env = append(env, "IVY_REVIEW_PAGE="+page, "IVY_REVIEW_CSV="+csvFilterOptions(j.kind))
+	}
+	out := filepath.Join(dir, "out.pdf")
+	if _, err := runTool(ctx, env, j.tmp, py.path, j.unoScript, soffice, "file://"+profile, pipe, doc, out); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(out); err != nil {
+		return "", &toolError{errors.New("LibreOffice wrote no PDF file")}
+	}
+	return "out.pdf", nil
+}
+
+// unoPage returns the page that unopdf.py gives each sheet of a CSV file:
+// the width, the height, and the margins at the top, the bottom, the left
+// and the right, in hundredths of a millimeter, separated by spaces. It is
+// the page of ivy: the paper of j, or US Letter, with the margins of Excel
+// and no header or footer (D32). It returns an empty string for a kind that
+// is not CSV.
+func (j *refJob) unoPage() string {
+	if !contains(csvKinds, j.kind) {
+		return ""
+	}
+	p := j.paper
+	if p.Width <= 0 || p.Height <= 0 {
+		p = ivy.Letter
+	}
+	m := sheet.DefaultPage
+	mm := func(pt float64) int { return int(math.Round(pt * 2540 / 72)) }
+	return fmt.Sprintf("%d %d %d %d %d %d", mm(float64(p.Width)), mm(float64(p.Height)), mm(m.Top), mm(m.Bottom), mm(m.Left), mm(m.Right))
+}
+
+// csvFilterOptions returns the options of the CSV filter of LibreOffice for
+// kind: the separator, the quote, the encoding UTF-8 (76) and the first
+// line. A .tsv or a .tab file has tabs (9), and a .csv file has commas (44).
+func csvFilterOptions(kind string) string {
+	if kind == "csv" {
+		return "44,34,76,1"
+	}
+	return "9,34,76,1"
+}
+
+// unoPython is a Python that can import the module uno of LibreOffice.
+type unoPython struct {
+	path string
+	// env is what the environment of Python needs more, such as a
+	// PYTHONPATH.
+	env []string
+}
+
+// unoPython finds a Python that can import the module uno, once for the
+// run. It tries the Python that LibreOffice bundles in the folder of
+// soffice.bin, then python3 of the PATH, then python3 with that folder in
+// its PYTHONPATH.
+func (e *refEnv) unoPython(ctx context.Context) (unoPython, error) {
+	e.unoOnce.Do(func() {
+		// the end of the time of one document must not end the search for
+		// the whole run
+		e.uno, e.unoErr = findUNOPython(context.WithoutCancel(ctx), e.env)
+	})
+	return e.uno, e.unoErr
+}
+
+// findUNOPython returns the first Python that unoPython tries that can
+// import uno.
+func findUNOPython(ctx context.Context, env []string) (unoPython, error) {
+	soffice, err := exec.LookPath("soffice")
+	if err != nil {
+		return unoPython{}, fmt.Errorf("the program soffice is not installed: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(soffice); err == nil {
+		soffice = resolved
+	}
+	program := filepath.Dir(soffice)
+	var tries []unoPython
+	if p := filepath.Join(program, "python"); fileExists(p) {
+		tries = append(tries, unoPython{path: p})
+	}
+	if p, err := exec.LookPath("python3"); err == nil {
+		tries = append(tries, unoPython{path: p}, unoPython{path: p, env: []string{"PYTHONPATH=" + program}})
+	}
+	for _, py := range tries {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, err := runTool(ctx, slices.Concat(env, py.env), "", py.path, "-c", "import uno")
+		cancel()
+		if err == nil {
+			return py, nil
+		}
+	}
+	return unoPython{}, fmt.Errorf("no Python can import the module uno of LibreOffice, so a file with a password has no reference: "+
+		"install the package of the Python bridge of LibreOffice, such as python3-uno, or give python3 the folder %s", program)
+}
+
+// fileExists reports whether the file path exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // calibrePDF converts doc to PDF with ebook-convert of calibre, with the
@@ -535,7 +811,7 @@ func calibrePDF(ctx context.Context, j *refJob, doc, dir string) (string, error)
 		"QT_QPA_PLATFORM=offscreen",
 		"QTWEBENGINE_CHROMIUM_FLAGS=--no-sandbox",
 	})
-	args := append([]string{doc, filepath.Join(dir, "out.pdf")}, calibreOptions(j.kind)...)
+	args := append([]string{doc, filepath.Join(dir, "out.pdf")}, calibreOptions(j.kind, j.paper)...)
 	if _, err := runTool(ctx, env, "", "ebook-convert", args...); err != nil {
 		return "", err
 	}
@@ -544,11 +820,11 @@ func calibrePDF(ctx context.Context, j *refJob, doc, dir string) (string, error)
 
 // weasyprintPDF lays out the HTML file doc with WeasyPrint into a PDF file.
 // It gives WeasyPrint the user style sheet that the package html of ivy
-// gives an HTML file, ebook.PaperStyle, so that both lay out the same
-// input. The links of doc resolve from its folder.
+// gives an HTML file on the paper of j, ebook.PaperStyleFor, so that both
+// lay out the same input. The links of doc resolve from its folder.
 func weasyprintPDF(ctx context.Context, j *refJob, doc, dir string) (string, error) {
 	style := filepath.Join(dir, "paper.css")
-	if err := os.WriteFile(style, []byte(ebook.PaperStyle), 0o644); err != nil {
+	if err := os.WriteFile(style, []byte(ebook.PaperStyleFor(j.paper)), 0o644); err != nil {
 		return "", fmt.Errorf("writing the style sheet: %w", err)
 	}
 	if _, err := runTool(ctx, j.env, "", "weasyprint", "--quiet", "-s", style, doc, filepath.Join(dir, "out.pdf")); err != nil {
@@ -597,22 +873,49 @@ const errorFile = "error.txt"
 // cache. A failed conversion is kept in the cache too, because LibreOffice
 // and calibre are slow. Delete its folder to try again.
 func (j *refJob) prepare(ctx context.Context, r *route, doc string) (*prepared, error) {
-	key, err := j.toolsKey(r.tools)
+	id, tools := r.id, r.tools
+	if r.uno && (j.password != "" || j.unoPage() != "") {
+		// the conversion through UNO depends on Python too
+		py, err := j.unoPython(ctx)
+		if err != nil {
+			return nil, err
+		}
+		id, tools = id+"-uno", slices.Concat(tools, []string{py.path})
+	}
+	key, err := j.toolsKey(tools)
 	if err != nil {
 		return nil, err
 	}
-	name := r.id + "-" + key + "-" + j.fonts
+	name := id + "-" + key + "-" + j.fonts
 	if r.perDPI {
 		name += fmt.Sprintf("-%ddpi", j.dpi)
+	}
+	if r.variant != nil {
+		if v := r.variant(j); v != "" {
+			sum := sha256.Sum256([]byte(v))
+			name += "-v" + hex.EncodeToString(sum[:4])
+		}
+	}
+	if j.password != "" {
+		// a wrong password gives another result
+		sum := sha256.Sum256([]byte(j.password))
+		name += "-pw" + hex.EncodeToString(sum[:4])
 	}
 	dir := filepath.Join(j.cache, "refs", j.hash[:16], name)
 	p := &prepared{in: doc, dir: dir, pages: -1}
 	if r.prepare != nil {
-		if msg, err := os.ReadFile(filepath.Join(dir, errorFile)); err == nil {
-			return nil, fmt.Errorf("%s (kept in the cache: delete %s to try again)", strings.TrimSpace(string(msg)), dir)
+		if msg, err := os.ReadFile(filepath.Join(dir, errorFile)); err == nil && !j.retry {
+			j.cachedFailures.Add(1)
+			return nil, fmt.Errorf("%s (kept in the cache: run render with -retry, or delete %s, to try again)",
+				strings.TrimSpace(string(msg)), dir)
 		}
 		out, err := os.ReadFile(filepath.Join(dir, "done"))
 		if err != nil {
+			// a folder without the mark of a result is a failure that -retry
+			// tries again, or a folder that a person emptied
+			if err := os.RemoveAll(dir); err != nil {
+				return nil, fmt.Errorf("removing the folder of the cache: %w", err)
+			}
 			out, err = j.convert(ctx, r, doc, dir)
 			if err != nil {
 				return nil, err
@@ -633,7 +936,9 @@ func (j *refJob) prepare(ctx context.Context, r *route, doc string) (*prepared, 
 }
 
 // convert runs the conversion of route r on doc in a temporary folder, then
-// moves the folder to dir.
+// moves the folder to dir. The temporary folder is in the folder of dir, so
+// that the move is one rename on one file system. The cache keeps a failure
+// only if it is a toolError.
 func (j *refJob) convert(ctx context.Context, r *route, doc, dir string) ([]byte, error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return nil, fmt.Errorf("making the folder of the cache: %w", err)
@@ -645,8 +950,9 @@ func (j *refJob) convert(ctx context.Context, r *route, doc, dir string) ([]byte
 	defer func() { _ = os.RemoveAll(tmp) }()
 	out, cerr := r.prepare(ctx, j, doc, tmp)
 	if cerr != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
-			// the run stopped: keep nothing
+		if errors.Is(ctx.Err(), context.Canceled) || !isToolError(cerr) {
+			// the run stopped, or the error is not one of the program: keep
+			// nothing
 			return nil, cerr
 		}
 		if err := os.WriteFile(filepath.Join(tmp, errorFile), []byte(cerr.Error()+"\n"), 0o644); err != nil {
@@ -655,8 +961,9 @@ func (j *refJob) convert(ctx context.Context, r *route, doc, dir string) ([]byte
 	} else if err := os.WriteFile(filepath.Join(tmp, "done"), []byte(out+"\n"), 0o644); err != nil {
 		return nil, fmt.Errorf("marking the conversion: %w", err)
 	}
-	if err := os.Rename(tmp, dir); err != nil && !errors.Is(err, os.ErrExist) {
-		if _, serr := os.Stat(dir); serr != nil {
+	if err := os.Rename(tmp, dir); err != nil {
+		// another run can put the same conversion into the cache first
+		if !fileExists(filepath.Join(dir, "done")) && !fileExists(filepath.Join(dir, errorFile)) {
 			return nil, fmt.Errorf("moving the conversion into the cache: %w", err)
 		}
 	}
@@ -667,8 +974,8 @@ func (j *refJob) convert(ctx context.Context, r *route, doc, dir string) ([]byte
 }
 
 // renderPage returns the path of the image of page n, from 1, that pr draws
-// from p, from the cache when it holds it. A failure that is not the end of
-// ctx is kept in the cache.
+// from p, from the cache when it holds it. The cache keeps a failure that is
+// a toolError and not the end of ctx.
 func (j *refJob) renderPage(ctx context.Context, p *prepared, pr pageRenderer, native bool, n int) (string, error) {
 	key, err := j.toolsKey(pr.tools)
 	if err != nil {
@@ -684,18 +991,24 @@ func (j *refJob) renderPage(ctx context.Context, p *prepared, pr pageRenderer, n
 		return png, nil
 	}
 	if msg, err := os.ReadFile(base + ".err"); err == nil {
-		return "", errors.New(strings.TrimSpace(string(msg)))
+		if !j.retry {
+			j.cachedFailures.Add(1)
+			return "", fmt.Errorf("%s (kept in the cache: run render with -retry to try again)", strings.TrimSpace(string(msg)))
+		}
+		if err := os.Remove(base + ".err"); err != nil {
+			return "", fmt.Errorf("removing the failure from the cache: %w", err)
+		}
 	}
 	tmp := base + ".tmp.png"
 	err = pr.render(ctx, j, p.in, n, tmp)
 	if err == nil {
 		if _, serr := os.Stat(tmp); serr != nil {
-			err = fmt.Errorf("%s wrote no image", pr.name)
+			err = &toolError{fmt.Errorf("%s wrote no image", pr.name)}
 		}
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
-		if ctx.Err() == nil {
+		if ctx.Err() == nil && isToolError(err) {
 			_ = os.WriteFile(base+".err", []byte(err.Error()+"\n"), 0o644)
 		}
 		return "", err
