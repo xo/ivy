@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/xo/okage/roxmltree"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // odtProps holds the properties of a style of OpenDocument, by the local
@@ -27,6 +29,15 @@ func (p odtProps) over(top odtProps) odtProps {
 			}
 		}
 		out[k] = v
+	}
+	// A font family of top replaces a font face of p: style:font-name
+	// wins only over a font family of its own style.
+	for _, suffix := range [...]string{"", "-asian", "-complex"} {
+		if _, ok := top["font-family"+suffix]; ok {
+			if _, ok := top["font-name"+suffix]; !ok {
+				delete(out, "font-name"+suffix)
+			}
+		}
 	}
 	return out
 }
@@ -89,6 +100,9 @@ type odtPageLayout struct {
 	// and the footer.
 	headerHeight, headerSpace float64
 	footerHeight, footerSpace float64
+	// headerFixed and footerFixed are set when the header or the footer
+	// has a fixed height, svg:height, and does not grow with its content.
+	headerFixed, footerFixed bool
 	// noSize is set when the layout gives no fo:page-width and no
 	// fo:page-height, and orientation is its style:print-orientation.
 	noSize      bool
@@ -113,8 +127,11 @@ type odtStyles struct {
 	styles   map[string]*odtStyle
 	defaults map[string]odtProps
 	lists    map[string]*[10]*odtListLevel
-	layouts  map[string]*odtPageLayout
-	masters  map[string]*odtMasterPage
+	// outline is the text:outline-style, which numbers the headings, or
+	// nil.
+	outline *[10]*odtListLevel
+	layouts map[string]*odtPageLayout
+	masters map[string]*odtMasterPage
 	// masterOrder holds the names of the master pages, in their order.
 	masterOrder []string
 	fonts       map[string]string
@@ -172,8 +189,57 @@ func odtReadProps(n roxmltree.Node) odtProps {
 			p["column-count"] = odtAttr(cols, "column-count")
 			p["column-gap"] = odtAttr(cols, "column-gap")
 		}
+		// The tab stops of a paragraph replace those of its parent.
+		if tabs, ok := odtChild(c, "tab-stops"); ok {
+			p["tab-stops"] = odtTabStops(tabs)
+		}
 	}
 	return p
+}
+
+// odtTabLeaders gives the text of a leader of style:leader-style when the
+// tab stop has no style:leader-text.
+var odtTabLeaders = map[string]string{
+	"dotted": ".", "dash": "-", "long-dash": "-", "dot-dash": "-", "dot-dot-dash": "-", "solid": "_", "wave": "~",
+}
+
+// odtTabStops encodes the tab stops of style:tab-stops as a property: a
+// stop for each line, with its position in points, its alignment and its
+// leader, separated by tabs.
+func odtTabStops(n roxmltree.Node) string {
+	var b strings.Builder
+	count := 0
+	for t := range n.Children() {
+		if !t.IsElement() || t.TagName().Name() != "tab-stop" || count >= 64 {
+			continue
+		}
+		pos, ok := odtLength(odtAttr(t, "position"))
+		if !ok || pos < 0 {
+			continue
+		}
+		align := "left"
+		switch odtAttr(t, "type") {
+		case "right":
+			align = "right"
+		case "center":
+			align = "center"
+		case "char":
+			align = "decimal"
+		}
+		leader := ""
+		if style := odtAttr(t, "leader-style"); style != "" && style != "none" {
+			leader = odtTabLeaders[style]
+		}
+		if text := odtAttr(t, "leader-text"); text != "" && text != " " {
+			leader = text
+		}
+		if leader == "" && odtAttr(t, "leader-type") != "" && odtAttr(t, "leader-type") != "none" {
+			leader = "."
+		}
+		b.WriteString(strconv.FormatFloat(pos, 'f', 2, 64) + "\t" + align + "\t" + leader + "\n")
+		count++
+	}
+	return b.String()
 }
 
 // read reads the styles of a document part: styles.xml or content.xml.
@@ -233,6 +299,10 @@ func (ts *odtStyles) readStyles(n roxmltree.Node) {
 			ts.styles[st.family+"/"+st.name] = st
 		case "list-style":
 			ts.lists[odtAttr(s, "name")] = readODTListStyle(s)
+		case "outline-style":
+			if ts.outline == nil {
+				ts.outline = readODTListStyle(s)
+			}
 		case "page-layout":
 			ts.layouts[odtAttr(s, "name")] = readODTPageLayout(s)
 		}
@@ -257,7 +327,7 @@ func readODTListStyle(n roxmltree.Node) *[10]*odtListLevel {
 			if lvl.bullet == "" {
 				lvl.bullet = "•"
 			}
-		case "list-level-style-number":
+		case "list-level-style-number", "outline-level-style":
 			lvl.format = odtAttr(l, "num-format")
 			if d, err := strconv.Atoi(odtAttr(l, "display-levels")); err == nil && d > 0 {
 				lvl.display = min(d, 10)
@@ -340,14 +410,15 @@ func readODTPageLayout(n roxmltree.Node) *odtPageLayout {
 			continue
 		}
 		height, _ := odtLength(odtAttr(pr, "min-height"))
-		if h, ok := odtLength(odtAttr(pr, "height")); ok {
+		h, fixed := odtLength(odtAttr(pr, "height"))
+		if fixed {
 			height = h
 		}
 		if part == "header-style" {
-			pl.headerHeight = height
+			pl.headerHeight, pl.headerFixed = height, fixed
 			pl.headerSpace, _ = odtLength(odtAttr(pr, "margin-bottom"))
 		} else {
-			pl.footerHeight = height
+			pl.footerHeight, pl.footerFixed = height, fixed
 			pl.footerSpace, _ = odtLength(odtAttr(pr, "margin-top"))
 		}
 	}
@@ -411,12 +482,39 @@ func (ts *odtStyles) inherited(family, name string, get func(*odtStyle) string) 
 // font returns the family and the generic family of a font face of the
 // font-face-decls, or of a family that the properties name.
 func (ts *odtStyles) font(p odtProps) (string, string) {
-	if name := p["font-name"]; name != "" {
+	return ts.fontOf(p, "")
+}
+
+// asianFont returns the family of the East Asian font of the properties,
+// from style:font-name-asian or style:font-family-asian, or "".
+func (ts *odtStyles) asianFont(p odtProps) string {
+	family, _ := ts.fontOf(p, "-asian")
+	return family
+}
+
+// fontOf returns the font of the properties whose names end with suffix,
+// such as "-asian" for the East Asian font.
+func (ts *odtStyles) fontOf(p odtProps, suffix string) (string, string) {
+	if name := p["font-name"+suffix]; name != "" {
 		if v, ok := ts.fonts[name]; ok {
 			family, generic, _ := strings.Cut(v, "\x00")
 			return family, generic
 		}
 		return name, ""
 	}
-	return strings.Trim(p["font-family"], `'" `), p["font-family-generic"]
+	return strings.Trim(p["font-family"+suffix], `'" `), p["font-family-generic"+suffix]
+}
+
+// odtAsianLang returns the language of the East Asian text of the
+// properties, from style:language-asian and style:country-asian, such as
+// "ja-JP", or "" if it is not an East Asian language.
+func odtAsianLang(p odtProps) string {
+	lang := p["language-asian"]
+	if country := p["country-asian"]; country != "" && country != "none" {
+		lang += "-" + country
+	}
+	if fontdb.ParseLang(lang) == fontdb.NoLang {
+		return ""
+	}
+	return lang
 }

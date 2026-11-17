@@ -11,6 +11,12 @@
 // text of a slide of PowerPoint does. internal/chart draws the charts of
 // the embedded objects with zuzu (D24).
 //
+// A page shows the footer, the header, the date and the number of its
+// master page when its style asks for them, with the texts that the page
+// names. A date of the source current-date stays empty. A picture shows the
+// part that fo:clip leaves. Shapes draws the shapes of a text of Writer,
+// each in a box of its own, for the layout.
+//
 // The package is apart from the package odf so that its names do not
 // collide with the code of the texts and the spreadsheets.
 package drawpage
@@ -67,9 +73,20 @@ type Document struct {
 	log   *slog.Logger
 	st    *styles
 	pages []pageRef
+	// decls holds the texts of presentation:footer-decl,
+	// presentation:header-decl and presentation:date-time-decl, by their
+	// local name and their name, such as "footer-decl/ftr1".
+	decls map[string]string
 
 	mu       sync.Mutex
-	pictures map[string]*drawingml.Picture
+	pictures map[string]picture
+}
+
+// picture is a picture of the document. raster is set for a picture of
+// pixels, whose size in pixels and resolution give its size in points.
+type picture struct {
+	pic    *drawingml.Picture
+	raster bool
 }
 
 // pageRef is a page of the document.
@@ -92,7 +109,8 @@ func Open(ctx context.Context, opts Options) (d *Document, err error) {
 		lim:      opts.Config.Limits.WithDefaults(),
 		log:      opts.Config.Log(),
 		st:       newStyles(),
-		pictures: map[string]*drawingml.Picture{},
+		pictures: map[string]picture{},
+		decls:    map[string]string{},
 	}
 	content, err := d.parse(ctx, "content.xml")
 	if err != nil {
@@ -114,6 +132,9 @@ func Open(ctx context.Context, opts Options) (d *Document, err error) {
 			continue
 		}
 		for p := range kind.Children() {
+			if uri, _ := p.TagName().Namespace(); p.IsElement() && uri == nsPresentation {
+				d.decl(p)
+			}
 			if !is(p, nsDraw, "page") {
 				continue
 			}
@@ -128,6 +149,25 @@ func Open(ctx context.Context, opts Options) (d *Document, err error) {
 		}
 	}
 	return d, nil
+}
+
+// decl reads a declaration of the text of the footer, the header or the
+// date of the pages. A date of the source current-date is the date of the
+// display, which ivy does not draw: its text is empty.
+func (d *Document) decl(n roxmltree.Node) {
+	name := n.TagName().Name()
+	switch name {
+	case "footer-decl", "header-decl":
+	case "date-time-decl":
+		if at(n, nsPresentation, "source") == "current-date" {
+			return
+		}
+	default:
+		return
+	}
+	if len(d.decls) < d.lim.MaxObjects {
+		d.decls[name+"/"+at(n, nsPresentation, "name")] = nodeText(n)
+	}
 }
 
 // parse reads and parses the entry name.
@@ -214,12 +254,19 @@ type builder struct {
 	w, h float64
 	// shapes counts the shapes of the page.
 	shapes int
+	// noText leaves out the text of the shapes.
+	noText bool
+	// page is the draw:page, and pageProps the properties of its style.
+	// They give the texts of the fields of a master page.
+	page      roxmltree.Node
+	pageProps props
 }
 
 // build adds the background, the shapes of the master page and the shapes
 // of the page p to the scene.
 func (b *builder) build(p, master roxmltree.Node, hasMaster bool) {
 	dp := b.st.props(b.st.chain("drawing-page", at(p, nsDraw, "style-name")), "drawing-page-properties", nil)
+	b.page, b.pageProps = p, dp
 	var mp props
 	if hasMaster {
 		mp = b.st.props(b.st.chain("drawing-page", at(master, nsDraw, "style-name")), "drawing-page-properties", nil)
@@ -279,7 +326,7 @@ func (b *builder) children(n roxmltree.Node, depth int, master bool) {
 			return
 		}
 		b.shapes++
-		if master && hasAt(c, nsPresentation, "class") {
+		if master && hasAt(c, nsPresentation, "class") && !b.showField(at(c, nsPresentation, "class")) {
 			continue
 		}
 		if at(c, nsPresentation, "placeholder") == "true" {
@@ -288,6 +335,29 @@ func (b *builder) children(n roxmltree.Node, depth int, master bool) {
 		}
 		b.shape(c, depth, master)
 	}
+}
+
+// showField reports whether a page shows the presentation object of its
+// master page of the class, such as "footer": the page shows a footer, a
+// header, a date or its number when the style of the page asks for it,
+// with presentation:display-footer and the like.
+func (b *builder) showField(class string) bool {
+	switch class {
+	case "footer", "header", "date-time", "page-number":
+		return b.pageProps.get("presentation:display-"+class) == "true"
+	}
+	return false
+}
+
+// field returns the text of a field of a master page, such as
+// presentation:footer, for the page: the text of the declaration that the
+// page names.
+func (b *builder) field(name string) string {
+	switch name {
+	case "footer", "header", "date-time":
+		return b.d.decls[name+"-decl/"+at(b.page, nsPresentation, "use-"+name+"-name")]
+	}
+	return ""
 }
 
 // shape adds the shape n.
@@ -436,6 +506,9 @@ func (b *builder) figure(n roxmltree.Node, w, h float64, m okage.Transform, fram
 // graphic properties gp of the shape. holder is the element that holds the
 // paragraphs.
 func (b *builder) textOf(n, holder roxmltree.Node, chain []roxmltree.Node, gp props) *drawingml.TextBody {
+	if b.noText {
+		return nil
+	}
 	base := &textBase{chain: chain, body: bodyStyle(gp)}
 	if name := at(n, nsDraw, "text-style-name"); name != "" {
 		base.chain = append(append([]roxmltree.Node(nil), chain...), b.st.chain("paragraph", name)...)
@@ -793,32 +866,78 @@ func (b *builder) drawChart(object roxmltree.Node, w, h float64, m okage.Transfo
 // the frame holds no picture that the package reads, so that the next
 // child of the frame can draw.
 func (b *builder) image(n, img roxmltree.Node, w, h float64, m okage.Transform) bool {
-	pic := b.picture(img)
-	if pic == nil {
+	p := b.picture(img)
+	if p.pic == nil {
 		return false
 	}
-	if _, _, ok := pic.Size(b.ctx); !ok {
+	pw, ph, ok := p.pic.Size(b.ctx)
+	if !ok {
 		return false
 	}
-	f, _, _ := b.figure(n, w, h, m, true)
+	f, _, gp := b.figure(n, w, h, m, true)
 	box, _ := okage.RectFromXYWH(0, 0, float32(max(w, 1e-3)), float32(max(h, 1e-3)))
 	f.Paths = []drawingml.Path{{Path: okage.PathFromRect(box), Stroke: true}}
-	f.Fill = drawingml.Paint{Kind: drawingml.PaintPicture, Picture: pic, Opacity: 1}
-	if o, ok := percent(b.st.props(b.shapeStyle(n), "graphic-properties", nil).get("draw:image-opacity")); ok {
+	f.Fill = drawingml.Paint{Kind: drawingml.PaintPicture, Picture: p.pic, Opacity: 1}
+	if o, ok := percent(gp.get("draw:image-opacity")); ok {
 		f.Fill.Opacity = min(max(o, 0), 1)
 	}
+	if p.raster {
+		rx, ry := p.pic.Resolution()
+		pw, ph = pw*72/rx, ph*72/ry
+	}
+	f.Fill.Crop = clip(gp.get("fo:clip"), pw, ph)
 	b.scene.AddFigure(f)
 	return true
 }
 
+// clip returns the part of a picture of w by h points that fo:clip shows,
+// such as "rect(1cm, 2cm, 1cm, 2cm)": the insets of its top, its right,
+// its bottom and its left, which LibreOffice gives in the size of the
+// picture. A value of auto is 0.
+func clip(s string, w, h float64) drawingml.Insets {
+	body, ok := strings.CutPrefix(strings.TrimSpace(s), "rect(")
+	if !ok || !(w > 0) || !(h > 0) {
+		return drawingml.Insets{}
+	}
+	body, _ = strings.CutSuffix(strings.TrimSpace(body), ")")
+	f := strings.FieldsFunc(body, func(r rune) bool { return r == ',' || r == ' ' })
+	if len(f) != 4 {
+		return drawingml.Insets{}
+	}
+	var v [4]float64
+	for i, part := range f {
+		if l, ok := length(part); ok {
+			v[i] = l
+		}
+	}
+	in := drawingml.Insets{T: v[0] / h, R: v[1] / w, B: v[2] / h, L: v[3] / w}
+	// a clip that leaves nothing of the picture is not drawn
+	if !(in.L+in.R < 1) || !(in.T+in.B < 1) || min(in.L, in.R, in.T, in.B) < 0 {
+		return drawingml.Insets{}
+	}
+	return in
+}
+
+// isRaster reports whether data is a picture of pixels: a PNG, a JPEG, a
+// GIF, a BMP, a TIFF or a WebP file.
+func isRaster(data []byte) bool {
+	for _, magic := range [...]string{"\x89PNG", "\xff\xd8\xff", "GIF8", "BM", "II*\x00", "MM\x00*"} {
+		if strings.HasPrefix(string(data[:min(len(data), 8)]), magic) {
+			return true
+		}
+	}
+	return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+}
+
 // picture returns the picture of draw:image or draw:fill-image: the entry
-// of xlink:href, or office:binary-data.
-func (b *builder) picture(img roxmltree.Node) *drawingml.Picture {
+// of xlink:href, or office:binary-data. Its pic is nil if the element holds
+// no picture that the package reads.
+func (b *builder) picture(img roxmltree.Node) picture {
 	href := strings.TrimPrefix(at(img, nsXLink, "href"), "./")
 	if href == "" {
 		data, ok := firstChild(img, nsOffice, "binary-data")
 		if !ok {
-			return nil
+			return picture{}
 		}
 		text := strings.Map(func(r rune) rune {
 			if r == ' ' || r == '\n' || r == '\r' || r == '\t' {
@@ -827,39 +946,39 @@ func (b *builder) picture(img roxmltree.Node) *drawingml.Picture {
 			return r
 		}, nodeText(data))
 		if int64(len(text)) > b.d.lim.MaxMemory {
-			return nil
+			return picture{}
 		}
 		buf, err := base64.StdEncoding.DecodeString(text)
 		if err != nil {
 			b.log.Debug("odf: picture left out", "err", err)
-			return nil
+			return picture{}
 		}
-		return drawingml.NewPicture(buf, b.d.opts.Config)
+		return picture{pic: drawingml.NewPicture(buf, b.d.opts.Config), raster: isRaster(buf)}
 	}
 	if strings.Contains(href, ":") {
 		// a link out of the package, which ivy never reads (D1)
-		return nil
+		return picture{}
 	}
 	d := b.d
 	d.mu.Lock()
-	pic, ok := d.pictures[href]
+	p, ok := d.pictures[href]
 	d.mu.Unlock()
 	if ok {
-		return pic
+		return p
 	}
 	buf, err := d.opts.Read(b.ctx, href)
 	if err != nil {
 		b.log.Debug("odf: picture left out", "href", href, "err", err)
-		return nil
+		return picture{}
 	}
-	pic = drawingml.NewPicture(buf, d.opts.Config)
+	p = picture{pic: drawingml.NewPicture(buf, d.opts.Config), raster: isRaster(buf)}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(d.pictures) >= maxPictures {
 		clear(d.pictures)
 	}
-	d.pictures[href] = pic
-	return pic
+	d.pictures[href] = p
+	return p
 }
 
 // nodeText returns the text of the element n.

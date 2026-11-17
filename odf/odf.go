@@ -6,17 +6,19 @@
 // spreadsheets, the presentations and the drawings (D24):
 //
 //   - A text, of Writer, goes through the layout of the ebooks, with its
-//     styles, its lists, its tables, its pictures and its charts.
+//     styles, its lists, the numbers of its headings, its tables, its
+//     pictures, its shapes and its charts.
 //   - A spreadsheet, of Calc, puts each sheet on pages, in order, as
 //     printing does, with its pictures and its charts.
 //   - A presentation, of Impress, or a drawing, of Draw, gives one page for
 //     each page of the file, with its shapes, its pictures, its text and its
 //     charts.
 //
-// internal/chart draws the charts of the embedded objects (D27). The
-// other kinds of files, such as a chart or a formula on its own, give no
-// pages, and Page returns an error that wraps ivy.ErrUnsupported. The title
-// and the authors come when okage exports its XML parser (D7).
+// internal/chart draws the charts of the embedded objects (D27), and
+// odf/internal/drawpage draws the shapes of a text. The other kinds of
+// files, such as a chart or a formula on its own, give no pages, and Page
+// returns an error that wraps ivy.ErrUnsupported. Describe reads the title,
+// the author and the dates of meta.xml.
 //
 // A file that a password protects opens with the password of ivy.Config, or
 // with the function PasswordFunc of ivy.Config (D12). The package reads
@@ -171,8 +173,10 @@ func (d *Document) readManifest(cfg ivy.Config) {
 
 // unlock finds the password of an encrypted file. It decrypts the smallest
 // encrypted entry with the password of the configuration, and while the
-// password is wrong, it asks PasswordFunc for another one. If the file
-// encrypts the whole package, unlock opens the package that it decrypts.
+// password is wrong, it asks PasswordFunc for another one. A password that
+// is not ASCII is tried in UTF-8, then in windows-1252, which old versions
+// of StarOffice hashed. If the file encrypts the whole package, unlock opens
+// the package that it decrypts.
 func (d *Document) unlock(ctx context.Context, cfg ivy.Config) error {
 	f, enc, err := d.probe()
 	if err != nil {
@@ -182,6 +186,12 @@ func (d *Document) unlock(ctx context.Context, cfg ivy.Config) error {
 	try := func(password string) error {
 		d.keys = odfcrypt.NewKeyring(password)
 		plain, err = d.decrypt(ctx, f, enc)
+		if legacy, ok := odfcrypt.Windows1252(password); ok && errors.Is(err, ivy.ErrPassword) {
+			d.keys = odfcrypt.NewKeyring(legacy)
+			if p, lerr := d.decrypt(ctx, f, enc); lerr == nil {
+				plain, err = p, nil
+			}
+		}
 		return err
 	}
 	err = try(cfg.Password)

@@ -146,8 +146,8 @@ func TestTextConvert(t *testing.T) {
 	}
 	for _, want := range []string{
 		// The body starts below the header: 18pt, a line of 10pt, and 7.2pt.
-		`@page m1 { size: 360pt 288pt; margin: 36.9pt 36pt 36pt 36pt; @top-center { content: element(hf1); padding-top: 18pt }`,
-		`@page m2 { size: 432pt 288pt; margin: 36pt 36pt 36pt 36pt;`,
+		`@page m1 { size: 360pt 288pt; margin: 36.9pt 36pt 36pt 36pt; -ivy-margin-box-fit: grow; @top-center { content: element(hf1); padding-top: 18pt; padding-bottom: 7.2pt }`,
+		`@page m2 { size: 432pt 288pt; margin: 36pt 36pt 36pt 36pt; -ivy-margin-box-fit: none;`,
 	} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("expected the style sheet to hold %q, got:\n%s", want, sheet)
@@ -320,6 +320,11 @@ func TestTextPaper(t *testing.T) {
 func FuzzText(f *testing.F) {
 	f.Add(odtFile(odtRichBody))
 	f.Add(odtFile(`<text:list><text:list-item><text:list><text:list-item><text:p>x</text:p></text:list-item></text:list></text:list-item></text:list>`))
+	f.Add(odtStyledFile(`<text:outline-style><text:outline-level-style text:level="1" style:num-format="1"/></text:outline-style>`+
+		`<style:style style:name="T" style:family="paragraph"><style:paragraph-properties><style:tab-stops><style:tab-stop style:position="1in" style:type="right" style:leader-text="."/></style:tab-stops></style:paragraph-properties></style:style>`,
+		`<text:h text:outline-level="1">H</text:h><text:p text:style-name="T">a<text:tab/>1<draw:rect text:anchor-type="as-char" svg:width="9pt" svg:height="9pt"><text:p>r</text:p></draw:rect></text:p>`+
+			`<draw:custom-shape text:anchor-type="paragraph" svg:width="72pt" svg:height="72pt"><text:p><draw:frame svg:width="9pt" svg:height="9pt"><draw:image xlink:href="Pictures/red.png"/></draw:frame></text:p></draw:custom-shape>`,
+		fixture.Entry{Name: "Pictures/red.png", Data: fixture.PNG(4, 4, color.Black)}))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 14, MaxDepth: 32}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
@@ -337,4 +342,238 @@ func FuzzText(f *testing.F) {
 		}
 		_, _ = ivy.RenderImage(t.Context(), p, 9, nil)
 	})
+}
+
+// odtStyledFile returns an OpenDocument text with the body, whose
+// styles.xml holds the styles of odtStylesXML and the elements styles in
+// office:styles.
+func odtStyledFile(styles, body string, entries ...fixture.Entry) []byte {
+	all := make([]fixture.Entry, 0, 3+len(entries))
+	all = append(all,
+		fixture.Entry{Name: "mimetype", Data: []byte(mimePrefix + "text")},
+		fixture.Entry{Name: "content.xml", Data: []byte(odtContent(body))},
+		fixture.Entry{Name: "styles.xml", Data: []byte(strings.Replace(odtStylesXML, "</office:styles>", styles+"</office:styles>", 1))},
+	)
+	return fixture.Zip(append(all, entries...)...)
+}
+
+func TestTextOutline(t *testing.T) {
+	const outline = `<text:outline-style style:name="Outline">` +
+		`<text:outline-level-style text:level="1" style:num-format="1"><style:list-level-properties text:min-label-width="0.5in"/></text:outline-level-style>` +
+		`<text:outline-level-style text:level="2" style:num-format="1" text:display-levels="2"><style:list-level-properties text:min-label-width="0.5in"/></text:outline-level-style>` +
+		`<text:outline-level-style text:level="3" style:num-format=""/>` +
+		`</text:outline-style>`
+	body := `<text:h text:outline-level="1">One</text:h>` +
+		`<text:h text:outline-level="2"><text:number>9.9</text:number>One A</text:h>` +
+		`<text:h text:outline-level="2">One B</text:h>` +
+		`<text:h text:outline-level="3">Plain</text:h>` +
+		`<text:h text:outline-level="1">Two</text:h>` +
+		`<text:h text:outline-level="2">Two A</text:h>` +
+		`<text:h text:outline-level="1" text:is-list-header="true">Header<text:placeholder text:placeholder-type="text">Enter</text:placeholder></text:h>` +
+		`<text:h text:outline-level="1" text:restart-numbering="true" text:start-value="7">Seven</text:h>` +
+		`<text:list text:style-name="Numbers"><text:list-item><text:h text:outline-level="1">Listed</text:h></text:list-item></text:list>`
+	html, _ := odtHTML(t, odtStyledFile(outline, body))
+	for _, want := range []string{
+		`margin-left: 36pt; text-indent: -36pt`,
+		`min-width: 36pt; text-indent: 0">1</span>One<`,
+		`>1.1</span>One A<`,
+		`>1.2</span>One B<`,
+		`>2</span>Two<`,
+		`>2.1</span>Two A<`,
+		`>7</span>Seven<`,
+		// a heading in a list takes the number of the list
+		`>1.</span>Listed<`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected the xhtml to hold %q", want)
+		}
+	}
+	// text:number gives no second number, a heading of a list header and
+	// a level without a format have no number, and a placeholder does not
+	// print
+	for _, unwanted := range []string{"9.9", `</span>Plain`, `</span>Header`, "Enter"} {
+		if strings.Contains(html, unwanted) {
+			t.Errorf("expected the xhtml not to hold %q", unwanted)
+		}
+	}
+	if t.Failed() {
+		t.Log(html)
+	}
+}
+
+// odtColorBox returns the box of the pixels of img near the color c, and
+// their number.
+func odtColorBox(img image.Image, c color.NRGBA) (image.Rectangle, int) {
+	var box image.Rectangle
+	n := 0
+	near := func(a, b uint8) bool { return a > b-40 && a < b+40 || a == b }
+	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
+		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
+			p := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+			if near(p.R, c.R) && near(p.G, c.G) && near(p.B, c.B) {
+				box = box.Union(image.Rect(x, y, x+1, y+1))
+				n++
+			}
+		}
+	}
+	return box, n
+}
+
+func TestTextShapes(t *testing.T) {
+	const styles = `<style:style style:name="red" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#ff0000" draw:stroke="none"/></style:style>` +
+		`<style:style style:name="blue" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#0000ff" draw:stroke="none" style:wrap="none"/></style:style>` +
+		`<style:style style:name="green" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#00ff00" svg:stroke-width="4pt"/></style:style>`
+	body := `<text:p>Box <draw:rect text:anchor-type="as-char" draw:style-name="red" svg:width="36pt" svg:height="18pt"><text:p/></draw:rect> after</text:p>` +
+		`<text:p><draw:g text:anchor-type="paragraph" draw:style-name="blue">` +
+		`<draw:ellipse draw:style-name="blue" svg:x="36pt" svg:y="0pt" svg:width="36pt" svg:height="36pt"/>` +
+		`<draw:rect draw:style-name="blue" svg:x="108pt" svg:y="0pt" svg:width="36pt" svg:height="36pt"/></draw:g></text:p>` +
+		`<draw:line text:anchor-type="page" draw:style-name="green" svg:x1="36pt" svg:y1="250pt" svg:x2="324pt" svg:y2="250pt"/>`
+	buf := odtStyledFile(styles, body)
+	html, _ := odtHTML(t, buf)
+	for _, want := range []string{
+		`Box <span><img src="ivy-object:shape1" alt="" style="width: 36pt; height: 18pt"/></span> after`,
+		`<span style="display: block; margin-left: 36pt; width: 108pt"><img src="ivy-object:shape2" alt="" style="display: block; width: 108pt; height: 36pt"/></span>`,
+		// the box of the line takes the half of its width of 4 points
+		// around it, and the body starts 36.9 points down the page
+		`<span style="position: absolute; top: 211.1pt; left: -2pt; width: 292pt"><img src="ivy-object:shape3" alt="" style="display: block; width: 292pt; height: 4pt"/></span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected the xhtml to hold %q", want)
+		}
+	}
+	if t.Failed() {
+		t.Log(html)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box, n := odtColorBox(img, color.NRGBA{R: 255, A: 255}); n < 500 || box.Dx() > 38 || box.Dy() > 20 {
+		t.Errorf("expected a red box of 36 by 18 points, got %d pixels in %v", n, box)
+	}
+	// the ellipse and the square of the group, side by side from 72 points
+	if box, n := odtColorBox(img, color.NRGBA{B: 255, A: 255}); n < 1500 || box.Min.X < 70 || box.Max.X > 182 || box.Dy() > 38 {
+		t.Errorf("expected the blue group from 72 to 180 points, got %d pixels in %v", n, box)
+	}
+	if box, n := odtColorBox(img, color.NRGBA{G: 255, A: 255}); n < 500 || box.Min.X > 38 || box.Max.X < 322 || box.Min.Y < 246 || box.Max.Y > 254 {
+		t.Errorf("expected the green line at 250 points, got %d pixels in %v", n, box)
+	}
+}
+
+func TestTextEastAsian(t *testing.T) {
+	const styles = `<style:style style:name="Japanese" style:family="paragraph"><style:text-properties style:font-name="Liberation Sans" style:font-name-asian="Mincho" style:language-asian="ja" style:country-asian="JP"/></style:style>` +
+		`<style:style style:name="Chinese" style:family="text"><style:text-properties style:font-family-asian="SimSun" style:language-asian="zh" style:country-asian="CN"/></style:style>`
+	body := `<text:p text:style-name="Japanese">Latin 日本語<text:span text:style-name="Chinese">中文</text:span></text:p>`
+	// the font face Mincho names the family MS Mincho
+	stylesXML := strings.NewReplacer(
+		`</office:font-face-decls>`, `<style:font-face style:name="Mincho" svg:font-family="'MS Mincho'"/></office:font-face-decls>`,
+		`</office:styles>`, styles+`</office:styles>`,
+	).Replace(odtStylesXML)
+	html, _ := odtHTML(t, fixture.Zip(
+		fixture.Entry{Name: "mimetype", Data: []byte(mimePrefix + "text")},
+		fixture.Entry{Name: "content.xml", Data: []byte(odtContent(body))},
+		fixture.Entry{Name: "styles.xml", Data: []byte(stylesXML)},
+	))
+	for _, want := range []string{
+		`font-family: &quot;Liberation Sans&quot;, &quot;MS Mincho&quot;, sans-serif`,
+		`><span lang="ja-JP">Latin 日本語</span><span style="font-family: &quot;Liberation Sans&quot;, &quot;SimSun&quot;, sans-serif"><span lang="zh-CN">中文</span></span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected the xhtml to hold %q", want)
+		}
+	}
+	if t.Failed() {
+		t.Log(html)
+	}
+}
+
+func TestTextTallHeader(t *testing.T) {
+	// The header of the master page holds a picture of 72 points, which
+	// the estimate of one line for each paragraph does not count.
+	styles := strings.Replace(odtStylesXML, `<text:p text:style-name="MP1">Page <text:page-number>1</text:page-number> of <text:page-count>1</text:page-count></text:p>`,
+		`<text:p><draw:frame text:anchor-type="as-char" svg:width="72pt" svg:height="72pt"><draw:image xlink:href="Pictures/red.png"/></draw:frame></text:p>`, 1)
+	buf := fixture.Zip(
+		fixture.Entry{Name: "mimetype", Data: []byte(mimePrefix + "text")},
+		fixture.Entry{Name: "content.xml", Data: []byte(odtContent(`<text:p>Body</text:p>`))},
+		fixture.Entry{Name: "styles.xml", Data: []byte(styles)},
+		fixture.Entry{Name: "Pictures/red.png", Data: fixture.PNG(40, 20, color.NRGBA{R: 255, A: 255})},
+	)
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	red, _ := odtColorBox(img, color.NRGBA{R: 255, A: 255})
+	if red.Min.Y < 17 || red.Max.Y > 91 {
+		t.Errorf("expected the picture of the header from 18 to 90 points, got: %v", red)
+	}
+	// the body starts below the header and its spacing of 7.2 points
+	if body := odtInk(img, image.Rect(0, red.Max.Y, 360, 288)); body.Empty() || body.Min.Y < 97 {
+		t.Errorf("expected the body below 97 points, got: %v", body)
+	}
+}
+
+func TestTextTabStops(t *testing.T) {
+	const styles = `<style:style style:name="TOC" style:family="paragraph"><style:paragraph-properties fo:margin-left="0.5in">` +
+		`<style:tab-stops><style:tab-stop style:position="1in"/><style:tab-stop style:position="3.5in" style:type="right" style:leader-style="dotted" style:leader-text="."/></style:tab-stops>` +
+		`</style:paragraph-properties></style:style>` +
+		`<style:style style:name="TOC2" style:family="paragraph" style:parent-style-name="TOC"><style:paragraph-properties>` +
+		`<style:tab-stops><style:tab-stop style:position="2cm" style:type="char" style:char="."/><style:tab-stop style:position="3in" style:type="center" style:leader-style="solid"/></style:tab-stops>` +
+		`</style:paragraph-properties></style:style>`
+	body := `<text:p text:style-name="TOC">1<text:tab/>Chapter<text:tab/>5</text:p>` +
+		`<text:p text:style-name="TOC2">x<text:tab/>y</text:p><text:p>plain</text:p>`
+	buf := odtStyledFile(styles, body)
+	html, _ := odtHTML(t, buf)
+	for _, want := range []string{
+		// the stops are from the left margin of the paragraph
+		`-ivy-tab-stops: 108pt left, 288pt right &quot;.&quot;">1` + "\t" + `Chapter` + "\t" + `5</p>`,
+		`-ivy-tab-stops: 92.69pt decimal, 252pt center &quot;_&quot;">x`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected the xhtml to hold %q", want)
+		}
+	}
+	if strings.Count(html, "-ivy-tab-stops") != 2 {
+		t.Errorf("expected the tab stops on 2 paragraphs, got %d", strings.Count(html, "-ivy-tab-stops"))
+	}
+	if t.Failed() {
+		t.Log(html)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The page has a margin of 36 points. The number 5 ends at the stop
+	// at 288 points from the margin, and the dots of the leader fill the
+	// space before it.
+	line := odtInk(img, image.Rect(0, 37, 360, 52))
+	if line.Max.X < 320 || line.Max.X > 326 {
+		t.Errorf("expected the line to end at the right stop at 324 points, got: %v", line)
+	}
+	if dots := odtInk(img, image.Rect(230, 37, 310, 52)); dots.Empty() {
+		t.Error("expected the dots of the leader before the right stop")
+	}
 }

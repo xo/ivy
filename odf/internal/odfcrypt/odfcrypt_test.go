@@ -218,3 +218,21 @@ func FuzzParseManifest(f *testing.F) {
 		}
 	})
 }
+
+func TestWindows1252(t *testing.T) {
+	for _, test := range []struct {
+		password string
+		exp      string
+		ok       bool
+	}{
+		{"café", "caf\xe9", true},
+		{"€uro", "\x80uro", true},
+		{"ascii", "", false},
+		{"日本", "", false},
+	} {
+		got, ok := Windows1252(test.password)
+		if got != test.exp || ok != test.ok {
+			t.Errorf("%q: expected %q and %v, got: %q and %v", test.password, test.exp, test.ok, got, ok)
+		}
+	}
+}

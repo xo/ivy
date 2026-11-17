@@ -72,7 +72,7 @@ func (b *builder) fill(gp props, solid bool) drawingml.Paint {
 		if !ok {
 			return drawingml.Paint{Kind: drawingml.PaintNone}
 		}
-		pic := b.picture(img)
+		pic := b.picture(img).pic
 		if pic == nil {
 			return drawingml.Paint{Kind: drawingml.PaintNone}
 		}

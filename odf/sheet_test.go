@@ -301,6 +301,7 @@ func TestODSRange(t *testing.T) {
 
 func FuzzSheet(f *testing.F) {
 	f.Add(fixture.ODS(testODS))
+	f.Add(fixture.ODS(condODS))
 	if buf, err := os.ReadFile(filepath.Join("testdata", "sheet.ods")); err == nil {
 		f.Add(buf)
 	}
@@ -368,5 +369,143 @@ func TestSheetChart(t *testing.T) {
 	}
 	if red < 1000 || out > 0 {
 		t.Errorf("expected the red bars of the chart at the top left of the page, got %d red pixels, %d far from it", red, out)
+	}
+}
+
+// condODS is a spreadsheet whose styles of cells have conditions.
+var condODS = fixture.ODSBook{
+	Styles: `<style:style style:name="Default" style:family="table-cell"/>` +
+		`<style:style style:name="Even" style:family="table-cell" style:parent-style-name="Default"><style:table-cell-properties fo:background-color="#f0f5ff"/></style:style>` +
+		`<style:style style:name="Big" style:family="table-cell" style:parent-style-name="Default"><style:table-cell-properties fo:background-color="#ffffcc"/></style:style>`,
+	ContentStyles: `<style:style style:name="ce1" style:family="table-cell"><style:table-cell-properties fo:border="0.5pt solid #000000"/>` +
+		`<style:map style:condition="cell-content()&gt;[.$D$1]" style:apply-style-name="Big" style:base-cell-address="Sheet1.A2"/>` +
+		`<style:map style:condition="is-true-formula(ISEVEN(ROW()))" style:apply-style-name="Even" style:base-cell-address="Sheet1.A2"/></style:style>` +
+		`<style:style style:name="ce2" style:family="table-cell">` +
+		`<style:map style:condition="cell-content-is-between(2,4)" style:apply-style-name="Big" style:base-cell-address="Sheet1.A2"/>` +
+		`<style:map style:condition="is-true-formula(UNKNOWN([.A2]))" style:apply-style-name="Even" style:base-cell-address="Sheet1.A2"/></style:style>`,
+	Body: `<table:table table:name="Sheet1">` +
+		`<table:table-row><table:table-cell/><table:table-cell/><table:table-cell/><table:table-cell office:value-type="float" office:value="10"><text:p>10</text:p></table:table-cell></table:table-row>` +
+		`<table:table-row table:number-rows-repeated="2"><table:table-cell table:style-name="ce1" office:value-type="float" office:value="5"><text:p>5</text:p></table:table-cell>` +
+		`<table:table-cell table:style-name="ce1" office:value-type="float" office:value="20"><text:p>20</text:p></table:table-cell>` +
+		`<table:table-cell table:style-name="ce2" office:value-type="float" office:value="3"><text:p>3</text:p></table:table-cell>` +
+		`<table:table-cell table:style-name="ce2" office:value-type="float" office:value="7"><text:p>7</text:p></table:table-cell></table:table-row>` +
+		`</table:table>`,
+}
+
+func TestSheetConditions(t *testing.T) {
+	d := openSheet(t, fixture.ODS(condODS), ivy.Config{})
+	wb, err := d.odsWorkbook(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fill := func(row, col int) color.NRGBA {
+		t.Helper()
+		for _, r := range wb.Sheets[0].Rows {
+			for _, c := range r.Cells {
+				if r.Index == row && c.Col == col {
+					return wb.Styles[c.Style].Fill
+				}
+			}
+		}
+		t.Fatalf("no cell at %d, %d", row, col)
+		return color.NRGBA{}
+	}
+	even, big := color.NRGBA{0xf0, 0xf5, 0xff, 0xff}, color.NRGBA{0xff, 0xff, 0xcc, 0xff}
+	for _, test := range []struct {
+		row, col int
+		exp      color.NRGBA
+	}{
+		// row 2 is even, and 5 is not more than 10
+		{1, 0, even},
+		{2, 0, color.NRGBA{}},
+		// 20 is more than the value 10 of D1, the first condition
+		{1, 1, big},
+		{2, 1, big},
+		{1, 2, big},
+		// a function that the reader does not know is false
+		{1, 3, color.NRGBA{}},
+	} {
+		if got := fill(test.row, test.col); got != test.exp {
+			t.Errorf("cell %d, %d: expected the fill %v, got: %v", test.row, test.col, test.exp, got)
+		}
+	}
+	// the style of a condition keeps the border of the cell
+	for _, r := range wb.Sheets[0].Rows {
+		for _, c := range r.Cells {
+			if r.Index == 1 && c.Col == 0 && wb.Styles[c.Style].Borders[0].Width == 0 {
+				t.Error("expected the border of the cell under the style of the condition")
+			}
+		}
+	}
+}
+
+func TestODSConditionEval(t *testing.T) {
+	values := map[[2]int]odsValue{{0, 0}: {num: 3, isNum: true}, {0, 1}: {text: "Abc"}}
+	for _, test := range []struct {
+		cond  string
+		value odsValue
+		exp   bool
+	}{
+		{"cell-content()=3", odsValue{num: 3, isNum: true}, true},
+		{"cell-content()!=3", odsValue{num: 3, isNum: true}, false},
+		{"cell-content()<=[.$A$1]", odsValue{num: 3, isNum: true}, true},
+		{`cell-content()="abc"`, odsValue{text: "ABC"}, true},
+		// A1 is relative to the base cell, one column left of the cell
+		{"cell-content()=[.A1]", odsValue{text: "abc"}, true},
+		{"cell-content()>0", odsValue{empty: true}, false},
+		{"cell-content-is-not-between(1,2)", odsValue{num: 3, isNum: true}, true},
+		{"cell-content-is-between(5,1)", odsValue{num: 3, isNum: true}, true},
+		{"is-true-formula(AND(MOD(ROW();2)=1;NOT(ISODD(COLUMN()))))", odsValue{}, true},
+		{"is-true-formula(of:ISEVEN(COLUMN()))", odsValue{}, true},
+		{"is-true-formula(ISBLANK([.C1]))", odsValue{}, true},
+		{"is-true-formula(1/0)", odsValue{}, false},
+		{"is-true-formula(ROW(", odsValue{}, false},
+		{"is-true-formula([Sheet2.A1]=1)", odsValue{}, false},
+		{"value()>1", odsValue{}, false},
+		{"cell-content()", odsValue{}, false},
+	} {
+		// the cell B1, one column right of its base cell
+		e := &odsEval{row: 0, col: 1, value: test.value, values: values, dCol: 1}
+		if got := e.condition(test.cond); got != test.exp {
+			t.Errorf("%s: expected %v, got: %v", test.cond, test.exp, got)
+		}
+	}
+}
+
+func TestSheetShapes(t *testing.T) {
+	book := fixture.ODSBook{
+		ContentStyles: `<style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#ff0000" draw:stroke="none"/></style:style>`,
+		Body: `<table:table table:name="Shapes"><table:shapes>` +
+			`<draw:rect draw:style-name="gr1" svg:x="100pt" svg:y="30pt" svg:width="72pt" svg:height="36pt"/></table:shapes>` +
+			`<table:table-row><table:table-cell office:value-type="string"><text:p>x</text:p>` +
+			`<draw:ellipse draw:style-name="gr1" svg:x="0pt" svg:y="0pt" svg:width="20pt" svg:height="20pt"/></table:table-cell></table:table-row></table:table>`,
+	}
+	d := openSheet(t, fixture.ODS(book), ivy.Config{})
+	doc := sheetDocs(t, d)[0]
+	for _, want := range []string{`src="ivy-object:shape1"`, `src="ivy-object:shape2"`} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the sheet:\n%s", want, doc)
+		}
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the rectangle of 72 by 36 points and the circle of 20 points
+	red := 0
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA); c.R > 200 && c.G < 60 && c.B < 60 {
+				red++
+			}
+		}
+	}
+	if red < 72*36+150 || red > 72*36+500 {
+		t.Errorf("expected the red rectangle and the red circle, got %d red pixels", red)
 	}
 }

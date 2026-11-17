@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	imagepng "image/png"
 	"os"
 	"path/filepath"
 	"testing"
@@ -287,4 +288,61 @@ func FuzzDraw(f *testing.F) {
 		}
 		_, _ = ivy.RenderImage(t.Context(), p, 8, nil)
 	})
+}
+
+func TestDrawMasterFields(t *testing.T) {
+	const styles = `<style:style style:name="shown" style:family="drawing-page"><style:drawing-page-properties presentation:display-footer="true" presentation:display-page-number="true"/></style:style>` +
+		`<style:style style:name="none" style:family="drawing-page"><style:drawing-page-properties presentation:display-footer="false" presentation:display-page-number="false"/></style:style>`
+	master := `<draw:frame draw:style-name="frame" svg:x="50pt" svg:y="50pt" svg:width="500pt" svg:height="60pt" presentation:class="footer"><draw:text-box>` +
+		`<text:p><text:span text:style-name="T1"><presentation:footer/></text:span></text:p></draw:text-box></draw:frame>` +
+		`<draw:frame draw:style-name="frame" svg:x="50pt" svg:y="200pt" svg:width="500pt" svg:height="60pt" presentation:class="page-number"><draw:text-box>` +
+		`<text:p><text:span text:style-name="T2"><text:page-number>&lt;number&gt;</text:page-number></text:span></text:p></draw:text-box></draw:frame>`
+	// The fixture writes the pages only. The first page closes early, so
+	// that the declaration of the footer comes before the next pages.
+	pages := []string{
+		`></draw:page><presentation:footer-decl presentation:name="ftr1">MMMM</presentation:footer-decl><draw:page draw:style-name="shown" presentation:use-footer-name="ftr1">`,
+		`draw:style-name="none" presentation:use-footer-name="ftr1">`,
+	}
+	buf := (&fixture.ODP{AutomaticStyles: drawStyles + styles, MasterShapes: master, Pages: pages}).Bytes()
+	img := drawRender(t, buf, 1)
+	if n := drawCount(img, image.Rect(50, 50, 550, 110), drawRed, 60); n < 100 {
+		t.Errorf("expected the red text of the footer, got %d red pixels", n)
+	}
+	if n := drawCount(img, image.Rect(50, 200, 550, 260), drawBlue, 60); n < 20 {
+		t.Errorf("expected the blue number of the page, got %d blue pixels", n)
+	}
+	img = drawRender(t, buf, 2)
+	if n := drawCount(img, img.Bounds(), drawRed, 60) + drawCount(img, img.Bounds(), drawBlue, 60); n > 0 {
+		t.Errorf("expected no footer and no number on a page that hides them, got %d pixels", n)
+	}
+}
+
+func TestDrawPictureClip(t *testing.T) {
+	// a picture of 8 by 8 pixels at 96 dots per inch, 6 by 6 points:
+	// green, with a red column at the right
+	pic := image.NewNRGBA(image.Rect(0, 0, 8, 8))
+	for y := range 8 {
+		for x := range 8 {
+			pic.Set(x, y, map[bool]color.NRGBA{true: drawGreen, false: drawRed}[x < 7])
+		}
+	}
+	var png bytes.Buffer
+	if err := imagepng.Encode(&png, pic); err != nil {
+		t.Fatal(err)
+	}
+	const style = `<style:style style:name="clip" style:family="graphic" style:parent-style-name="frame"><style:graphic-properties fo:clip="rect(0pt, 1.5pt, 0pt, 0pt)"/></style:style>`
+	page := `><draw:frame draw:style-name="clip" svg:x="100pt" svg:y="100pt" svg:width="100pt" svg:height="100pt">
+<draw:image xlink:href="Pictures/a.png" xlink:type="simple"/></draw:frame>`
+	img := drawRender(t, (&fixture.ODP{
+		AutomaticStyles: drawStyles + style,
+		Pages:           []string{page},
+		Entries:         []fixture.Entry{{Name: "Pictures/a.png", Data: png.Bytes()}},
+	}).Bytes(), 0)
+	// the clip of 2 pixels at the right leaves the green part, which
+	// fills the frame
+	drawExpect(t, img, 110, 150, drawGreen)
+	drawExpect(t, img, 190, 150, drawGreen)
+	if n := drawCount(img, img.Bounds(), drawRed, 40); n > 0 {
+		t.Errorf("expected the red column clipped, got %d red pixels", n)
+	}
 }

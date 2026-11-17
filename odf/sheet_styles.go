@@ -21,6 +21,8 @@ type odsStyle struct {
 	props          map[string]string
 	// master is the master page of a style of a table.
 	master string
+	// maps are the conditions of a style of a cell, style:map, in order.
+	maps []odsMap
 }
 
 // odsStyles holds the styles of a spreadsheet: the styles of styles.xml
@@ -125,6 +127,14 @@ func (s *odsStyles) readStyle(n roxmltree.Node) {
 		st.parent = ebook.Attr(n, "parent-style-name")
 		st.master = ebook.Attr(n, "master-page-name")
 		odsProps(n, st.props)
+		for m := range n.Children() {
+			if odsLocal(m) != "map" || len(st.maps) >= 64 {
+				continue
+			}
+			om := odsMap{cond: ebook.Attr(m, "condition"), apply: ebook.Attr(m, "apply-style-name")}
+			om.baseRow, om.baseCol, _ = odsCell(ebook.Attr(m, "base-cell-address"))
+			st.maps = append(st.maps, om)
+		}
 		s.styles[st.family+"/"+ebook.Attr(n, "name")] = st
 	case "default-style":
 		st.family = ebook.Attr(n, "family")

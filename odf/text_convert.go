@@ -15,6 +15,7 @@ import (
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/memfs"
 	"github.com/xo/ivy/internal/ooxml"
+	"github.com/xo/ivy/odf/internal/drawpage"
 )
 
 // odtDocumentName is the path of the XHTML document of a text in the FS of
@@ -70,6 +71,10 @@ type odtConverter struct {
 	fs       memfs.FS
 
 	st *odtStyles
+	// content and styles are content.xml and styles.xml, and styles can
+	// be nil. shapes draws their shapes, from the first shape.
+	content, styles *roxmltree.Document
+	shapes          *drawpage.Shapes
 	// files maps the name of an entry to its path in fs, or to "" for an
 	// entry that cannot be read.
 	files   map[string]string
@@ -86,8 +91,10 @@ type odtConverter struct {
 	running map[string]string
 	// runningHeights holds the estimated heights of the running elements.
 	runningHeights map[string]float64
-	// layout is the page layout of the current section.
-	layout *odtPageLayout
+	// layout is the page layout of the current section, and pageTop the
+	// top margin of its first page, with the header.
+	layout  *odtPageLayout
+	pageTop float64
 	// started is set after the first block.
 	started bool
 
@@ -125,12 +132,14 @@ func convertText(ctx context.Context, d *Document) (layout.Source, error) {
 			c.log.Warn("odf: styles left out", "err", err)
 		} else {
 			c.st.read(doc.RootElement())
+			c.styles = doc
 		}
 	}
 	doc, err := c.readXML("content.xml")
 	if err != nil {
 		return layout.Source{}, err
 	}
+	c.content = doc
 	root := doc.RootElement()
 	c.st.read(root)
 	text, ok := odtFind(root, "body", "text")
@@ -328,6 +337,12 @@ func (c *odtConverter) block(n roxmltree.Node) {
 				c.paragraph(e)
 			}
 		}
+	default:
+		// a shape anchored at the page is a child of office:text
+		if odtIsShape(n) {
+			c.started = true
+			c.shape(n)
+		}
 	}
 }
 
@@ -373,17 +388,17 @@ func (c *odtConverter) startSection(master string) {
 	if mp != nil && mp.next != "" && mp.next != mp.name {
 		if next, ok := c.st.masters[mp.next]; ok {
 			c.pageRules("@page "+name, next, false)
-			c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+			c.pageTop = c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
 			return
 		}
 	}
-	c.pageRules("@page "+name, mp, false)
+	c.pageTop = c.pageRules("@page "+name, mp, false)
 	if mp != nil {
 		if _, ok := mp.parts["header-left"]; ok {
 			c.pageRules("@page "+name+":left", mp, false)
 		}
 		if _, ok := mp.parts["header-first"]; ok {
-			c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+			c.pageTop = c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
 		}
 	}
 }
@@ -417,8 +432,8 @@ func (c *odtConverter) pageLayout(mp *odtMasterPage) *odtPageLayout {
 // pageRules writes the rule sel of the pages of the master page mp, with
 // its size, its margins, its header and its footer. A rule of :left takes
 // the left header and footer, and first takes the header and the footer of
-// the first page.
-func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) {
+// the first page. It returns the top margin of the pages, with the header.
+func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) float64 {
 	pl := c.pageLayout(mp)
 	header, footer := "header", "footer"
 	switch {
@@ -455,10 +470,29 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) {
 		}
 		return "none"
 	}
+	// The estimate of the height of a header or a footer counts a line for
+	// each paragraph. When the header is taller, the layout makes the
+	// margin of the page grow, so that the body starts below the header and
+	// its spacing, as in LibreOffice. A header of a fixed height does not
+	// grow.
+	fit := "none"
+	if hOK && !pl.headerFixed || fOK && !pl.footerFixed {
+		fit = "grow"
+	}
+	topBox := "content: " + box(hName, hOK) + "; padding-top: " + odtPt(pl.top)
+	if hOK && !pl.headerFixed {
+		topBox += "; padding-bottom: " + odtPt(pl.headerSpace)
+	}
+	bottomBox := "content: " + box(fName, fOK) + "; padding-bottom: " + odtPt(pl.bottom)
+	if fOK && !pl.footerFixed {
+		bottomBox += "; padding-top: " + odtPt(pl.footerSpace)
+	}
 	c.sheet.WriteString(sel + " { size: " + odtPt(pl.width) + " " + odtPt(pl.height) +
 		"; margin: " + odtPt(top) + " " + odtPt(pl.right) + " " + odtPt(bottom) + " " + odtPt(pl.left) + "; " +
-		"@top-center { content: " + box(hName, hOK) + "; padding-top: " + odtPt(pl.top) + " } " +
-		"@bottom-center { content: " + box(fName, fOK) + "; padding-bottom: " + odtPt(pl.bottom) + " } }\n")
+		"-ivy-margin-box-fit: " + fit + "; " +
+		"@top-center { " + topBox + " } " +
+		"@bottom-center { " + bottomBox + " } }\n")
+	return top
 }
 
 // odtPick returns a if cond is true, else b.

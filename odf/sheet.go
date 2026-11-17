@@ -18,6 +18,7 @@ import (
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/numfmt"
 	"github.com/xo/ivy/internal/sheet"
+	"github.com/xo/ivy/odf/internal/drawpage"
 )
 
 // sheetPager gives the pages of a spreadsheet: each table that prints, in
@@ -34,8 +35,11 @@ import (
 // the manual page breaks, the grid of the page layout, and the images of
 // the cells and of the sheet, and the charts of the embedded objects, which
 // internal/chart draws (D27). An object that is not a chart shows
-// as a frame. The conditional formats, the annotations and the shapes are
-// left out.
+// as a frame, and odf/internal/drawpage draws the shapes. The conditions of
+// the style of a cell, style:map, give the cell the style of the first
+// condition that is true. The color scales, the data bars and the icon
+// sets of LibreOffice are left out, and so are the annotations. The pages
+// go down, then over, whatever style:print-page-order says.
 //
 // A run of repeated rows or cells that holds no text and is longer than
 // odsMaxEmptyRun is left out, as the trailing runs that LibreOffice writes
@@ -112,6 +116,20 @@ type odsReader struct {
 	// nCells counts the cells of the workbook.
 	nCells  int
 	objects int
+	// cellProps holds the properties of each style of wb.Styles, and maps
+	// the conditions of the styles that have some, by their index.
+	// condIndex caches the styles of the conditions, by the index of the
+	// style of the cell and the name of the style of the condition.
+	cellProps []map[string]string
+	maps      map[int][]odsMap
+	condIndex map[string]int
+	// conds is set when a style of a cell has conditions, so that the
+	// reader keeps the values of the cells.
+	conds bool
+	// content and styles are content.xml and styles.xml, and styles can
+	// be nil. shapes draws their shapes, from the first shape.
+	content, stylesDoc *roxmltree.Document
+	shapes             *drawpage.Shapes
 }
 
 // odsParse reads and parses the entry name.
@@ -129,9 +147,10 @@ func (d *Document) odsParse(ctx context.Context, name string) (*roxmltree.Docume
 
 // odsWorkbook reads the tables of the spreadsheet.
 func (d *Document) odsWorkbook(ctx context.Context) (*sheet.Workbook, error) {
-	r := &odsReader{ctx: ctx, d: d, styles: newODSStyles(), index: make(map[string]int)}
+	r := &odsReader{ctx: ctx, d: d, styles: newODSStyles(), index: make(map[string]int), maps: map[int][]odsMap{}, condIndex: map[string]int{}}
 	if doc, err := d.odsParse(ctx, "styles.xml"); err == nil {
 		r.styles.read(doc)
+		r.stylesDoc = doc
 	} else if ctx.Err() != nil {
 		return nil, err
 	}
@@ -139,11 +158,16 @@ func (d *Document) odsWorkbook(ctx context.Context) (*sheet.Workbook, error) {
 	if err != nil {
 		return nil, err
 	}
+	r.content = content
 	r.styles.read(content)
+	for _, st := range r.styles.styles {
+		r.conds = r.conds || st.family == "table-cell" && len(st.maps) > 0
+	}
 	r.wb = &sheet.Workbook{Files: make(map[string][]byte)}
 	// The default style of the cells: the default style of the family
 	// with the style Default.
-	def := r.styles.cellStyle(r.styles.props("table-cell", "Default"))
+	defProps := r.styles.props("table-cell", "Default")
+	def := r.styles.cellStyle(defProps)
 	if def.Font.Size <= 0 {
 		def.Font.Size = 10
 	}
@@ -151,6 +175,7 @@ func (d *Document) odsWorkbook(ctx context.Context) (*sheet.Workbook, error) {
 		def.Font.Family = "Liberation Sans"
 	}
 	r.wb.Styles = []sheet.Style{def}
+	r.cellProps = []map[string]string{defProps}
 	r.index["Default"] = 0
 	var spreadsheet roxmltree.Node
 	found := false
@@ -191,9 +216,13 @@ func (r *odsReader) styleIndex(name string) int {
 		r.index[name] = 0
 		return 0
 	}
-	st := r.styles.cellStyle(r.styles.props("table-cell", name))
+	p := r.styles.props("table-cell", name)
 	i := len(r.wb.Styles)
-	r.wb.Styles = append(r.wb.Styles, st)
+	r.wb.Styles = append(r.wb.Styles, r.styles.cellStyle(p))
+	r.cellProps = append(r.cellProps, p)
+	if maps := r.styles.style("table-cell", name).maps; len(maps) > 0 {
+		r.maps[i] = maps
+	}
 	r.index[name] = i
 	return i
 }
@@ -209,6 +238,11 @@ type odsTable struct {
 	// titleRows and titleCols are the rows and the columns of the
 	// header elements.
 	titleRows, titleCols *sheet.Span
+	// conds are the cells whose style has conditions, and values the
+	// values of the cells, by row and column, for the references of the
+	// conditions.
+	conds  []odsCond
+	values map[[2]int]odsValue
 }
 
 // table reads a table:table. It returns false for a table that does not
@@ -231,8 +265,9 @@ func (r *odsReader) table(t roxmltree.Node) (*sheet.Sheet, bool) {
 		master = st.master
 	}
 	r.pageSetup(sh, master)
-	ts := &odsTable{sh: sh}
+	ts := &odsTable{sh: sh, values: map[[2]int]odsValue{}}
 	r.walk(ts, t, 0)
+	r.applyConds(sh, ts.conds, ts.values)
 	sh.Cols = append(sh.Cols, ts.colStyles...)
 	for i := range sh.Images {
 		if img := &sh.Images[i]; img.Row < 0 {
@@ -284,6 +319,8 @@ func (r *odsReader) walk(ts *odsTable, n roxmltree.Node, depth int) {
 			for f := range c.Children() {
 				if odsLocal(f) == "frame" {
 					r.frame(ts.sh, f, -1, -1)
+				} else if odtIsShape(f) {
+					r.shape(ts.sh, f, -1, -1)
 				}
 			}
 		}
@@ -360,7 +397,8 @@ func (r *odsReader) row(ts *odsTable, rn roxmltree.Node) {
 		ts.sh.RowBreaks = append(ts.sh.RowBreaks, ts.row)
 	}
 	merges := len(ts.sh.Merges)
-	row.Cells = r.cells(ts, rn, rowStyle)
+	var values []odsValue
+	row.Cells, values = r.cells(ts, rn, rowStyle)
 	rowMerges := ts.sh.Merges[merges:]
 	hasText := false
 	for _, c := range row.Cells {
@@ -401,15 +439,37 @@ func (r *odsReader) row(ts *odsTable, rn roxmltree.Node) {
 				}
 			}
 			ts.sh.Rows = append(ts.sh.Rows, rr)
+			r.keepValues(ts, rr, values)
 		}
 		ts.row++
 	}
 }
 
-// cells reads the cells of a row. rowStyle is the default style of the
-// cells of the row.
-func (r *odsReader) cells(ts *odsTable, rn roxmltree.Node, rowStyle string) []sheet.Cell {
+// keepValues keeps the values of the cells of the row rr, the last row of
+// the sheet, for the conditions of the styles, and the cells whose style
+// has conditions. values holds the value of each cell of rr.
+func (r *odsReader) keepValues(ts *odsTable, rr sheet.Row, values []odsValue) {
+	if !r.conds {
+		return
+	}
+	for i, c := range rr.Cells {
+		if i >= len(values) {
+			break
+		}
+		if !values[i].empty && len(ts.values) < r.d.lim.MaxObjects {
+			ts.values[[2]int{rr.Index, c.Col}] = values[i]
+		}
+		if len(r.maps[c.Style]) > 0 {
+			ts.conds = append(ts.conds, odsCond{row: len(ts.sh.Rows) - 1, cell: i, value: values[i]})
+		}
+	}
+}
+
+// cells reads the cells of a row, and their values. rowStyle is the
+// default style of the cells of the row.
+func (r *odsReader) cells(ts *odsTable, rn roxmltree.Node, rowStyle string) ([]sheet.Cell, []odsValue) {
 	var cells []sheet.Cell
+	var values []odsValue
 	col := 0
 	for cn := range rn.Children() {
 		kind := odsLocal(cn)
@@ -421,6 +481,10 @@ func (r *odsReader) cells(ts *odsTable, rn roxmltree.Node, rowStyle string) []sh
 			break
 		}
 		cell, hasText := r.cell(cn)
+		var value odsValue
+		if r.conds {
+			value = odsCellValue(cell, func(name string) string { return ebook.Attr(cn, name) })
+		}
 		name := ebook.Attr(cn, "style-name")
 		switch {
 		case name != "":
@@ -453,6 +517,8 @@ func (r *odsReader) cells(ts *odsTable, rn roxmltree.Node, rowStyle string) []sh
 		for f := range cn.Children() {
 			if odsLocal(f) == "frame" {
 				r.frame(ts.sh, f, ts.row, col)
+			} else if odtIsShape(f) {
+				r.shape(ts.sh, f, ts.row, col)
 			}
 		}
 		for range n {
@@ -463,17 +529,20 @@ func (r *odsReader) cells(ts *odsTable, rn roxmltree.Node, rowStyle string) []sh
 				if r.nCells >= r.d.lim.MaxObjects {
 					ts.sh.Note = "The workbook holds more cells than the limit of ivy. The sheet stops at the limit."
 					ts.stop = true
-					return cells
+					return cells, values
 				}
 				r.nCells++
 				c := cell
 				c.Col = col
 				cells = append(cells, c)
+				if r.conds {
+					values = append(values, value)
+				}
 			}
 			col++
 		}
 	}
-	return cells
+	return cells, values
 }
 
 // cell reads the value and the text of a table:table-cell. It reports
@@ -865,6 +934,36 @@ func (r *odsReader) frame(sh *sheet.Sheet, f roxmltree.Node, row, col int) {
 		sh.Images = append(sh.Images, img)
 		return
 	}
+}
+
+// shape reads a shape of the namespace draw, such as draw:custom-shape or
+// a group draw:g, which odf/internal/drawpage draws. A shape of a cell is
+// anchored at the cell of row and col, as a frame. A shape of the sheet has
+// a row of -1, and table anchors it later at the cell that holds its
+// position.
+func (r *odsReader) shape(sh *sheet.Sheet, n roxmltree.Node, row, col int) {
+	if r.objects >= 4096 {
+		return
+	}
+	if r.shapes == nil {
+		cfg := r.d.cfg
+		cfg.Limits = r.d.lim
+		r.shapes = drawpage.NewShapes(drawpage.Options{Config: cfg, Read: r.d.readEntry}, r.content, r.stylesDoc)
+	}
+	s, ok := r.shapes.Shape(r.ctx, n, true)
+	if !ok || s.W > 14400 || s.H > 14400 {
+		return
+	}
+	r.objects++
+	name := "shape" + strconv.Itoa(r.objects)
+	if r.wb.Objects == nil {
+		r.wb.Objects = make(map[string]layout.Object)
+	}
+	r.wb.Objects[name] = s
+	sh.Images = append(sh.Images, sheet.Image{
+		Row: row, Col: col, DX: math.Max(0, s.X), DY: math.Max(0, s.Y),
+		Width: s.W, Height: s.H, Object: name,
+	})
 }
 
 // odsAnchor returns the cell that holds the point (x, y) of a sheet, and

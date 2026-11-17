@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xo/ivy"
@@ -256,5 +257,24 @@ func TestPasswordFunc(t *testing.T) {
 	cfg.PasswordFunc = func(context.Context, int) (string, error) { return "", errStop }
 	if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg)); !errors.Is(err, ivy.ErrPassword) || !errors.Is(err, errStop) {
 		t.Errorf("expected ivy.ErrPassword and the error of the function, got: %v", err)
+	}
+}
+
+// TestEncryptedWindows1252 opens a file whose password hash takes the bytes
+// of the password in windows-1252, as old versions of StarOffice wrote it.
+func TestEncryptedWindows1252(t *testing.T) {
+	for _, c := range []fixture.ODFCipher{fixture.ODFBlowfish, fixture.ODFAESCBC} {
+		buf := fixture.EncryptODF(
+			fixture.ODFEncryption{Password: "caf\xe9", Cipher: c, Iterations: 100},
+			mimePrefix+"text",
+			fixture.Entry{Name: "content.xml", Data: []byte(odtContent(`<text:p>Old text</text:p>`))},
+		)
+		if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: "cafe"})); !errors.Is(err, ivy.ErrPassword) {
+			t.Errorf("expected ivy.ErrPassword for a wrong password, got: %v", err)
+		}
+		html, _ := odtHTML(t, buf, WithConfig(ivy.Config{Password: "café"}))
+		if !strings.Contains(html, "Old text") {
+			t.Errorf("expected the decrypted text, got:\n%s", html)
+		}
 	}
 }

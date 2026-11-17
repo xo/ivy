@@ -10,6 +10,7 @@ import (
 	"github.com/xo/ivy/internal/chart"
 	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
+	"github.com/xo/ivy/odf/internal/drawpage"
 )
 
 // odtDecl is a declaration of CSS.
@@ -36,12 +37,28 @@ var odtGenerics = map[string]string{
 	"decorative": "fantasy", "script": "cursive", "system": "sans-serif",
 }
 
-// family returns the value of font-family of the properties, or "".
+// family returns the value of font-family of the properties, or "". The
+// East Asian font comes after the font of the Latin text, as in docx, so
+// that it draws the East Asian characters that the first font does not
+// hold.
 func (c *odtConverter) family(p odtProps) string {
 	family, generic := c.st.font(p)
+	asian := c.st.asianFont(p)
 	if family == "" {
-		return ""
+		if asian == "" {
+			return ""
+		}
+		return odtQuote(asian) + ", serif"
 	}
+	if asian != "" && !strings.EqualFold(asian, family) {
+		return odtQuote(family) + ", " + odtQuote(asian) + ", " + odtGeneric(family, generic)
+	}
+	return odtQuote(family) + ", " + odtGeneric(family, generic)
+}
+
+// odtGeneric returns the generic family of CSS of the font family, from its
+// generic family of OpenDocument or from its name.
+func odtGeneric(family, generic string) string {
 	g := odtGenerics[generic]
 	if g == "" {
 		g = "serif"
@@ -55,7 +72,7 @@ func (c *odtConverter) family(p odtProps) string {
 			g = "monospace"
 		}
 	}
-	return odtQuote(family) + ", " + g
+	return g
 }
 
 // odtTextPosition returns the vertical align and the scale of the size of
@@ -294,7 +311,35 @@ func (c *odtConverter) paragraphStyle(p odtProps, list *odtList) string {
 	} else {
 		s.set("tab-size", "36pt")
 	}
+	s.set("-ivy-tab-stops", odtTabStopsCSS(p["tab-stops"], left))
 	return s.String()
+}
+
+// odtTabStopsCSS returns the value of -ivy-tab-stops of the tab stops of a
+// paragraph, which odtTabStops encoded, or "" for a paragraph without
+// tab stops. The position of a stop of OpenDocument is from the left
+// margin of the paragraph, left, as LibreOffice places it, and the layout
+// measures it from the edge of the margin of the paragraph.
+func odtTabStopsCSS(stops string, left float64) string {
+	var b strings.Builder
+	for line := range strings.Lines(stops) {
+		f := strings.Split(strings.TrimSuffix(line, "\n"), "\t")
+		if len(f) != 3 {
+			continue
+		}
+		pos, err := strconv.ParseFloat(f[0], 64)
+		if err != nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(odtPt(max(pos+left, 0)) + " " + f[1])
+		if f[2] != "" {
+			b.WriteString(" " + odtQuote(f[2]))
+		}
+	}
+	return b.String()
 }
 
 // paragraph converts a text:p or a text:h element.
@@ -303,15 +348,20 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 	list := c.list
 	c.list = nil
 	defer func() { c.list = list }()
-	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, list)) + `">`)
+	// A heading outside a list takes its number from the outline.
+	item := list
+	if item == nil && n.TagName().Name() == "h" {
+		item = c.outlineItem(n)
+	}
+	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, item)) + `">`)
 	mark := c.w.Len()
 	if c.noteMark {
 		c.noteMark = false
 		c.w.WriteString(`<span class="fnref"></span>`)
 	}
-	if list != nil && list.marker != "" {
-		c.marker(list, p)
-		list.marker = ""
+	if item != nil && item.marker != "" {
+		c.marker(item, p)
+		item.marker = ""
 	}
 	c.space = true
 	c.inlines(n, p)
@@ -319,6 +369,49 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		c.w.WriteString("<br/>")
 	}
 	c.w.WriteString("</p>")
+}
+
+// odtOutlineKey is the key of the counters of the headings in
+// odtConverter.counters. No list style has this name.
+const odtOutlineKey = "\x00outline"
+
+// outlineItem counts the heading n, a text:h outside a list, and returns
+// the list item that gives its number from the text:outline-style. It
+// returns nil if the heading has no number.
+func (c *odtConverter) outlineItem(n roxmltree.Node) *odtList {
+	levels := c.st.outline
+	level := 1
+	if v, err := strconv.Atoi(odtAttr(n, "outline-level")); err == nil {
+		level = v
+	}
+	if levels == nil || level < 1 || level > 10 || odtAttr(n, "is-list-header") == "true" {
+		return nil
+	}
+	lvl := levels[level-1]
+	if lvl == nil {
+		return nil
+	}
+	counters, ok := c.counters[odtOutlineKey]
+	if !ok {
+		counters = &[10]int{}
+		c.counters[odtOutlineKey] = counters
+	}
+	i := level - 1
+	switch v, err := strconv.Atoi(odtAttr(n, "start-value")); {
+	case odtAttr(n, "restart-numbering") == "true" && err == nil:
+		counters[i] = v - 1
+	case odtAttr(n, "restart-numbering") == "true", counters[i] == 0:
+		counters[i] = lvl.start - 1
+	}
+	counters[i]++
+	for j := level; j < 10; j++ {
+		counters[j] = 0
+	}
+	marker := odtListMarker(levels, lvl, counters, i)
+	if marker == "" {
+		return nil
+	}
+	return &odtList{level: i, marker: marker, lvl: lvl}
 }
 
 // marker writes the marker of the first paragraph of an item of a list.
@@ -358,9 +451,11 @@ func (c *odtConverter) marker(list *odtList, p odtProps) {
 	c.w.WriteString("</span>")
 }
 
-// text writes text with its runs of white space collapsed to one space, as
-// OpenDocument says.
-func (c *odtConverter) text(s string) {
+// text writes text with the properties p, with its runs of white space
+// collapsed to one space, as OpenDocument says. The East Asian language of
+// p goes on the CJK text, so that its characters take the faces of that
+// language.
+func (c *odtConverter) text(s string, p odtProps) {
 	var b strings.Builder
 	for _, r := range s {
 		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
@@ -372,6 +467,12 @@ func (c *odtConverter) text(s string) {
 		}
 		b.WriteRune(r)
 		c.space = false
+	}
+	if lang := odtAsianLang(p); lang != "" && strings.ContainsFunc(s, fontdb.IsCJK) {
+		c.w.WriteString(`<span lang="` + odtAttrText(lang) + `">`)
+		odtEscape(c.w, b.String(), false)
+		c.w.WriteString("</span>")
+		return
 	}
 	odtEscape(c.w, b.String(), false)
 }
@@ -393,7 +494,7 @@ func (c *odtConverter) inlines(n roxmltree.Node, p odtProps) {
 	for e := range n.Children() {
 		if e.IsText() {
 			s, _ := e.Text()
-			c.text(s)
+			c.text(s, p)
 			continue
 		}
 		if !e.IsElement() {
@@ -450,11 +551,21 @@ func (c *odtConverter) inlines(n roxmltree.Node, p odtProps) {
 		case "bookmark", "bookmark-start", "bookmark-end", "reference-mark", "reference-mark-start",
 			"reference-mark-end", "soft-page-break", "change", "change-start", "change-end",
 			"annotation", "annotation-end", "toc-mark", "alphabetical-index-mark", "user-index-mark":
+		case "number":
+			// text:number holds the number of a list item or a heading,
+			// which the conversion counts itself.
+		case "placeholder":
+			// LibreOffice shows the text of a placeholder on the screen,
+			// and does not print it.
 		case "hidden-text", "hidden-paragraph":
 			if odtAttr(e, "is-hidden") != "true" {
 				c.inlines(e, p)
 			}
 		default:
+			if odtIsShape(e) {
+				c.shape(e)
+				continue
+			}
 			// A field, such as text:date or text:sequence, shows the text
 			// that the file holds. A link around a frame, draw:a, shows its
 			// frame.
@@ -811,19 +922,26 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 		h = v
 	}
 	w, h = min(max(w, 0), 14400), min(max(h, 0), 14400)
+	x, _ := odtLength(odtAttr(n, "x"))
+	y, _ := odtLength(odtAttr(n, "y"))
 	g := c.st.props("graphic", odtAttr(n, "style-name"))
+	c.place(n, x, y, w, g, func() { c.frameContent(n, w, h, g) })
+}
+
+// place writes the box of a frame or a shape n, of the width w, at the
+// position (x, y) from its anchor, with the graphic properties g. content
+// writes what the box holds.
+func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, content func()) {
 	anchor := odtAttr(n, "anchor-type")
 	var s odtCSS
 	inline := anchor == "as-char"
 	switch {
 	case inline:
 	case anchor == "page" || anchor == "frame" || g["wrap"] == "run-through":
-		x, _ := odtLength(odtAttr(n, "x"))
-		y, _ := odtLength(odtAttr(n, "y"))
 		s.set("position", "absolute")
 		if anchor == "page" && c.layout != nil {
 			x -= c.layout.left
-			y -= c.layout.top
+			y -= c.pageTop
 			s.set("top", odtPt(y))
 		} else if y != 0 {
 			s.set("margin-top", odtPt(y))
@@ -838,7 +956,7 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 		case "right":
 			s.set("margin-left", "auto")
 		default:
-			if x, ok := odtLength(odtAttr(n, "x")); ok && x > 0 {
+			if x > 0 {
 				s.set("margin-left", odtPt(x))
 			}
 		}
@@ -857,9 +975,128 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 	} else {
 		c.w.WriteString(`<span style="` + odtAttrText(s.String()) + `">`)
 	}
-	c.frameContent(n, w, h, g)
+	content()
 	c.w.WriteString("</span>")
 	c.space = false
+}
+
+// odtShapes holds the local names of the shapes of the namespace draw that
+// a text draws with odf/internal/drawpage.
+var odtShapes = map[string]bool{
+	"rect": true, "ellipse": true, "circle": true, "custom-shape": true, "polygon": true, "polyline": true,
+	"path": true, "regular-polygon": true, "line": true, "connector": true, "g": true, "caption": true,
+	"measure": true,
+}
+
+// odtNSDraw is the namespace of the drawings of OpenDocument.
+const odtNSDraw = "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0"
+
+// odtIsShape reports whether n is a shape that the conversion draws.
+func odtIsShape(n roxmltree.Node) bool {
+	uri, _ := n.TagName().Namespace()
+	return uri == odtNSDraw && odtShapes[n.TagName().Name()]
+}
+
+// shape converts a shape of the namespace draw, such as draw:rect or a
+// group draw:g, into an object of the layout that odf/internal/drawpage
+// draws. The text of a shape that holds a frame or a table, such as a
+// picture with its caption, goes through the layout over the shape, since
+// drawpage draws only the paragraphs of a text.
+func (c *odtConverter) shape(n roxmltree.Node) {
+	if c.shapes == nil {
+		cfg := c.d.cfg
+		cfg.Limits = c.lim
+		c.shapes = drawpage.NewShapes(drawpage.Options{Config: cfg, Read: c.d.readEntry}, c.content, c.styles)
+	}
+	c.objects++
+	if c.objects > c.lim.MaxObjects {
+		c.log.Warn("odf: too many objects, shape left out", "element", n.TagName().Name())
+		return
+	}
+	over := odtRichText(n)
+	sh, ok := c.shapes.Shape(c.ctx, n, !over)
+	if !ok {
+		return
+	}
+	id := "shape" + strconv.Itoa(len(c.charts)+1)
+	c.charts[id] = sh
+	g := c.st.props("graphic", odtAttr(n, "style-name"))
+	src := odtAttrText(layout.ObjectURL(id))
+	inline := odtAttr(n, "anchor-type") == "as-char"
+	c.place(n, sh.X, sh.Y, sh.W, g, func() {
+		var s odtCSS
+		if !inline && !over {
+			// a box apart from the line has no baseline
+			s.set("display", "block")
+		}
+		if over {
+			s.set("position", "absolute")
+			s.set("left", "0")
+			s.set("top", "0")
+		}
+		s.set("width", odtPt(sh.W))
+		s.set("height", odtPt(sh.H))
+		img := `<img src="` + src + `" alt="" style="` + s.String() + `"/>`
+		if !over {
+			c.w.WriteString(img)
+			return
+		}
+		var box odtCSS
+		box.set("display", "inline-block")
+		box.set("position", "relative")
+		box.set("vertical-align", "top")
+		box.set("width", odtPt(sh.W))
+		box.set("min-height", odtPt(sh.H))
+		c.w.WriteString(`<span style="` + odtAttrText(box.String()) + `">` + img)
+		// The text is a positioned box, which draws over the shape.
+		var text odtCSS
+		text.set("display", "block")
+		text.set("position", "relative")
+		text.set("box-sizing", "border-box")
+		text.set("width", odtPt(sh.W))
+		all, _ := odtLength(g["padding"])
+		pad := (sh.W - odtShapeWidth(n)) / 2
+		for _, side := range [...]string{"top", "right", "bottom", "left"} {
+			v, ok := odtLength(g["padding-"+side])
+			if !ok {
+				v = all
+			}
+			text.set("padding-"+side, odtPt(max(v, 0)+pad))
+		}
+		c.w.WriteString(`<span style="` + odtAttrText(text.String()) + `">`)
+		list := c.list
+		c.list = nil
+		c.nested++
+		c.blocks(n)
+		c.nested--
+		c.list = list
+		c.w.WriteString("</span></span>")
+	})
+}
+
+// odtShapeWidth returns svg:width of the shape n, or 0.
+func odtShapeWidth(n roxmltree.Node) float64 {
+	w, _ := odtLength(odtAttr(n, "width"))
+	return max(w, 0)
+}
+
+// odtRichText reports whether the text of the shape n holds a frame or a
+// table, which the drawing of its text does not show. A group has no text
+// of its own.
+func odtRichText(n roxmltree.Node) bool {
+	if n.TagName().Name() == "g" {
+		return false
+	}
+	for d := range n.Descendants() {
+		if !d.IsElement() {
+			continue
+		}
+		switch d.TagName().Name() {
+		case "frame", "table":
+			return true
+		}
+	}
+	return false
 }
 
 // frameContent writes the content of a frame of w by h points: its first

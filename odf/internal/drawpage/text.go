@@ -7,6 +7,7 @@ import (
 	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // The limits of the text of a shape.
@@ -210,8 +211,9 @@ func (w *textWalker) inline(n roxmltree.Node, tp props, depth int) {
 		switch uri {
 		case nsText:
 		case nsPresentation:
-			// the fields of a master, such as presentation:footer, take
-			// the text of the page, which the package does not read
+			// a field of a master, such as presentation:footer, takes the
+			// text that the page names
+			w.text(w.b.field(c.TagName().Name()), style)
 			continue
 		default:
 			continue
@@ -307,6 +309,23 @@ func (b *builder) runStyle(tp props) drawingml.RunStyle {
 		}
 	} else if f := tp.get("fo:font-family"); f != "" {
 		s.Latin.Set(unquote(strings.Split(f, ",")[0]))
+	}
+	// The East Asian font and language select the faces of the CJK text.
+	if name := tp.get("style:font-name-asian"); name != "" {
+		if f, ok := b.st.fonts[name]; ok && f != "" {
+			s.EastAsian.Set(f)
+		} else {
+			s.EastAsian.Set(name)
+		}
+	} else if f := tp.get("style:font-family-asian"); f != "" {
+		s.EastAsian.Set(unquote(strings.Split(f, ",")[0]))
+	}
+	lang := tp.get("style:language-asian")
+	if country := tp.get("style:country-asian"); country != "" && country != "none" {
+		lang += "-" + country
+	}
+	if fontdb.ParseLang(lang) != fontdb.NoLang {
+		s.Lang.Set(lang)
 	}
 	switch w := tp.get("fo:font-weight"); w {
 	case "":
