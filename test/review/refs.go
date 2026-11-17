@@ -87,6 +87,10 @@ type route struct {
 	// native renders ivy at 72 dots per inch, one pixel for each pixel of a
 	// raster image, and the references at the size of the image.
 	native bool
+	// ivyPDF makes ivy render the PDF file of the conversion too, as the
+	// column "ivy PDF", and compare it with MuPDF. Only a route that
+	// converts the document to PDF sets it.
+	ivyPDF bool
 }
 
 // The page renderers.
@@ -109,13 +113,13 @@ var (
 var (
 	pdfRoute     = &route{id: "pdf", count: pdfCount, renderers: pdfRenderers}
 	sofficeRoute = &route{id: "soffice", name: "LibreOffice", tools: []string{"soffice"},
-		prepare: sofficePDF, count: pdfCount, renderers: pdfRenderers}
+		prepare: sofficePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
 	calibreRoute = &route{id: "calibre", name: "calibre", tools: []string{"ebook-convert"},
-		prepare: calibrePDF, count: pdfCount, renderers: pdfRenderers}
+		prepare: calibrePDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
 	// weasyprintRoute lays out HTML with WeasyPrint, whose layout ivy ports
 	// (D15), with the style sheet that ivy gives an HTML file.
 	weasyprintRoute = &route{id: "weasyprint", name: "WeasyPrint", tools: []string{"weasyprint"},
-		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers}
+		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true}
 	xpsRoute = &route{id: "xps", renderers: []pageRenderer{{id: "xpstopng", name: "libgxps", tools: []string{"xpstopng"}, render: xpstopng}}}
 	gsRoute  = &route{id: "gs", name: "Ghostscript", tools: []string{"gs"}, perDPI: true,
 		prepare: ghostscript, count: countPages,

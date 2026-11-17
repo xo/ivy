@@ -97,17 +97,36 @@ type DocReport struct {
 	// difference of ivy from a reference. It is -1 without a metric.
 	Worst float64 `json:"worst"`
 	// Disagree counts the pages where the references disagree.
-	Disagree int        `json:"disagree"`
-	Rows     []*PageRow `json:"rows"`
+	Disagree int `json:"disagree"`
+	// IvyPDFWorst is, over the pages, the largest blurred difference of ivy
+	// PDF from MuPDF. It is -1 without a metric. ivy PDF is the PDF file of
+	// the conversion of the references, which ivy renders too. It shows the
+	// gaps of the package pdf of ivy, and it is not a reference: Worst and
+	// Disagree leave it out.
+	IvyPDFWorst float64 `json:"ivy_pdf_worst"`
+	// IvyPDFStatus is the worst status of ivy PDF over the pages. It is
+	// empty when the document has no column ivy PDF, or no PDF file. It
+	// does not change Status.
+	IvyPDFStatus string `json:"ivy_pdf_status,omitempty"`
+	// IvyPDFError is the error of ivy PDF on the PDF file, or on its first
+	// page that failed.
+	IvyPDFError string `json:"ivy_pdf_error,omitempty"`
+	// IvyPDFLog holds the messages of the log of ivy PDF.
+	IvyPDFLog []string   `json:"ivy_pdf_log,omitempty"`
+	Rows      []*PageRow `json:"rows"`
 }
 
 // PageRow is one page of a document: the image of ivy and the images of
 // the references.
 type PageRow struct {
 	// Page is the number of the page, from 1.
-	Page int     `json:"page"`
-	Ivy  *Cell   `json:"ivy"`
-	Refs []*Cell `json:"references"`
+	Page int   `json:"page"`
+	Ivy  *Cell `json:"ivy"`
+	// IvyPDF is the page of the PDF file of the conversion, which ivy
+	// renders. Its metric is its difference from MuPDF. It is nil for a
+	// kind that the references do not convert to PDF.
+	IvyPDF *Cell   `json:"ivy_pdf,omitempty"`
+	Refs   []*Cell `json:"references"`
 	// RefsDiff is the largest blurred difference between two references,
 	// or -1.
 	RefsDiff  float64 `json:"references_diff"`
@@ -182,12 +201,15 @@ func Render(ctx context.Context, entries []Entry, opts RenderOptions) (*Report, 
 				rep.Docs[i] = d
 				done++
 				if opts.Log != nil {
-					worst := "-"
-					if d.Worst >= 0 {
-						worst = fmt.Sprintf("%.2f", d.Worst)
+					number := func(v float64) string {
+						if v < 0 {
+							return "-"
+						}
+						return fmt.Sprintf("%.2f", v)
 					}
-					_, _ = fmt.Fprintf(opts.Log, "[%d/%d] %-8s %-5s pages %3d  worst %6s  %6.1fs  %s\n",
-						done, len(selected), d.Status, d.Kind, d.Pages, worst, d.TotalMS/1000, d.Name)
+					_, _ = fmt.Fprintf(opts.Log, "[%d/%d] %-8s %-5s pages %3d  worst %6s  ivy PDF %6s  %6.1fs  %s\n",
+						done, len(selected), d.Status, d.Kind, d.Pages, number(d.Worst), number(d.IvyPDFWorst),
+						d.TotalMS/1000, d.Name)
 				}
 				mu.Unlock()
 			}
@@ -353,7 +375,7 @@ func toolEnv(ctx context.Context, opts RenderOptions, home string) (*refEnv, []s
 // writes its images into the folder of the report.
 func renderDoc(ctx context.Context, e Entry, i, slot int, env *refEnv, home string, opts RenderOptions) *DocReport {
 	start := time.Now()
-	d := &DocReport{Entry: e, ID: fmt.Sprintf("%03d-%s", i+1, slug(e.Name)), Pages: -1, RefPages: -1, Worst: -1}
+	d := &DocReport{Entry: e, ID: fmt.Sprintf("%03d-%s", i+1, slug(e.Name)), Pages: -1, RefPages: -1, Worst: -1, IvyPDFWorst: -1}
 	defer func() { d.TotalMS = ms(time.Since(start)) }()
 	dir := filepath.Join(opts.Out, "d", d.ID)
 	if err := os.RemoveAll(dir); err != nil {
@@ -394,9 +416,12 @@ func renderDoc(ctx context.Context, e Entry, i, slot int, env *refEnv, home stri
 	doc, openTime, err := openIvy(ivyCtx, path, e.Kind, e.Password(), filepath.Join(opts.Repo, "fonts"))
 	d.OpenMS = ms(openTime)
 	stuck := errors.Is(err, errStuck)
-	if doc != nil && !stuck {
-		defer doc.close()
-	}
+	// a page can get stuck too, so the close checks stuck at the end
+	defer func() {
+		if doc != nil && !stuck {
+			doc.close()
+		}
+	}()
 	switch {
 	case err != nil:
 		d.Status = statusOf(ivyCtx, err)
@@ -454,6 +479,18 @@ func renderDoc(ctx context.Context, e Entry, i, slot int, env *refEnv, home stri
 		pages = []int{0}
 	}
 
+	// ivy opens the PDF file of the conversion, with a time of its own
+	pdfCtx, cancelPDF := context.WithTimeout(ctx, opts.Timeout)
+	defer cancelPDF()
+	var pdfDoc *ivyPDF
+	if r.ivyPDF {
+		pdfDoc = &ivyPDF{}
+		if prep != nil && d.RefError == "" {
+			pdfDoc.open(pdfCtx, d, prep.in, filepath.Join(opts.Repo, "fonts"))
+		}
+		defer pdfDoc.close(d)
+	}
+
 	var renderTime time.Duration
 	for _, n := range pages {
 		row := &PageRow{Page: n + 1, RefsDiff: -1}
@@ -493,6 +530,12 @@ func renderDoc(ctx context.Context, e Entry, i, slot int, env *refEnv, home stri
 					row.Ivy.Error = werr.Error()
 				}
 			}
+		}
+
+		// ivy PDF
+		var pdfImg image.Image
+		if pdfDoc != nil {
+			row.IvyPDF, pdfImg = pdfDoc.page(pdfCtx, d, n, float32(opts.DPI), prefix+"-ivypdf", rel)
 		}
 
 		// the references
@@ -537,13 +580,14 @@ func renderDoc(ctx context.Context, e Entry, i, slot int, env *refEnv, home stri
 			if ivyImg == nil {
 				continue
 			}
-			m, heat := Compare(ivyImg, img, true)
-			c.Metric = &m
-			if err := writePNG(out+"-diff.png", heat); err == nil {
-				c.Diff = rel(out + "-diff.png")
-			}
-			if err := writeThumb(out+"-diff.jpg", heat); err == nil {
-				c.DiffThumb = rel(out + "-diff.jpg")
+			compareCell(c, ivyImg, img, out+"-diff", rel)
+		}
+
+		// ivy PDF compared with MuPDF, which is not a reference
+		for i, pr := range r.renderers {
+			if pdfImg != nil && pr.id == mupdfRenderer.id && refImgs[i] != nil {
+				compareCell(row.IvyPDF, pdfImg, refImgs[i], prefix+"-ivypdf-diff", rel)
+				d.IvyPDFWorst = max(d.IvyPDFWorst, row.IvyPDF.Metric.Blurred)
 			}
 		}
 
@@ -588,6 +632,110 @@ func writeCell(c *Cell, img image.Image, base string, rel func(string) string) e
 	}
 	c.Thumb = rel(base + ".jpg")
 	return nil
+}
+
+// compareCell sets the metric of c to the difference of img from ref, and
+// writes the map of the difference as the PNG image and the thumbnail of
+// c, at the path base with the extensions .png and .jpg.
+func compareCell(c *Cell, img, ref image.Image, base string, rel func(string) string) {
+	m, heat := Compare(img, ref, true)
+	c.Metric = &m
+	if heat == nil {
+		return
+	}
+	if err := writePNG(base+".png", heat); err == nil {
+		c.Diff = rel(base + ".png")
+	}
+	if err := writeThumb(base+".jpg", heat); err == nil {
+		c.DiffThumb = rel(base + ".jpg")
+	}
+}
+
+// ivyPDFName is the name of the column of ivy PDF.
+const ivyPDFName = "ivy PDF"
+
+// ivyPDF is the PDF file of the conversion of the references, which ivy
+// renders as the column "ivy PDF". The column shows the gaps of the package
+// pdf of ivy. It does not change the status of the document.
+type ivyPDF struct {
+	// path is the PDF file, or empty when the references made none.
+	path string
+	doc  *ivyDoc
+	// ready reports whether ivy opened the file and counted its pages.
+	ready bool
+	// stuck reports a call of ivy that did not return after the end of its
+	// context. ivy then keeps the file open.
+	stuck bool
+}
+
+// open opens the PDF file at path with the package pdf of ivy, with the
+// fonts of the folder fonts, and sets the status of ivy PDF in d.
+func (p *ivyPDF) open(ctx context.Context, d *DocReport, path, fonts string) {
+	p.path = path
+	doc, _, err := openIvy(ctx, path, "pdf", "", fonts)
+	p.doc = doc
+	if err != nil {
+		p.stuck = errors.Is(err, errStuck)
+		d.IvyPDFStatus, d.IvyPDFError = statusOf(ctx, err), err.Error()
+		return
+	}
+	p.ready = true
+	d.IvyPDFStatus = StatusOK
+}
+
+// page renders page n, from 0, of the PDF file at dpi, and writes its
+// images at the path base. It returns the cell of the page, and its image
+// or nil. An error goes into the cell, and the first one into d.
+func (p *ivyPDF) page(ctx context.Context, d *DocReport, n int, dpi float32, base string, rel func(string) string) (*Cell, image.Image) {
+	c := &Cell{Name: ivyPDFName}
+	switch {
+	case p.path == "":
+		c.Error = "the references made no PDF file"
+		return c, nil
+	case !p.ready:
+		c.Status, c.Error = d.IvyPDFStatus, "ivy did not open the PDF file"
+		return c, nil
+	case p.stuck:
+		c.Status, c.Error = StatusTimeout, "ivy is stuck on an earlier page"
+		return c, nil
+	case n >= p.doc.pages:
+		c.Error = "the PDF file has no such page"
+		return c, nil
+	}
+	t := time.Now()
+	img, err := p.doc.render(ctx, n, dpi)
+	c.MS = ms(time.Since(t))
+	c.Status = statusOf(ctx, err)
+	d.IvyPDFStatus = worse(d.IvyPDFStatus, c.Status)
+	if err != nil {
+		c.Error = err.Error()
+		p.stuck = p.stuck || errors.Is(err, errStuck)
+		if d.IvyPDFError == "" {
+			d.IvyPDFError = fmt.Sprintf("page %d: %s", n+1, err)
+		}
+	}
+	if img == nil || (err != nil && c.Status != StatusPartial) {
+		return c, nil
+	}
+	c.Size = img.Bounds().Size()
+	if werr := writeCell(c, img, base, rel); werr != nil {
+		c.Error = werr.Error()
+	}
+	return c, img
+}
+
+// close keeps the log of ivy PDF in d, and closes the PDF file unless ivy
+// is stuck on it.
+func (p *ivyPDF) close(d *DocReport) {
+	if p.doc == nil {
+		return
+	}
+	if p.doc.log != nil {
+		d.IvyPDFLog = p.doc.log.lines()
+	}
+	if !p.stuck {
+		p.doc.close()
+	}
 }
 
 // selectPages returns the pages to render, from 0: the first n pages and

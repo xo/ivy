@@ -25,7 +25,9 @@
 // with the reference programs of the kind, compares each page of ivy with
 // each reference, and writes index.html, report.json and the images into
 // the folder of -out. It keeps the images of the references in the cache,
-// because LibreOffice and calibre are slow. ivy renders each time.
+// because LibreOffice and calibre are slow. ivy renders each time. If the
+// references convert a document to PDF, ivy renders that PDF file too, as
+// the column "ivy PDF", and compares it with MuPDF.
 //
 // The cache is test/review/cache of the repository, by default. Git
 // ignores it. The command finds the repository from the current folder.

@@ -86,18 +86,26 @@ An empty line and a line that starts with `#` are skipped.
 ivy renders each document again on each run. The references convert some
 kinds to PDF first, then draw each page:
 
-| Kinds | Conversion | Pages |
-| --- | --- | --- |
-| pdf, ai | none | MuPDF, Poppler Splash, Poppler Cairo |
-| Office, OpenDocument, rtf, csv, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo |
-| html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo |
-| epub, mobi, azw3, azw4, fb2, chm, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo |
-| xps, oxps | none | libgxps (`xpstopng`) |
-| ps, eps | Ghostscript draws each page | Ghostscript |
-| emf, wmf | none | Inkscape |
-| djvu | none | DjVuLibre (`ddjvu`) |
-| psd, ora, camera raw | none | ImageMagick |
-| kra, cbz | none | no reference |
+| Kinds | Conversion | Pages | ivy PDF |
+| --- | --- | --- | --- |
+| pdf, ai | none | MuPDF, Poppler Splash, Poppler Cairo | no |
+| Office, OpenDocument, rtf, csv, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
+| html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
+| epub, mobi, azw3, azw4, fb2, chm, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
+| xps, oxps | none | libgxps (`xpstopng`) | no |
+| ps, eps | Ghostscript draws each page | Ghostscript | no |
+| emf, wmf | none | Inkscape | no |
+| djvu | none | DjVuLibre (`ddjvu`) | no |
+| psd, ora, camera raw | none | ImageMagick | no |
+| kra, cbz | none | no reference | no |
+
+ivy PDF is a column of the report that is not a reference. If LibreOffice,
+WeasyPrint or calibre converts a document to PDF, the package `pdf` of ivy
+renders that PDF file too, at the same resolution. The command compares
+each page with the page of MuPDF. The difference shows the gaps of the PDF
+renderer of ivy. A PDF file has no column ivy PDF, because the column
+`ivy` already renders the file with the package `pdf`. ivy renders the
+pages of ivy PDF again on each run. The PDF file comes from the cache.
 
 These are the command lines, with `DPI` and the page `N`:
 
@@ -167,19 +175,23 @@ The folder of `-out` holds these files:
 - `index.html` is the report. It needs no network.
 - `report.json` holds the numbers of the report, so that a later run can
   compare them.
-- `d/<id>/` holds the images of each document: `p1-ivy.png` and the image of
-  each reference, such as `p1-mupdf.png`, at the full resolution, a JPEG
-  file of each one at 480 pixels wide, and a map of the difference from
-  each reference, such as `p1-mupdf-diff.png`.
+- `d/<id>/` holds the images of each document: `p1-ivy.png`, the image of
+  ivy PDF `p1-ivypdf.png`, and the image of each reference, such as
+  `p1-mupdf.png`, at the full resolution. It also holds a JPEG file of each
+  one at 480 pixels wide, a map of the difference of ivy from each
+  reference, such as `p1-mupdf-diff.png`, and a map of the difference of
+  ivy PDF from MuPDF, `p1-ivypdf-diff.png`.
 
 The top of the report has a table of the documents, from the worst. A click
 on a heading sorts the table, and the fields above it filter the documents
 by kind, by status and by name. Under the table, each document has a
-section: its header, the errors and the log of ivy, and a row for each page
-with the image of ivy and the images of the references. A click on an image
+section: its header, the errors and the log of ivy, and a row for each page.
+A row holds the image of ivy, the image of ivy PDF if the kind has that
+column, and the images of the references, in this order: ivy, ivy PDF,
+MuPDF, Poppler Splash, Poppler Cairo. A click on an image
 opens it at its full size. The box "show the differences", or the button of
-a row, shows the map of the difference in place of each reference: red
-where the pages differ, darker where they differ more.
+a row, shows the map of the difference in place of each reference and of ivy
+PDF: red where the pages differ, darker where they differ more.
 
 These are the numbers under each image of a reference:
 
@@ -196,10 +208,28 @@ closest reference, and the largest of these over the pages. A row says
 "references disagree" when two references differ by more than 4 after the
 blur. On such a page, the references themselves do not agree.
 
+Under the image of ivy PDF, `vs MuPDF` gives the blurred and the mean
+difference of ivy PDF from MuPDF on the same page. The column "ivy PDF vs
+MuPDF" of the table gives the largest of these over the pages. A sort on
+that column shows where the PDF renderer of ivy has gaps. ivy PDF is not a
+reference, so `worst` and "references disagree" do not count it.
+
 The status of a document is `ok`, `partial` (ivy drew a page only in part),
 `error`, `panic` (ivy panicked, which is a bug), `timeout`, `missing` (the
 file is not in the cache) or `unsupported` (ivy has no package for the
-kind).
+kind). The status comes from the column `ivy` only. An error, a panic or a
+partial page of ivy PDF shows under its image, and the header of the document
+gives the first one as "ivy PDF: " and the error.
+
+`report.json` holds these keys for ivy PDF. The other keys do not change.
+
+| Key | What it holds |
+| --- | --- |
+| `documents[].ivy_pdf_worst` | the largest blurred difference of ivy PDF from MuPDF over the pages, or -1 without a metric |
+| `documents[].ivy_pdf_status` | the worst status of ivy PDF over the pages. It is not there if the kind has no column ivy PDF, or if the references made no PDF file |
+| `documents[].ivy_pdf_error` | the error of ivy PDF on the PDF file, or on its first page that failed |
+| `documents[].ivy_pdf_log` | the messages of the log of ivy PDF |
+| `documents[].rows[].ivy_pdf` | the image of ivy PDF on the page, with the keys of `ivy`. Its `metric` is the difference from MuPDF. It is not there for a kind without the column |
 
 ## Add a format
 

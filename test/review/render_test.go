@@ -9,12 +9,14 @@ import (
 	"time"
 )
 
-// TestRender renders three small files of the repository with ivy and with
-// their references: a PDF file with MuPDF and Poppler, an XPS file with
-// libgxps, and a Photoshop file with ImageMagick. As each test of the test
-// module, it fails when a program is missing, and names it (D13).
+// TestRender renders four small files of the repository with ivy and with
+// their references: a PDF file with MuPDF and Poppler, a Word file with
+// LibreOffice to PDF and then MuPDF and Poppler, an XPS file with libgxps,
+// and a Photoshop file with ImageMagick. ivy renders the PDF file of
+// LibreOffice too, as the column ivy PDF. As each test of the test module,
+// it fails when a program is missing, and names it (D13).
 func TestRender(t *testing.T) {
-	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", "xpstopng", "magick", "fc-list"} {
+	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", "xpstopng", "magick", "fc-list", "soffice"} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatalf("oracle %s is not installed: %v", name, err)
 		}
@@ -25,6 +27,7 @@ func TestRender(t *testing.T) {
 	}
 	entries := []Entry{
 		{Name: "pdf/clip.pdf", Kind: "pdf", URL: "repo:pdf/internal/interpret/testdata/clip_path_nested.pdf", Size: -1},
+		{Name: "docx/sample.docx", Kind: "docx", URL: "repo:docx/testdata/sample.docx", Size: -1},
 		{Name: "xps/example.xps", Kind: "xps", URL: "repo:xps/testdata/example.xps", Size: -1},
 		{Name: "psd/rgb8bit.psd", Kind: "psd", URL: "repo:psd/testdata/rgb8bit.psd", Size: -1},
 		{Name: "missing.pdf", Kind: "pdf", URL: "https://example.com/missing.pdf", Size: -1},
@@ -41,9 +44,10 @@ func TestRender(t *testing.T) {
 		t.Fatalf("expected %d documents, got: %d", len(entries), len(rep.Docs))
 	}
 	refs := map[string][]string{
-		"pdf/clip.pdf":    {"MuPDF", "Poppler Splash", "Poppler Cairo"},
-		"xps/example.xps": {"libgxps"},
-		"psd/rgb8bit.psd": {"ImageMagick"},
+		"pdf/clip.pdf":     {"MuPDF", "Poppler Splash", "Poppler Cairo"},
+		"docx/sample.docx": {"MuPDF", "Poppler Splash", "Poppler Cairo"},
+		"xps/example.xps":  {"libgxps"},
+		"psd/rgb8bit.psd":  {"ImageMagick"},
 	}
 	for _, d := range rep.Docs {
 		if d.Name == "missing.pdf" {
@@ -66,6 +70,7 @@ func TestRender(t *testing.T) {
 				t.Errorf("%s: expected the image of ivy: %v", d.Name, err)
 			}
 		}
+		checkIvyPDF(t, d, out)
 		if len(row.Refs) != len(refs[d.Name]) {
 			t.Errorf("%s: expected the references %v, got: %d", d.Name, refs[d.Name], len(row.Refs))
 			continue
@@ -112,5 +117,40 @@ func TestRender(t *testing.T) {
 	opts.Out = other
 	if _, err := Render(t.Context(), entries, opts); err == nil || !strings.Contains(err.Error(), "no report.json") {
 		t.Errorf("expected a folder of other files to be refused, got: %v", err)
+	}
+}
+
+// checkIvyPDF checks the column ivy PDF of the document d of TestRender: a
+// page and a metric against MuPDF for the Word file, which LibreOffice
+// converts to PDF, and no column for the other files.
+func checkIvyPDF(t *testing.T, d *DocReport, out string) {
+	t.Helper()
+	c := d.Rows[0].IvyPDF
+	if d.Kind != "docx" {
+		if c != nil || d.IvyPDFWorst != -1 || d.IvyPDFStatus != "" {
+			t.Errorf("%s: expected no column ivy PDF, got: %+v", d.Name, c)
+		}
+		return
+	}
+	if c == nil {
+		t.Errorf("%s: expected a column ivy PDF", d.Name)
+		return
+	}
+	if c.Name != ivyPDFName || c.Status != StatusOK || c.Error != "" || c.Metric == nil {
+		t.Errorf("%s: expected a page of ivy PDF with a metric, got: %+v", d.Name, c)
+		return
+	}
+	if d.IvyPDFStatus != StatusOK || d.IvyPDFError != "" || d.IvyPDFWorst != c.Metric.Blurred {
+		t.Errorf("%s: expected the status ok and the worst %.2f of ivy PDF, got: %s %.2f %s",
+			d.Name, c.Metric.Blurred, d.IvyPDFStatus, d.IvyPDFWorst, d.IvyPDFError)
+	}
+	// ivy and MuPDF draw the same PDF file: TestPDF allows 8
+	if c.Metric.Blurred > 8 || c.Metric.Scaled() {
+		t.Errorf("%s: expected ivy PDF to look as MuPDF, got: %+v", d.Name, c.Metric)
+	}
+	for _, p := range []string{c.Image, c.Thumb, c.Diff, c.DiffThumb} {
+		if _, err := os.Stat(filepath.Join(out, p)); err != nil {
+			t.Errorf("%s: expected the image %q of ivy PDF: %v", d.Name, p, err)
+		}
 	}
 }

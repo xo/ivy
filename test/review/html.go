@@ -66,7 +66,13 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{
 		}
 		return fmt.Sprint(n)
 	},
-	"cols": func(d *DocReport) int { return 1 + len(d.RefNames) },
+	"cols": func(d *DocReport) int {
+		n := 1 + len(d.RefNames)
+		if len(d.Rows) != 0 && d.Rows[0].IvyPDF != nil {
+			n++
+		}
+		return n
+	},
 	"kinds": func(docs []*DocReport) []string {
 		seen := map[string]bool{}
 		var out []string
@@ -145,7 +151,7 @@ body.showdiff .ref .plain,.row.showdiff .ref .plain{display:none}
 {{range .Notes}}<p class="err">{{.}}</p>{{end}}
 <details><summary>Programs</summary><pre>{{range .Programs}}{{.Name}}: {{.Version}}
 {{end}}</pre></details>
-<p class="muted">Worst: for each page, the blurred difference of ivy from its closest reference, and the largest of these over the pages. Blurred: the mean difference of the grey levels after a blur of 5 by 5 pixels, from 0 to 255. Mean: the mean difference of the channels. Under 2 is green, under 5 is amber.</p>
+<p class="muted">Worst: for each page, the blurred difference of ivy from its closest reference, and the largest of these over the pages. Blurred: the mean difference of the grey levels after a blur of 5 by 5 pixels, from 0 to 255. Mean: the mean difference of the channels. Under 2 is green, under 5 is amber. ivy PDF vs MuPDF: when the references convert a document to PDF, ivy renders that PDF file too, as the column ivy PDF. The number is the largest blurred difference of that column from MuPDF over the pages. It shows the gaps of the PDF renderer of ivy. It is not a reference, so Worst and Refs disagree leave it out.</p>
 <div class="bar">
 <label>Kind <select id="fkind"><option value="">all</option>{{range kinds .Docs}}<option>{{.}}</option>{{end}}</select></label>
 <label>Status <select id="fstatus"><option value="">all</option>{{range statuses .Counts}}<option>{{.}}</option>{{end}}</select></label>
@@ -154,20 +160,23 @@ body.showdiff .ref .plain,.row.showdiff .ref .plain{display:none}
 <span id="shown" class="muted"></span>
 </div>
 <table class="sum" id="sum">
-<thead><tr><th data-k="name">Name</th><th data-k="kind">Kind</th><th data-k="status">Status</th><th data-k="pages" data-num>Pages ivy / ref</th><th data-k="worst" data-num>Worst</th><th data-k="disagree" data-num>Refs disagree</th><th data-k="time" data-num>Time s</th><th data-k="source">Source</th><th data-k="license">License</th></tr></thead>
+<thead><tr><th data-k="name">Name</th><th data-k="kind">Kind</th><th data-k="status">Status</th><th data-k="pages" data-num>Pages ivy / ref</th><th data-k="worst" data-num>Worst</th><th data-k="ivypdf" data-num>ivy PDF vs MuPDF</th><th data-k="disagree" data-num>Refs disagree</th><th data-k="time" data-num>Time s</th><th data-k="source">Source</th><th data-k="license">License</th></tr></thead>
 <tbody>
-{{range $i, $d := .Docs}}<tr data-id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}" data-pages="{{.Pages}}" data-worst="{{.Worst}}" data-disagree="{{.Disagree}}" data-time="{{.TotalMS}}" data-source="{{.Source}}" data-license="{{.License}}" data-order="{{$i}}">
-<td class="name"><a href="#{{.ID}}">{{.Name}}</a></td><td>{{.Kind}}</td><td><span class="badge {{.Status}}">{{.Status}}</span></td><td class="n">{{if .Preview}}preview{{else}}{{pages .Pages}}{{end}} / {{pages .RefPages}}</td><td class="n {{mclass .Worst}}">{{f2 .Worst}}</td><td class="n">{{if .Disagree}}{{.Disagree}}{{end}}</td><td class="n">{{sec .TotalMS}}</td><td>{{.Source}}</td><td>{{.License}}</td></tr>
+{{range $i, $d := .Docs}}<tr data-id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}" data-pages="{{.Pages}}" data-worst="{{.Worst}}" data-ivypdf="{{.IvyPDFWorst}}" data-disagree="{{.Disagree}}" data-time="{{.TotalMS}}" data-source="{{.Source}}" data-license="{{.License}}" data-order="{{$i}}">
+<td class="name"><a href="#{{.ID}}">{{.Name}}</a></td><td>{{.Kind}}</td><td><span class="badge {{.Status}}">{{.Status}}</span></td><td class="n">{{if .Preview}}preview{{else}}{{pages .Pages}}{{end}} / {{pages .RefPages}}</td><td class="n {{mclass .Worst}}">{{f2 .Worst}}</td><td class="n {{mclass .IvyPDFWorst}}">{{f2 .IvyPDFWorst}}</td><td class="n">{{if .Disagree}}{{.Disagree}}{{end}}</td><td class="n">{{sec .TotalMS}}</td><td>{{.Source}}</td><td>{{.License}}</td></tr>
 {{end}}</tbody>
 </table>
 {{range .Docs}}
 <section class="doc" id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}">
 <h2>{{.Name}} <span class="badge {{.Status}}">{{.Status}}</span></h2>
 <p class="meta">{{.Kind}}{{if .Source}} · {{.Source}}{{end}}{{if .License}} · {{.License}}{{end}} · {{if hasPrefix .URL "https://"}}<a href="{{.URL}}">{{.URL}}</a>{{else}}{{.URL}}{{end}}{{if .Note}} · {{.Note}}{{end}}</p>
-<p class="meta">ivy: {{if .Preview}}a preview{{else}}{{pages .Pages}} pages{{end}}, open {{msf .OpenMS}}, render {{msf .RenderMS}} · reference{{if .Reference}} through {{.Reference}}{{end}}: {{pages .RefPages}} pages · total {{msf .TotalMS}}{{if .Disagree}} · <span class="warnbadge">the references disagree on {{.Disagree}} pages</span>{{end}}</p>
+<p class="meta">ivy: {{if .Preview}}a preview{{else}}{{pages .Pages}} pages{{end}}, open {{msf .OpenMS}}, render {{msf .RenderMS}} · reference{{if .Reference}} through {{.Reference}}{{end}}: {{pages .RefPages}} pages · total {{msf .TotalMS}}{{if ge .IvyPDFWorst 0.0}} · ivy PDF vs MuPDF <span class="{{mclass .IvyPDFWorst}}">{{f2 .IvyPDFWorst}}</span>{{end}}{{if .Disagree}} · <span class="warnbadge">the references disagree on {{.Disagree}} pages</span>{{end}}</p>
 {{if .Error}}<p class="err">ivy: {{first .Error}}</p>{{if long .Error}}<details><summary>the whole error</summary><pre>{{.Error}}</pre></details>{{end}}{{end}}
 {{if .RefError}}<p class="err">reference: {{first .RefError}}</p>{{if long .RefError}}<details><summary>the whole error</summary><pre>{{.RefError}}</pre></details>{{end}}{{end}}
+{{if .IvyPDFError}}<p class="err">ivy PDF: {{first .IvyPDFError}}</p>{{if long .IvyPDFError}}<details><summary>the whole error</summary><pre>{{.IvyPDFError}}</pre></details>{{end}}{{end}}
 {{if .Log}}<details{{if le (len .Log) 4}} open{{end}}><summary>{{len .Log}} messages of the log of ivy</summary><pre>{{range .Log}}{{.}}
+{{end}}</pre></details>{{end}}
+{{if .IvyPDFLog}}<details><summary>{{len .IvyPDFLog}} messages of the log of ivy PDF</summary><pre>{{range .IvyPDFLog}}{{.}}
 {{end}}</pre></details>{{end}}
 {{$cols := cols .}}{{range .Rows}}
 <div class="row" style="--cols:{{$cols}}">
@@ -175,6 +184,11 @@ body.showdiff .ref .plain,.row.showdiff .ref .plain{display:none}
 {{with .Ivy}}<figure class="ivy"><figcaption>{{.Name}}</figcaption>
 {{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy"></a>{{end}}
 <div class="m">{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
+{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
+{{with .IvyPDF}}<figure class="ref ivypdf"><figcaption>{{.Name}}</figcaption>
+{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy PDF"></a>{{end}}
+{{if .DiffThumb}}<a class="diff" href="{{.Diff}}"><img loading="lazy" src="{{.DiffThumb}}"{{template "dims" .Size}} alt="difference of ivy PDF from MuPDF"></a>{{end}}
+<div class="m">{{with .Metric}}<span class="{{mclass .Blurred}}">vs MuPDF: blurred {{f2 .Blurred}}</span> · mean {{f2 .Mean}}{{if .Scaled}} · <span class="{{if .SizeOff}}bad{{else}}fair{{end}}">ivy PDF {{size .IvySize}} scaled</span>{{end}} · {{end}}{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
 {{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
 {{range .Refs}}<figure class="ref"><figcaption>{{.Name}}</figcaption>
 {{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of {{.Name}}"></a>{{end}}
