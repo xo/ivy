@@ -223,11 +223,14 @@ Phase 3 delivered these packages, on 2026-11-16:
 | Package | What it holds |
 | --- | --- |
 | `pdf` | PDF and Illustrator compatible with PDF: each page, the thumbnails, the document information and the password (D12) |
-| `pdf/internal/syntax`, `postscript`, `cmap`, `pdffont`, `interpret` | the ports of hayro-syntax, hayro-postscript, hayro-cmap, hayro-font and hayro-interpret (D16) |
-| `pdf/internal/render` | the port of the crate hayro, which draws onto the display list (D20) |
-| `pdf/internal/kurboext` | the parts of kurbo that the port needs and that okage does not port |
+| `internal/hayro/syntax`, `postscript`, `cmap`, `pdffont`, `interpret` | the ports of hayro-syntax, hayro-postscript, hayro-cmap, hayro-font and hayro-interpret (D16) |
+| `internal/hayro/render` | the port of the crate hayro, which draws onto the display list (D20) |
+| `internal/hayro/kurboext` | the parts of kurbo that the port needs and that okage does not port |
 | `internal/ccitt`, `internal/jbig2`, `internal/jpeg2000` | the ports of hayro-ccitt, hayro-jbig2 and hayro-jpeg2000 (D17) |
 | `internal/moxcms` | the subset of moxcms that hayro uses (D16) |
+
+On 2026-11-17 the ports of hayro moved from `pdf/internal/` to
+`internal/hayro/`, so that the interpreter of PostScript uses them too (D29).
 
 `internal/display` grew groups with a blend mode and a soft mask, images that
 a transform places, and image masks. `pdffont` reads TrueType and CFF with
@@ -295,7 +298,8 @@ Phase 5 delivered these packages, on 2026-11-17:
 | `xlsx`, `odf`, `csv` | every sheet of Excel and OpenDocument, and CSV, as tables on pages |
 | `pptx`, `odf` | one page for each slide or drawing, on the display list |
 | `msdoc`, `msxls`, `msppt` | the text and the sheets of the binary formats through the layout, the slides on the display list with `internal/drawingml`, their thumbnails, and their RC4 and XOR encryption |
-| `vsdx`, `pub` | the thumbnails and the properties of Visio and Publisher |
+| `vsdx` | the pages of Visio on the display list (D30), and the thumbnails and the properties of every Visio file |
+| `pub` | the thumbnails and the properties of Publisher |
 | `fonts` | a module of fonts with the metrics of the fonts of Office (D24) |
 | `internal/gowemf`, `internal/metafile` | the copy of gowemf, and the playback of a metafile onto the display list |
 | `internal/drawingml`, `odf/internal/drawpage` | the shapes, the colors, the fills, the pictures and the text of slides |
@@ -330,7 +334,8 @@ The work that is left is under "Left by phase 6" in `BACKLOG.md`.
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.
 The long tail is not a phase. Each format of it waits until a user asks for
-it (D1).
+it (D1). The first one is the interpreter of PostScript (D29). From
+2026-11-17 it gives the pages of PostScript and EPS files.
 
 ## Risks
 

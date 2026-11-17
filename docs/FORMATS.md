@@ -92,7 +92,7 @@ ivy does not use it, because it requires a port of Pango under the LGPL-2.1
 
 | Format | Extensions | iv today | Way at review quality | Source (license) | Gemini | GPT-5.6 | DeepSeek | Survey |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Photoshop | `psd`, `psb` | `oov/psd`, then libvips | The merged image that the file holds. If the file holds none, a composite of the layers. Fix the 16-bit and 32-bit files that `oov/psd` fails on | [oov/psd][oov-psd] (MIT, pure Go). [psd-tools][psd-tools] (MIT, Python) as the reference for compositing | 0.5 | 2 to 4 | 3 | 0.5 to 1 |
+| Photoshop | `psd`, `psb` | `oov/psd`, then libvips | The merged image that the file holds, with its spot channels in the colors of their inks. If the file holds none, a composite of the layers. Fix the 16-bit and 32-bit files that `oov/psd` fails on | [oov/psd][oov-psd] (MIT, pure Go). [psd-tools][psd-tools] (MIT, Python) as the reference for compositing | 0.5 | 2 to 4 | 3 | 0.5 to 1 |
 | OpenRaster and Krita | `ora`, `kra` | none | `mergedimage.png` in the zip | none | added | none | none | 0.1 |
 | GIMP | `xcf` | none | A composite of the layers. The file holds no merged image | the specification. GIMP is GPL | dropped | none | none | 1, later |
 

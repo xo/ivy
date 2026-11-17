@@ -10,14 +10,21 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-None.
-
-## Before a release of ivy
-
-1. okage and magic tag the commits that the `go.mod` of ivy and of its test
-   module require as pseudo-versions: okage at `73730383e33c` and magic at
-   `5bda5bb2eaed`. Then the `go.mod` files require the tags. Source: the
-   push of phases 1 to 6.
+1. `pdf`, from 2026-11-17: the option `WithPageBox` (D31), after the move
+   of the PostScript interpreter, and the MediaBox rows of the review.
+2. `internal/fontdb` and `internal/font`, from 2026-11-17: the fonts of the
+   system for the CJK scripts.
+3. `csv`, `rtf`, `msdoc`, `docx`, `xlsx`, `msxls` and the text and sheets
+   of `odf`, from 2026-11-17: `Config.Paper` for a file without a paper
+   (D32).
+4. `docx`, `msdoc`, `rtf` and the parts of `internal/layout` that they
+   need, from 2026-11-17: the styles of Word documents, against the PDFs of
+   Microsoft Word.
+5. `pptx`, `msppt` and `internal/drawingml`, from 2026-11-17: the styles of
+   presentations, against the PDFs of Microsoft PowerPoint.
+6. `xlsx`, `msxls`, `internal/sheet`, `internal/numfmt` and
+   `internal/chart`, from 2026-11-17: the styles of Excel workbooks,
+   against the PDFs of Microsoft Excel.
 
 ## Found by the visual review
 
@@ -25,79 +32,72 @@ The review command in `test/cmd/review` renders the corpus of
 `test/review/corpus.tsv` beside reference programs. Its run of 2026-11-17
 found these faults. Each item names a file of the corpus.
 
-1. Give PostScript and EPS files their pages, which needs the interpreter
-   of the long tail (D1). Five files of the corpus give no page. Source:
-   `ps`.
-2. Decide whether the page of the cover stretches the cover to the page,
-   as calibre does by default. ivy keeps the aspect ratio of the cover, and
-   the first page of each book with a cover differs by about 31. Source:
-   `internal/ebook`.
-3. Give `ripgrep-all/fb2/wasteland.fb2` its pages. ivy gives 30 pages and
-   calibre gives 80. Source: `fb2`.
-4. Leave out of the text of a FictionBook file the image of its coverpage
-   when it is the first image of the annotation or the body, and give the
-   table of contents that calibre gives. `fbreaderj/fb2/testfb2book.fb2`
-   shows the cover twice. Source: `fb2`.
-5. Lay out the cover part in SVG of `gutenberg/mobi/pg11-images-kf8.mobi`
-   as calibre does, with grey bars above and below the image. Source:
-   `mobi` and the layout.
-6. Draw a stroke of 1 pixel or less as dark as MuPDF and Poppler do.
+1. Add `--preserve-cover-aspect-ratio` to the calibre options of the
+   review. calibre stretches a cover to the page, and ivy keeps its aspect
+   ratio. Source: `test/review`.
+2. Draw a stroke of 1 pixel or less as dark as MuPDF and Poppler do.
    `pdfjs/pdf/a1-plans.pdf` draws its thin lines lighter, because a line
    across a pixel border spreads over two light pixels. It needs stroke
    adjustment, which snaps a thin stroke to the pixels. Source: `pdf` and
    okage.
-7. Map the codes of a symbolic TrueType font that a PDF does not embed,
+3. Map the codes of a symbolic TrueType font that a PDF does not embed,
    and that resolves by name, through its (3,0) cmap, not through the names
    of the glyphs. Source: `pdf`.
-8. Do not advance for a code of a Unicode CMap that the CJK collection does
+4. Do not advance for a code of a Unicode CMap that the CJK collection does
    not hold, as MuPDF does. ivy draws it with the width DW, and
    `pdfjs/pdf/text-cjk-nonembedded.pdf` moves every glyph after it. Source:
    `pdf`.
-9. Read the properties of the characters and the paragraphs of Word 6 and
+5. Read the properties of the characters and the paragraphs of Word 6 and
    Word 95, whose sprms have one byte, and return the text of PowerPoint
    95, which `msppt` refuses with ErrUnsupported. Source: `msdoc` and
    `msppt`.
-10. Draw the pictures of a Word document: the inline pictures of the Data
+6. Draw the pictures of a Word document: the inline pictures of the Data
    stream and the floating shapes of Office Drawing.
    `poi/doc/floating-pictures.doc` gives 6 pages, and LibreOffice gives 8.
    Source: `msdoc`.
-11. Draw the shapes, the pictures and the charts of an Excel workbook.
+7. Draw the shapes, the pictures and the charts of an Excel workbook.
    `poi/xls/drawings.xls` gives 1 page, and LibreOffice gives 10. Move the
    reader of Office Drawing of `msppt` into a package that `msxls` and
    `msdoc` share. Source: `msxls`.
-12. Find why the columns of `msxls` are narrower than those of LibreOffice.
+8. Find why the columns of `msxls` are narrower than those of LibreOffice.
    `poi/xls/basic-expense-template-2011.xls` gives 44 pages, and
    LibreOffice gives 66. Source: `msxls` and `internal/sheet`.
-13. Draw the date, the footer and the slide number of the master of a .ppt
+9. Draw the date, the footer and the slide number of the master of a .ppt
    file, as its HeadersFooters atom says, and find why LibreOffice makes the
    body text of page 2 of `poi/ppt/defense-final.ppt` smaller. Source:
    `msppt`.
-14. Draw the vertical text of the table cells of DrawingML (`a:tcPr vert="vert"`
-   and `"vert270"`). `poi/pptx/table-test2.pptx` differs by 18. Source:
-   `internal/drawingml`.
-15. Shrink the text of a body with `a:normAutofit` to fit its box, as
-   LibreOffice does. ivy uses the `fontScale` that the file stores. Source:
-   `internal/drawingml`.
-16. Give the columns of an xlsx sheet the widths of LibreOffice, so that the
-   bands of columns break at the same column. `poi/xlsx/picture.xlsx`
-   differs by 36 on pages 2 and 3. Source: `internal/sheet`.
-17. Decide the orientation of a chart sheet without a page setup. ivy prints
-   it landscape, as Excel does, and LibreOffice prints it portrait
-   (`poi/xlsx/chart-sheet.xlsx`). Source: `xlsx`.
-18. Find the blank page before the A5 section with page borders in
-   `aspose/docx/rendering.docx`, which has 6 pages against 5. Source:
-   `docx`.
-19. Draw the check boxes of the form fields of docx. Source: `docx`.
-20. Lay out the tab stops with leaders of the tables of contents of ODF,
-   which `libreoffice/odt/ooo96040-2.odt` uses. It has 13 pages against 12.
-   Source: `odf`.
-21. Measure the height of the paragraph of a footer for the drawings that it
-   places. `docx` estimates one line of 11.5 points. Source: `docx`.
-22. Find why these files have pages that LibreOffice does not:
-   `poi/docx/illustrative-cases.docx` (5 against 4),
-   `poi/xlsx/conditional-formatting-samples.xlsx` (38 against 37) and
-   `datasets/csv/world-cities.csv` (1470 against 1396). Source: `docx` and
-   `internal/sheet`.
+10. Draw the vertical text of the table cells of DrawingML (`a:tcPr vert="vert"`
+    and `"vert270"`). `poi/pptx/table-test2.pptx` differs by 18. Source:
+    `internal/drawingml`.
+11. Shrink the text of a body with `a:normAutofit` to fit its box, as
+    LibreOffice does. ivy uses the `fontScale` that the file stores. Source:
+    `internal/drawingml`.
+12. Give the columns of an xlsx sheet the widths of LibreOffice, so that the
+    bands of columns break at the same column. `poi/xlsx/picture.xlsx`
+    differs by 36 on pages 2 and 3. Source: `internal/sheet`.
+13. Decide the orientation of a chart sheet without a page setup. ivy prints
+    it landscape, as Excel does, and LibreOffice prints it portrait
+    (`poi/xlsx/chart-sheet.xlsx`). Source: `xlsx`.
+14. Find the blank page before the A5 section with page borders in
+    `aspose/docx/rendering.docx`, which has 6 pages against 5. Source:
+    `docx`.
+15. Draw the check boxes of the form fields of docx. Source: `docx`.
+16. Lay out the tab stops with leaders of the tables of contents of ODF,
+    which `libreoffice/odt/ooo96040-2.odt` uses. It has 13 pages against 12.
+    Source: `odf`.
+17. Measure the height of the paragraph of a footer for the drawings that it
+    places. `docx` estimates one line of 11.5 points. Source: `docx`.
+18. Find why these files have pages that LibreOffice does not:
+    `poi/docx/illustrative-cases.docx` (5 against 4),
+    `poi/xlsx/conditional-formatting-samples.xlsx` (38 against 37) and
+    `datasets/csv/world-cities.csv` (1470 against 1396). Source: `docx` and
+    `internal/sheet`.
+19. Decide whether a text file reflows its paragraphs as calibre does.
+    calibre joins the lines of a paragraph, and ivy keeps them. Source:
+    `text`.
+20. Drop an undefined entity of a FictionBook file, as calibre does.
+    `fbreaderj/fb2/minihelp.ja.fb2` shows `&FBReaderVersion;` as text.
+    Source: `internal/ebook`.
 
 ## Left by the charts
 
@@ -109,6 +109,50 @@ found these faults. Each item names a file of the corpus.
    missing days. Source: `internal/chart`.
 4. Draw the depth of a 3D chart. A 3D pie draws as a flat ellipse, and the
    other 3D charts as their 2D form. Source: `internal/chart`.
+
+## Left by the CJK fonts of the system
+
+On 2026-11-17 the layout and `internal/fontdb` came to take the East Asian
+fonts of the system, by their local names too, and a system face of the
+language of the text for a CJK character, when `Config.SystemFonts` is on.
+
+1. Give the layout the East Asian font and the language of ODF:
+   `style:font-name-asian` and `fo:language-asian` in the text, and
+   `style:font-name-asian` in the drawing pages, as an East Asian font in
+   font-family and as `lang` on the runs of CJK text, as `docx` does.
+   Source: `odf`.
+2. Pass the East Asian font (`sprmCRgFtc1`) and the language
+   (`sprmCRgLid1`) of the characters of `msdoc`, and `\dbch` with the
+   `\fcharset` of a font (128, 134, 136, 129) of `rtf`, in the same way.
+   Source: `msdoc` and `rtf`.
+3. Read the language of the runs of PowerPoint 97 (`lang` and `altLang` of
+   TextSIException). Source: `msppt`.
+4. Read the script fonts of a theme (`a:font script="Jpan"`, `"Hans"`,
+   `"Hant"` and `"Hang"`). Word and PowerPoint use them for `minorEastAsia`
+   when the `a:ea` of the theme is empty. `aspose/docx/asian-typography.docx`
+   needs them. Source: `internal/drawingml`.
+5. Find the language of a text or Markdown file, from its text or from the
+   header of a Project Gutenberg file. Without it, Chinese text takes the
+   Japanese faces first (`gutenberg/txt/pg24264.txt`). Source: `text`.
+6. Make a bold face for a font without one, such as SimSun, so that the CJK
+   headings draw bold (`fbreaderj/fb2/minihelp.zh.fb2`). Source: the layout.
+7. Add the space between Latin and CJK text of `w:autoSpaceDE` and
+   `w:autoSpaceDN`, as LibreOffice does. Source: `docx` and the layout.
+
+## Left by the pages of Visio
+
+The pages of Visio came on 2026-11-17 (D30).
+
+1. `internal/gowemf`: draw an EMF+ DrawImage whose source rectangle is
+   outside the image when the wrap mode is not a transparent clamp. Clamp or
+   tile the source as GDI+ does. Three of the five pictures of
+   `poi/vsdx/60973.vsdx` draw blank because of it.
+2. `vsdx`: compute more ShapeSheet formulas, such as IF, THEMEVAL with
+   arguments, and references to other shapes (`Sheet.N!Cell`). The package
+   uses the V values, and computes only simple arithmetic.
+3. `vsdx`: draw an OLE object that has no picture, and the theme effects
+   other than the shadow: the bevel, the glow and the reflection.
+4. `vsdx`: test a stencil (.vssx), which has no pages.
 
 ## Left by phase 6
 
@@ -252,11 +296,10 @@ found these faults. Each item names a file of the corpus.
 
 ## Left by phase 2
 
-1. Draw a VisualBrush and an OpacityMask of XPS. Source: phase 2.
-2. Draw a sideways run of glyphs of XPS, `IsSideways`. Source: phase 2.
-3. Decode the images of XPS in JPEG XR. No permissive decoder in Go is known.
+1. Draw a sideways run of glyphs of XPS, `IsSideways`. Source: phase 2.
+2. Decode the images of XPS in JPEG XR. No permissive decoder in Go is known.
    Source: phase 2.
-4. Read the resolution of an image of an ImageBrush, from the pHYs of a PNG or
+3. Read the resolution of an image of an ImageBrush, from the pHYs of a PNG or
    the density of a JPEG. `xps` takes 96 dots per inch, unless the Viewbox
    starts at the origin. Source: phase 2.
 
@@ -331,6 +374,9 @@ repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
    `internal/display` now fills small glyphs at twice their size and
    averages them (D28). A change of the rasterizer of okage would differ
    from tiny-skia, so it needs a decision of okage. Source: D28.
+10. Let a program look up a character in a face with the cmap that okage
+    caches. `DefaultFallbackSelector` and ivy parse the cmap again for each
+    lookup. Source: the CJK fonts of the system, 2026-11-17.
 
 ## Work for iv
 

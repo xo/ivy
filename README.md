@@ -71,7 +71,7 @@ its pages or both:
 | `github.com/xo/ivy/rtf` | RTF: the pages, and the title, the author and the dates of `\info` |
 | `github.com/xo/ivy/iwork` | Pages, Keynote and Numbers: the previews |
 | `github.com/xo/ivy/ora` | OpenRaster and Krita: the image and the thumbnail |
-| `github.com/xo/ivy/ps` | EPS: the TIFF and EPSI previews, and the title and the creator |
+| `github.com/xo/ivy/ps` | PostScript and EPS: the pages, through an interpreter of PostScript (D29), the TIFF and EPSI previews of EPS, and the title and the creator |
 | `github.com/xo/ivy/camera` | The RAW files of cameras: the JPEG images, the camera and the date |
 | `github.com/xo/ivy/comic` | CBZ and CBT: the pages and the cover |
 | `github.com/xo/ivy/psd` | Photoshop: the image and the thumbnail |
@@ -86,7 +86,7 @@ its pages or both:
 | `github.com/xo/ivy/msdoc` | Word 97 to 2003, .doc and .dot, with a password: the pages, the thumbnail, and the title, the author and the dates |
 | `github.com/xo/ivy/msxls` | Excel 97 to 2003 and Excel 5, .xls and .xlt, with a password: every sheet on pages, the thumbnail and the properties |
 | `github.com/xo/ivy/msppt` | PowerPoint 97 to 2003, .ppt, .pps and .pot, with a password: one page for each slide, with its texts, the thumbnail and the properties |
-| `github.com/xo/ivy/vsdx` | Visio, .vsdx and .vsd: the thumbnail and the properties |
+| `github.com/xo/ivy/vsdx` | Visio: the pages, the thumbnail and the properties of .vsdx, .vsdm, .vstx and .vstm. The thumbnail and the properties of .vsd, .vst, .vss and the stencils |
 | `github.com/xo/ivy/pub` | Publisher: the thumbnail and the properties |
 | `github.com/xo/ivy/csv` | CSV, TSV and TAB: the rows as one table on pages |
 | `github.com/xo/ivy/djvu` | DjVu, single and bundled: the pages, the thumbnails, and the title, the authors and the dates of the metadata |
@@ -128,7 +128,7 @@ Fallback, under the Apache License 2.0, which draws the Chinese, Japanese and
 Korean characters that a document does not embed. The module adds about
 10.9 MB to a program.
 
-A document that has no pages, such as an EPS file, gives its preview:
+A document that has no pages, such as a camera RAW file, gives its preview:
 
 ```go
 img, err := ivy.BestPreview(ctx, doc, image.Pt(512, 512))

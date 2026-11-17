@@ -75,7 +75,7 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 29, and the next question is
+repeat. The next decision has the number 33, and the next question is
 question 6.
 
 ## Hard rules
@@ -171,7 +171,9 @@ On 2026-11-16 the repository holds these files:
 | `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/`. Phase 5 gives the pages of `odf`, `docx`, `xlsx` and `pptx`: the texts and the sheets through the layout, and the slides and the drawings on the display list |
 | `rtf/` | RTF, as RTF 1.9.1 describes it, converted into HTML and CSS for the layout |
 | `xps/` | XPS and OpenXPS, the format of phase 2 |
-| `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3. `pdf/internal/` holds the ports of the crates of hayro (D14, D16, D20) |
+| `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3 |
+| `internal/hayro/` | the ports of the crates of hayro, which `pdf` and `ps` share (D14, D16, D20, D29) |
+| `ps/internal/` | the interpreter of PostScript, which gives the pages of PostScript and EPS files (D29) |
 | `epub/`, `html/`, `text/`, `fb2/`, `markdown/`, `mobi/`, `chm/` | the ebooks and the documents of text of phase 4, each with its tests and its `testdata/` |
 | `internal/layout/` | the port of the layout and the drawing of WeasyPrint (D15, D21), and the book that puts a whole ebook on pages |
 | `internal/ebook/`, `internal/memfs/`, `internal/charset/` | the code that the ebooks share: the style sheets, the metadata, the text encodings and the pages, a file system in memory, and the encodings of the WHATWG Encoding Standard |
@@ -182,7 +184,8 @@ On 2026-11-16 the repository holds these files:
 | `internal/drawingml/` | the shapes of DrawingML and the slides: the tables of the preset shapes, made from `presetShapeDefinitions.xml` of ECMA-376, which `testdata/ecma` holds with the copyright notice of Ecma (D24), the colors, fills, lines, pictures and text bodies, and the scene that draws a page of fixed positions, with its text through `internal/layout` |
 | `odf/internal/drawpage/` | the pages of the presentations and the drawings of OpenDocument, on the display list |
 | `msdoc/`, `msxls/`, `msppt/` | Word, Excel and PowerPoint 97 to 2003: the text and the sheets on pages, the summary information and its thumbnail, and RC4 encryption (D12, D24) |
-| `vsdx/`, `pub/` | Visio and Publisher: the thumbnail and the properties |
+| `vsdx/` | Visio: the pages of the files of Office Open XML on the display list, with the masters, the styles and the theme (D30), and the thumbnail and the properties of every Visio file |
+| `pub/` | Publisher: the thumbnail and the properties |
 | `internal/msole/` | the code that the binary Office formats share: the Compound File within the limits, the summary information, the thumbnails in WMF, EMF, DIB, PNG or JPEG, and the password |
 | `csv/` | CSV, TSV and TAB files, as one table on pages |
 | `internal/sheet/`, `internal/numfmt/` | the sheets of a spreadsheet as HTML tables on pages, for `xlsx`, `odf`, `csv` and `msxls`, the sizes of the papers, the widths of the columns and the headers and footers that they share, and the number formats of Excel |
@@ -215,9 +218,10 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-The `go.mod` of ivy requires commits of okage and magic that are pushed and
-not yet tagged, as pseudo-versions. When okage and magic tag those commits,
-require the tags. A change that needs a commit of okage or magic that is not
+On 2026-11-17 the `go.mod` of ivy requires okage v0.10.0 and magic v0.7.0.
+If a change needs a commit of okage or magic that is pushed and not tagged,
+require it as a pseudo-version. When okage and magic tag that commit,
+require the tag. A change that needs a commit of okage or magic that is not
 pushed builds through a `go.work` that points at the checkouts next to ivy.
 Git ignores `go.work`. Make it with
 `go work init . ./test ./fonts ../okage ../magic`. Run the checks without it,

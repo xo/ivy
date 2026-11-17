@@ -56,6 +56,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 │   ├── layout/                  the port of WeasyPrint (D15)
 │   ├── drawingml/               the shapes of DrawingML, from ECMA-376 (D24)
 │   ├── msole/  offcrypto/  ...  the code that more than one format shares
+│   ├── hayro/                   the port of hayro, which pdf and ps share (D14, D29)
 │   ├── ccitt/  jbig2/  jpeg2000/ the codecs of the port of hayro (D14, D17)
 │   └── moxcms/                  the subset of moxcms that hayro uses (D16)
 └── test/                        a module of its own: the oracles (D13)
@@ -63,8 +64,10 @@ github.com/xo/ivy                the root package: the document API (D11)
 
 Each other format of [`FORMATS.md`](FORMATS.md) gets a package named after
 its main extension, such as `deb`, `rpm`, `appimage` and `iso`. Code that only
-one format uses stays inside that format, such as `pdf/internal/syntax` or the
-IW44 wavelets in `djvu/internal`.
+one format uses stays inside that format, such as the interpreter of
+PostScript in `ps/internal` or the IW44 wavelets in `djvu/internal`. Code
+that two formats share moves to `internal/`, as the port of hayro moved to
+`internal/hayro` for `pdf` and `ps` (D29).
 
 The package `html` of ivy has the same name as the package `html` of okage. A
 program that imports both renames one.
@@ -244,7 +247,31 @@ type Config struct {
 	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
 	// WOFF2 files within Limits, and ignores the other files.
 	Fonts fs.FS
+	// Paper is the page of a document whose file gives none, such as a
+	// text file, an HTML file or an ebook. The zero Paper keeps the default
+	// of the format, US Letter in portrait (D32).
+	Paper Paper
 }
+
+// Paper is the size of a page in points, 1/72 inch. The zero Paper is the
+// default of the format.
+type Paper struct {
+	Width, Height float32
+}
+
+// The common papers, in portrait.
+var (
+	Letter = Paper{Width: 612, Height: 792}
+	Legal  = Paper{Width: 612, Height: 1008}
+	A4     = Paper{Width: 595.28, Height: 841.89}
+	A5     = Paper{Width: 419.53, Height: 595.28}
+)
+
+// Landscape returns p with its longer side across.
+func (p Paper) Landscape() Paper
+
+// Portrait returns p with its longer side down.
+func (p Paper) Portrait() Paper
 
 // Log returns the logger of the configuration, or a logger that discards
 // each record when Logger is nil.
