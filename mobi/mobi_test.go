@@ -106,7 +106,12 @@ func TestCalibre(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if src.Title != "Sample Book" || len(src.StyleSheets) != 2 || src.StyleSheets[0] != ebook.BookStyle {
+			// a MOBI 6 book adds the style sheet of its HTML
+			sheets := 2
+			if d.kind == mobi6 {
+				sheets = 3
+			}
+			if src.Title != "Sample Book" || len(src.StyleSheets) != sheets || src.StyleSheets[0] != ebook.BookStyle {
 				t.Errorf("expected the title and the style sheets, got: %q %d", src.Title, len(src.StyleSheets))
 			}
 			name := "resource00001.jpg"
@@ -239,7 +244,8 @@ func TestMOBI(t *testing.T) {
 	}
 	doc := readFile(t, src.FS, "index.html")
 	for _, want := range []string{
-		`<reference type="toc" title="Contents" href="#filepos0" />`,
+		// the guide links to parts of the book and shows nothing
+		"<html><head></head><body>",
 		"\uFEFF<a id=\"filepos0\"></a><html>",
 		"<p>Café",
 		`<a href="#filepos4500">`,
@@ -787,5 +793,56 @@ func TestReplicaFile(t *testing.T) {
 	}
 	if _, err := d.PageCount(t.Context()); !errors.Is(err, ivy.ErrFormat) {
 		t.Errorf("expected ivy.ErrFormat again, got: %v", err)
+	}
+}
+
+func TestPaper(t *testing.T) {
+	for _, name := range []string{"book-old.mobi", "book-both.mobi", "book.azw3"} {
+		t.Run(name, func(t *testing.T) {
+			buf, err := os.ReadFile(filepath.Join("testdata", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ebooktest.CheckPaper(t, d)
+		})
+	}
+}
+
+func TestMOBI6Attrs(t *testing.T) {
+	for _, tt := range []struct {
+		tag, want string
+	}{
+		{`<p height="1em" width="-14pt">`, `<p height="1em" width="-14pt" style="margin-top: 1em; text-indent: -14pt; margin-left: 14pt">`},
+		{`<p width="2em"/>`, `<p width="2em" style="text-indent: 2em"/>`},
+		{`<blockquote height="0pt">`, `<blockquote height="0pt" style="margin-top: 0pt">`},
+		{`<font size="7">`, `<font size="7" style="font-size: 22pt">`},
+		{`<font size="+1">`, `<font size="+1" style="font-size: 13.5pt">`},
+		{`<font size="-9">`, `<font size="-9" style="font-size: 6pt">`},
+		{`<font size="x">`, `<font size="x">`},
+		{`<p width="1em" style="color: red">`, `<p width="1em" style="color: red">`},
+		{`<p width="calc(1em)">`, `<p width="calc(1em)">`},
+		{`<hr width="50%" size="2">`, `<hr size="2">`},
+		{`<td width="10">`, `<td width="10">`},
+		{`</p>`, `</p>`},
+	} {
+		if got := mobi6Attrs(tt.tag); got != tt.want {
+			t.Errorf("mobi6Attrs(%q): expected %q, got: %q", tt.tag, tt.want, got)
+		}
+	}
+}
+
+func TestSVGPageSize(t *testing.T) {
+	doc := `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="100%" height="50%" viewBox="0 0 10 10"><rect width="100%"/></svg>`
+	want := `<svg xmlns="http://www.w3.org/2000/svg" width="360.00pt" height="280.80pt" viewBox="0 0 10 10"><rect width="100%"/></svg>`
+	if got := svgPageSize(doc, ivy.Paper{}); !strings.HasSuffix(got, want) {
+		t.Errorf("expected the size of the page area of an ebook, got: %s", got)
+	}
+	want = `width="769.89pt"`
+	if got := svgPageSize(doc, ivy.A4.Landscape()); !strings.Contains(got, want) {
+		t.Errorf("expected the width of the page area of A4 in landscape, got: %s", got)
 	}
 }

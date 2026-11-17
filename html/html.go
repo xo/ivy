@@ -83,6 +83,8 @@ type Document struct {
 	log *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
 	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper ivy.Paper
 	// fsys holds the document and its resources. For an HTML file, it holds
 	// the document over the folder of WithDir, or only the document, because
 	// an ivy.Source has no folder.
@@ -118,7 +120,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 		return nil, fmt.Errorf("opening html: %w", err)
 	}
 	defer ebook.Recover("opening html", &err)
-	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg)}
+	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper}
 	var magic [4]byte
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
 		err = d.openHTMLZ(src)
@@ -306,9 +308,9 @@ func (d *Document) source() (src layout.Source, err error) {
 	if err != nil {
 		return layout.Source{}, err
 	}
-	style := ebook.PaperStyle
+	style := ebook.PaperStyleFor(d.paper)
 	if d.archive != nil {
-		style = ebook.BookStyle
+		style = ebook.BookStyleFor(d.paper)
 	}
 	return layout.Source{
 		FS:          d.fsys,

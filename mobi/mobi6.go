@@ -23,6 +23,39 @@ pre.palmdoc {
 }
 `
 
+// mobi6Style is the style sheet of the HTML of a MOBI 6 book, after
+// mobiStyle. It matches the pages that calibre makes of such a book. The
+// rules come from measurements of the PDF files of ebook-convert, not from
+// the code of calibre, which is under the GPL (D7):
+//
+//   - The text is justified. A paragraph has no margin, and its first line
+//     has an indent of 1.5em.
+//   - A blockquote has a left margin of 2em and no other margin. Eleven
+//     blockquotes inside each other put the text 22em from the left.
+//   - A line of hr spans the column whatever its attribute width, and it
+//     is 4px high, with a border of 1px. mobi6Attrs removes the width.
+//
+// mobi6Attrs gives the attributes height and width of a paragraph, and the
+// attribute size of a font.
+const mobi6Style = `body {
+  text-align: justify;
+}
+p {
+  margin: 0;
+  text-indent: 1.5em;
+}
+blockquote {
+  margin: 0 0 0 2em;
+}
+hr {
+  height: 2px;
+  margin: 0.5em 0;
+  border-style: solid;
+  border-width: 1px;
+  border-color: #9a9a9a #eee #eee #9a9a9a;
+}
+`
+
 // The markup of MOBI that the conversion changes.
 var (
 	// fileposRef is a link to a position in the text, such as
@@ -34,7 +67,97 @@ var (
 	recindexRef = regexp.MustCompile(`(?i)\b(?:hi|lo)?recindex\s*=\s*["']?0*([0-9]{1,10})["']?`)
 	// pageBreak is the page break of MOBI.
 	pageBreak = regexp.MustCompile(`(?i)<\s*mbp:pagebreak\b[^>]*>|<\s*/\s*mbp:pagebreak\s*>`)
+	// brEnd is the end tag of a line break. A MOBI book often writes a line
+	// break as <br></br>, which the parser of HTML reads as two breaks, as
+	// HTML says. calibre reads one.
+	brEnd = regexp.MustCompile(`(?i)^<\s*/\s*br\s*>$`)
+	// guide is the guide of a MOBI book, in its head, which links to parts
+	// of the book and shows nothing.
+	guide = regexp.MustCompile(`(?is)<guide\b[^>]*>.*?</guide\s*>`)
+	// tagName is the name of a start tag.
+	tagName = regexp.MustCompile(`^<\s*([a-zA-Z][a-zA-Z0-9]*)`)
+	// layoutAttr is an attribute of MOBI that gives a space or a size, such
+	// as height="1em", width="-14pt" or size="+1".
+	layoutAttr = regexp.MustCompile(`(?i)\s(height|width|size)\s*=\s*["']?([^"'\s>]*)`)
+	// widthAttr is the attribute width.
+	widthAttr = regexp.MustCompile(`(?i)\swidth\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)`)
+	// styleAttr is the attribute style.
+	styleAttr = regexp.MustCompile(`(?i)\sstyle\s*=`)
+	// length is a length of an attribute of MOBI, such as 3pt or -1.5em.
+	length = regexp.MustCompile(`^-?[0-9]{1,6}(\.[0-9]{1,6})?(pt|em|px|%)$`)
 )
+
+// fontSizes are the sizes of the font element of MOBI, from size 1 to 7,
+// that calibre draws. They are absolute, so size 3 is not the size of the
+// text. ebook-convert with a text of 11.25pt draws them at 6, 9, 12, 13.5,
+// 17, 20 and 22 points.
+var fontSizes = [...]string{"6pt", "9pt", "12pt", "13.5pt", "17pt", "20pt", "22pt"}
+
+// mobi6Attrs returns tag with a style that gives its attributes of MOBI, as
+// calibre draws them. On a paragraph, a div or a blockquote, height is the
+// space above, and width is the indent of the first line. A negative width
+// is a hanging indent: the other lines start that far from the left. On a
+// font element, size is a size of fontSizes, or a size relative to 3, such
+// as +1. A tag that has a style already is left as it is. calibre draws a
+// line of hr across the column, so mobi6Attrs removes its width.
+func mobi6Attrs(tag string) string {
+	m := tagName.FindStringSubmatch(tag)
+	if m == nil {
+		return tag
+	}
+	name := strings.ToLower(m[1])
+	if name == "hr" {
+		return widthAttr.ReplaceAllString(tag, "")
+	}
+	if name != "p" && name != "div" && name != "blockquote" && name != "font" {
+		return tag
+	}
+	if styleAttr.MatchString(tag) {
+		return tag
+	}
+	var style []string
+	for _, a := range layoutAttr.FindAllStringSubmatch(tag, 4) {
+		attr, v := strings.ToLower(a[1]), strings.ToLower(a[2])
+		switch {
+		case name == "font" && attr == "size":
+			if size, ok := fontSize(v); ok {
+				style = append(style, "font-size: "+size)
+			}
+		case name == "font", !length.MatchString(v):
+		case attr == "height":
+			style = append(style, "margin-top: "+v)
+		case attr == "width":
+			style = append(style, "text-indent: "+v)
+			if indent, ok := strings.CutPrefix(v, "-"); ok {
+				style = append(style, "margin-left: "+indent)
+			}
+		}
+	}
+	if len(style) == 0 {
+		return tag
+	}
+	end := len(tag)
+	switch {
+	case strings.HasSuffix(tag, "/>"):
+		end -= 2
+	case strings.HasSuffix(tag, ">"):
+		end--
+	}
+	return tag[:end] + ` style="` + strings.Join(style, "; ") + `"` + tag[end:]
+}
+
+// fontSize returns the size of the font of the attribute size v of a font
+// element.
+func fontSize(v string) (string, bool) {
+	n, err := strconv.Atoi(strings.TrimPrefix(v, "+"))
+	if err != nil {
+		return "", false
+	}
+	if strings.HasPrefix(v, "+") || strings.HasPrefix(v, "-") {
+		n += 3
+	}
+	return fontSizes[min(max(n, 1), len(fontSizes))-1], true
+}
 
 // maxTagScan is the number of bytes that the conversion reads back from a
 // position of a link to find the start of a tag.
@@ -49,13 +172,17 @@ func mobiHTML(text []byte, h *header, res *resources, lim ivy.Limits) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	doc := rewriteTags(h.decode(text), func(tag string) string {
+	doc := rewriteTags(guide.ReplaceAllString(h.decode(text), ""), func(tag string) string {
 		if pageBreak.MatchString(tag) {
 			if strings.HasPrefix(tag, "</") {
 				return ""
 			}
 			return `<div class="mbp-pagebreak"></div>`
 		}
+		if brEnd.MatchString(tag) {
+			return ""
+		}
+		tag = mobi6Attrs(tag)
 		tag = fileposRef.ReplaceAllStringFunc(tag, func(m string) string {
 			pos := fileposRef.FindStringSubmatch(m)[1]
 			return `href="#filepos` + pos + `"`

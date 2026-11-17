@@ -185,10 +185,13 @@ func TestSource(t *testing.T) {
 	for _, want := range []string{
 		`<html xmlns="http://www.w3.org/1999/xhtml" lang="ru" xml:lang="ru">`,
 		`<title>Война и мир</title>`,
-		`<div class="annotation">` + "\n" + `<p>Роман о <em>войне</em>.</p>`,
-		`<h1 class="title">Война и мир<br/>Том 1</h1>`,
+		`<div class="annotation info">` + "\n" + `<h1>Annotation</h1>` + "\n" + `<p>Роман о <em>войне</em>.</p>` + "\n</div>\n<hr/>",
+		`<ul class="toc">` + "\n" + `<li><a href="#toc-1">Война и мир</a>`,
+		`<li><a href="#toc-2">Часть первая</a>`,
+		`<li><a href="#toc-4">notes</a>`,
+		`<h1 class="title" id="toc-1">Война и мир<br/>Том 1</h1>`,
 		`<blockquote class="epigraph">` + "\n" + `<p>Эпиграф</p>` + "\n" + `<p class="text-author">Автор</p>`,
-		`<div class="section" id="ch1">` + "\n" + `<h2 class="title">Часть первая</h2>`,
+		`<div class="section" id="ch1">` + "\n" + `<h1 class="title" id="toc-2">Часть первая</h1>`,
 		`<strong>жирным</strong>, <s>зачёркнутым</s>, H<sub>2</sub>O и x<sup>2</sup> &amp; <code>код</code>.`,
 		`<a class="note" href="#n1">[1]</a>`,
 		"<p class=\"empty-line\"> </p>",
@@ -196,12 +199,14 @@ func TestSource(t *testing.T) {
 		`<div class="image"><img src="images/0.png" alt="обложка"/></div>`,
 		`<div class="poem-title">` + "\n" + `<p>Стих</p>`,
 		`<div class="stanza">` + "\n" + `<p class="v">Строка один</p>`,
+		`<p class="v">Строка два</p>` + "\n" + `<p class="empty-line">&#160;</p>` + "\n</div>",
 		`<p class="date">1812</p>`,
 		`<blockquote class="cite">`,
 		`<p class="subtitle">* * *</p>`,
 		`<tr style="text-align: center"><th colspan="2">Заголовок</th></tr>`,
 		`<td style="vertical-align: top">a</td>`,
-		`<h3 class="title">Глава</h3>` + "\n" + `<p>Повтор id.</p>` + "\n" + `<p><span>нет</span></p>`,
+		`<h2 class="title" id="toc-3">Глава</h2>` + "\n" + `<p>Повтор id.</p>` + "\n" + `<p><span>нет</span></p>`,
+		`<hr/>` + "\n" + `<p class="bodyname" id="toc-4">notes</p>`,
 		`<div class="body notes">`,
 		`<div class="section" id="n1">`,
 	} {
@@ -420,4 +425,12 @@ func TestPages(t *testing.T) {
 	if _, err := d.Page(t.Context(), n); !errors.Is(err, ivy.ErrPageRange) {
 		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
 	}
+}
+
+func TestPaper(t *testing.T) {
+	d, err := Open(t.Context(), strings.NewReader(book("utf-8")), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ebooktest.CheckPaper(t, d)
 }

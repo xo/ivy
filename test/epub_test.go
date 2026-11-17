@@ -19,14 +19,19 @@ import (
 	"github.com/xo/ivy/epub"
 )
 
-// The page of the EPUB of TestEPUB: 4 by 6 inches, with margins of half an
-// inch. At 96 dots per inch, the page is 384 by 576 pixels, and the margins
-// are 48 pixels.
+// The page of TestEPUB: 4 by 6 inches. ivy gives an ebook the paper of the
+// configuration and the margins of its book style, 0.5 inch at the sides and
+// 0.6 inch at the top and the bottom, and calibre gets the same options. At
+// 96 dots per inch, the page is 384 by 576 pixels, and the smaller margin is
+// 48 pixels.
 const (
 	oraclePageWidth  = 384
 	oraclePageHeight = 576
 	oracleMargin     = 48
 )
+
+// oraclePaper is the paper that ivy gets: 4 by 6 inches, in points.
+var oraclePaper = ivy.Paper{Width: 288, Height: 432}
 
 // oracleStyle is the style sheet of the EPUB of TestEPUB. Both programs read
 // the font from the file go.ttf of the book, so both draw the same glyphs.
@@ -116,8 +121,8 @@ func buildEPUB(t *testing.T, paragraphs int) []byte {
 }
 
 // calibrePDF converts an EPUB file to PDF with ebook-convert of calibre. The
-// options give calibre the page and the margins of the style sheet, and stop
-// it from changing the sizes of the fonts and the heights of the lines.
+// options give calibre the page and the margins that ivy uses, and stop it
+// from changing the sizes of the fonts and the heights of the lines.
 func calibrePDF(ctx context.Context, dir, epubPath string) (string, error) {
 	path, err := exec.LookPath("ebook-convert")
 	if err != nil {
@@ -127,7 +132,7 @@ func calibrePDF(ctx context.Context, dir, epubPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, path, epubPath, pdfPath,
 		"--custom-size", "4x6", "--unit", "inch",
 		"--pdf-page-margin-left", "36", "--pdf-page-margin-right", "36",
-		"--pdf-page-margin-top", "36", "--pdf-page-margin-bottom", "36",
+		"--pdf-page-margin-top", "43.2", "--pdf-page-margin-bottom", "43.2",
 		"--margin-left", "0", "--margin-right", "0", "--margin-top", "0", "--margin-bottom", "0",
 		"--disable-font-rescaling", "--minimum-line-height", "0",
 		"--chapter-mark", "none", "--page-breaks-before", "/",
@@ -255,7 +260,7 @@ func TestEPUB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d, err := epub.Open(t.Context(), bytes.NewReader(data))
+	d, err := epub.Open(t.Context(), bytes.NewReader(data), epub.WithConfig(ivy.Config{Paper: oraclePaper}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package fb2
 import (
 	"context"
 	"fmt"
+	"html"
 	"path"
 	"strconv"
 	"strings"
@@ -26,32 +27,116 @@ const (
 // ebook.BookStyle, which sets the page and the font, and it sets the style
 // of each class of the XHTML document. A class has the name of the element
 // of FictionBook that it comes from.
+//
+// The rules match the pages that calibre makes of a FictionBook file. They
+// come from measurements of the PDF files of ebook-convert, not from the
+// code of calibre, which is under the GPL (D7). An em is the size of the
+// font of the text. These are the measurements:
+//
+//   - The text is justified. A paragraph has no margin, and its first line
+//     has an indent of 2em.
+//   - A title is a heading in a box that spans the column, with a border of
+//     1px and a grey background. Its text is bold and on the left. The
+//     title of the body and of a section at the first level is an h1 of
+//     1.6em, at the second level an h2 of 1.3em, and at the third an h3 of
+//     1.1em. The heading of a deeper level has the size of the text: bold
+//     at the fourth level, bold and italic at the fifth, italic below. The
+//     margins above and below the box are 11.55pt for an h1 and an h2 at a
+//     font of 11.25pt, 1em of the heading for an h3, and 1.33em, 1.67em and
+//     2.33em for the deeper ones.
+//   - Each h1 and h2 starts a page.
+//   - An epigraph is italic, with a left margin of 25% of the column. A
+//     cite and a poem have a left margin of 4em and a right margin of 3px.
+//     These blocks have a margin of 1em above and below.
+//   - The author of a text is italic, 4em from the left of its block, with
+//     a margin of 1em above it. The date of a poem is not italic, 0.75em
+//     from the left.
+//   - A subtitle is bold, italic and centered, in a box like the one of a
+//     heading of the fourth level, with margins of 1.67em.
+//   - The title of a poem is in a box like an h2. The title of a stanza is
+//     a line of the text. An empty line follows each stanza.
+//   - An empty-line is one line of the text.
+//   - An image is centered at its size, with no margin.
+//   - A note is a link in a superscript of 0.83em.
+//   - A table has no border, and no margin.
+//   - The table of contents is a list of links before the body, with a
+//     line of 4px above and below.
 const styleSheet = `body { text-align: justify; }
-p { margin: 0; text-indent: 1.5em; }
-h1, h2, h3, h4, h5, h6 { text-align: center; text-indent: 0; margin: 1em 0 0.5em; page-break-after: avoid; }
-h1 { font-size: 1.6em; }
-h2 { font-size: 1.4em; }
-h3 { font-size: 1.2em; }
-h4, h5, h6 { font-size: 1em; }
-div.body + div.body { page-break-before: always; }
-div.annotation { margin: 1em 2em; font-style: italic; }
-blockquote { margin: 1em 0 1em 2em; }
-blockquote.epigraph { margin-left: 30%; font-style: italic; }
-p.text-author, p.date { text-align: right; text-indent: 0; font-style: italic; }
-p.subtitle { text-align: center; text-indent: 0; font-weight: bold; margin: 1em 0 0.5em; }
+p { margin: 0; text-indent: 2em; }
+h1, h2, h3, h4, h5, h6 {
+  text-align: left;
+  text-indent: 0;
+  border: 1px solid #808080;
+  background: #f4f4f4;
+  padding: 0;
+  page-break-after: avoid;
+}
+h1 { font-size: 1.6em; margin: 0.642em 0; border-color: #000; background: #e7e7e7; }
+h2 { font-size: 1.3em; margin: 0.79em 0; background: #eee; }
+h3 { font-size: 1.1em; line-height: 1.212; margin: 1em 0; border-color: #c0c0c0; background: #f1f1f1; }
+h4 { font-size: 1em; margin: 1.33em 0; }
+h5 { font-size: 1em; margin: 1.67em 0; font-style: italic; }
+h6 { font-size: 1em; margin: 2.33em 0; font-weight: normal; font-style: italic; }
+h1.title, h2.title { page-break-before: always; }
+blockquote { margin: 1em 0; }
+blockquote.epigraph { margin: 1em 0 1em 25%; font-style: italic; }
+blockquote.cite { margin: 1em 3px 1em 4em; }
+p.text-author { text-indent: 0; margin: 1em 0 0 4em; font-style: italic; text-align: left; }
+p.date { text-indent: 0; padding-left: 0.75em; margin: 1em 0; }
+p.subtitle {
+  text-align: center;
+  text-indent: 0;
+  font-weight: bold;
+  font-style: italic;
+  margin: 1.67em 0;
+  border: 1px solid #808080;
+  background: #f4f4f4;
+}
+p.bodyname {
+  text-align: center;
+  text-indent: 0;
+  font-weight: bold;
+  margin: 1.33em 0;
+  border: 1px solid #808080;
+  background: #f4f4f4;
+}
 p.empty-line { text-indent: 0; }
-div.poem { margin: 1em 0 1em 15%; text-align: left; }
-div.poem-title { font-weight: bold; margin-bottom: 0.5em; }
-div.stanza { margin: 0.5em 0; }
-p.v { text-indent: 0; text-align: left; }
-div.image { text-align: center; text-indent: 0; margin: 1em 0; page-break-inside: avoid; }
-img { max-width: 100%; }
-a.note { vertical-align: super; font-size: 0.75em; line-height: 0; }
-div.notes { font-size: 0.9em; }
-table { border-collapse: collapse; margin: 1em auto; }
-th, td { border: 1px solid; padding: 0.2em 0.4em; text-indent: 0; }
-code { font-family: monospace; }
+div.poem { margin: 1em 3px 1em 4em; page-break-inside: avoid; }
+div.poem-title {
+  font-size: 1.3em;
+  font-weight: bold;
+  margin: 0.79em 0;
+  border: 1px solid #808080;
+  background: #eee;
+  page-break-after: avoid;
+}
+div.poem-title p, div.stanza-title p, p.v { text-indent: 0; }
+div.image { text-align: center; text-indent: 0; page-break-inside: avoid; }
+a.note { vertical-align: super; font-size: 0.83em; }
+table { border-collapse: separate; border-spacing: 2px; margin: 0; }
+th, td { padding: 1px; text-indent: 0; }
+ul.toc { margin: 1em 0; }
+ul.toc li { text-indent: 0; }
+hr {
+  height: 2px;
+  margin: 0.5em 0;
+  border-style: solid;
+  border-width: 1px;
+  border-color: #9a9a9a #eee #eee #9a9a9a;
+}
 `
+
+// annotationHeading is the heading that calibre gives the annotation of the
+// book, in English whatever the language of the book.
+const annotationHeading = "Annotation"
+
+// tocEntry is an entry of the table of contents: the text of a title and
+// the id of its heading, and the entries of the sections inside it. The
+// text of an entry for a section without a title is "".
+type tocEntry struct {
+	text, id string
+	children []*tocEntry
+}
 
 // converter converts the body of a book into XHTML.
 type converter struct {
@@ -65,6 +150,14 @@ type converter struct {
 	images map[string]string
 	// ids holds the ids that the document has, so that each one is unique.
 	ids map[string]bool
+	// toc is the root of the table of contents. parent is the entry that
+	// takes the entry of the next section, and pending is the entry that
+	// takes the next title.
+	toc     tocEntry
+	parent  *tocEntry
+	pending *tocEntry
+	// nextID numbers the ids that the converter makes for the headings.
+	nextID int
 	// deep is true after the converter left out content past the limit of
 	// depth.
 	deep bool
@@ -87,11 +180,16 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	c.escape(d.info.Title, false)
 	c.b.WriteString("</title>\n</head>\n<body>\n")
 	if d.annotation.ok {
-		c.element(d.annotation.node, 0, 0)
+		c.annotation(d.annotation.node)
 	}
+	// the table of contents goes here, once the bodies give its entries
+	tocAt := c.b.Len()
+	c.parent = &c.toc
+	first := true
 	for n := range d.root.Children() {
 		if name(n) == "body" {
-			c.body(n)
+			c.body(n, first)
+			first = false
 		}
 		if c.err != nil {
 			return layout.Source{}, c.err
@@ -101,20 +199,27 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	if err := c.check(); err != nil {
 		return layout.Source{}, err
 	}
+	doc := c.b.String()
+	if toc := c.tocHTML(); toc != "" {
+		if int64(len(doc)+len(toc)) > d.lim.MaxMemory {
+			return layout.Source{}, fmt.Errorf("xhtml of more than %d bytes: %w", d.lim.MaxMemory, ivy.ErrLimit)
+		}
+		doc = doc[:tocAt] + toc + doc[tocAt:]
+	}
 	if c.deep {
 		d.log.Warn("fictionbook nests deeper than the limit, content left out", "limit", d.lim.MaxDepth)
 	}
-	c.fs.Add(documentName, []byte(c.b.String()))
+	c.fs.Add(documentName, []byte(doc))
 	docs := []string{documentName}
 	if cover := c.coverPath(); cover != "" {
 		// the book starts with a page of the cover, as calibre shows it
-		c.fs.Add(coverName, ebook.ImagePage(ebook.ImagePageLink(coverName, cover), d.info.Title))
+		c.fs.Add(coverName, ebook.ImagePage(ebook.ImagePageLink(coverName, cover), d.info.Title, d.paper))
 		docs = []string{coverName, documentName}
 	}
 	return layout.Source{
 		FS:          &c.fs,
 		Documents:   docs,
-		StyleSheets: []string{ebook.BookStyle, styleSheet},
+		StyleSheets: []string{ebook.BookStyleFor(d.paper), styleSheet},
 		Title:       d.info.Title,
 	}, nil
 }
@@ -133,18 +238,127 @@ func (c *converter) check() error {
 	return c.err
 }
 
+// annotation converts the annotation of the title-info. As calibre does,
+// it has a heading, and a line follows it.
+func (c *converter) annotation(n roxmltree.Node) {
+	c.b.WriteString(`<div class="annotation info"`)
+	c.id(n)
+	c.b.WriteString(">\n<h1>" + annotationHeading + "</h1>\n")
+	c.blocks(n, 0, 1)
+	c.b.WriteString("</div>\n<hr/>\n")
+}
+
 // body converts a body element. The first body is the main text. A later
-// body, such as the body of the notes, follows it.
-func (c *converter) body(n roxmltree.Node) {
+// body, such as the body of the notes, follows it. As in calibre, a later
+// body with a name starts with a line and its name, and the table of
+// contents lists it by that name.
+func (c *converter) body(n roxmltree.Node, first bool) {
+	bodyName := strings.TrimSpace(ebook.Attr(n, "name"))
 	class := "body"
-	if bodyName := ebook.Attr(n, "name"); bodyName == "notes" || bodyName == "comments" {
+	if bodyName == "notes" || bodyName == "comments" {
 		class = "body notes"
+	}
+	c.parent = &c.toc
+	c.pending = nil
+	switch {
+	case !first && bodyName != "":
+		id := c.newID()
+		c.b.WriteString(`<hr/>` + "\n" + `<p class="bodyname" id="` + id + `">`)
+		c.escape(bodyName, false)
+		c.b.WriteString("</p>\n")
+		c.parent = c.addEntry(bodyName, id)
+	case hasTitle(n):
+		c.parent = c.addEntry("", "")
+		c.pending = c.parent
+	case !first && len(c.toc.children) > 0:
+		// calibre lists the sections of a later body without a title or a
+		// name under the entry before them
+		c.parent = c.toc.children[len(c.toc.children)-1]
 	}
 	c.b.WriteString(`<div class="` + class + `"`)
 	c.id(n)
 	c.b.WriteString(">\n")
 	c.blocks(n, 0, 1)
 	c.b.WriteString("</div>\n")
+}
+
+// hasTitle reports whether n has a title element.
+func hasTitle(n roxmltree.Node) bool {
+	for child := range n.Children() {
+		if name(child) == "title" {
+			return true
+		}
+	}
+	return false
+}
+
+// addEntry adds an entry of the table of contents to the current parent,
+// and returns it.
+func (c *converter) addEntry(text, id string) *tocEntry {
+	e := &tocEntry{text: text, id: id}
+	c.parent.children = append(c.parent.children, e)
+	return e
+}
+
+// newID returns an id that no element of the document has, for a heading
+// that the table of contents links to.
+func (c *converter) newID() string {
+	for {
+		c.nextID++
+		id := "toc-" + strconv.Itoa(c.nextID)
+		if !c.ids[id] {
+			c.ids[id] = true
+			return id
+		}
+	}
+}
+
+// tocHTML returns the table of contents as a list of links, with a line
+// after it, or "" if no entry has a text. An entry without a text shows
+// only its bullet, as in calibre.
+func (c *converter) tocHTML() string {
+	if !hasText(&c.toc) {
+		return ""
+	}
+	var b strings.Builder
+	var list func(entries []*tocEntry, top bool)
+	list = func(entries []*tocEntry, top bool) {
+		if top {
+			b.WriteString(`<ul class="toc">` + "\n")
+		} else {
+			b.WriteString("<ul>\n")
+		}
+		for _, e := range entries {
+			b.WriteString("<li>")
+			switch {
+			case e.text != "" && e.id != "":
+				b.WriteString(`<a href="#` + html.EscapeString(e.id) + `">` + e.text + "</a>")
+			case e.text != "":
+				b.WriteString(e.text)
+			case len(e.children) == 0:
+				b.WriteString("&#160;")
+			}
+			if len(e.children) > 0 {
+				b.WriteString("\n")
+				list(e.children, false)
+			}
+			b.WriteString("</li>\n")
+		}
+		b.WriteString("</ul>\n")
+	}
+	list(c.toc.children, true)
+	b.WriteString("<hr/>\n")
+	return b.String()
+}
+
+// hasText reports whether e or an entry inside it has a text.
+func hasText(e *tocEntry) bool {
+	for _, child := range e.children {
+		if child.text != "" || hasText(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // blocks converts the children of n as blocks. level is the level of the
@@ -182,6 +396,10 @@ var paragraphClasses = map[string]string{
 	"date":        "date",
 }
 
+// emptyLine is the paragraph of an empty-line: a line of the text. Its
+// space does not break, so that the line keeps its height.
+const emptyLine = "<p class=\"empty-line\">&#160;</p>\n"
+
 // element converts the block element n.
 func (c *converter) element(n roxmltree.Node, level, depth int) {
 	if depth > c.d.lim.MaxDepth {
@@ -193,10 +411,24 @@ func (c *converter) element(n roxmltree.Node, level, depth int) {
 		c.b.WriteString("<" + t[0] + ` class="` + t[1] + `"`)
 		c.id(n)
 		c.b.WriteString(">\n")
-		if tag == "section" {
+		switch tag {
+		case "section":
 			level++
+			parent := c.parent
+			c.parent = c.addEntry("", "")
+			c.pending = c.parent
+			c.blocks(n, level, depth+1)
+			if c.pending == c.parent {
+				c.pending = nil
+			}
+			c.parent = parent
+		case "stanza":
+			c.blocks(n, level, depth+1)
+			// calibre leaves an empty line after each stanza
+			c.b.WriteString(emptyLine)
+		default:
+			c.blocks(n, level, depth+1)
 		}
-		c.blocks(n, level, depth+1)
 		c.b.WriteString("</" + t[0] + ">\n")
 		return
 	}
@@ -231,18 +463,43 @@ func (c *converter) element(n roxmltree.Node, level, depth int) {
 }
 
 // title converts a title. In a body or a section, it is a heading of the
-// level of the section. In a poem or a stanza, it is a block in bold.
+// level of the section: an h1 for the title of the body and of a section
+// at the first level, an h2 at the second level, and so on. In a poem, it
+// is a block in a box, and in a stanza, a line of the text. The first
+// title of a section gives the text of its entry in the table of contents:
+// the text of its first paragraph.
 func (c *converter) title(n roxmltree.Node, level, depth int) {
 	parent, _ := n.ParentElement()
 	if p := name(parent); p == "poem" || p == "stanza" {
-		c.b.WriteString(`<div class="poem-title">` + "\n")
+		c.b.WriteString(`<div class="` + p + `-title">` + "\n")
 		c.blocks(n, level, depth+1)
 		c.b.WriteString("</div>\n")
 		return
 	}
-	h := "h" + strconv.Itoa(min(level+1, 6))
+	h := "h" + strconv.Itoa(min(max(level, 1), 6))
 	c.b.WriteString("<" + h + ` class="title"`)
-	c.id(n)
+	id := strings.TrimSpace(ebook.Attr(n, "id"))
+	if id == "" || c.ids[id] {
+		id = ""
+	}
+	if e := c.pending; e != nil {
+		c.pending = nil
+		if id == "" {
+			id = c.newID()
+			c.b.WriteString(` id="` + id + `"`)
+		} else {
+			c.id(n)
+		}
+		e.id = id
+		for child := range n.Children() {
+			if name(child) == "p" {
+				e.text = c.inlineText(child)
+				break
+			}
+		}
+	} else {
+		c.id(n)
+	}
 	c.b.WriteString(">")
 	first := true
 	for child := range n.Children() {
@@ -258,6 +515,27 @@ func (c *converter) title(n roxmltree.Node, level, depth int) {
 		}
 	}
 	c.b.WriteString("</" + h + ">\n")
+}
+
+// inlineText returns the text of n, with each run of white space as one
+// space, escaped for XHTML.
+func (c *converter) inlineText(n roxmltree.Node) string {
+	var b strings.Builder
+	for _, r := range text(n) {
+		switch r {
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		default:
+			if r >= 0x20 && r != 0xFFFE && r != 0xFFFF {
+				b.WriteRune(r)
+			}
+		}
+	}
+	return b.String()
 }
 
 // table converts a table. The cells keep their spans and their alignment.

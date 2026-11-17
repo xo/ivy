@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
 	"github.com/xo/ivy/internal/fixture"
 )
@@ -99,7 +100,7 @@ func TestSource(t *testing.T) {
 	if !slices.Equal(src.Documents, []string{"text.html"}) || src.Title != "" {
 		t.Errorf("expected the document without a title, got: %q %q", src.Documents, src.Title)
 	}
-	if len(src.StyleSheets) != 1 || !strings.Contains(src.StyleSheets[0], "white-space: pre-wrap") ||
+	if len(src.StyleSheets) != 2 || src.StyleSheets[1] != ebook.BodyStyle || !strings.Contains(src.StyleSheets[0], "white-space: pre-wrap") ||
 		!strings.Contains(src.StyleSheets[0], "monospace") || !strings.Contains(src.StyleSheets[0], "size: letter") {
 		t.Errorf("expected the style sheet of text, got: %q", src.StyleSheets)
 	}
@@ -250,7 +251,7 @@ func TestPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 10pt lines on a page of 9.5 inches give about 50 lines a page.
+	// Lines of 15px on a page of 9.5 inches give about 45 lines a page.
 	if n < 3 {
 		t.Errorf("expected 3 pages or more, got: %d", n)
 	}
@@ -262,7 +263,15 @@ func TestPages(t *testing.T) {
 		t.Errorf("expected a page of US Letter, got: %g by %g", w, h)
 	}
 	img := ebooktest.RenderPage(t, d, 0)
-	if ink := ebooktest.Ink(img, image.Rect(72, 72, 250, 90)); ink < 20 {
+	// As in calibre, the first line is 1em below the margin, and it starts
+	// at the margin on the left: the body has no margin.
+	if ink := ebooktest.Ink(img, image.Rect(72, 72, 816, 84)); ink != 0 {
+		t.Errorf("expected no ink above the first line, got %d pixels", ink)
+	}
+	if ink := ebooktest.Ink(img, image.Rect(72, 84, 78, 102)); ink == 0 {
+		t.Error("expected the ink of the first letter at the margin, got none")
+	}
+	if ink := ebooktest.Ink(img, image.Rect(72, 84, 250, 102)); ink < 20 {
 		t.Errorf("expected the ink of the first line, got %d pixels", ink)
 	}
 	if ink := ebooktest.Ink(img, image.Rect(400, 72, 816, 1056)); ink != 0 {
@@ -274,5 +283,21 @@ func TestPages(t *testing.T) {
 	}
 	if _, err := d.Page(t.Context(), n); !errors.Is(err, ivy.ErrPageRange) {
 		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
+	}
+}
+
+func TestPaper(t *testing.T) {
+	txtz := fixture.Zip(
+		fixture.Entry{Name: "index.txt", Data: []byte("First paragraph\nstill first.\n\nSecond.")},
+		fixture.Entry{Name: "metadata.opf", Data: []byte(metadata)},
+	)
+	for name, src := range map[string][]byte{"text": []byte("First paragraph\n\nSecond."), "txtz": txtz} {
+		t.Run(name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(src), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ebooktest.CheckPaper(t, d)
+		})
 	}
 }

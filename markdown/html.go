@@ -20,35 +20,31 @@ import (
 const documentName = "index.html"
 
 // styleSheet is the style sheet of the format. It comes after
-// ebook.PaperStyle, which sets the page. It sets a font without serifs, and
-// the style of code, quotes and tables. The style sheet of WeasyPrint 70.0
-// makes each input a block, so a box of a task list sets its display again,
-// to stay on the line of its text.
-const styleSheet = `html { font-family: sans-serif; font-size: 11pt; line-height: 1.5; }
-h1, h2, h3, h4, h5, h6 { margin: 1.2em 0 0.5em; line-height: 1.25; page-break-after: avoid; }
-h1 { font-size: 2em; border-bottom: 1px solid #d0d7de; padding-bottom: 0.2em; }
-h2 { font-size: 1.5em; border-bottom: 1px solid #d0d7de; padding-bottom: 0.2em; }
-h3 { font-size: 1.25em; }
-h4 { font-size: 1em; }
-h5 { font-size: 0.875em; }
-h6 { font-size: 0.85em; color: #57606a; }
-p, ul, ol, dl, table, pre, blockquote { margin: 0 0 1em; }
-ul ul, ul ol, ol ol, ol ul { margin-bottom: 0; }
-a { color: #0550ae; text-decoration: none; }
-code, kbd, pre { font-family: monospace; font-size: 0.9em; }
-code { background: #eff1f3; padding: 0.1em 0.3em; border-radius: 3px; }
-pre { background: #f6f8fa; padding: 0.8em 1em; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
-pre code { background: none; padding: 0; font-size: 1em; }
-blockquote { margin-left: 0; padding: 0 1em; border-left: 0.25em solid #d0d7de; color: #57606a; }
-table { border-collapse: collapse; }
-th, td { border: 1px solid #d0d7de; padding: 0.3em 0.6em; }
-th { background: #f6f8fa; font-weight: bold; }
-img { max-width: 100%; }
-hr { border: 0; border-top: 1px solid #d0d7de; margin: 1.5em 0; }
-dt { font-weight: bold; }
-dd { margin-left: 2em; }
+// ebook.PaperStyle, which sets the page, and ebook.BodyStyle. The rules
+// match the pages that calibre makes of a Markdown file with a font of
+// 16px without serifs. They come from measurements of the PDF files of
+// ebook-convert, not from the code of calibre, which is under the GPL (D7).
+// calibre draws the HTML with the default styles of Chromium:
+//
+//   - The text is 16px, 12pt, and a line is 18px high, the normal height of
+//     a line of Liberation Sans.
+//   - A paragraph has a margin of 1em above and below it. The headings are
+//     bold, and an h2 is 24px with a margin of 0.83em: the default styles
+//     of the layout give the same sizes and margins.
+//   - Code is 16px, as large as the text, and a line of a block of code is
+//     18px high.
+//   - Code, quotes and tables have no border and no background.
+//
+// calibre does not wrap the lines of a block of code. When a line is wider
+// than the page, it draws the whole document smaller. ivy wraps the line
+// instead. The style sheet of WeasyPrint 70.0 makes each input a block, so
+// a box of a task list sets its display again, to stay on the line of its
+// text.
+const styleSheet = `html { font-family: sans-serif; font-size: 16px; }
+h1, h2, h3, h4, h5, h6 { page-break-after: avoid; }
+code, kbd, pre, samp, tt { font-family: monospace; font-size: 1em; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 li > input[type="checkbox"] { display: inline-block; margin-right: 0.4em; }
-.footnotes { font-size: 0.9em; }
 `
 
 // convert converts the text into a layout.Source.
@@ -82,7 +78,7 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	return layout.Source{
 		FS:          &files,
 		Documents:   []string{documentName},
-		StyleSheets: []string{ebook.PaperStyle, styleSheet},
+		StyleSheets: []string{ebook.PaperStyleFor(d.paper), ebook.BodyStyle, styleSheet},
 		Title:       d.title,
 	}, nil
 }

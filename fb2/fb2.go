@@ -69,6 +69,8 @@ type Document struct {
 	log *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
 	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper ivy.Paper
 	root  roxmltree.Node
 	info  ivy.Info
 	// cover is the id of the binary of the cover, or "".
@@ -130,7 +132,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if root.TagName().Name() != "FictionBook" {
 		return nil, fmt.Errorf("xml of root element %s, not FictionBook: %w", root.TagName().Name(), ivy.ErrFormat)
 	}
-	d = &Document{lim: lim, log: log, fonts: ebook.FontsOf(o.cfg), root: root, binaries: make(map[string]binary)}
+	d = &Document{lim: lim, log: log, fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, root: root, binaries: make(map[string]binary)}
 	for n := range root.Children() {
 		switch name(n) {
 		case "description":

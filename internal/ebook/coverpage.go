@@ -21,11 +21,13 @@ import (
 const maxCoverPageText = 64
 
 // ImagePage returns a document of XHTML that shows the image at the link src
-// alone on a page. The page has no margin, and the image is scaled to fit
-// the page and centered, as on the cover page of calibre. src is relative to
-// the document. The size of the page comes from the style sheets of the
-// format.
-func ImagePage(src, title string) []byte {
+// alone on a page of BookStyleFor(p). The image is scaled to fit the whole
+// page, over its margins, and centered, as on the cover page of calibre.
+// src is relative to the document. BookStyleFor sets the margins of each
+// page, and the book cannot change them, so the image takes the size of
+// the page and moves up and left by the margins.
+func ImagePage(src, title string, p ivy.Paper) []byte {
+	p = bookPaperOf(p)
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -35,9 +37,20 @@ func ImagePage(src, title string) []byte {
 	b.WriteString(html.EscapeString(xmlText(title)))
 	b.WriteString(`</title>
 <style>
-@page { margin: 0; }
-html, body { margin: 0; padding: 0; border: 0; height: 100%; }
-img { display: block; width: 100%; height: 100%; max-width: none; margin: 0; object-fit: contain; object-position: center; }
+html, body { margin: 0; padding: 0; border: 0; }
+img {
+  display: block;
+  position: absolute;
+  left: -` + bookMarginX + `;
+  top: -` + bookMarginY + `;
+  width: ` + points(float64(p.Width)) + `;
+  height: ` + points(float64(p.Height)) + `;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  object-fit: contain;
+  object-position: center;
+}
 </style>
 </head>
 <body><img src="`)

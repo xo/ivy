@@ -74,6 +74,8 @@ type Document struct {
 	log *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
 	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper ivy.Paper
 	dir   fs.FS
 	text  []byte
 	title string
@@ -122,13 +124,62 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if bytes.IndexByte(text, 0) >= 0 {
 		return nil, fmt.Errorf("markdown with a nul byte: %w", ivy.ErrFormat)
 	}
-	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), dir: o.dir, text: text}
+	text = text[frontMatter(text):]
+	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, dir: o.dir, text: text}
 	doc := parse(text)
 	if err := checkTree(doc, lim); err != nil {
 		return nil, err
 	}
 	d.title = title(doc, text)
 	return d, nil
+}
+
+// maxFrontMatter is the number of lines that frontMatter reads to find the
+// end of the front matter.
+const maxFrontMatter = 256
+
+// frontMatter returns the length of the front matter at the start of text,
+// or 0. Front matter is metadata in YAML, such as the title of a page,
+// between two lines of three dashes. The first line after the dashes must
+// be a key and a colon. calibre leaves the front matter out of the pages,
+// and so does the package. CommonMark would read the dashes as a line and
+// the metadata as a heading.
+func frontMatter(text []byte) int {
+	rest, ok := bytes.CutPrefix(text, []byte("---"))
+	if !ok {
+		return 0
+	}
+	line, rest, ok := bytes.Cut(rest, []byte("\n"))
+	if !ok || len(bytes.TrimSpace(line)) != 0 {
+		return 0
+	}
+	for i := 0; i < maxFrontMatter && len(rest) > 0; i++ {
+		line, after, _ := bytes.Cut(rest, []byte("\n"))
+		trimmed := bytes.TrimSpace(line)
+		switch {
+		case i == 0 && !isKey(trimmed):
+			return 0
+		case i > 0 && (string(trimmed) == "---" || string(trimmed) == "..."):
+			return len(text) - len(after)
+		}
+		rest = after
+	}
+	return 0
+}
+
+// isKey reports whether line starts with a key of YAML and a colon, such as
+// "title:".
+func isKey(line []byte) bool {
+	key, _, ok := bytes.Cut(line, []byte(":"))
+	if !ok || len(key) == 0 {
+		return false
+	}
+	for _, c := range key {
+		if c != '-' && c != '_' && (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+			return false
+		}
+	}
+	return true
 }
 
 // parse parses the text with the extensions of the package.

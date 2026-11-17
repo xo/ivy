@@ -64,7 +64,9 @@ type Document struct {
 	lim     ivy.Limits
 	log     *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
-	fonts  ebook.Fonts
+	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper  ivy.Paper
 	system system
 	// lcid is the LCID of the help file: the one of #SYSTEM, or else the one
 	// of the ITSF header.
@@ -106,7 +108,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if err != nil {
 		return nil, err
 	}
-	d = &Document{archive: a, lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), fsys: zipdoc.NewFS(), lower: make(map[string]string)}
+	d = &Document{archive: a, lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, fsys: zipdoc.NewFS(), lower: make(map[string]string)}
 	d.system = a.readSystem()
 	d.lcid = a.lcid
 	if d.system.hasLCID {
@@ -253,9 +255,10 @@ func (d *Document) contents() []string {
 }
 
 // source returns the help file as a source for the layout: its files, the
-// documents in the order of reading, the style sheet of a page of US Letter
-// and the title. It returns an error that wraps ivy.ErrFormat if the help
-// file holds no HTML document.
+// documents in the order of reading, the style sheets and the title. The
+// style sheets are a page of US Letter and the body of ebook.BodyStyle, as
+// calibre draws it. It returns an error that wraps ivy.ErrFormat if the
+// help file holds no HTML document.
 func (d *Document) source() (src layout.Source, err error) {
 	defer ebook.Recover("reading chm", &err)
 	var docs []string
@@ -285,7 +288,7 @@ func (d *Document) source() (src layout.Source, err error) {
 	return layout.Source{
 		FS:          d.fsys,
 		Documents:   docs,
-		StyleSheets: []string{ebook.PaperStyle},
+		StyleSheets: []string{ebook.PaperStyleFor(d.paper), ebook.BodyStyle},
 		Title:       d.title(),
 	}, nil
 }

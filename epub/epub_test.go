@@ -619,3 +619,8 @@ func TestPagesDRM(t *testing.T) {
 		t.Errorf("expected ivy.ErrDRM, got: %v", err)
 	}
 }
+
+func TestPaper(t *testing.T) {
+	d := mustOpen(t, book3(), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+	ebooktest.CheckPaper(t, d)
+}

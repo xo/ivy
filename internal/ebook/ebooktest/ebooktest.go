@@ -1,6 +1,7 @@
 // Package ebooktest holds the helpers that the tests of the formats of
-// ebooks share: the ink of a rendered page, and the rendering of the first
-// page of a document in a fuzz test.
+// ebooks share: the ink of a rendered page, the size of the pages on the
+// paper of a program, and the rendering of the first page of a document in
+// a fuzz test.
 package ebooktest
 
 import (
@@ -47,6 +48,43 @@ func RenderPage(t *testing.T, d ivy.Document, n int) image.Image {
 		t.Fatal(err)
 	}
 	return img
+}
+
+// Landscape is the paper that CheckPaper expects: A4 in landscape.
+var Landscape = ivy.A4.Landscape()
+
+// CheckPaper fails the test unless each page of d is A4 in landscape,
+// 841.89 by 595.28 points. A test opens d with Landscape as the paper of
+// its ivy.Config (D32). CheckPaper also renders the pages, and fails the
+// test unless one of them holds ink.
+func CheckPaper(t *testing.T, d ivy.Document) {
+	t.Helper()
+	pager, ok := d.(ivy.Pager)
+	if !ok {
+		t.Fatal("expected an ivy.Pager")
+	}
+	n, err := pager.PageCount(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatal("expected a page, got none")
+	}
+	for i := range n {
+		p, err := pager.Page(t.Context(), i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w, h := p.Size(); w != Landscape.Width || h != Landscape.Height {
+			t.Errorf("expected page %d on A4 in landscape, 841.89 by 595.28 points, got: %g by %g", i, w, h)
+		}
+	}
+	for i := range n {
+		if img := RenderPage(t, d, i); Ink(img, img.Bounds()) > 0 {
+			return
+		}
+	}
+	t.Error("expected ink on a page, got none")
 }
 
 // RenderFirstPage renders the first page of d, 32 pixels wide, for a fuzz

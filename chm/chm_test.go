@@ -78,8 +78,8 @@ func TestOpen(t *testing.T) {
 		if !slices.Equal(src.Documents, want) {
 			t.Errorf("expected the documents %q, got: %q", want, src.Documents)
 		}
-		if src.Title != "Help of Tests" || len(src.StyleSheets) != 1 || src.StyleSheets[0] != ebook.PaperStyle {
-			t.Errorf("expected the title and the style sheet, got: %q %d", src.Title, len(src.StyleSheets))
+		if src.Title != "Help of Tests" || len(src.StyleSheets) != 2 || src.StyleSheets[0] != ebook.PaperStyle || src.StyleSheets[1] != ebook.BodyStyle {
+			t.Errorf("expected the title and the style sheets, got: %q %d", src.Title, len(src.StyleSheets))
 		}
 		data, err := fs.ReadFile(src.FS, "pages/a.htm")
 		if err != nil {
@@ -404,4 +404,12 @@ func TestPages(t *testing.T) {
 	if _, err := d.Page(t.Context(), n); !errors.Is(err, ivy.ErrPageRange) {
 		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
 	}
+}
+
+func TestPaper(t *testing.T) {
+	d, err := Open(t.Context(), bytes.NewReader(buildCHM(helpFiles(), chmOptions{})), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ebooktest.CheckPaper(t, d)
 }

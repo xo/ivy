@@ -53,22 +53,32 @@ const (
 	documentName = "text.html"
 )
 
-// textStyle is the style sheet of a text file: a page of US Letter and a
-// monospace font, so that a text with fixed columns, such as a table, keeps
-// them.
-const textStyle = `@page {
-  size: letter;
+// textStyle returns the style sheet of a text file: a page of US Letter, or
+// of the paper p if it is not zero (D32), and a monospace font, so that a text with fixed columns, such as a table, keeps
+// them. ebook.BodyStyle follows it. The size of the font and the space
+// between the paragraphs match the pages that calibre makes of a text file
+// with a font of 13px. They come from measurements of the PDF files of
+// ebook-convert, not from the code of calibre, which is under the GPL (D7):
+//
+//   - The font is 13px, 9.75pt. calibre takes a size in pixels, so a font of
+//     10pt is not possible. A line is 15px high.
+//   - A paragraph has a margin of 1em above and below it. The first line of
+//     the first page is 1em below the margin of the page.
+func textStyle(p ivy.Paper) string {
+	return `@page {
+  size: ` + ebook.PageSize(p, "letter") + `;
   margin: 0.75in;
 }
 html {
   font-family: monospace;
-  font-size: 10pt;
+  font-size: 13px;
 }
 p {
   white-space: pre-wrap;
-  margin: 0 0 1em;
+  margin: 1em 0;
 }
 `
+}
 
 // bookStyle is the style sheet of a TXTZ file, after the style sheet of an
 // ebook. The page and the font are those of an ebook.
@@ -97,6 +107,8 @@ type Document struct {
 	log *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
 	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper ivy.Paper
 	// fsys holds the document of HTML that the package makes from the text,
 	// and the files of a TXTZ file.
 	fsys fs.FS
@@ -132,7 +144,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 		return nil, fmt.Errorf("opening text: %w", err)
 	}
 	defer ebook.Recover("opening text", &err)
-	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg)}
+	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper}
 	var magic [4]byte
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
 		err = d.openTXTZ(src)
@@ -345,10 +357,10 @@ func (d *Document) source() layout.Source {
 	src := layout.Source{
 		FS:          d.fsys,
 		Documents:   []string{d.doc},
-		StyleSheets: []string{textStyle},
+		StyleSheets: []string{textStyle(d.paper), ebook.BodyStyle},
 	}
 	if d.archive != nil {
-		src.StyleSheets = []string{ebook.BookStyle, bookStyle}
+		src.StyleSheets = []string{ebook.BookStyleFor(d.paper), bookStyle}
 	}
 	if d.pkg != nil {
 		src.Title = d.pkg.Metadata.Title

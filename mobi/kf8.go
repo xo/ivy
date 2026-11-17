@@ -426,6 +426,39 @@ func isXHTML(part []byte, lim ivy.Limits) bool {
 	return err == nil
 }
 
+// svgRoot is the start tag of the root of an SVG document, and svgSize is
+// its attribute width or height in percent.
+var (
+	svgRoot = regexp.MustCompile(`(?is)<svg\b[^>]*>`)
+	svgSize = regexp.MustCompile(`(?i)(\s(width|height)\s*=\s*["'])\s*([0-9]{1,3}(?:\.[0-9]{1,3})?)\s*%`)
+)
+
+// svgPageSize returns the SVG document doc with a width or a height in
+// percent of its root as a part of the page area of an ebook on the paper
+// p. An SVG flow is often the cover of a book, which a part shows with an img
+// element and a size of 100%. calibre draws such an image as wide as the
+// column and as high as the page area, with the picture in the middle. The
+// layout would give it the height of its width and of its viewBox instead.
+func svgPageSize(doc string, p ivy.Paper) string {
+	loc := svgRoot.FindStringIndex(doc)
+	if loc == nil {
+		return doc
+	}
+	tag := svgSize.ReplaceAllStringFunc(doc[loc[0]:loc[1]], func(m string) string {
+		g := svgSize.FindStringSubmatch(m)
+		pct, err := strconv.ParseFloat(g[3], 64)
+		if err != nil {
+			return m
+		}
+		size, height := ebook.BookArea(p)
+		if strings.EqualFold(g[2], "height") {
+			size = height
+		}
+		return g[1] + strconv.FormatFloat(size*pct/100, 'f', 2, 64) + "pt"
+	})
+	return doc[:loc[0]] + tag + doc[loc[1]:]
+}
+
 // flowType returns the extension of a flow from its content: an image of
 // SVG, or a style sheet.
 func flowType(flow []byte) string {

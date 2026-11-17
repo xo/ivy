@@ -335,3 +335,15 @@ func TestWithDir(t *testing.T) {
 		})
 	}
 }
+
+func TestPaper(t *testing.T) {
+	for name, src := range map[string][]byte{"html": []byte(page), "htmlz": fixture.Zip(htmlz()...)} {
+		t.Run(name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(src), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ebooktest.CheckPaper(t, d)
+		})
+	}
+}

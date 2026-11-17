@@ -84,7 +84,7 @@ func TestSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(src.Documents) != 1 || src.Title != "The Title of ivy" || len(src.StyleSheets) != 2 {
+	if len(src.Documents) != 1 || src.Title != "The Title of ivy" || len(src.StyleSheets) != 3 {
 		t.Fatalf("unexpected source: %+v", src)
 	}
 	buf, err := fs.ReadFile(src.FS, src.Documents[0])
@@ -286,5 +286,47 @@ func TestPages(t *testing.T) {
 	}
 	if _, err := d.Page(t.Context(), n); !errors.Is(err, ivy.ErrPageRange) {
 		t.Errorf("expected ivy.ErrPageRange, got: %v", err)
+	}
+}
+
+func TestPaper(t *testing.T) {
+	d, err := Open(t.Context(), strings.NewReader(sample), WithDir(dir()), WithConfig(ivy.Config{Paper: ebooktest.Landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ebooktest.CheckPaper(t, d)
+}
+
+func TestFrontMatter(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		n    int
+	}{
+		{"---\ntitle: \"`<table>`\"\nshort-title: <table>\n---\n\nText.", 48},
+		{"---\r\nkey: v\r\n...\r\nText.", 18},
+		{"---\n\nText.\n\n---\n", 0},
+		{"---\nNot a key\n---\n", 0},
+		{"--- \nkey: open\n", 0},
+		{"Text.\n---\nkey: v\n---\n", 0},
+		{"", 0},
+	} {
+		if n := frontMatter([]byte(tt.text)); n != tt.n {
+			t.Errorf("frontMatter(%q): expected %d, got: %d", tt.text, tt.n, n)
+		}
+	}
+	d, err := Open(t.Context(), strings.NewReader("---\ntitle: x\nshort-title: <table>\n---\n\n# Heading\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := fs.ReadFile(src.FS, src.Documents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "table") || !strings.Contains(string(doc), `<h1 id="heading">Heading</h1>`) {
+		t.Errorf("expected the document without the front matter, got:\n%s", doc)
 	}
 }

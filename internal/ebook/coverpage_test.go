@@ -20,7 +20,7 @@ func imageBook(t *testing.T, w, h int) (*Pages, Source) {
 	page := "images/cover-page.xhtml"
 	fsys := fstest.MapFS{
 		"images/a cover.png": &fstest.MapFile{Data: fixture.PNG(w, h, color.Black)},
-		page:                 &fstest.MapFile{Data: ImagePage(ImagePageLink(page, "images/a cover.png"), "A & B")},
+		page:                 &fstest.MapFile{Data: ImagePage(ImagePageLink(page, "images/a cover.png"), "A & B", ivy.Paper{})},
 	}
 	src := func(context.Context) (layout.Source, error) {
 		return layout.Source{FS: fsys, Documents: []string{page}, StyleSheets: []string{BookStyle}}, nil
@@ -157,7 +157,7 @@ func TestIsCoverPage(t *testing.T) {
 }
 
 func TestImagePageTitle(t *testing.T) {
-	page := ImagePage("./a.png", "A \x01 <b> & \ufffe")
+	page := ImagePage("./a.png", "A \x01 <b> & \ufffe", ivy.Paper{})
 	if _, err := ParseXML(page, ivy.Limits{}); err != nil {
 		t.Errorf("expected well formed XML, got: %v\n%s", err, page)
 	}

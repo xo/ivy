@@ -385,7 +385,7 @@ func (d *Document) convert() (layout.Source, error) {
 	fsys := zipdoc.NewFS()
 	src := layout.Source{
 		FS:          fsys,
-		StyleSheets: []string{ebook.BookStyle, mobiStyle},
+		StyleSheets: []string{ebook.BookStyleFor(d.cfg.Paper), mobiStyle},
 		Title:       h.info(d.db).Title,
 	}
 	res := newResources(d, fsys, d.firstResource)
@@ -400,6 +400,7 @@ func (d *Document) convert() (layout.Source, error) {
 		}
 		fsys.Add("index.html", doc)
 		src.Documents = []string{"index.html"}
+		src.StyleSheets = append(src.StyleSheets, mobi6Style)
 	default:
 		book, err := d.readKF8(h, text)
 		if err != nil {
@@ -441,7 +442,7 @@ func (d *Document) withCover(fsys *zipdoc.FS, res *resources, docs []string, tit
 	if page, shows := ebook.IsCoverPage(fsys, docs[0], cover, d.lim); shows && !page {
 		return docs
 	}
-	fsys.Add(coverPage, ebook.ImagePage(ebook.ImagePageLink(coverPage, cover), title))
+	fsys.Add(coverPage, ebook.ImagePage(ebook.ImagePageLink(coverPage, cover), title, d.cfg.Paper))
 	return append([]string{coverPage}, docs...)
 }
 
@@ -463,9 +464,14 @@ func (d *Document) addKF8(fsys *zipdoc.FS, book *kf8Book, res *resources, h *hea
 		}
 	}
 	for i, flow := range book.flows {
-		if l.flows[i] != "" {
-			fsys.Add(l.flows[i], []byte(l.rewrite(h.decode(flow))))
+		if l.flows[i] == "" {
+			continue
 		}
+		doc := l.rewrite(h.decode(flow))
+		if strings.HasSuffix(l.flows[i], ".svg") {
+			doc = svgPageSize(doc, d.cfg.Paper)
+		}
+		fsys.Add(l.flows[i], []byte(doc))
 	}
 	for i, part := range book.parts {
 		doc := l.rewrite(h.decode(part))

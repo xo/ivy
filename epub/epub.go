@@ -74,6 +74,8 @@ type Document struct {
 	log     *slog.Logger
 	// fonts are the fonts of the configuration, for the layout.
 	fonts ebook.Fonts
+	// paper is the paper of the configuration, or zero (D32).
+	paper ivy.Paper
 	// opf is the path of the package document.
 	opf string
 	pkg *ebook.Package
@@ -139,6 +141,7 @@ func open(src ivy.Source, cfg ivy.Config) (*Document, error) {
 		lim:     lim,
 		log:     cfg.Log(),
 		fonts:   ebook.FontsOf(cfg),
+		paper:   cfg.Paper,
 		opf:     name,
 		pkg:     pkg,
 		fsys:    archive.FS(),
@@ -406,7 +409,7 @@ func (d *Document) source() (src layout.Source, err error) {
 	return layout.Source{
 		FS:          fsys,
 		Documents:   docs,
-		StyleSheets: []string{ebook.BookStyle},
+		StyleSheets: []string{ebook.BookStyleFor(d.paper)},
 		Title:       title,
 	}, nil
 }
@@ -427,7 +430,7 @@ func (p *imagePages) add(name string) string {
 		_, err := p.fs.Stat(s)
 		return err == nil || p.d.exists(s)
 	})
-	p.fs.Add(page, ebook.ImagePage(ebook.ImagePageLink(page, name), p.title))
+	p.fs.Add(page, ebook.ImagePage(ebook.ImagePageLink(page, name), p.title, p.d.paper))
 	p.n++
 	return page
 }
