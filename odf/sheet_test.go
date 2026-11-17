@@ -237,6 +237,37 @@ func TestSheetLimits(t *testing.T) {
 	}
 }
 
+func TestSheetPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	body := `<table:table table:name="Paper"><table:table-row><table:table-cell office:value-type="string"><text:p>Text</text:p></table:table-cell></table:table-row></table:table>`
+	book := func(props string) []byte {
+		b := fixture.ODSBook{Body: body}
+		if props != "" {
+			b.AutoStyles = `<style:page-layout style:name="pm1"><style:page-layout-properties ` + props + `/></style:page-layout>`
+			b.MasterStyles = `<style:master-page style:name="Default" style:page-layout-name="pm1"/>`
+		}
+		return fixture.ODS(b)
+	}
+	for _, test := range []struct {
+		name  string
+		buf   []byte
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", book(""), ivy.Paper{}, ivy.Letter},
+		{"no master page", book(""), landscape, landscape},
+		{"no size", book(`fo:margin="0.5in"`), landscape, landscape},
+		{"orientation only", book(`style:print-orientation="landscape"`), ivy.A4, landscape},
+		{"own size", book(`fo:page-width="8.5in" fo:page-height="14in"`), landscape, ivy.Legal},
+		{"own size in landscape", fixture.ODS(testODS), ivy.Letter, ivy.Paper{Width: 841.9, Height: 595.3}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d := openSheet(t, test.buf, ivy.Config{Paper: test.paper})
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+}
+
 func TestSheetCanceled(t *testing.T) {
 	d := openSheet(t, fixture.ODS(testODS), ivy.Config{})
 	ctx, cancel := context.WithCancel(t.Context())

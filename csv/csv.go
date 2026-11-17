@@ -290,7 +290,7 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 		}
 	}()
 	defer ebook.Recover("converting csv", &err)
-	return d.workbook().Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger})
+	return d.workbook().Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger, Paper: d.cfg.Paper})
 }
 
 // The sizes of the columns, in points: the width of a character of
@@ -313,6 +313,9 @@ func (d *Document) workbook() *sheet.Workbook {
 		Gridlines:        true,
 		Page:             sheet.DefaultPage,
 	}
+	// A CSV file gives no paper. The sheet takes the paper of the program,
+	// or US Letter in portrait, with the margins of Excel (D32).
+	sh.Page.SetPaper(d.cfg.Paper)
 	var widths []float64
 	for i, rec := range d.rows {
 		if i >= sheet.MaxRows {

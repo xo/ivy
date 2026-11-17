@@ -89,6 +89,10 @@ type odtPageLayout struct {
 	// and the footer.
 	headerHeight, headerSpace float64
 	footerHeight, footerSpace float64
+	// noSize is set when the layout gives no fo:page-width and no
+	// fo:page-height, and orientation is its style:print-orientation.
+	noSize      bool
+	orientation string
 }
 
 // odtMasterPage is a style:master-page.
@@ -290,10 +294,21 @@ func readODTListStyle(n roxmltree.Node) *[10]*odtListLevel {
 	return &levels
 }
 
+// defaultODTPageLayout returns the page layout of a page that gives no
+// size and no margins. ODF 1.3 gives no default to fo:page-width and
+// fo:page-height. ivy takes US Letter in portrait, with margins of 1 inch,
+// and odtConverter.pageLayout puts the page on the paper of the program
+// (D32).
+func defaultODTPageLayout() *odtPageLayout {
+	return &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1, noSize: true}
+}
+
 // readODTPageLayout reads a style:page-layout.
 func readODTPageLayout(n roxmltree.Node) *odtPageLayout {
-	pl := &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1}
+	pl := defaultODTPageLayout()
 	if pr, ok := odtChild(n, "page-layout-properties"); ok {
+		pl.noSize = odtAttr(pr, "page-width") == "" && odtAttr(pr, "page-height") == ""
+		pl.orientation = odtAttr(pr, "print-orientation")
 		set := func(v *float64, name string) {
 			if l, ok := odtLength(odtAttr(pr, name)); ok && l >= 0 {
 				*v = l

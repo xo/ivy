@@ -97,7 +97,7 @@ func (p *sheetPager) source(ctx context.Context) (src layout.Source, err error) 
 	if err != nil {
 		return layout.Source{}, err
 	}
-	return wb.Source(ctx, sheet.Options{Limits: p.d.lim, Logger: p.d.cfg.Logger})
+	return wb.Source(ctx, sheet.Options{Limits: p.d.lim, Logger: p.d.cfg.Logger, Paper: p.d.cfg.Paper})
 }
 
 // odsReader is the state of the reader of a spreadsheet.
@@ -620,6 +620,10 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 		Width: sheet.LetterWidth, Height: sheet.LetterHeight,
 		Top: 56.69, Bottom: 56.69, Left: 56.69, Right: 56.69,
 	}
+	// ODF 1.3 gives no default to fo:page-width and fo:page-height. A
+	// sheet without them takes the paper of the program, or US Letter, and
+	// keeps its margins (D32).
+	sh.Page.SetPaper(r.d.cfg.Paper)
 	m, ok := r.styles.masters[name]
 	if !ok {
 		return
@@ -630,12 +634,21 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 	}
 	p := layout.props
 	pg := &sh.Page
+	own := false
 	if w, ok := odsLength(p["page-width"]); ok && w > 72 {
 		if h, ok := odsLength(p["page-height"]); ok && h > 72 {
-			pg.Width, pg.Height = w, h
+			pg.Width, pg.Height, own = w, h, true
 		}
 	}
-	pg.Landscape = p["print-orientation"] == "landscape"
+	switch p["print-orientation"] {
+	case "landscape":
+		pg.Landscape = true
+	case "portrait":
+		pg.Landscape = false
+	default:
+		// the paper of the program keeps its orientation
+		pg.Landscape = pg.Landscape && !own
+	}
 	if pg.Landscape != (pg.Width > pg.Height) {
 		// the size of the paper is in the orientation of the page
 		pg.Width, pg.Height = pg.Height, pg.Width

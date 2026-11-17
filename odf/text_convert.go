@@ -389,14 +389,29 @@ func (c *odtConverter) startSection(master string) {
 }
 
 // pageLayout returns the page layout of the master page mp, which can be
-// nil.
+// nil. A layout that gives no size takes the paper of the program, turned
+// by its style:print-orientation, and keeps its margins (D32).
 func (c *odtConverter) pageLayout(mp *odtMasterPage) *odtPageLayout {
+	pl := defaultODTPageLayout()
 	if mp != nil {
 		if l, ok := c.st.layouts[mp.layout]; ok {
-			return l
+			pl = l
 		}
 	}
-	return &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1}
+	p := c.d.cfg.Paper
+	if !pl.noSize || !(p.Width > 0) || !(p.Height > 0) {
+		return pl
+	}
+	switch pl.orientation {
+	case "landscape":
+		p = p.Landscape()
+	case "portrait":
+		p = p.Portrait()
+	}
+	out := *pl
+	out.width = min(max(float64(p.Width), 72), 14400)
+	out.height = min(max(float64(p.Height), 72), 14400)
+	return &out
 }
 
 // pageRules writes the rule sel of the pages of the master page mp, with

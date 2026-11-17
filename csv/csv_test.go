@@ -15,6 +15,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/fixture"
 )
 
 // open opens buf.
@@ -215,6 +216,13 @@ func inked(img image.Image, r image.Rectangle) bool {
 		}
 	}
 	return false
+}
+
+func TestPaper(t *testing.T) {
+	buf := []byte("a,b,c\n1,2,3\n")
+	fixture.CheckPaper(t, open(t, buf, ivy.Config{}), ivy.Letter)
+	fixture.CheckPaper(t, open(t, buf, ivy.Config{Paper: ivy.A4.Landscape()}), ivy.A4.Landscape())
+	fixture.CheckPaper(t, open(t, []byte("x\ty\n"), ivy.Config{Paper: ivy.A5}), ivy.A5)
 }
 
 func FuzzOpen(f *testing.F) {

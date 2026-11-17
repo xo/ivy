@@ -270,6 +270,53 @@ func TestTextDeep(t *testing.T) {
 	}
 }
 
+// odtPaperFile returns an OpenDocument text of one paragraph, whose master
+// page Standard has a page layout with the properties props. An empty
+// props gives a text without styles.xml.
+func odtPaperFile(props string) []byte {
+	entries := []fixture.Entry{
+		{Name: "mimetype", Data: []byte(mimePrefix + "text")},
+		{Name: "content.xml", Data: []byte(odtContent(`<text:p>Text</text:p>`))},
+	}
+	if props != "" {
+		entries = append(entries, fixture.Entry{Name: "styles.xml", Data: []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<office:document-styles ` + odtNamespaces + `><office:automatic-styles>
+<style:page-layout style:name="pm1"><style:page-layout-properties ` + props + `/></style:page-layout>
+</office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles>
+</office:document-styles>`)})
+	}
+	return fixture.Zip(entries...)
+}
+
+func TestTextPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	for _, test := range []struct {
+		name  string
+		props string
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", "", ivy.Paper{}, ivy.Letter},
+		{"no styles", "", landscape, landscape},
+		{"no size", `fo:margin="0.5in"`, landscape, landscape},
+		{"orientation only", `style:print-orientation="landscape"`, ivy.A4, landscape},
+		{"own size", `fo:page-width="8.5in" fo:page-height="14in"`, landscape, ivy.Legal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(odtPaperFile(test.props)), WithConfig(ivy.Config{Paper: test.paper}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+	// the margins of the layout stay on the paper of the program
+	_, rules := odtHTML(t, odtPaperFile(`fo:margin="0.5in"`), WithConfig(ivy.Config{Paper: landscape}))
+	if exp := "size: 841.89pt 595.28pt; margin: 36pt 36pt 36pt 36pt"; !strings.Contains(rules, exp) {
+		t.Errorf("expected %q in the rules of the pages, got:\n%s", exp, rules)
+	}
+}
+
 func FuzzText(f *testing.F) {
 	f.Add(odtFile(odtRichBody))
 	f.Add(odtFile(`<text:list><text:list-item><text:list><text:list-item><text:p>x</text:p></text:list-item></text:list></text:list-item></text:list>`))
