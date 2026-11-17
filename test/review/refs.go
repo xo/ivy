@@ -33,6 +33,10 @@ type refEnv struct {
 	// env is the environment of each program: HOME in a temporary folder,
 	// and the fonts of ivy for fontconfig.
 	env []string
+	// fonts is a short hash of the configuration of fontconfig, which the
+	// names of the conversions in the cache hold, because the fonts change
+	// the pages of a conversion.
+	fonts string
 
 	mu       sync.Mutex
 	keys     map[string]string
@@ -593,7 +597,7 @@ func (j *refJob) prepare(ctx context.Context, r *route, doc string) (*prepared, 
 	if err != nil {
 		return nil, err
 	}
-	name := r.id + "-" + key
+	name := r.id + "-" + key + "-" + j.fonts
 	if r.perDPI {
 		name += fmt.Sprintf("-%ddpi", j.dpi)
 	}

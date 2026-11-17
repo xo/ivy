@@ -305,6 +305,11 @@ func toolEnv(ctx context.Context, opts RenderOptions, home string) (*refEnv, []s
 <fontconfig>
   <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
   <dir>` + fonts + `</dir>
+  <!-- ivy draws the generic families with Liberation (D28), so the
+       references do too. fontconfig prefers other fonts by default. -->
+  <alias binding="strong"><family>serif</family><prefer><family>Liberation Serif</family></prefer></alias>
+  <alias binding="strong"><family>sans-serif</family><prefer><family>Liberation Sans</family></prefer></alias>
+  <alias binding="strong"><family>monospace</family><prefer><family>Liberation Mono</family></prefer></alias>
   <cachedir>` + filepath.Join(home, "fontconfig") + `</cachedir>
 </fontconfig>
 `
@@ -327,7 +332,9 @@ func toolEnv(ctx context.Context, opts RenderOptions, home string) (*refEnv, []s
 	env = append(env, "HOME="+home, "FONTCONFIG_FILE="+conf, "TMPDIR="+tmp,
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"), "XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
 		"XDG_DATA_HOME="+filepath.Join(home, ".local", "share"))
-	e := &refEnv{cache: opts.Cache, dpi: opts.DPI, env: env, keys: map[string]string{}, versions: map[string]string{}}
+	sum := sha256.Sum256([]byte(strings.Replace(data, filepath.Join(home, "fontconfig"), "", 1)))
+	e := &refEnv{cache: opts.Cache, dpi: opts.DPI, env: env, fonts: hex.EncodeToString(sum[:4]),
+		keys: map[string]string{}, versions: map[string]string{}}
 	var notes []string
 	out, err := runTool(ctx, env, "", "fc-list", ":", "family")
 	if err != nil {

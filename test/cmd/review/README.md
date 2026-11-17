@@ -131,7 +131,12 @@ the command uses `gray`.
 
 Each program runs with `HOME` in a temporary folder, and with a
 configuration of fontconfig that adds the folder `fonts` of the
-repository, so that LibreOffice and calibre have the fonts of ivy. Each
+repository, so that LibreOffice, calibre and WeasyPrint have the fonts of
+ivy. The configuration also makes Liberation Serif, Sans and Mono the
+generic families serif, sans-serif and monospace, as in ivy (D28). Without
+it, fontconfig picks Noto, whose larger glyphs give the references more
+pages. The names of the conversions in the cache hold a hash of the
+configuration, so a change of it converts the files again. Each
 worker has its own profile of LibreOffice and of calibre, in the folder
 `profiles` of the cache. The end of the time of `-timeout` kills a program
 and each process that it started.

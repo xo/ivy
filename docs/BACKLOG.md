@@ -98,13 +98,6 @@ found these faults. Each item names a file of the corpus.
    `poi/xlsx/conditional-formatting-samples.xlsx` (38 against 37) and
    `datasets/csv/world-cities.csv` (1470 against 1396). Source: `docx` and
    `internal/sheet`.
-23. Find why the port lays out long HTML books on fewer pages than
-    WeasyPrint 70.0, whose layout it ports, with the same style sheet:
-    `weasyprint-samples/book/book.html` gives 56 pages against 61,
-    `gutenberg/html/pg1342-images.html` 192 against 266, and
-    `gutenberg/html/pg11-images.html` 58 against 75. The first pages
-    match, so the cause is in a later part of the layout. Source:
-    `internal/layout`.
 
 ## Left by the charts
 
