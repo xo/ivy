@@ -8,8 +8,8 @@ require (
 )
 
 require (
-	github.com/xo/magic v0.6.2-0.20261116202509-5bda5bb2eaed // indirect
-	github.com/xo/okage v0.9.1-0.20261116223529-73730383e33c // indirect
+	github.com/xo/magic v0.7.0 // indirect
+	github.com/xo/okage v0.10.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
