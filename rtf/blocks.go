@@ -1,6 +1,7 @@
 package rtf
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -297,6 +298,8 @@ func (c *converter) endCell(s *state) {
 }
 
 // endRow ends the current row of a table, with the definition of the row.
+// The rows of a table wait for its end, as the edges of the cells of all
+// its rows make its columns.
 func (c *converter) endRow(s *state) {
 	c.flushBytes(s)
 	t := s.target
@@ -304,37 +307,119 @@ func (c *converter) endRow(s *state) {
 	if t.para.Len() > 0 || t.cell.Len() > 0 {
 		c.endCell(s)
 	}
-	r := c.row
 	if !t.table {
 		if t == c.body {
 			c.openSection()
 		}
-		var st css
-		total := 0
-		for i, cell := range r.cells {
-			left := r.left
-			if i > 0 {
-				left = r.cells[i-1].right
-			}
-			total += max(cell.right-left, 0)
-		}
-		if total > 0 {
-			st.set("width", pt(total))
-		}
-		switch r.align {
-		case 'c':
-			st.set("margin-left", "auto")
-			st.set("margin-right", "auto")
-		case 'r':
-			st.set("margin-left", "auto")
-		default:
-			if r.left != 0 {
-				st.set("margin-left", pt(r.left))
-			}
-		}
-		t.out.WriteString(`<table style="` + attrText(st.String()) + `"><tbody>`)
 		t.table = true
 	}
+	def := c.row
+	def.cells = append([]cellDef(nil), c.row.cells...)
+	if len(t.rows) < c.lim.MaxObjects {
+		t.rows = append(t.rows, tableRow{def: def, cells: append([]string(nil), t.row...)})
+	}
+	t.row = t.row[:0]
+}
+
+// tableRow is a row of a table that waits for the end of the table: its
+// definition and the XHTML of its cells.
+type tableRow struct {
+	def   rowDef
+	cells []string
+}
+
+// edges returns the edges of the cells of the row r, in twips, one more
+// than its cells.
+func (r *rowDef) edges() []int {
+	out := make([]int, 0, len(r.cells)+1)
+	out = append(out, r.left)
+	for _, cell := range r.cells {
+		out = append(out, max(cell.right, out[len(out)-1]))
+	}
+	return out
+}
+
+// closeTable closes the table of a target, and writes its rows. Each cell
+// covers the columns between its edges, as in Word, where each row has
+// cells of its own.
+func (c *converter) closeTable(t *target) {
+	if !t.table {
+		return
+	}
+	t.table = false
+	rows := t.rows
+	t.rows = nil
+	if len(rows) == 0 {
+		return
+	}
+	var all []int
+	for i := range rows {
+		all = append(all, rows[i].def.edges()...)
+	}
+	sort.Ints(all)
+	var grid []int
+	for _, x := range all {
+		if len(grid) == 0 || x-grid[len(grid)-1] >= 40 {
+			grid = append(grid, x)
+		}
+	}
+	column := func(x int) int {
+		k := sort.SearchInts(grid, x)
+		if k > 0 && (k == len(grid) || x-grid[k-1] < grid[k]-x) {
+			k--
+		}
+		return k
+	}
+	first := rows[0].def
+	var st css
+	if len(grid) > 1 {
+		st.set("width", pt(grid[len(grid)-1]-grid[0]))
+	}
+	switch first.align {
+	case 'c':
+		st.set("margin-left", "auto")
+		st.set("margin-right", "auto")
+	case 'r':
+		st.set("margin-left", "auto")
+	default:
+		if len(grid) > 0 && grid[0] != 0 {
+			st.set("margin-left", pt(grid[0]))
+		}
+	}
+	t.out.WriteString(`<table style="` + attrText(st.String()) + `">`)
+	if len(grid) > 1 {
+		t.out.WriteString("<colgroup>")
+		for k := 1; k < len(grid); k++ {
+			t.out.WriteString(`<col style="width: ` + pt(grid[k]-grid[k-1]) + `"/>`)
+		}
+		t.out.WriteString("</colgroup>")
+	}
+	// the rows of \trhdr at the start of the table repeat at the top of
+	// each page
+	head := 0
+	for head < len(rows) && rows[head].def.header {
+		head++
+	}
+	if head > 0 && head < len(rows) {
+		t.out.WriteString("<thead>")
+		for _, row := range rows[:head] {
+			c.writeRow(t, row, column, len(grid) > 1)
+		}
+		t.out.WriteString("</thead>")
+		rows = rows[head:]
+	}
+	t.out.WriteString("<tbody>")
+	for _, row := range rows {
+		c.writeRow(t, row, column, len(grid) > 1)
+	}
+	t.out.WriteString("</tbody></table>")
+}
+
+// writeRow writes a row of a table. column returns the column of the grid
+// at an edge, when grid is set.
+func (c *converter) writeRow(t *target, row tableRow, column func(int) int, grid bool) {
+	r := row.def
+	edges := r.edges()
 	var rs css
 	if r.height != 0 {
 		h := r.height
@@ -344,18 +429,27 @@ func (c *converter) endRow(s *state) {
 		rs.set("height", pt(h))
 	}
 	t.out.WriteString(`<tr style="` + attrText(rs.String()) + `">`)
-	for i, html := range t.row {
+	at := 0
+	if grid {
+		if k := column(edges[0]); k > 0 {
+			t.out.WriteString(`<td colspan="` + strconv.Itoa(k) + `" style="border: none"></td>`)
+			at = k
+		}
+	}
+	for i, html := range row.cells {
 		var cs css
-		width, span := 0, 1
+		span := 1
 		if i < len(r.cells) {
 			def := r.cells[i]
-			left := r.left
-			if i > 0 {
-				left = r.cells[i-1].right
+			// the cells that \clmrg merges into this one
+			end := i + 1
+			for end < len(r.cells) && end < len(row.cells) && r.cells[end].merged {
+				end++
 			}
-			width = max(def.right-left, 0)
-			for j := i + 1; j < len(r.cells) && j < len(t.row) && r.cells[j].merged; j++ {
-				span++
+			if grid {
+				span = max(column(edges[end])-at, 1)
+			} else {
+				span = end - i
 			}
 			if def.merged {
 				continue
@@ -390,9 +484,7 @@ func (c *converter) endRow(s *state) {
 				}
 			}
 		}
-		if width > 0 {
-			cs.set("width", pt(width))
-		}
+		at += span
 		t.out.WriteString("<td")
 		if span > 1 {
 			t.out.WriteString(` colspan="` + strconv.Itoa(span) + `"`)
@@ -404,15 +496,6 @@ func (c *converter) endRow(s *state) {
 		t.out.WriteString(html + "</td>")
 	}
 	t.out.WriteString("</tr>")
-	t.row = t.row[:0]
-}
-
-// closeTable closes the table of a target.
-func (c *converter) closeTable(t *target) {
-	if t.table {
-		t.out.WriteString("</tbody></table>")
-		t.table = false
-	}
 }
 
 // endTarget ends the paragraph, the row and the table of a target.
@@ -491,7 +574,17 @@ func (c *converter) closeSection() {
 		return "@top-center { content: " + header + "; padding-top: " + pt(min(sec.header, sec.top)) + " } " +
 			"@bottom-center { content: " + footer + "; padding-bottom: " + pt(min(sec.footer, sec.bottom)) + " }"
 	}
-	c.sheet.WriteString("@page " + name + " { size: " + pt(width) + " " + pt(height) +
+	size := pt(width) + " " + pt(height)
+	if sec.paper {
+		// The paper of the program, in the orientation of the section, as
+		// exact points that twips round.
+		p := c.d.cfg.Paper.Portrait()
+		if width > height {
+			p = p.Landscape()
+		}
+		size = num(min(max(float64(p.Width), 72), 14400)) + "pt " + num(min(max(float64(p.Height), 72), 14400)) + "pt"
+	}
+	c.sheet.WriteString("@page " + name + " { size: " + size +
 		"; margin: " + pt(top) + " " + pt(sec.right) + " " + pt(bottom) + " " + pt(sec.left) + "; " +
 		margins(box("header", "headerr"), box("footer", "footerr")) + " }\n")
 	if _, ok := c.running["headerl"]; ok {

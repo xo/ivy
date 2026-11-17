@@ -3,8 +3,19 @@ package docx
 import (
 	"strings"
 
+	"github.com/xo/okage/svg"
+
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/fontdb"
 )
+
+// fontCache holds what the conversion knows of the fonts of the program.
+type fontCache struct {
+	// fonts reports, by the name of a font in lower case, whether the
+	// program has the font.
+	fonts  map[string]bool
+	fontDB *svg.FontDatabase
+}
 
 // decl is a declaration of CSS.
 type decl struct {
@@ -108,12 +119,44 @@ func (c *converter) family(p props) string {
 }
 
 // lineRatio returns the height of a single line of the font of the
-// properties.
+// properties. A font that the program does not have draws with the next
+// font of its family, or with the generic family, which is Liberation
+// Serif, Liberation Sans or Liberation Mono (D28), so its line has the
+// height of a line of that font.
 func (c *converter) lineRatio(p props) float64 {
-	if r, ok := lineRatios[strings.ToLower(c.font(p["font"]))]; ok {
-		return r
+	latin := c.font(p["font"])
+	for _, name := range [...]string{latin, c.font(p["font.ea"])} {
+		if name == "" {
+			continue
+		}
+		if r, ok := lineRatios[strings.ToLower(name)]; ok {
+			return r
+		}
+		if c.hasFont(name) {
+			return defaultLineRatio
+		}
 	}
-	return defaultLineRatio
+	if latin == "" {
+		return defaultLineRatio
+	}
+	if c.genericFamily(latin) == "monospace" {
+		return lineRatios["liberation mono"]
+	}
+	return lineRatios["liberation serif"]
+}
+
+// hasFont reports whether the fonts of the program hold the font name.
+func (c *converter) hasFont(name string) bool {
+	key := strings.ToLower(name)
+	if v, ok := c.fonts[key]; ok {
+		return v
+	}
+	if c.fontDB == nil {
+		c.fontDB = fontdb.Of(c.d.cfg)
+	}
+	_, ok := fontdb.Find(c.fontDB, name, 400, false)
+	c.fonts[key] = ok
+	return ok
 }
 
 // fontSize returns the size of the font of the properties in points.

@@ -32,6 +32,8 @@ type styleSheet struct {
 	styles []style
 	// ftc is the default font, from rgftcStandardChpStsh, or -1.
 	ftc int
+	// word6 is set for the style sheet of Word 6 or Word 95.
+	word6 bool
 }
 
 // defaultChp returns the properties of a character without a style.
@@ -42,7 +44,13 @@ func defaultChp() chp {
 // parseStyles reads the style sheet in buf. It reads what fits, and a
 // damaged sheet gives fewer styles.
 func parseStyles(buf []byte, maxStyles int) *styleSheet {
-	ss := &styleSheet{ftc: -1}
+	return parseStylesOf(buf, maxStyles, false)
+}
+
+// parseStylesOf reads the style sheet in buf, of Word 6 or Word 95 when
+// word6 is set, whose names have one byte for each character.
+func parseStylesOf(buf []byte, maxStyles int, word6 bool) *styleSheet {
+	ss := &styleSheet{ftc: -1, word6: word6}
 	cbStshi := int(u16(buf, 0))
 	if cbStshi < 4 || 2+cbStshi > len(buf) {
 		return ss
@@ -64,16 +72,21 @@ func parseStyles(buf []byte, maxStyles int) *styleSheet {
 		if off+cb > len(buf) {
 			break
 		}
-		ss.styles = append(ss.styles, parseStd(buf[off:off+cb], cbBase))
+		ss.styles = append(ss.styles, parseStd(buf[off:off+cb], cbBase, word6))
 		off += cb
 	}
 	return ss
 }
 
-// parseStd reads one STD: its StdfBase, its name and its UPXs.
-func parseStd(b []byte, cbBase int) style {
+// parseStd reads one STD: its StdfBase, its name and its UPXs. The base of
+// an STD of Word 6 has 8 bytes, and its name one byte for each character.
+func parseStd(b []byte, cbBase int, word6 bool) style {
 	st := style{base: -1}
-	if len(b) < 10 || cbBase < 10 || cbBase > len(b) {
+	minBase := 10
+	if word6 {
+		minBase = word6StdBaseSize
+	}
+	if len(b) < minBase || cbBase < minBase || cbBase > len(b) {
 		st.stk = 0
 		return st
 	}
@@ -86,8 +99,16 @@ func parseStd(b []byte, cbBase int) style {
 	cupx := int(u16(b, 4) & 0x000F)
 	off := cbBase
 	// the name: a count of characters, the characters and a nul
-	cch := int(u16(b, off))
-	off += 2 + 2*cch + 2
+	if word6 {
+		if off < len(b) {
+			off += 1 + int(b[off]) + 1
+		}
+		// the UPXs start at an even offset
+		off += off % 2
+	} else {
+		cch := int(u16(b, off))
+		off += 2 + 2*cch + 2
+	}
 	upx := make([][]byte, 0, cupx)
 	for range cupx {
 		if off+2 > len(b) {
@@ -145,10 +166,10 @@ func (ss *styleSheet) resolve(istd, depth int) *style {
 		p.istd = istd
 	}
 	base := c
-	for s := range sprms(st.chpx) {
+	for s := range sprmsOf(ss.word6, st.chpx) {
 		applyChp(&c, s, &base)
 	}
-	for s := range sprms(st.papx) {
+	for s := range sprmsOf(ss.word6, st.papx) {
 		applyPap(&p, s)
 	}
 	p.istd = istd

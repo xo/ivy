@@ -8,50 +8,57 @@ import "iter"
 
 // The sprms that the package reads.
 const (
-	sprmCFRMarkDel  = 0x0800
-	sprmCFBold      = 0x0835
-	sprmCFItalic    = 0x0836
-	sprmCFStrike    = 0x0837
-	sprmCFSmallCaps = 0x083A
-	sprmCFCaps      = 0x083B
-	sprmCFVanish    = 0x083C
-	sprmCHighlight  = 0x2A0C
-	sprmCKul        = 0x2A3E
-	sprmCIco        = 0x2A42
-	sprmCIss        = 0x2A48
-	sprmCFDStrike   = 0x2A53
-	sprmCIstd       = 0x4A30
-	sprmCHps        = 0x4A43
-	sprmCRgFtc0     = 0x4A4F
-	sprmCCv         = 0x6870
-	sprmPIstd       = 0x4600
-	sprmPJc80       = 0x2403
-	sprmPFPageBreak = 0x2407
-	sprmPFInTable   = 0x2416
-	sprmPFTtp       = 0x2417
-	sprmPFInnerCell = 0x244B
-	sprmPFInnerTtp  = 0x244C
-	sprmPJc         = 0x2461
-	sprmPOutLvl     = 0x2640
-	sprmPItap       = 0x6649
-	sprmPDxaRight80 = 0x840E
-	sprmPDxaLeft80  = 0x840F
-	sprmPDxaLeft180 = 0x8411
-	sprmPDxaRight   = 0x845D
-	sprmPDxaLeft    = 0x845E
-	sprmPDxaLeft1   = 0x8460
-	sprmPDyaLine    = 0x6412
-	sprmPDyaBefore  = 0xA413
-	sprmPDyaAfter   = 0xA414
-	sprmPChgTabs    = 0xC615
-	sprmTDefTable   = 0xD608
-	sprmSBkc        = 0x3009
-	sprmSDyaTop     = 0x9023
-	sprmSDyaBottom  = 0x9024
-	sprmSXaPage     = 0xB01F
-	sprmSYaPage     = 0xB020
-	sprmSDxaLeft    = 0xB021
-	sprmSDxaRight   = 0xB022
+	sprmCFRMarkDel    = 0x0800
+	sprmCFData        = 0x0806
+	sprmCFSpec        = 0x0855
+	sprmCPicLocation  = 0x6A03
+	sprmCFBold        = 0x0835
+	sprmCFItalic      = 0x0836
+	sprmCFStrike      = 0x0837
+	sprmCFSmallCaps   = 0x083A
+	sprmCFCaps        = 0x083B
+	sprmCFVanish      = 0x083C
+	sprmCHighlight    = 0x2A0C
+	sprmCKul          = 0x2A3E
+	sprmCIco          = 0x2A42
+	sprmCIss          = 0x2A48
+	sprmCFDStrike     = 0x2A53
+	sprmCIstd         = 0x4A30
+	sprmCHps          = 0x4A43
+	sprmCRgFtc0       = 0x4A4F
+	sprmCCv           = 0x6870
+	sprmPIstd         = 0x4600
+	sprmPJc80         = 0x2403
+	sprmPFPageBreak   = 0x2407
+	sprmPFInTable     = 0x2416
+	sprmPFTtp         = 0x2417
+	sprmPFInnerCell   = 0x244B
+	sprmPFInnerTtp    = 0x244C
+	sprmPJc           = 0x2461
+	sprmPOutLvl       = 0x2640
+	sprmPItap         = 0x6649
+	sprmPHugePapx     = 0x6646
+	sprmPDxaRight80   = 0x840E
+	sprmPDxaLeft80    = 0x840F
+	sprmPDxaLeft180   = 0x8411
+	sprmPDxaRight     = 0x845D
+	sprmPDxaLeft      = 0x845E
+	sprmPDxaLeft1     = 0x8460
+	sprmPDyaLine      = 0x6412
+	sprmPDyaBefore    = 0xA413
+	sprmPDyaAfter     = 0xA414
+	sprmPChgTabs      = 0xC615
+	sprmTDefTable     = 0xD608
+	sprmSBkc          = 0x3009
+	sprmSFTitlePage   = 0x300A
+	sprmSDyaHdrTop    = 0xB017
+	sprmSDyaHdrBottom = 0xB018
+	sprmSDyaTop       = 0x9023
+	sprmSDyaBottom    = 0x9024
+	sprmSXaPage       = 0xB01F
+	sprmSYaPage       = 0xB020
+	sprmSDxaLeft      = 0xB021
+	sprmSDxaRight     = 0xB022
 )
 
 // sprm is one property modifier and its operand.
@@ -163,6 +170,12 @@ type chp struct {
 	ftc int
 	// istd is the character style, or -1.
 	istd int
+	// special is set for a character that stands for an object, such as
+	// the character 0x01 of a picture, and data for the character of the
+	// data of a form field. picLocation is the offset of the picture in the
+	// stream Data.
+	special, data bool
+	picLocation   uint32
 }
 
 // pap holds the paragraph properties that the package reads.
@@ -183,9 +196,12 @@ type pap struct {
 	lineExact                int
 	outline                  int
 	hasOutline, hasLeftFirst bool
-	// widths are the widths of the cells of a row, in twips, from the
-	// mark of the end of the row.
-	widths []int
+	// tap holds the properties of the row, from the mark of the end of a
+	// row, or nil.
+	tap *tap
+	// ilfo is the LFO of the list of the paragraph, from 1, or 0, and ilvl
+	// its level in the list.
+	ilfo, ilvl int
 }
 
 // The 16 colors of the ico of MS-DOC 2.9.119, as 0xRRGGBB.
@@ -257,11 +273,24 @@ func applyChp(c *chp, s sprm, base *chp) {
 		}
 	case sprmCRgFtc0:
 		c.ftc = int(uint16(s.value()))
+	case sprmCFSpec:
+		c.special = v != 0
+	case sprmCFData:
+		c.data = v != 0
+	case sprmCPicLocation:
+		c.picLocation = uint32(s.value())
 	}
 }
 
 // applyPap applies the paragraph modifier s to p.
 func applyPap(p *pap, s sprm) {
+	if isTableSprm(s.op) {
+		if p.tap == nil {
+			p.tap = &tap{}
+		}
+		applyTap(p.tap, s)
+		return
+	}
 	v := s.byteValue()
 	switch s.op {
 	case sprmPIstd:
@@ -307,21 +336,10 @@ func applyPap(p *pap, s sprm) {
 		}
 	case sprmPOutLvl:
 		p.outline, p.hasOutline = int(v), true
-	case sprmTDefTable:
-		// cb, the number of cells, and the n+1 edges of the cells
-		// (MS-DOC 2.9.302)
-		b := s.operand
-		if len(b) < 3 {
-			return
-		}
-		n := int(b[2])
-		if 3+2*(n+1) > len(b) {
-			return
-		}
-		p.widths = make([]int, n)
-		for i := range n {
-			p.widths[i] = int(int16(le.Uint16(b[3+2*i+2:]))) - int(int16(le.Uint16(b[3+2*i:])))
-		}
+	case sprmPIlfo:
+		p.ilfo = int(uint16(s.value()))
+	case sprmPIlvl:
+		p.ilvl = int(v)
 	}
 }
 
@@ -329,6 +347,9 @@ func applyPap(p *pap, s sprm) {
 // with the codes of Word 97 that match them.
 var word6Sections = map[byte]uint16{
 	142: sprmSBkc,
+	143: sprmSFTitlePage,
+	156: sprmSDyaHdrTop,
+	157: sprmSDyaHdrBottom,
 	164: sprmSXaPage,
 	165: sprmSYaPage,
 	166: sprmSDxaLeft,

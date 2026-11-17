@@ -1611,6 +1611,25 @@ func TestTableRowHeight3(t *testing.T) {
 	tableEq(t, "row2.height", rows[1].Height, 0)
 }
 
+// TestTableRowHeightSpan checks that the row with a height in which a cell
+// that spans rows ends gets only the part of the cell past the rows before
+// it. WeasyPrint gives the row the whole height of the cell. This port
+// differs on purpose. A row in which no cell ends still gets the height 0,
+// as in WeasyPrint, which internal/sheet works around.
+func TestTableRowHeightSpan(t *testing.T) {
+	_, table := tableRender(t, `
+      <table style="border-spacing: 0">
+        <tr style="height: 30px"><td rowspan="2" style="vertical-align: top"><div style="height: 50px"></div></td><td style="vertical-align: top"></td></tr>
+        <tr style="height: 10px"><td style="vertical-align: top"></td></tr>
+      </table>
+    `)
+	rowGroup := only(t, table)
+	rows := unpack(t, rowGroup, 2)
+	tableEq(t, "row1.height", rows[0].Height, 30)
+	tableEq(t, "row2.height", rows[1].Height, 20)
+	tableEq(t, "row_group.height", rowGroup.Height, 50)
+}
+
 func TestTableRowHeight4(t *testing.T) {
 	// A row cannot be shorter than the border-height of its tallest cell.
 	_, table := tableRender(t, `

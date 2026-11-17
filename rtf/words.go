@@ -63,6 +63,17 @@ func (c *converter) word(s *state, t token) {
 	if s.dest == destFieldInst {
 		return
 	}
+	switch t.word {
+	case "brdrt", "brdrb", "brdrl", "brdrr", "box":
+		// a border of a paragraph, not of a cell
+		c.row.side = 0
+	case "brdrnone":
+		if c.row.side != 0 {
+			// the border of a cell that the border word before it starts
+			c.tableWord(token{word: "brdrnil"})
+			return
+		}
+	}
 	if c.charWord(s, t) || c.paraWord(s, t) || c.tableWord(t) || c.sectionWord(t) {
 		return
 	}
@@ -432,13 +443,29 @@ func (c *converter) tableWord(t token) bool {
 	case "clcbpat":
 		cell().shading = t.param
 	case "clbrdrt":
-		cell().top = true
+		cell().top, r.side = true, 't'
 	case "clbrdrb":
-		cell().bottom = true
+		cell().bottom, r.side = true, 'b'
 	case "clbrdrl":
-		cell().left = true
+		cell().left, r.side = true, 'l'
 	case "clbrdrr":
-		cell().right2 = true
+		cell().right2, r.side = true, 'r'
+	case "brdrtbl", "brdrnil":
+		// a cell border with no line (RTF 1.9.1, "Table definitions")
+		if r.side != 0 {
+			d := cell()
+			switch r.side {
+			case 't':
+				d.top = false
+			case 'b':
+				d.bottom = false
+			case 'l':
+				d.left = false
+			case 'r':
+				d.right2 = false
+			}
+			r.side = 0
+		}
 	case "clvertalc":
 		cell().valign = 'c'
 	case "clvertalb":
@@ -463,8 +490,10 @@ func (c *converter) sectionWord(t token) bool {
 	switch t.word {
 	case "paperw":
 		d.width, s.width = twips, twips
+		d.paper, s.paper = false, false
 	case "paperh":
 		d.height, s.height = twips, twips
+		d.paper, s.paper = false, false
 	case "margl":
 		d.left, s.left = twips, twips
 	case "margr":
@@ -474,9 +503,9 @@ func (c *converter) sectionWord(t token) bool {
 	case "margb":
 		d.bottom, s.bottom = twips, twips
 	case "pgwsxn":
-		s.width = twips
+		s.width, s.paper = twips, false
 	case "pghsxn":
-		s.height = twips
+		s.height, s.paper = twips, false
 	case "marglsxn":
 		s.left = twips
 	case "margrsxn":

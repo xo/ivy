@@ -1,6 +1,7 @@
 // Package msdoc opens the Word documents of Word 97 to Word 2003: .doc
 // files and .dot templates (MS-DOC). It also reads the text of a document
-// of Word 6 or Word 95.
+// of Word 6 or Word 95, with the properties of its characters and its
+// paragraphs.
 //
 // A Word document is a Compound File, which the package cfb of magic reads.
 // The package reads the File Information Block, the piece table and the text
@@ -8,16 +9,20 @@
 // the color and the font of each run, the alignment, the indents and the
 // spacing of each paragraph, and the headings of the style sheet. It
 // converts the text into HTML, with each table as an HTML table, for the
-// layout of ivy (D10). The pages have the size and the margins of the first
-// section. A section break starts a new page, unless the next section is
-// continuous.
+// layout of ivy (D10). Each section has pages of its own size and margins,
+// with its headers and its footers. A section break starts a new page,
+// unless the next section is continuous on a page of the same size. The
+// tables have the borders, the shading and the merged cells of their rows,
+// the lists have their numbers and their bullets, and the pictures of the
+// stream Data and the pictures of Office Drawing that float on the page
+// show.
 //
-// The package leaves out the headers, the footers, the footnotes, the
-// comments, the text boxes, the pictures, and the numbers and the bullets
-// of the lists. The codes of the fields are left out, and their results
-// stay. Of a document of Word 6 or Word 95, the package reads the text, the
-// paragraphs and the sections, without the properties of the characters
-// and the paragraphs.
+// The package leaves out the footnotes, the comments, the text boxes, and
+// the shapes of Office Drawing that are not pictures. The codes of the
+// fields are left out, and their results stay, but the page numbers of the
+// fields PAGE and NUMPAGES come from the layout. Of a document of Word 6
+// or Word 95, the package leaves out the headers, the footers, the lists,
+// the pictures and the properties of the tables.
 //
 // A document gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A document that a password protects with RC4,
@@ -30,6 +35,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strings"
 	"sync"
 
 	"github.com/xo/ivy"
@@ -204,16 +210,45 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	if err != nil {
 		return layout.Source{}, err
 	}
-	html := msole.HTML(d.summary.Info.Title, d.lang, "", d.parser.body(paras))
+	secs, running, err := d.parser.docSections(ctx, d.cfg.Paper)
+	if err != nil {
+		return layout.Source{}, err
+	}
+	nameSections(secs, d.parser.sections())
+	cur := -1
+	// section starts the element of the section of each paragraph, with
+	// the running elements of its headers and its footers
+	section := func(b *strings.Builder, para paragraph, closeTable func()) {
+		i := sectionOf(secs, para.cp)
+		if i == cur {
+			return
+		}
+		closeTable()
+		if cur >= 0 {
+			b.WriteString("</div>\n")
+		}
+		cur = i
+		d.parser.page = secs[i].page.page
+		b.WriteString(`<div class="section" style="page: ` + secs[i].name + `">`)
+		b.WriteString(running[i])
+	}
+	body := d.parser.body(paras, section)
+	if cur >= 0 {
+		body += "</div>\n"
+	}
+	html := msole.HTML(d.summary.Info.Title, d.lang, "", body)
 	if int64(len(html)) > d.cfg.Limits.MaxMemory {
 		return layout.Source{}, fmt.Errorf("html of more than %d bytes: %w", d.cfg.Limits.MaxMemory, ivy.ErrLimit)
 	}
 	var files memfs.FS
 	files.Add(documentName, []byte(html))
+	for _, m := range d.parser.media {
+		files.Add(m.name, m.data)
+	}
 	return layout.Source{
 		FS:          &files,
 		Documents:   []string{documentName},
-		StyleSheets: []string{d.parser.css(d.parser.firstPage())},
+		StyleSheets: []string{d.parser.css(d.parser.firstPage(d.cfg.Paper)), d.parser.sectionCSS(secs)},
 		Title:       d.summary.Info.Title,
 	}, nil
 }

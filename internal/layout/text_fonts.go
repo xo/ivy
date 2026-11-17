@@ -35,6 +35,7 @@ import (
 
 	"github.com/xo/ivy"
 	ivyfont "github.com/xo/ivy/internal/font"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // FontConfiguration is FontConfiguration in weasyprint/text/fonts.py: the
@@ -79,6 +80,12 @@ type FontConfiguration struct {
 	// fallbacks holds the fallback faces of a character, by the first face
 	// of a chain and the character. A missing face is -1.
 	fallbacks map[fallbackKey]int
+	// eastAsian holds the East Asian faces of the program, which
+	// eastAsianFaces reads on first use.
+	eastAsian *fontdb.EastAsian
+	// eastAsianChains holds the East Asian faces of the program for a kind,
+	// a language and a query, the best first.
+	eastAsianChains map[eastAsianKey][]svg.FontID
 	// shaper shapes the text.
 	shaper shaping.HarfbuzzShaper
 	// segmenter splits the text into runs.
@@ -105,10 +112,14 @@ type faceKey struct {
 	variations string
 }
 
-// fallbackKey is the key of a fallback face.
+// fallbackKey is the key of a fallback face: the first face of a chain, the
+// character, and the kind and the language of the East Asian text of the
+// style.
 type fallbackKey struct {
 	first svg.FontID
 	r     rune
+	kind  fontdb.Kind
+	lang  fontdb.Lang
 }
 
 // FontConfigurationOptions holds the options of NewFontConfiguration.
@@ -669,6 +680,9 @@ func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
 	query := svg.FontQuery{Weight: weight, Stretch: stretch, Style: fstyle}
 	for _, family := range families {
 		id, ok := fc.query(family, query)
+		if !ok && family.Kind == svg.FontFamilyNamed {
+			id, ok = fc.eastAsianSubstitute(family.Name, styleLang(style), query, style)
+		}
 		if ok && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
@@ -714,6 +728,134 @@ func (fc *FontConfiguration) query(family svg.FontFamily, q svg.FontQuery) (svg.
 		}
 	}
 	return fc.queryRange(fc.first, fc.base, name, q)
+}
+
+// eastAsianFaces returns the East Asian faces of the program, such as the
+// fonts of the system for Japanese, Chinese and Korean text.
+func (fc *FontConfiguration) eastAsianFaces() *fontdb.EastAsian {
+	if fc.eastAsian == nil {
+		fc.eastAsian = fontdb.NewEastAsian(fc.db, 0, fc.base)
+	}
+	return fc.eastAsian
+}
+
+// eastAsianKey is the key of the East Asian faces for a kind, a language
+// and a query.
+type eastAsianKey struct {
+	kind    fontdb.Kind
+	lang    fontdb.Lang
+	weight  uint16
+	stretch svg.FontStretch
+	style   svg.FontStyle
+}
+
+// eastAsianChain returns the best face for q of each East Asian family of
+// the program, the best family for kind and lang first
+// (fontdb.EastAsian.Families).
+func (fc *FontConfiguration) eastAsianChain(kind fontdb.Kind, lang fontdb.Lang, q svg.FontQuery) []svg.FontID {
+	key := eastAsianKey{kind, lang, q.Weight, q.Stretch, q.Style}
+	if ids, ok := fc.eastAsianChains[key]; ok {
+		return ids
+	}
+	var ids []svg.FontID
+	for _, family := range fc.eastAsianFaces().Families(kind, lang) {
+		if id, ok := fc.query(svg.FontFamily{Kind: svg.FontFamilyNamed, Name: family}, q); ok && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if fc.eastAsianChains == nil {
+		fc.eastAsianChains = map[eastAsianKey][]svg.FontID{}
+	}
+	fc.eastAsianChains[key] = ids
+	return ids
+}
+
+// eastAsianSubstitute returns the substitute of an East Asian font that the
+// program does not hold, such as MS Mincho: the best face for q of an East
+// Asian family of the program of the same kind (fontdb.ClassifyName). It
+// prefers the language of the text, lang, or else the language of the
+// font. A font of fontdb.LookupEastAsian takes its own face first, by
+// another of its names. The face must draw the fontdb.Probe of the
+// language. It returns false for a family that is not an East Asian font,
+// and when the program holds no East Asian face, as without the fonts of
+// the system (D23).
+//
+// Port: Fontconfig gives such a family the fonts of its language and of
+// its generic family. ivy reads no configuration of Fontconfig (D1).
+func (fc *FontConfiguration) eastAsianSubstitute(name string, lang fontdb.Lang, q svg.FontQuery, style *Style) (svg.FontID, bool) {
+	kind, fontLang, ok := fontdb.ClassifyName(name)
+	if !ok || fc.eastAsianFaces().Len() == 0 {
+		return 0, false
+	}
+	if f, ok := fontdb.LookupEastAsian(name); ok {
+		// Another name of the same font, such as MS PGothic for
+		// MS Pゴシック, which differs from ＭＳ Ｐゴシック in the width of its
+		// letters.
+		for _, n := range append([]string{f.Family}, f.Names...) {
+			if id, ok := fc.query(svg.FontFamily{Kind: svg.FontFamilyNamed, Name: n}, q); ok {
+				return id, true
+			}
+		}
+	}
+	if lang == fontdb.NoLang {
+		lang = fontLang
+	}
+	probe := fontdb.Probe(lang)
+	for _, id := range fc.eastAsianChain(kind, lang, q) {
+		if fc.covers(id, fc.face(id, style), probe) {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// styleLang returns the East Asian language of the lang of a style, or
+// fontdb.NoLang.
+func styleLang(style *Style) fontdb.Lang {
+	if lang, ok := style.Get("lang").(String); ok {
+		return fontdb.ParseLang(string(lang))
+	}
+	return fontdb.NoLang
+}
+
+// eastAsianStyle returns the kind and the language of the East Asian text
+// of a style, for the fallback of an East Asian character. The language is
+// the lang of the style, or else the language of the first East Asian font
+// of font-family. The kind is the kind of that font, or else the kind of
+// the first generic family of font-family, or else serif, as the default
+// family of the chain.
+func eastAsianStyle(style *Style) (fontdb.Kind, fontdb.Lang) {
+	kind, lang := fontdb.NoKind, styleLang(style)
+	generic := fontdb.NoKind
+	for _, name := range valueStrings(style.Get("font_family")) {
+		if g, ok := genericFamilies[strings.ToLower(name)]; ok {
+			if generic == fontdb.NoKind {
+				generic = fontdb.Serif
+				if g.Kind != svg.FontFamilySerif && g.Kind != svg.FontFamilyCursive && g.Kind != svg.FontFamilyFantasy {
+					generic = fontdb.Sans
+				}
+			}
+			continue
+		}
+		k, l, ok := fontdb.ClassifyName(name)
+		if !ok {
+			continue
+		}
+		if lang == fontdb.NoLang {
+			lang = l
+		}
+		if kind == fontdb.NoKind {
+			kind = k
+		}
+		break
+	}
+	if kind == fontdb.NoKind {
+		kind = generic
+	}
+	if kind == fontdb.NoKind {
+		kind = fontdb.Serif
+	}
+	return kind, lang
 }
 
 // queryRange returns the best face of the family name among the faces from
@@ -857,16 +999,23 @@ type fontmap struct {
 	style  *Style
 	chain  []svg.FontID
 	byFace map[*font.Face]svg.FontID
+	// kind and lang are the kind and the language of the East Asian text
+	// of the style (eastAsianStyle).
+	kind fontdb.Kind
+	lang fontdb.Lang
 }
 
 // newFontmap returns the fontmap of a style.
 func (fc *FontConfiguration) newFontmap(style *Style) *fontmap {
-	return &fontmap{fc: fc, style: style, chain: fc.chain(style), byFace: map[*font.Face]svg.FontID{}}
+	m := &fontmap{fc: fc, style: style, chain: fc.chain(style), byFace: map[*font.Face]svg.FontID{}}
+	m.kind, m.lang = eastAsianStyle(style)
+	return m
 }
 
 // ResolveFace satisfies shaping.Fontmap. It returns the first face of the
-// families that draws r, then the fallback face of okage, then the first
-// face.
+// families that draws r, then for an East Asian character the East Asian
+// face of the program that draws it (eastAsianFallback), then the fallback
+// face of okage, then the first face.
 func (m *fontmap) ResolveFace(r rune) *font.Face {
 	for _, id := range m.chain {
 		if f := m.fc.face(id, m.style); m.fc.covers(id, f, r) {
@@ -877,11 +1026,16 @@ func (m *fontmap) ResolveFace(r rune) *font.Face {
 	if len(m.chain) == 0 {
 		return nil
 	}
-	key := fallbackKey{m.chain[0], r}
+	key := fallbackKey{first: m.chain[0], r: r}
+	if fontdb.IsCJK(r) {
+		key.kind, key.lang = m.kind, m.lang
+	}
 	id, ok := m.fc.fallbacks[key]
 	if !ok {
 		id = -1
-		if fallback, found := svg.DefaultFallbackSelector(nil)(r, m.chain, m.fc.db); found {
+		if fallback, found := m.eastAsianFallback(r); found {
+			id = int(fallback)
+		} else if fallback, found := svg.DefaultFallbackSelector(nil)(r, m.chain, m.fc.db); found {
 			id = int(fallback)
 		}
 		m.fc.fallbacks[key] = id
@@ -899,6 +1053,41 @@ func (m *fontmap) ResolveFace(r rune) *font.Face {
 		}
 	}
 	return nil
+}
+
+// eastAsianFallback returns the East Asian face of the program that draws
+// the East Asian character r, the best for the kind and the language of the
+// style (fontdb.EastAsian.Families), with the weight, the style and the
+// stretch of the style. A style without a language takes the order of
+// fontdb.EastAsian.Families for no language for each character, so that
+// the kana and the Han characters of a text take the same face when it
+// draws them. It returns false for another character, and when no East
+// Asian face draws r.
+//
+// The East Asian faces come before the other fallback faces, so that a
+// Japanese text takes a Japanese font of the system, and not Droid Sans
+// Fallback of the module github.com/xo/ivy/fonts, which draws the Han
+// characters in their Chinese forms. Without the fonts of the system,
+// the program holds no East Asian face, and the fallback does not change
+// (D23).
+//
+// Port: Fontconfig sorts the fonts of the system by the language of the
+// text for a fallback. ivy prefers the language and the kind of the text.
+func (m *fontmap) eastAsianFallback(r rune) (svg.FontID, bool) {
+	if !fontdb.IsCJK(r) || m.fc.eastAsianFaces().Len() == 0 {
+		return 0, false
+	}
+	q := svg.FontQuery{
+		Weight:  uint16(fontWeight(m.style.Get("font_weight"))),
+		Stretch: fontStretch(str(m.style.Get("font_stretch"))),
+		Style:   fontStyle(str(m.style.Get("font_style"))),
+	}
+	for _, id := range m.fc.eastAsianChain(m.kind, m.lang, q) {
+		if m.fc.covers(id, m.fc.face(id, m.style), r) {
+			return id, true
+		}
+	}
+	return 0, false
 }
 
 // primary returns the first face of the families that go-text can use, and

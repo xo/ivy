@@ -747,9 +747,13 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 					}
 					row.Height = max(rowBottomY-row.PositionY, 0)
 				} else {
+					// Port: a cell that spans rows ends in this row with
+					// the part of its height that is past the rows before
+					// it, as in the branch above. Upstream compares the
+					// whole height of the cell with the height of the row.
 					height := row.Height
 					for _, rowCell := range endingCells {
-						height = max(height, rowCell.BorderHeight())
+						height = max(height, rowCell.PositionY+rowCell.BorderHeight()-row.PositionY)
 					}
 					row.Height = height
 					rowBottomY = row.PositionY + row.Height

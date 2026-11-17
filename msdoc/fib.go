@@ -60,6 +60,14 @@ const (
 	fcClx          = 33
 	fcLcbCountMin  = 34
 	ccpTextIndex   = 3
+	ccpFtnIndex    = 4
+	ccpHddIndex    = 5
+	fcPlcfHdd      = 11
+	fcDop          = 31
+	fcPlcSpaMom    = 40
+	fcDggInfo      = 50
+	fcPlfLst       = 73
+	fcPlfLfo       = 74
 	cslwCountMin   = 4
 	fibBaseSize    = 32
 	wIdentWord     = 0xA5EC
@@ -67,6 +75,7 @@ const (
 	cfbWordName    = "WordDocument"
 	cfbTable0Name  = "0Table"
 	cfbTable1Name  = "1Table"
+	cfbDataName    = "Data"
 	blockSizeBytes = 512
 )
 
@@ -77,7 +86,10 @@ type fib struct {
 	lid     uint16
 	flags   uint16
 	ccpText uint32
-	fcLcb   [][2]uint32
+	// ccpFtn and ccpHdd are the counts of the characters of the footnotes
+	// and of the headers, which follow the main document.
+	ccpFtn, ccpHdd uint32
+	fcLcb          [][2]uint32
 }
 
 // streams is a Word document: its FIB and its two streams, decrypted.
@@ -85,6 +97,8 @@ type streams struct {
 	fib   fib
 	word  []byte
 	table []byte
+	// data is the stream Data, which holds the pictures, or nil.
+	data []byte
 	// word6 is set for a document of Word 6 or Word 95, whose table stream
 	// is the stream WordDocument. Its text has one byte for each character,
 	// in the code page codePage, from the byte fcMin.
@@ -94,8 +108,8 @@ type streams struct {
 	fcMac    uint32
 }
 
-// readStreams reads the streams WordDocument and the table stream of f, and
-// decrypts them if a password protects them.
+// readStreams reads the streams WordDocument, the table stream and the
+// stream Data of f, and decrypts them if a password protects them.
 func readStreams(ctx context.Context, f *cfb.File, cfg ivy.Config) (*streams, error) {
 	lim := cfg.Limits.WithDefaults()
 	word, err := msole.ReadStream(f, cfbWordName, lim)
@@ -121,6 +135,11 @@ func readStreams(ctx context.Context, f *cfb.File, cfg ivy.Config) (*streams, er
 	}
 	if s.table, err = msole.ReadStream(f, name, lim); err != nil {
 		return nil, err
+	}
+	// the stream Data holds the pictures, and a document without a picture
+	// can have none
+	if data, err := msole.ReadStream(f, cfbDataName, lim); err == nil {
+		s.data = data
 	}
 	if s.fib.flags&flagEncrypted != 0 {
 		if err := s.decrypt(ctx, cfg); err != nil {
@@ -180,7 +199,10 @@ func (s *streams) decrypt(ctx context.Context, cfg ivy.Config) error {
 				return err
 			}
 		}
-		return key.DecryptAt(s.table, 0, blockSizeBytes)
+		if err := key.DecryptAt(s.table, 0, blockSizeBytes); err != nil {
+			return err
+		}
+		return key.DecryptAt(s.data, 0, blockSizeBytes)
 	}
 	lKey := int(le.Uint32(s.word[14:]))
 	if lKey <= 0 || lKey > len(s.table) {
@@ -202,7 +224,10 @@ func (s *streams) decrypt(ctx context.Context, cfg ivy.Config) error {
 			return err
 		}
 	}
-	return key.DecryptAt(s.table[lKey:], int64(lKey), blockSizeBytes)
+	if err := key.DecryptAt(s.table[lKey:], int64(lKey), blockSizeBytes); err != nil {
+		return err
+	}
+	return key.DecryptAt(s.data, 0, blockSizeBytes)
 }
 
 // parse reads the parts of the FIB after the FibBase: the counts of
@@ -216,6 +241,10 @@ func (fb *fib) parse(word []byte) error {
 		return fmt.Errorf("fib with %d longs: %w", cslw, ivy.ErrFormat)
 	}
 	fb.ccpText = le.Uint32(word[off+2+4*ccpTextIndex:])
+	if cslw > ccpHddIndex {
+		fb.ccpFtn = le.Uint32(word[off+2+4*ccpFtnIndex:])
+		fb.ccpHdd = le.Uint32(word[off+2+4*ccpHddIndex:])
+	}
 	off += 2 + 4*cslw
 	n := int(u16(word, off))
 	off += 2

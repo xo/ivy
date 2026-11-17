@@ -876,6 +876,10 @@ Each guard is marked with `Port:` in the code.
     the cell that is absolutely positioned with a `top` or a `bottom` stays
     in place, because its containing block does not move. Upstream moves it
     with the content of the cell.
+40. A cell that spans rows and ends in a row with a height gives that row
+    only the part of the cell that is past the rows before it, as for a
+    row of the height `auto`. Upstream compares the whole height of the
+    cell with the height of the row, which makes the row too high.
 
 ## What the port leaves out
 

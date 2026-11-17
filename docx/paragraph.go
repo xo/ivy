@@ -1,11 +1,13 @@
 package docx
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
 	"github.com/xo/okage/roxmltree"
 
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/ooxml"
 )
 
@@ -96,6 +98,12 @@ func styleID(p roxmltree.Node) string {
 
 // paragraph converts a w:p element.
 func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
+	if c.endsBeforePage(p) {
+		return
+	}
+	if t, ok := c.hf.tops[p.ID()]; ok && c.margin != "" {
+		c.hfTop = t
+	}
 	direct, mark := props{}, props{}
 	if ppr, ok := child(p, "pPr"); ok {
 		direct = parsePPr(ppr)
@@ -188,6 +196,22 @@ func hasSectPr(p roxmltree.Node) bool {
 	}
 	_, ok = child(ppr, "sectPr")
 	return ok
+}
+
+// endsBeforePage reports whether the paragraph p only ends a section of
+// the body, with nothing in it, and the next section starts a new page. Its
+// line shows nothing, and the layout leaves it out. Word keeps such a
+// paragraph on the page of its section, even when the bottom of the page
+// has no room for its line, and the line would otherwise make a blank page
+// before the next section.
+func (c *converter) endsBeforePage(p roxmltree.Node) bool {
+	if c.margin != "" || c.nested > 0 || c.section+1 >= len(c.sections) || !hasSectPr(p) || !empty(p) {
+		return false
+	}
+	if parent, ok := p.ParentElement(); !ok || parent.TagName().Name() != "body" {
+		return false
+	}
+	return c.sections[c.section+1].typ != "continuous"
 }
 
 // lineFont returns the properties rpr of the runs of the paragraph p with
@@ -394,7 +418,23 @@ func (c *converter) lineHeight(ppr, rpr props) string {
 	if line <= 0 {
 		line = 240
 	}
+	// On a grid of lines, Word gives a line as many lines of the grid as
+	// its font needs, and multiplies them for the spacing (ECMA-376 Part 1,
+	// 17.6.5).
+	if pitch := c.linePitch(); pitch > 0 && c.margin == "" && ppr["snapToGrid"] != "0" && ppr["snapToGrid"] != "false" && ppr["snapToGrid"] != "off" {
+		n := math.Ceil(ratio*fontSize(rpr)/pitch - 0.01)
+		return pt(n * pitch * min(line/240, 10))
+	}
 	return num(min(line/240, 10) * ratio)
+}
+
+// linePitch returns the pitch of the grid of lines of the current
+// section, or 0.
+func (c *converter) linePitch() float64 {
+	if c.section < len(c.sections) {
+		return c.sections[c.section].linePitch
+	}
+	return 0
 }
 
 // marker writes the marker of a paragraph of a list, with the properties
@@ -482,11 +522,19 @@ func (c *converter) text(s string, p, base props) {
 	}
 	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 	style := c.runStyle(p, base)
-	if style == "" {
+	// The East Asian language selects the font of the East Asian text.
+	lang := ""
+	if v := p["lang.ea"]; v != "" && strings.ContainsFunc(s, fontdb.IsCJK) {
+		lang = ` lang="` + attrText(v) + `"`
+	}
+	if style == "" && lang == "" {
 		escape(c.w, s, false)
 		return
 	}
-	c.w.WriteString(`<span style="` + attrText(style) + `">`)
+	if style != "" {
+		style = ` style="` + attrText(style) + `"`
+	}
+	c.w.WriteString(`<span` + lang + style + `>`)
 	escape(c.w, s, false)
 	c.w.WriteString("</span>")
 }
@@ -553,7 +601,7 @@ func (c *converter) runContent(r roxmltree.Node, p, base props) {
 			}
 		case "fldChar":
 			flush()
-			c.fieldChar(e, p)
+			c.fieldChar(e, p, base)
 		case "instrText":
 			if len(c.fields) > 0 {
 				s, _ := e.Text()
@@ -725,12 +773,17 @@ func (c *converter) fieldHidden() bool {
 	return false
 }
 
-// fieldChar converts a w:fldChar element of a run with the properties p.
-func (c *converter) fieldChar(e roxmltree.Node, p props) {
+// fieldChar converts a w:fldChar element of a run with the properties p, in
+// a paragraph whose runs have the properties base.
+func (c *converter) fieldChar(e roxmltree.Node, p, base props) {
 	switch ooxml.Attr(e, "fldCharType") {
 	case "begin":
 		if len(c.fields) < 64 {
-			c.fields = append(c.fields, &field{})
+			f := &field{}
+			if ff, ok := child(e, "ffData"); ok {
+				f.form = parseFormField(ff)
+			}
+			c.fields = append(c.fields, f)
 		}
 	case "separate":
 		if len(c.fields) == 0 {
@@ -747,6 +800,8 @@ func (c *converter) fieldChar(e roxmltree.Node, p props) {
 		case hidden:
 		case c.pageField(code, p, p):
 			f.hide = true
+		case c.formField(code, f.form, p, base):
+			f.hide = true
 		case code == "HYPERLINK" && safeLink(arg) && c.para != "":
 			c.openTag(`<a href="`+attrText(arg)+`">`, "a")
 			f.link = c.paraSeq
@@ -759,7 +814,9 @@ func (c *converter) fieldChar(e roxmltree.Node, p props) {
 		c.fields = c.fields[:len(c.fields)-1]
 		if !f.result && !c.fieldHidden() {
 			code, _ := fieldCode(f.instr.String())
-			c.pageField(code, p, p)
+			if !c.pageField(code, p, p) {
+				c.formField(code, f.form, p, base)
+			}
 		}
 		// A link closes in the paragraph that opened it. The end of a
 		// paragraph closes it too.

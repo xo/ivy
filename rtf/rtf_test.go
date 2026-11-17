@@ -71,7 +71,8 @@ func TestConvert(t *testing.T) {
 		`<span style="display: inline-block; min-width: 18pt; text-indent: 0">`,
 		`<span class="fn"><p `,
 		`<span class="fnref"></span><span style="font-size: 10pt"> The note.</span>`,
-		`<td style="padding-left: 5.4pt; padding-right: 5.4pt; width: 72pt">`,
+		`<col style="width: 72pt"/>`,
+		`<td style="padding-left: 5.4pt; padding-right: 5.4pt">`,
 		`border-top: 0.5pt solid black`,
 		`<a href="https://example.com/">`,
 		`<img src="media/1.png" alt="" style="width: 72pt; height: 36pt"/>`,
@@ -190,6 +191,42 @@ func TestUnbalanced(t *testing.T) {
 	}
 }
 
+func TestPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	for _, test := range []struct {
+		name  string
+		file  string
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", `{\rtf1\ansi Text\par}`, ivy.Paper{}, ivy.Letter},
+		{"no paper", `{\rtf1\ansi Text\par}`, landscape, landscape},
+		{"landscape word", `{\rtf1\ansi\landscape Text\par}`, ivy.A4, landscape},
+		{"own paper", `{\rtf1\ansi\paperw7200\paperh5760 Text\par}`, landscape, ivy.Paper{Width: 360, Height: 288}},
+		{"own section", `{\rtf1\ansi\sectd\pgwsxn5760\pghsxn7200 Text\par}`, landscape, ivy.Paper{Width: 288, Height: 360}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), strings.NewReader(test.file), WithConfig(ivy.Config{Paper: test.paper}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+	// the margins of RTF stay on the paper of the program
+	d, err := Open(t.Context(), strings.NewReader(`{\rtf1\ansi Text\par}`), WithConfig(ivy.Config{Paper: landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp := "size: 841.89pt 595.28pt; margin: 72pt 90pt 72pt 90pt;"; !strings.Contains(src.StyleSheets[1], exp) {
+		t.Errorf("expected %q in the rules of the pages, got:\n%s", exp, src.StyleSheets[1])
+	}
+}
+
 func FuzzOpen(f *testing.F) {
 	f.Add(sample())
 	f.Add([]byte(`{\rtf1\ansi{\fonttbl{\f0 Arial;}}\trowd\cellx100\intbl a\cell\row\sect\sectd\pgwsxn100 b\par}`))
@@ -206,4 +243,27 @@ func FuzzOpen(f *testing.F) {
 		}
 		_, _ = ivy.RenderImage(t.Context(), p, 9, nil)
 	})
+}
+
+// TestTableGrid checks that the rows of a table with cells of other edges
+// share the columns of all their edges, that a border word with no line
+// draws no border, and that the header rows repeat on each page
+// (libreoffice/rtf/landscape-a4-table.rtf and table-repeat.rtf).
+func TestTableGrid(t *testing.T) {
+	doc := `{\rtf1\ansi` +
+		`\trowd\trhdr\clbrdrt\brdrtbl\clbrdrb\brdrs\cellx1440\cellx4320\pard\intbl Head\cell More\cell\row` +
+		`\trowd\cellx1440\cellx2880\cellx4320\pard\intbl A\cell B\cell C\cell\row` +
+		`\pard After\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	for _, want := range []string{
+		`<col style="width: 72pt"/><col style="width: 72pt"/><col style="width: 72pt"/>`,
+		`<td colspan="2"`, `<thead>`, `border-bottom: 0.5pt solid black`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "border-top") {
+		t.Errorf("expected no top border:\n%s", html)
+	}
 }

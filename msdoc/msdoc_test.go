@@ -85,13 +85,14 @@ func TestOpen(t *testing.T) {
 	}
 	got := htmlOf(t, doc)
 	for _, want := range []string{
-		`<h1 style="margin-top: 12pt; margin-bottom: 6pt"><span style="font-weight: bold; font-size: 18pt;`,
+		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
 		`<span style="font-weight: bold; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, serif">bold text</span>`,
 		`<span style="font-style: italic; font-size: 12pt;`,
 		"Unicode: éè € Ω.",
-		`<p style="text-align: center"><span style="font-size: 20pt;`,
-		"<table>",
-		`<td style="width: `,
+		`<p style="text-align: center; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, serif"><span style="font-size: 20pt;`,
+		"<table ",
+		`<col style="width: 249.3pt"/>`,
+		`border-left: 0.5pt solid #000000`,
 		"Cell B2",
 		"After the table.",
 	} {
@@ -292,6 +293,68 @@ func TestXOR(t *testing.T) {
 	}
 }
 
+// word6Section returns a document of Word 6 with one section, whose Sepx
+// holds sepx: the count of its bytes and its sprms.
+func word6Section(sepx []byte) []byte {
+	text := "Text.\r"
+	w := make([]byte, 0x300+len(text), 0x400)
+	le := binary.LittleEndian
+	le.PutUint16(w, wIdentWord6)
+	le.PutUint16(w[2:], 0x0065)
+	le.PutUint16(w[6:], 0x0409)
+	le.PutUint32(w[word6FcMinOffset:], 0x300)
+	le.PutUint32(w[word6FcMacOffset:], uint32(0x300+len(text)))
+	le.PutUint32(w[word6CcpOffset:], uint32(len(text)))
+	copy(w[0x300:], text)
+	sepxAt := len(w)
+	w = append(w, sepx...)
+	plc := u32s(0, uint32(len(text)))
+	plc = append(plc, sed(uint32(sepxAt))...)
+	le.PutUint32(w[word6PlcfSed:], uint32(len(w)))
+	le.PutUint32(w[word6PlcfSed+4:], uint32(len(plc)))
+	w = append(w, plc...)
+	return fixture.CFB(fixture.CFBEntry{Name: "WordDocument", Data: w})
+}
+
+func TestPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	// a section without a size, and a section of US Legal: the sprms
+	// sprmSBkc, sprmSXaPage and sprmSYaPage of Word 6
+	none := word6Section([]byte{2, 0, 142, 2})
+	legal := word6Section([]byte{6, 0, 164, 0xd0, 0x2f, 165, 0xc0, 0x4e})
+	for _, test := range []struct {
+		name  string
+		buf   []byte
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", none, ivy.Paper{}, ivy.Letter},
+		{"no size", none, landscape, landscape},
+		{"own size", legal, landscape, ivy.Legal},
+		{"own size without paper", legal, ivy.Paper{}, ivy.Legal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(test.buf), WithConfig(ivy.Config{Paper: test.paper}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+	// the margins of the Sep stay on the paper of the program
+	d, err := Open(t.Context(), bytes.NewReader(none), WithConfig(ivy.Config{Paper: landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp := "size: 841.89pt 595.28pt;\n  margin: 72pt 90pt 72pt 90pt;"; !strings.Contains(src.StyleSheets[0], exp) {
+		t.Errorf("expected %q in the style sheet, got:\n%s", exp, src.StyleSheets[0])
+	}
+}
+
 func TestWord6(t *testing.T) {
 	// a FIB of Word 6 and its text, which Word did not save fast
 	text := "First paragraph.\rSecond \xe9t\xe9.\r\x0cNew section.\r"
@@ -304,9 +367,10 @@ func TestWord6(t *testing.T) {
 	le.PutUint32(w[word6FcMacOffset:], uint32(0x300+len(text)))
 	le.PutUint32(w[word6CcpOffset:], uint32(len(text)))
 	copy(w[0x300:], text)
-	// two sections, the second continuous, with the sprms of Word 6
+	// two sections of the same page, the second continuous, with the sprms
+	// of Word 6
 	sepx := []byte{5, 0, 164, 0x82, 0x2e, 142, 2}
-	sepx2 := []byte{2, 0, 142, 0}
+	sepx2 := []byte{5, 0, 164, 0x82, 0x2e, 142, 0}
 	sepxAt := len(w)
 	w = append(w, sepx...)
 	w = append(w, sepx2...)
@@ -333,7 +397,7 @@ func TestWord6(t *testing.T) {
 	if n, err := d.PageCount(t.Context()); err != nil || n != 1 {
 		t.Errorf("expected 1 page, got: %d, %v", n, err)
 	}
-	if pg := d.parser.firstPage(); pg.width != 0x2e82 {
+	if pg := d.parser.firstPage(ivy.Paper{}); pg.width != 0x2e82 {
 		t.Errorf("expected the width of the page from the section, got: %d", pg.width)
 	}
 	// a Word 6 document that a password protects

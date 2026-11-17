@@ -486,20 +486,17 @@ func (c *converter) marginDrawing(g roxmltree.Node, w, h, x float64, pv position
 	c.w.WriteString("</div>")
 }
 
-// footerLine is the height that the paragraph of a footer takes for the
-// place of its drawings: one line of text of 10 points.
-const footerLine = 11.5
-
-// paragraphTop returns the top of the paragraph of a header or a footer on
-// the page area: the distance of the header from the top of the paper, or
-// one line above the distance of the footer from the bottom. A drawing that
-// a paragraph places takes it as its origin.
+// paragraphTop returns the top of the current paragraph of a header or a
+// footer on the page area. A drawing that a paragraph places takes it as
+// its origin. The top of a header is at the distance of the header from the
+// top of the paper, and the bottom of a footer at the distance of the footer
+// from the bottom, with the estimate of its height above it.
 func (c *converter) paragraphTop() float64 {
 	sec := c.sections[c.section]
 	if c.margin == "footer" {
-		return sec.height - sec.footer - footerLine - sec.top
+		return sec.height - min(sec.footer, sec.bottom) - c.hf.height + c.hfTop - sec.top
 	}
-	return sec.header - sec.top
+	return min(sec.header, sec.top) + c.hfTop - sec.top
 }
 
 // vmlStyle returns the declarations of the style of a VML shape, with
@@ -609,6 +606,11 @@ func washout(d roxmltree.Node) float64 {
 // pict converts a w:pict or a w:object element, which hold shapes of VML:
 // an image of v:imagedata or the text of v:textbox.
 func (c *converter) pict(n roxmltree.Node) {
+	for e := range n.Children() {
+		if e.IsElement() && c.vmlBox(e) {
+			return
+		}
+	}
 	for d := range n.Descendants() {
 		if !d.IsElement() {
 			continue

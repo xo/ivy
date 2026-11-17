@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -99,6 +100,9 @@ type sectionProps struct {
 	cols, colSpace           int
 	titlePage                bool
 	breakKind                string
+	// paper is set while width and height are the paper of
+	// ivy.Config.Paper, which the file did not change (D32).
+	paper bool
 }
 
 // cellDef is the definition of a cell of a row: its right edge and its
@@ -131,6 +135,9 @@ type rowDef struct {
 	height    int
 	align     byte
 	header    bool
+	// side is the side of the border of a cell that the next border word
+	// sets, or 0.
+	side byte
 }
 
 // field is a field of RTF, \field.
@@ -199,6 +206,8 @@ type target struct {
 	table bool
 	row   []string
 	cell  strings.Builder
+	// rows holds the rows of the open table.
+	rows []tableRow
 }
 
 // converter converts RTF into XHTML.
@@ -263,9 +272,22 @@ func newConverter(ctx context.Context, d *Document) *converter {
 		infoFields: map[string]string{},
 		infoDates:  map[string]*[5]int{},
 	}
+	// RTF 1.9.1 gives a paper of 12240 by 15840 twips, US Letter in
+	// portrait, to a file without \paperw and \paperh. The paper of the
+	// program replaces that default, and the margins stay (D32).
 	c.doc = sectionProps{width: 12240, height: 15840, left: 1800, right: 1800, top: 1440, bottom: 1440, header: 720, footer: 720, cols: 1, colSpace: 720}
+	if p := d.cfg.Paper; p.Width > 0 && p.Height > 0 {
+		c.doc.width, c.doc.height = paperTwips(p.Width), paperTwips(p.Height)
+		c.doc.paper = true
+	}
 	c.section = c.doc
 	return c
+}
+
+// paperTwips returns a side of a paper in points as twips, within the
+// bounds of a page.
+func paperTwips(v float32) int {
+	return int(math.Round(min(max(float64(v)*20, 1440), 288000)))
 }
 
 // defaultChar returns the properties of \plain.

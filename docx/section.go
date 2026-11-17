@@ -7,6 +7,7 @@ import (
 
 	"github.com/xo/okage/roxmltree"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ooxml"
 )
 
@@ -18,6 +19,10 @@ type section struct {
 	top, right, bottom, left, header, footer, gutter float64
 	cols                                             int
 	colSpace                                         float64
+	// linePitch is the pitch of the lines of the grid of the document in
+	// points, from a w:docGrid of the type lines, or 0 without a grid of
+	// lines.
+	linePitch float64
 	// typ is the type of the break that starts the section: nextPage,
 	// continuous, evenPage, oddPage or nextColumn.
 	typ     string
@@ -30,12 +35,21 @@ type section struct {
 	// running maps "header.default" and the like to the name of the running
 	// element that the section shows.
 	running map[string]string
+	// borders are the borders of the pages, from w:pgBorders: top, right,
+	// bottom and left, as "val sz color space", or "".
+	borders [4]string
+	// bordersFrom is "page" when the space of a border of the page is from
+	// the edge of the page, and "text" from the text. bordersOn is
+	// "allPages", "firstPage" or "notFirstPage".
+	bordersFrom, bordersOn string
+	// bordersName is the name of the running element of the borders, or "".
+	bordersName string
 }
 
 // parseSection reads a w:sectPr element. A missing value takes the value
-// of Word: a page of US Letter with margins of 1 inch.
-func parseSection(n roxmltree.Node) *section {
-	s := defaultSection()
+// of defaultSection. paper is the paper of the program.
+func parseSection(n roxmltree.Node, paper ivy.Paper) *section {
+	s := defaultSection(paper)
 	twips := func(e roxmltree.Node, name string, def float64) float64 {
 		v := number(ooxml.Attr(e, name), math.NaN())
 		if v != v {
@@ -69,9 +83,24 @@ func parseSection(n roxmltree.Node) *section {
 			s.colSpace = twips(c, "space", s.colSpace)
 		case "type":
 			s.typ = ooxml.Attr(c, "val")
+		case "docGrid":
+			switch ooxml.Attr(c, "type") {
+			case "lines", "linesAndChars", "snapToChars":
+				if v := number(ooxml.Attr(c, "linePitch"), 0) / 20; v >= 1 && v <= 1584 {
+					s.linePitch = v
+				}
+			}
 		case "titlePg":
 			v := ooxml.Attr(c, "val")
 			s.titlePg = v == "" || v == "1" || v == "true" || v == "on"
+		case "pgBorders":
+			s.bordersFrom = ooxml.Attr(c, "offsetFrom")
+			s.bordersOn = ooxml.Attr(c, "display")
+			p := props{}
+			borders(p, "pg.", c)
+			for i, side := range [...]string{"top", "right", "bottom", "left"} {
+				s.borders[i] = p["pg."+side]
+			}
 		case "headerReference", "footerReference":
 			kind := strings.TrimSuffix(c.TagName().Name(), "Reference")
 			typ := ooxml.Attr(c, "type")
@@ -88,12 +117,21 @@ func parseSection(n roxmltree.Node) *section {
 }
 
 // defaultSection returns the section of a document without w:sectPr.
-func defaultSection() *section {
-	return &section{
+// ECMA-376 Part 1, 17.6.13, gives no size to a page without w:pgSz, or
+// without its attributes w and h. Word takes US Letter in portrait, with
+// margins of 1 inch. The paper of the program replaces US Letter, and the
+// margins stay (D32).
+func defaultSection(paper ivy.Paper) *section {
+	s := &section{
 		width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72,
 		header: 36, footer: 36, cols: 1, colSpace: 36, typ: "nextPage",
 		refs: map[string]string{}, running: map[string]string{},
 	}
+	if paper.Width > 0 && paper.Height > 0 {
+		s.width = min(max(float64(paper.Width), 72), 14400)
+		s.height = min(max(float64(paper.Height), 72), 14400)
+	}
+	return s
 }
 
 // convertBody converts w:body. Each w:sectPr of a paragraph ends a section, and the
@@ -108,16 +146,16 @@ func (c *converter) convertBody(body roxmltree.Node) {
 		case "p":
 			if ppr, ok := child(n, "pPr"); ok {
 				if sp, ok := child(ppr, "sectPr"); ok {
-					c.sections = append(c.sections, parseSection(sp))
+					c.sections = append(c.sections, parseSection(sp, c.d.cfg.Paper))
 					ends[n.ID()] = true
 				}
 			}
 		case "sectPr":
-			c.sections = append(c.sections, parseSection(n))
+			c.sections = append(c.sections, parseSection(n, c.d.cfg.Paper))
 		}
 	}
 	if len(c.sections) == 0 || len(ends) == len(c.sections) {
-		c.sections = append(c.sections, defaultSection())
+		c.sections = append(c.sections, defaultSection(c.d.cfg.Paper))
 	}
 	c.startSection(0)
 	i := 0
@@ -151,9 +189,11 @@ func (c *converter) startSection(i int) {
 	switch {
 	case prev != nil && s.typ == "continuous":
 		// A continuous section stays on the page, with the page of the
-		// section before.
+		// section before. It names that page too, so that a page that it
+		// starts has the size and the headers of the section before.
 		s.name = prev.name
 		s.running = prev.running
+		style.set("page", s.name)
 	default:
 		s.name = "s" + strconv.Itoa(i+1)
 		style.set("page", s.name)
@@ -205,6 +245,7 @@ func (c *converter) startSection(i int) {
 		}
 	}
 	s.running = running
+	c.pageBorders(s)
 	c.pageRules(s)
 }
 
@@ -233,10 +274,13 @@ func (c *converter) headerFooter(id, margin string) (string, bool) {
 	// edge of the margin box that is next to the page area: the top of the
 	// box of a header, which aligns its content to the top, and the bottom
 	// of the box of a footer, which aligns its content to the bottom.
-	prev := c.margin
-	c.margin = margin
+	sec := c.sections[c.section]
+	height, tops := c.partHeight(doc.RootElement(), sec.width-sec.left-sec.right-sec.gutter)
+	c.hfHeights[name] = hfHeight{height: height, tops: tops}
+	prev, prevHF := c.margin, c.hf
+	c.margin, c.hf, c.hfTop = margin, c.hfHeights[name], 0
 	c.floats.Reset()
-	defer func() { c.margin = prev }()
+	defer func() { c.margin, c.hf = prev, prevHF }()
 	var body strings.Builder
 	w := c.w
 	c.w = &body
@@ -271,19 +315,82 @@ func (c *converter) pageRules(s *section) {
 		}
 		return "element(" + name + ")"
 	}
+	// header returns the rules of the headers and the footers of the kind,
+	// with the margins at the top and the bottom that hold them.
 	header := func(kind string) string {
-		return "@top-center { content: " + box("header."+kind) + "; padding-top: " + pt(min(s.header, s.top)) + " } " +
+		top, bottom := c.bodyMargins(s, s.running["header."+kind], s.running["footer."+kind])
+		return "margin-top: " + pt(top) + "; margin-bottom: " + pt(bottom) + "; " +
+			"@top-center { content: " + box("header."+kind) + "; padding-top: " + pt(min(s.header, s.top)) + " } " +
 			"@bottom-center { content: " + box("footer."+kind) + "; padding-bottom: " + pt(min(s.footer, s.bottom)) + " }"
 	}
 	w := &c.sheet
 	w.WriteString("@page " + s.name + " { size: " + pt(s.width) + " " + pt(s.height) +
 		"; margin: " + pt(s.top) + " " + pt(s.right) + " " + pt(s.bottom) + " " + pt(s.left+s.gutter) + "; ")
 	w.WriteString(header("default"))
+	if s.bordersName != "" && s.bordersOn != "firstPage" {
+		w.WriteString(" " + c.bordersBox(s.bordersName))
+	}
 	w.WriteString(" }\n")
 	if c.evenOdd {
 		w.WriteString("@page " + s.name + ":left { " + header("even") + " }\n")
 	}
-	if s.titlePg {
-		w.WriteString("@page " + s.name + ":nth(1 of " + s.name + ") { " + header("first") + " }\n")
+	if s.titlePg || s.bordersName != "" && s.bordersOn != "" && s.bordersOn != "allPages" {
+		first := header(pick(s.titlePg, "first", "default"))
+		switch {
+		case s.bordersName != "" && s.bordersOn == "firstPage":
+			first += " " + c.bordersBox(s.bordersName)
+		case s.bordersName != "" && s.bordersOn == "notFirstPage":
+			first += " @top-left-corner { content: none }"
+		}
+		w.WriteString("@page " + s.name + ":nth(1 of " + s.name + ") { " + first + " }\n")
 	}
+}
+
+// pageBorders writes the running element of the borders of the pages of
+// the section s, from w:pgBorders (ECMA-376 Part 1, 17.6.10): a box at
+// the space of each border from the edge of the page, or from the text. The
+// box is in the margin box at the top left corner of the page, which is at
+// the corner of the paper.
+func (c *converter) pageBorders(s *section) {
+	var lines [4]string
+	var space [4]float64
+	drawn := false
+	for i, v := range s.borders {
+		lines[i], space[i] = border(v)
+		drawn = drawn || lines[i] != ""
+	}
+	if !drawn {
+		return
+	}
+	left, top := space[3], space[0]
+	right, bottom := s.width-space[1], s.height-space[2]
+	if s.bordersFrom != "page" {
+		// the space is from the text, outside the margins
+		left, top = s.left+s.gutter-space[3], s.top-space[0]
+		right, bottom = s.width-s.right+space[1], s.height-s.bottom+space[2]
+	}
+	if right-left < 1 || bottom-top < 1 {
+		return
+	}
+	var st css
+	st.set("position", "absolute")
+	st.set("left", pt(left))
+	st.set("top", pt(top))
+	st.set("width", pt(right-left))
+	st.set("height", pt(bottom-top))
+	st.set("box-sizing", "border-box")
+	for i, side := range [...]string{"top", "right", "bottom", "left"} {
+		if lines[i] != "" {
+			st.set("border-"+side, lines[i])
+		}
+	}
+	s.bordersName = "pb" + strconv.Itoa(c.section+1)
+	c.w.WriteString(`<div style="position: running(` + s.bordersName + `)"><div style="position: relative; height: 0">`)
+	c.w.WriteString(`<div style="` + attrText(st.String()) + `"></div></div></div>`)
+}
+
+// bordersBox returns the rule of the margin box of the borders of the page,
+// whose running element is name.
+func (c *converter) bordersBox(name string) string {
+	return "@top-left-corner { content: element(" + name + "); vertical-align: top; text-align: left; padding: 0 }"
 }

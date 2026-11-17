@@ -3,6 +3,7 @@ package msdoc
 import (
 	"context"
 	"fmt"
+	"iter"
 	"slices"
 	"sort"
 	"strings"
@@ -35,6 +36,29 @@ type fkpRun struct {
 type run struct {
 	text string
 	chp  chp
+	// pic is the picture of the run, when the run is a picture and not
+	// text, and float the picture that floats on the page.
+	pic   *picture
+	float *floating
+}
+
+// The characters of the private use area that stand for the result of a
+// field that the layout writes: the number of the page and the number of
+// the pages.
+const (
+	runePage  = '\uE001'
+	runePages = '\uE002'
+)
+
+// field is a field of the text, from its character 0x13 to its character
+// 0x15.
+type field struct {
+	// code is set while the characters are those of the code of the field,
+	// before its character 0x14.
+	code  bool
+	instr strings.Builder
+	// skip drops the result of the field, which the layout writes itself.
+	skip bool
 }
 
 // paragraph is a paragraph of the main document.
@@ -47,6 +71,11 @@ type paragraph struct {
 	// pageBreak is set when a page break or a section break comes before
 	// the paragraph.
 	pageBreak bool
+	// cp is the character position of the mark of the paragraph.
+	cp uint32
+	// mark holds the character properties of the mark of the paragraph,
+	// which give an empty paragraph the height of its line.
+	mark chp
 }
 
 // parser reads the text and the properties of a document.
@@ -61,12 +90,23 @@ type parser struct {
 	fonts  []font
 	// ansi maps a byte of a compressed piece to its character.
 	ansi [256]rune
+	// pictures holds the pictures by their offset in the stream Data, and
+	// media their files.
+	pictures map[uint32]*picture
+	media    []media
+	// lists holds the lists of a document of Word 97, or nil.
+	lists *lists
+	// shapes holds the pictures that float on the page, by the character
+	// position of their anchor, once read.
+	shapes map[uint32]floating
+	// page is the page of the section that the conversion writes.
+	page page
 }
 
 // newParser reads the piece table, the formatted disk pages, the styles and
 // the fonts of the document.
 func newParser(s *streams, lim ivy.Limits) (*parser, error) {
-	p := &parser{s: s, lim: lim}
+	p := &parser{s: s, lim: lim, pictures: map[uint32]*picture{}}
 	if s.word6 {
 		return p, p.readWord6()
 	}
@@ -82,6 +122,7 @@ func newParser(s *streams, lim ivy.Limits) (*parser, error) {
 	}
 	p.styles = parseStyles(s.part(fcStshf), lim.MaxObjects)
 	p.fonts = parseFonts(s.part(fcSttbfFfn), lim.MaxObjects)
+	p.lists = p.readLists()
 	// a compressed piece holds the characters of code page 1252 (MS-DOC
 	// 2.4.1)
 	var all [256]byte
@@ -117,7 +158,7 @@ func (p *parser) readWord6() error {
 		all[i] = byte(i)
 	}
 	p.setCodePage(all[:], msole.CodePageLabel(p.s.codePage))
-	p.styles = parseStyles(nil, 0)
+	p.readWord6Properties()
 	if p.s.fib.flags&flagComplex == 0 {
 		if p.s.fcMac < p.s.fcMin {
 			return fmt.Errorf("word 6 document with the text from %d to %d: %w", p.s.fcMin, p.s.fcMac, ivy.ErrFormat)
@@ -200,17 +241,35 @@ func (p *parser) readClx() error {
 // 2.8.26). Each page has 512 bytes in the stream WordDocument.
 func (p *parser) readFkps(i int, para bool) ([]fkpRun, error) {
 	plc := p.s.part(i)
-	if len(plc) < 4 {
-		return nil, nil
-	}
-	n := (len(plc) - 4) / 8
-	if n > p.lim.MaxObjects {
+	if n := (len(plc) - 4) / 8; n > p.lim.MaxObjects {
 		return nil, fmt.Errorf("%d formatted disk pages: %w", n, ivy.ErrLimit)
 	}
+	return p.fkpRuns(plc, para, 4), nil
+}
+
+// fkpRuns reads the formatted disk pages of the PlcBte plc, whose page
+// numbers have bteSize bytes: 4 in Word 97, and 2 in Word 6, whose pages
+// of paragraphs have a BX of 7 bytes and a PAPX without the escape of a
+// size of 0. It reads at most MaxObjects pages.
+func (p *parser) fkpRuns(plc []byte, para bool, bteSize int) []fkpRun {
+	if len(plc) < 4 {
+		return nil
+	}
+	word6 := bteSize == 2
+	bx := 13
+	if word6 {
+		bx = word6BxSize
+	}
+	n := min((len(plc)-4)/(4+bteSize), p.lim.MaxObjects)
 	var runs []fkpRun
 	word := p.s.word
 	for k := range n {
-		pn := le.Uint32(plc[4*(n+1)+4*k:]) & 0x3FFFFF
+		var pn uint32
+		if word6 {
+			pn = uint32(le.Uint16(plc[4*(n+1)+2*k:]))
+		} else {
+			pn = le.Uint32(plc[4*(n+1)+4*k:]) & 0x3FFFFF
+		}
 		off := int64(pn) * 512
 		if off+512 > int64(len(word)) {
 			continue
@@ -218,20 +277,22 @@ func (p *parser) readFkps(i int, para bool) ([]fkpRun, error) {
 		page := word[off : off+512]
 		count := int(page[511])
 		if para {
-			// rgfc, then rgbx of 13 bytes each
-			if 4*(count+1)+13*count > 511 {
+			// rgfc, then rgbx of 13 bytes each, or 7 in Word 6
+			if 4*(count+1)+bx*count > 511 {
 				continue
 			}
 			for j := range count {
 				r := fkpRun{fcStart: le.Uint32(page[4*j:]), fcEnd: le.Uint32(page[4*j+4:]), istd: 0}
-				bOff := 2 * int(page[4*(count+1)+13*j])
+				bOff := 2 * int(page[4*(count+1)+bx*j])
 				if bOff > 0 && bOff < 511 {
 					cb := 2 * int(page[bOff])
 					start := bOff + 1
-					if cb == 0 && bOff+1 < 511 {
+					switch {
+					case word6:
+					case cb == 0 && bOff+1 < 511:
 						cb = 2 * int(page[bOff+1])
 						start = bOff + 2
-					} else {
+					default:
 						cb--
 					}
 					if cb >= 2 && start+cb <= 511 {
@@ -259,7 +320,7 @@ func (p *parser) readFkps(i int, para bool) ([]fkpRun, error) {
 			}
 		}
 		if len(runs) > p.lim.MaxObjects {
-			return nil, fmt.Errorf("more than %d runs of properties: %w", p.lim.MaxObjects, ivy.ErrLimit)
+			break
 		}
 	}
 	slices.SortStableFunc(runs, func(a, b fkpRun) int {
@@ -271,7 +332,7 @@ func (p *parser) readFkps(i int, para bool) ([]fkpRun, error) {
 		}
 		return 0
 	})
-	return runs, nil
+	return runs
 }
 
 // find returns the run of runs that holds the byte fc, or nil.
@@ -313,11 +374,25 @@ func (p *parser) paraProps(fc uint32, pieceMods []byte) pap {
 	if st := p.styles.resolve(istd, p.lim.MaxDepth); st != nil && st.stk == stkParagraph {
 		pp = st.pap
 	}
-	pp.istd = istd
-	for s := range sprms(grpprl) {
+	// the properties of a row come from its mark, not from a style
+	pp.istd, pp.tap = istd, nil
+	for s := range sprmsOf(p.s.word6, grpprl) {
+		if s.op == sprmPHugePapx {
+			// the modifiers that do not fit in the page are in the stream
+			// Data, with their size in 2 bytes (MS-DOC 2.9.103)
+			fc := int64(uint32(s.value()))
+			data := p.s.data
+			if fc >= 0 && fc+2 <= int64(len(data)) {
+				n := int64(le.Uint16(data[fc:]))
+				for h := range sprms(data[fc+2 : min(fc+2+n, int64(len(data)))]) {
+					applyPap(&pp, h)
+				}
+			}
+			continue
+		}
 		applyPap(&pp, s)
 	}
-	for s := range sprms(pieceMods) {
+	for s := range sprmsOf(p.s.word6, pieceMods) {
 		applyPap(&pp, s)
 	}
 	return pp
@@ -337,23 +412,23 @@ func (p *parser) charProps(r *fkpRun, istd int, pieceMods []byte) chp {
 		grpprl = r.grpprl
 	}
 	// a character style comes before the other modifiers
-	for s := range sprms(grpprl) {
+	for s := range sprmsOf(p.s.word6, grpprl) {
 		if s.op != sprmCIstd {
 			continue
 		}
 		if st := p.styles.resolve(int(uint16(s.value())), p.lim.MaxDepth); st != nil && st.stk == stkCharacter {
 			cs := base
-			for m := range sprms(st.chpx) {
+			for m := range sprmsOf(p.s.word6, st.chpx) {
 				applyChp(&cs, m, &base)
 			}
 			base = cs
 		}
 	}
 	c := base
-	for s := range sprms(grpprl) {
+	for s := range sprmsOf(p.s.word6, grpprl) {
 		applyChp(&c, s, &base)
 	}
-	for s := range sprms(pieceMods) {
+	for s := range sprmsOf(p.s.word6, pieceMods) {
 		applyChp(&c, s, &base)
 	}
 	return c
@@ -368,21 +443,30 @@ type char struct {
 	piece int
 }
 
-// chars iterates over the characters of the main document, from 0 to
-// ccpText, in the order of the pieces. The pieces of a valid document do not
-// overlap, so the document has fewer characters than the stream
-// WordDocument has bytes. The iteration stops there, so that pieces that
-// repeat the same bytes cannot make it long.
-func (p *parser) chars(yield func(char) bool) {
-	limit := p.s.fib.ccpText
+// chars iterates over the characters of the document from the character
+// position from to the position to, in the order of the pieces. The pieces
+// of a valid document do not overlap, so the document has fewer characters
+// than the stream WordDocument has bytes. The iteration stops there, so
+// that pieces that repeat the same bytes cannot make it long.
+func (p *parser) chars(from, to uint32) iter.Seq[char] {
+	return func(yield func(char) bool) {
+		p.charsIn(from, to, yield)
+	}
+}
+
+// charsIn is the iteration of chars.
+func (p *parser) charsIn(from, limit uint32, yield func(char) bool) {
 	word := p.s.word
 	budget := len(word)
 	for i, pc := range p.pieces {
 		if pc.cpStart >= limit {
 			return
 		}
+		if pc.cpEnd <= from {
+			continue
+		}
 		end := min(pc.cpEnd, limit)
-		for cp := pc.cpStart; cp < end; cp++ {
+		for cp := max(pc.cpStart, from); cp < end; cp++ {
 			if budget--; budget < 0 {
 				return
 			}
@@ -420,17 +504,24 @@ func (p *parser) chars(yield func(char) bool) {
 	}
 }
 
-// paragraphs reads the text of the main document into paragraphs. It drops
-// the codes of the fields and keeps their results, and drops the hidden
-// and the deleted text.
+// paragraphs reads the text of the main document into paragraphs.
 func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
+	return p.paragraphsIn(ctx, 0, p.s.fib.ccpText)
+}
+
+// paragraphsIn reads the text from the character position from to the
+// position to into paragraphs. It drops the codes of the fields and keeps
+// their results, and drops the hidden and the deleted text. The result of
+// the field PAGE or NUMPAGES becomes a character that the layout replaces
+// with the number.
+func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph, error) {
 	var (
 		paras   []paragraph
 		cur     paragraph
 		text    strings.Builder
 		runChp  chp
 		haveRun bool
-		fields  []bool // for each open field, whether its code is read
+		fields  []*field
 		pending []char
 		total   int
 		secs    = p.sections()
@@ -442,12 +533,39 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 		text.Reset()
 		haveRun = false
 	}
-	inCode := func() bool {
-		return slices.Contains(fields, true)
+	hidden := func() bool {
+		for _, f := range fields {
+			if f.code || f.skip {
+				return true
+			}
+		}
+		return false
+	}
+	// pageField adds the character of the number of the page for the field
+	// f, if it is PAGE or NUMPAGES, at the character c.
+	pageField := func(f *field, c char) bool {
+		code := strings.Fields(strings.ToUpper(f.instr.String()))
+		if len(code) == 0 {
+			return false
+		}
+		switch code[0] {
+		case "PAGE":
+			c.r = runePage
+		case "NUMPAGES", "SECTIONPAGES":
+			c.r = runePages
+		default:
+			return false
+		}
+		if !hidden() {
+			pending = append(pending, c)
+		}
+		return true
 	}
 	endPara := func(mark char) {
 		mods := p.pieceGrpprl(p.pieces[mark.piece].prm)
 		cur.pap = p.paraProps(mark.fc, mods)
+		cur.cp = mark.cp
+		cur.mark = p.charProps(find(p.chpx, mark.fc), cur.pap.istd, mods)
 		// the properties of the characters wait for those of the paragraph,
 		// which come at its end
 		// the characters of one run of one piece share their properties
@@ -462,6 +580,25 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 				lastRun, lastPiece = r, c.piece
 			}
 			if cp.hidden || cp.deleted {
+				continue
+			}
+			if c.r == 0x08 && cp.special && to <= p.s.fib.ccpText {
+				// the anchor of a shape of Office Drawing
+				if p.shapes == nil {
+					p.shapes = p.readShapes()
+				}
+				if f, ok := p.shapes[c.cp]; ok {
+					flushRun()
+					cur.runs = append(cur.runs, run{chp: cp, float: &f})
+				}
+				continue
+			}
+			if c.r == 0x01 && cp.special {
+				// a picture of the stream Data
+				if pic := p.picture(cp); pic != nil {
+					flushRun()
+					cur.runs = append(cur.runs, run{chp: cp, pic: pic})
+				}
 				continue
 			}
 			s, ok := visible(c.r)
@@ -480,7 +617,7 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 		paras = append(paras, cur)
 		cur = paragraph{}
 	}
-	for c := range p.chars {
+	for c := range p.chars(from, to) {
 		total++
 		if total%4096 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -490,17 +627,26 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 		switch c.r {
 		case 0x13:
 			if len(fields) < p.lim.MaxDepth {
-				fields = append(fields, true)
+				fields = append(fields, &field{code: true})
 			}
 			continue
 		case 0x14:
 			if len(fields) > 0 {
-				fields[len(fields)-1] = false
+				f := fields[len(fields)-1]
+				if f.code {
+					f.code = false
+					f.skip = pageField(f, c)
+				}
 			}
 			continue
 		case 0x15:
 			if len(fields) > 0 {
+				f := fields[len(fields)-1]
 				fields = fields[:len(fields)-1]
+				if f.code {
+					// a field without a result
+					pageField(f, c)
+				}
 			}
 			continue
 		case 0x0D, 0x07:
@@ -510,7 +656,7 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 			}
 			continue
 		case 0x0C:
-			if inCode() {
+			if hidden() {
 				continue
 			}
 			// a page break ends the text before it, and the text after it
@@ -526,7 +672,15 @@ func (p *parser) paragraphs(ctx context.Context) ([]paragraph, error) {
 			}
 			continue
 		}
-		if inCode() {
+		if len(fields) > 0 {
+			if f := fields[len(fields)-1]; f.code {
+				if f.instr.Len() < 256 {
+					f.instr.WriteRune(c.r)
+				}
+				continue
+			}
+		}
+		if hidden() {
 			continue
 		}
 		pending = append(pending, c)

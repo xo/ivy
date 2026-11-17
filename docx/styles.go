@@ -97,6 +97,10 @@ func parseRPr(n roxmltree.Node) props {
 			p[name] = v
 		case name == "rFonts":
 			fonts(p, c)
+		case name == "lang":
+			if v := ooxml.Attr(c, "eastAsia"); v != "" {
+				p["lang.ea"] = v
+			}
 		case name == "sz" || name == "u" || name == "highlight" || name == "vertAlign" ||
 			name == "spacing" || name == "position" || name == "rStyle":
 			p[name] = ooxml.Attr(c, "val")
@@ -164,7 +168,7 @@ func parsePPr(n roxmltree.Node) props {
 		switch name {
 		case "jc", "pStyle", "outlineLvl":
 			p[name] = ooxml.Attr(c, "val")
-		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens":
+		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens", "snapToGrid":
 			v := ooxml.Attr(c, "val")
 			if v == "" {
 				v = "1"
@@ -451,6 +455,12 @@ func parseStyle(n roxmltree.Node) *style {
 			continue
 		}
 		switch c.TagName().Name() {
+		case "name":
+			// Word gives a style without an id the id of its name without
+			// the spaces, which a paragraph can name.
+			if st.id == "" {
+				st.id = strings.ReplaceAll(ooxml.Attr(c, "val"), " ", "")
+			}
 		case "basedOn":
 			st.basedOn = ooxml.Attr(c, "val")
 		case "pPr":

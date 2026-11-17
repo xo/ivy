@@ -168,7 +168,9 @@ func TestConvert(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		`@page s1 { size: 419.6pt 595.35pt; margin: 36pt 36pt 36pt 36pt; @top-center { content: element(hf1); padding-top: 18pt }`,
+		// The header of one line at 18 points from the top of the paper
+		// takes more than the margin of 36 points, which grows to hold it.
+		`@page s1 { size: 419.6pt 595.35pt; margin: 36pt 36pt 36pt 36pt; margin-top: 40.49pt; margin-bottom: 36pt; @top-center { content: element(hf1); padding-top: 18pt }`,
 	} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("expected the style sheet to hold %q, got:\n%s", want, sheet)
@@ -301,6 +303,43 @@ func TestSections(t *testing.T) {
 	html, _ := convertHTML(t, fixture.DOCX(body))
 	if !strings.Contains(html, `style="page: s2; break-before: page; columns: 2; column-gap: 18pt"`) {
 		t.Errorf("expected the second section with two columns, got:\n%s", html)
+	}
+}
+
+func TestPaper(t *testing.T) {
+	landscape := ivy.A4.Landscape()
+	text := `<w:p><w:r><w:t>Text</w:t></w:r></w:p>`
+	for _, test := range []struct {
+		name  string
+		body  string
+		paper ivy.Paper
+		exp   ivy.Paper
+	}{
+		{"default", text, ivy.Paper{}, ivy.Letter},
+		{"no sectPr", text, landscape, landscape},
+		{"no pgSz", text + `<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>`, landscape, landscape},
+		{"orient only", text + `<w:sectPr><w:pgSz w:orient="landscape"/></w:sectPr>`, ivy.A4, landscape},
+		{"own paper", text + `<w:sectPr><w:pgSz w:w="12240" w:h="20160"/></w:sectPr>`, landscape, ivy.Legal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(test.body)), WithConfig(ivy.Config{Paper: test.paper}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.CheckPaper(t, d, test.exp)
+		})
+	}
+	// the margins of Word stay on the paper of the program
+	d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(text)), WithConfig(ivy.Config{Paper: landscape}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exp := "size: 841.89pt 595.28pt; margin: 72pt 72pt 72pt 72pt"; !strings.Contains(src.StyleSheets[len(src.StyleSheets)-1], exp) {
+		t.Errorf("expected %q in the rules of the pages, got:\n%s", exp, src.StyleSheets[len(src.StyleSheets)-1])
 	}
 }
 

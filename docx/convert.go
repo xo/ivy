@@ -66,6 +66,7 @@ type converter struct {
 	// generic maps the name of a font to its generic family, from the font
 	// table.
 	generic map[string]string
+	fontCache
 	// defaultTab is the distance of the default tab stops, in points.
 	defaultTab float64
 	// evenOdd is set when the pages have even and odd headers.
@@ -102,6 +103,13 @@ type converter struct {
 	// the page, such as a watermark, go to floats.
 	margin string
 	floats strings.Builder
+	// hfHeights holds the estimate of the height of each header and each
+	// footer, by the name of its running element.
+	hfHeights map[string]hfHeight
+	// hf is the estimate of the header or the footer that the conversion
+	// reads, and hfTop the top of its current paragraph in it.
+	hf    hfHeight
+	hfTop float64
 	// lineParent is the properties of the runs of the paragraph that the
 	// conversion is in, with the font of its largest run, which its
 	// element has. It is nil out of a paragraph.
@@ -136,6 +144,8 @@ type field struct {
 	// link is the number of the paragraph that opened the link of a field
 	// HYPERLINK, or 0.
 	link int
+	// form is the form field of the field, from its w:ffData, or nil.
+	form *formField
 }
 
 // convert converts the document into a layout.Source.
@@ -143,11 +153,13 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	c := &converter{
 		d: d, ctx: ctx, lim: d.lim, log: d.log,
 		generic:    map[string]string{},
+		fontCache:  fontCache{fonts: map[string]bool{}},
 		defaultTab: 36,
 		rels:       map[string]map[string]ooxml.Relationship{},
 		files:      map[string]string{},
 		running:    map[string]string{},
 		charts:     map[string]layout.Object{},
+		hfHeights:  map[string]hfHeight{},
 	}
 	c.w = &c.body
 	main, err := d.doc.MainPart(d.lim)
