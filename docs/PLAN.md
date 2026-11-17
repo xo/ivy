@@ -348,7 +348,7 @@ format of each kind before the maintainers commit to phases 3 to 5.
 A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
 decisions were consolidated (D4). D22 answers question 3, D23 answers
-question 4, and D25 answers question 5. The next question is question 6.
+question 4, and D25 answers question 5. The next question is question 21.
 
 ### Question 1. Is a build with TinyGo a goal that CI tests?
 
@@ -357,3 +357,92 @@ which builds with TinyGo (D7), so the largest obstacle is gone. A goal in CI
 also forbids `reflect` and `encoding/json` in the packages that a user
 imports, and each outside package must build with TinyGo. No phase waits for
 the answer.
+
+### Question 6. Does an ebook take the paper of the configuration over its own @page?
+
+On 2026-11-17 the books came to take `Config.Paper`, or 6 by 9 inches,
+with `!important`, so the `@page` size of the style sheet of a book does not
+apply. calibre does the same. D32 says that `Config.Paper` applies to a
+file without a paper of its own. An EPUB of fixed layout keeps the size of
+its viewport. If the maintainers keep this, a decision amends D32.
+
+### Question 7. Does a text file reflow its paragraphs?
+
+calibre joins the lines of a paragraph of a text file, and ivy keeps
+them. A rule can join the lines between empty lines, and keep the lines
+of an indented block.
+
+### Question 8. Does `ivy.Info` get the publisher and the identifier of a book?
+
+`internal/ebook` reads them. A new field changes the API (D11).
+
+### Question 9. Does `csv` get an option for its separator, and read dates?
+
+An option, such as `csv.WithSeparator`, changes the API (D11). A guess of
+the dates of a column can be wrong.
+
+### Question 10. Is `ivy.Cache` for the format packages still needed?
+
+It was meant for the fonts of phase 2, which `internal/fontdb` now holds.
+
+### Question 11. Does ivy have a capability for the text, the outline and the table of contents of a document?
+
+DjVu has a text layer, an outline and links, PDF has text and an
+outline, and EPUB and MOBI have a table of contents. Each needs a
+capability of the API (D11). One capability for every format is simpler
+than one for each format.
+
+### Question 12. Does an indirect DjVu document open from a folder that a program gives?
+
+D22 lets a program give a folder for Markdown. The same can hold for the
+other files of an indirect DjVu document (D26).
+
+### Question 13. Does the backlog keep JPEG XR of XPS?
+
+No permissive decoder of JPEG XR in Go is known.
+
+### Question 14. Does `pdf` read a file on demand, and check its size against `Limits.MaxMemory`?
+
+`pdf.Open` reads the whole file, up to its size, without a check against
+`Limits.MaxMemory`. A check refuses the PDF files over 512 MiB that open
+today. A reader that pages through an `io.ReaderAt` needs a rewrite of the
+reader and the xref layer of the port of hayro. A memory map is not safe,
+because a file that shrinks while it is mapped crashes the program.
+
+### Question 15. Which source decodes the JPEG files that `image/jpeg` refuses?
+
+A truncated JPEG, a JPEG of 12 bits and a JPEG with arithmetic coding need
+a decoder of their own (D17). The choice is a copy of `image/jpeg` of Go
+(BSD-3-Clause) with these parts added, or a port of zune-jpeg, which hayro
+uses. Either one adds an outside package (hard rule 5).
+
+### Question 16. Does `msppt` read PowerPoint 95?
+
+MS-PPT does not describe PowerPoint 95, and PowerPoint 2024 does not open
+it. A reader rests on the study of files, such as `poi/ppt/ppt95.ppt`.
+
+### Question 17. How does a fuzz test bound the time to make an input smaller?
+
+After each input that finds new code, the fuzzer of Go makes it smaller
+for up to 60 seconds, by default. For a seed of tens of kilobytes and a
+run of some milliseconds, a fuzz run of 1 minute does nothing else, and
+looks as if it hangs. `msppt` and `msxls` set `-test.fuzzminimizetime` to
+2 seconds in a `TestMain`. The other choice is to add
+`-fuzzminimizetime 2s` to the fuzz command of `AGENTS.md`.
+
+### Question 18. Does D7 cover the scans of the bytes of HTML in `mobi` and `chm`?
+
+`mobi` and `chm` change the HTML of a book at byte positions: the filepos
+anchors and the meta element of the charset. A tree of the HTML parser of
+okage cannot keep byte positions.
+
+### Question 19. Does a page that a program asks for early wait for the whole layout?
+
+`Document.Page` lays out the pages up to the one that a program asks for.
+The fixed boxes and the target counters of the later pages, and
+`counter(pages)` across the documents of a book, need the whole layout.
+
+### Question 20. Does ivy decode SVM pictures?
+
+Some objects of OpenDocument show only an SVM picture. No permissive
+decoder of SVM is known.

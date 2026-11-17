@@ -76,7 +76,7 @@ A bare number, such as D3, names a decision of this repository, in
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
 repeat. The next decision has the number 33, and the next question is
-question 6.
+question 21.
 
 ## Hard rules
 
@@ -186,6 +186,7 @@ On 2026-11-16 the repository holds these files:
 | `msdoc/`, `msxls/`, `msppt/` | Word, Excel and PowerPoint 97 to 2003: the text and the sheets on pages, the summary information and its thumbnail, and RC4 encryption (D12, D24) |
 | `vsdx/` | Visio: the pages of the files of Office Open XML on the display list, with the masters, the styles and the theme (D30), and the thumbnail and the properties of every Visio file |
 | `pub/` | Publisher: the thumbnail and the properties |
+| `internal/odraw/` | the shapes, the properties and the pictures of Office Drawing (MS-ODRAW), which `msppt` and `msxls` share |
 | `internal/msole/` | the code that the binary Office formats share: the Compound File within the limits, the summary information, the thumbnails in WMF, EMF, DIB, PNG or JPEG, and the password |
 | `csv/` | CSV, TSV and TAB files, as one table on pages |
 | `internal/sheet/`, `internal/numfmt/` | the sheets of a spreadsheet as HTML tables on pages, for `xlsx`, `odf`, `csv` and `msxls`, the sizes of the papers, the widths of the columns and the headers and footers that they share, and the number formats of Excel |

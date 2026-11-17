@@ -68,7 +68,7 @@ three choices:
 | Display list and okage device | The commands of a page description, and a device that draws them with okage | none. The `Device` of [hayro-interpret][hayro] is the model | 1 |
 | Layout of HTML and CSS | A flow of text onto pages | A port of the layout of [WeasyPrint][weasyprint] (BSD-3-Clause, Python), on the parsers and the text API of okage (D7, D15). The work on the parsers of okage is not counted here | 4 to 6 |
 | Fonts | Embedded fonts, substitutes for named fonts, Type 1 and Type 3 | go-text for TrueType, OpenType and CFF. [hayro-font][hayro] (Apache-2.0 or MIT) for Type 1 | 1 to 1.5 |
-| Containers | Zip with its encryption, the Compound File Binary format of Microsoft, PalmDB, and the plist of Apple | `archive/zip`. [richardlehane/mscfb][mscfb] (Apache-2.0, pure Go) | 0.5 to 1 |
+| Containers | Zip with its encryption, the Compound File Binary format of Microsoft, PalmDB, and the plist of Apple | `archive/zip`. The package `cfb` of magic for Compound Files (magic D62), in place of [richardlehane/mscfb][mscfb] | 0.5 to 1 |
 | Encryption | MS-OFFCRYPTO, OpenDocument, zip | the specifications, and [nolze/msoffcrypto-tool][msoffcrypto] (MIT, Python) as a reference. PDF takes its encryption from hayro | 1 to 1.5 |
 
 WeasyPrint paginates with `@page`, so an ebook or a Word document comes out
@@ -129,7 +129,7 @@ in the long tail.
 | PowerPoint, Impress and Draw | `pptx`, `ppsx`, `potx`, `odp`, `otp`, `odg`, `otg` | `soffice` | Each slide has fixed positions, so it goes onto the display list. The shapes of DrawingML come from the preset definitions of ECMA-376 | the specifications ECMA-376 and ODF 1.3 | 2 to 3 |
 | Word, Writer and RTF | `docx`, `dotx`, `odt`, `ott`, `rtf` | `soffice` | Into HTML and CSS, then the layout | the specifications. [Apache POI][poi] (Apache-2.0, Java) as a reference | 2 to 3, and 0.5 to 1 for RTF |
 | Excel, Calc and CSV | `xlsx`, `xltx`, `ods`, `ots`, `csv`, `tsv` | `soffice` | A grid of the cells that hold data in the first sheet, with the values that the file holds and the basic styles. No formulas are computed | the specifications | 1 to 1.5 |
-| Word, Excel and PowerPoint before 2007 | `doc`, `dot`, `xls`, `xlt`, `ppt`, `pps`, `pot` | `soffice` | First the preview and the text. Then the records of MS-DOC, MS-XLS and MS-PPT into the same paths as the formats above | [mscfb][mscfb] (Apache-2.0, pure Go). Apache POI as a reference | 1 to 2 for the text, 6 or more for a layout |
+| Word, Excel and PowerPoint before 2007 | `doc`, `dot`, `xls`, `xlt`, `ppt`, `pps`, `pot` | `soffice` | First the preview and the text. Then the records of MS-DOC, MS-XLS and MS-PPT into the same paths as the formats above | The package `cfb` of magic (magic D62). Apache POI as a reference | 1 to 2 for the text, 6 or more for a layout |
 | Encrypted Office files | all above | `soffice` asks for no password | MS-OFFCRYPTO and the encryption of OpenDocument (D12) | the specifications, and msoffcrypto-tool (MIT) as a reference | in the shared layers |
 | Visio | `vsdx`, `vsd` | `soffice` | `docProps/thumbnail.emf`, which needs the EMF reader | the specifications | 0.25, preview only |
 | Publisher, WordPerfect, HWP and iWork | `pub`, `wpd`, `hwp`, `hwpx`, `pages`, `key`, `numbers` | `soffice` for `pub` and `wpd` | The preview only. iWork holds a JPEG in `QuickLook/` or in its root | none | 0.25 each, preview only |
@@ -149,12 +149,12 @@ preview that they carry (D11).
 
 | Format | Extensions | Where the image is | Source (license) | Survey |
 | --- | --- | --- | --- | --- |
-| Apple disk image | `dmg` | UDIF holds blocks that zlib, bzip2, ADC, LZFSE or LZMA compress. The blocks hold HFS+ or APFS. The image is `.VolumeIcon.icns`, the icon of the application inside, or the background in `.background/` | [blacktop/go-apfs][go-apfs] (Apache-2.0, pure Go). LZFSE from [lzfse][lzfse] (BSD-3-Clause, C). libdmg-hfsplus is GPL-3.0, a reference only. iv decodes ICNS with jackmordaunt/icns (MIT) | 1.5 to 2.5 |
+| Apple disk image | `dmg` | UDIF holds blocks that zlib, bzip2, ADC, LZFSE or LZMA compress. The blocks hold HFS+ or APFS. The image is `.VolumeIcon.icns`, the icon of the application inside, or the background in `.background/` | [blacktop/go-apfs][go-apfs] (Apache-2.0). It reads an `io.ReaderAt`, but it imports `blacktop/lzfse-cgo`, which breaks D1. LZFSE from [lzfse][lzfse] (BSD-3-Clause, C). libdmg-hfsplus is GPL-3.0, a reference only. iv decodes ICNS with jackmordaunt/icns (MIT) | 1.5 to 2.5 |
 | macOS application and installer | `app`, `pkg` | `Contents/Info.plist` names the ICNS file. A `pkg` is a XAR archive with a compressed cpio | the specifications | 0.5 to 1 |
 | iOS application | `ipa` | Zip, then `Info.plist`, then a PNG in the CgBI form of Apple, which needs its channels swapped and its compression fixed | the specification | 0.5 |
 | Android package | `apk`, `aab`, `xapk`, `apks` | The binary XML of the manifest names the icon. `resources.arsc` finds the file. The icon is a PNG, a WebP or an adaptive icon in vector XML | AOSP (Apache-2.0) as a reference | 1 to 1.5 |
-| Windows installer | `msi`, `msix`, `appx` | MSI is a Compound File with an Icon table. MSIX and APPX are zip files with a manifest | mscfb | 0.5 |
-| Linux packages | `AppImage`, `deb`, `rpm`, `snap`, `flatpak` | AppImage holds `.DirIcon` in SquashFS. A deb or an rpm holds icons under `/usr/share/icons` | [diskfs/go-diskfs][go-diskfs] (MIT) for SquashFS and ISO 9660. [sassoftware/go-rpmutils][rpmutils] (Apache-2.0) | 1 |
+| Windows installer | `msi`, `msix`, `appx` | MSI is a Compound File with an Icon table. MSIX and APPX are zip files with a manifest | The package `cfb` of magic | 0.5 |
+| Linux packages | `AppImage`, `deb`, `rpm`, `snap`, `flatpak` | AppImage holds `.DirIcon` in SquashFS. A deb or an rpm holds icons under `/usr/share/icons` | [diskfs/go-diskfs][go-diskfs] (MIT) for SquashFS and ISO 9660. It reads an `fs.File` that has ReadAt and Seek, without a file on disk. [sassoftware/go-rpmutils][rpmutils] (Apache-2.0) | 1 |
 | Disc images | `iso`, `img`, `udf` | `autorun.inf` names an icon, or `.VolumeIcon.icns` | go-diskfs | 0.5 |
 | Extensions and archives of Java | `crx`, `xpi`, `vsix`, `jar` | A manifest in a zip names the icon | none | 0.25 |
 | Camera RAW | `cr2`, `cr3`, `nef`, `arw`, `dng`, `orf`, `raf`, `rw2`, `pef`, `srw` | A full size JPEG that the camera wrote. Each format but CR3 is a form of TIFF, and CR3 is a form of ISO BMFF | the specifications | 0.5 to 1 |
