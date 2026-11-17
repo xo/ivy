@@ -69,7 +69,10 @@ func (c *cursor) wmf(typ uint32) any {
 	case 0xfb:
 		f := Font{Height: c.short(), Width: c.short(), Escapement: c.short(), Orientation: c.short(), Weight: c.short()}
 		c.fontFlags(&f)
-		f.FaceName = c.take(32)
+		// ivy: MS-WMF 2.2.1.2 limits the face name to 32 bytes with its
+		// NUL, and writers such as MathType store fewer bytes. Windows
+		// reads the record as it is.
+		f.FaceName = c.take(min(32, uint64(len(c.b)-c.pos)))
 		return f
 	case 0x21:
 		n := c.short()

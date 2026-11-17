@@ -385,11 +385,12 @@ func (c *cursor) regionData(n uint64) Region {
 		q.bad("region header")
 	}
 	v.Count = q.dword()
-	size := uint64(q.dword())
+	// ivy: nRgnSize is the size of the buffer of the rectangles, and the
+	// RGNDATAHEADER of Windows lets it be 0 when the size is not known.
+	// Some writers give a larger buffer, such as 168 for one rectangle.
+	// The reader takes nCount rectangles, which must fit in the data.
+	_ = q.dword()
 	v.Bounds = q.rect()
-	if size != uint64(v.Count)*16 {
-		q.bad("region data size")
-	}
 	v.Rectangles = q.elements(uint64(v.Count), 16)
 	if q.err != nil {
 		c.err = q.err

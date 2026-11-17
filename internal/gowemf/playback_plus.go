@@ -1190,7 +1190,7 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 		if meta, err = p.metafileImage(r, obj, img); err != nil || meta == nil {
 			return err
 		}
-		hi = meta.size
+		lo, hi = meta.origin, Point{meta.origin.X + meta.size.X, meta.origin.Y + meta.size.Y} // ivy: see embeddedMetafile
 	} else {
 		if im, err = p.plusBitmap(r, obj, img); err != nil || im == nil {
 			return err
@@ -1198,7 +1198,10 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 		bounds = im.Bounds()
 		lo, hi = Point{float64(bounds.Min.X), float64(bounds.Min.Y)}, Point{float64(bounds.Max.X), float64(bounds.Max.Y)}
 	}
-	inside := src.X >= lo.X && src.Y >= lo.Y && src.X+src.Width <= hi.X && src.Y+src.Height <= hi.Y
+	// ivy: the source rectangle is in float32, so a rectangle that is the
+	// frame of a metafile image can be outside it by a rounding error.
+	const eps = 1e-3
+	inside := src.X >= lo.X-eps && src.Y >= lo.Y-eps && src.X+src.Width <= hi.X+eps && src.Y+src.Height <= hi.Y+eps
 	if !inside {
 		// Pixels outside the image come from the attributes' wrap mode;
 		// only transparent clamping matches drawing the image alone. Without
@@ -1237,7 +1240,7 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 			return p.unsupported(r, "EMF+ SourceCopy compositing of a metafile image")
 		}
 		// Only the source rectangle's part of the picture is drawn.
-		x0, y0 := max(src.X, 0), max(src.Y, 0)
+		x0, y0 := max(src.X, lo.X), max(src.Y, lo.Y)
 		x1, y1 := min(src.X+src.Width, hi.X), min(src.Y+src.Height, hi.Y)
 		if x0 >= x1 || y0 >= y1 {
 			return nil
@@ -1246,7 +1249,10 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 			Points: []Point{place.Apply(Point{x0, y0}), place.Apply(Point{x1, y0}), place.Apply(Point{x1, y1}), place.Apply(Point{x0, y1})}}
 		clip := p.plusCurrentClip()
 		clip = append(clip[:len(clip):len(clip)], &ClipRegion{Op: ClipReplace, Area: area, Rule: NonZero, depth: 1})
-		return p.playEmbedded(r, meta, place, clip)
+		// ivy: the embedded picture plays into [0, size], which starts at
+		// the origin of the image.
+		shift := Matrix{M11: 1, M22: 1, Dx: meta.origin.X, Dy: meta.origin.Y}
+		return p.playEmbedded(r, meta, shift.Then(place), clip)
 	}
 	if p.plus.compositing == 1 && !isOpaque(im) {
 		return p.unsupported(r, "EMF+ SourceCopy compositing of an image with alpha")

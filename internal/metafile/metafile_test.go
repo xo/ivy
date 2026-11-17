@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"strings"
 	"testing"
 
 	"github.com/xo/okage"
@@ -311,4 +312,43 @@ func gowemfTriangle() gowemf.GradientTriangle {
 		Points: [3]gowemf.Point{{X: 0, Y: 0}, {X: 10, Y: 0}, {X: 0, Y: 10}},
 		Colors: [3]color.NRGBA64{{R: 0xffff, A: 0xffff}, {G: 0xffff, A: 0xffff}, {B: 0xffff, A: 0xffff}},
 	}
+}
+
+// TestClipKept checks that the records under one clip share it on the
+// device, and that a new clip replaces it.
+func TestClipKept(t *testing.T) {
+	e := filled(green)
+	e.IntersectClip(20, 20, 80, 80)
+	e.Rectangle(0, 0, 50, 50)
+	e.Rectangle(50, 0, 100, 50)
+	e.Rectangle(0, 50, 50, 100)
+	e.ExcludeClip(40, 40, 60, 60)
+	e.Rectangle(50, 50, 100, 100)
+	p, err := Open(e.Bytes(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l display.List
+	dst, _ := okage.RectFromXYWH(0, 0, 100, 100)
+	if err := p.Draw(t.Context(), &l, dst); err != nil {
+		t.Fatal(err)
+	}
+	got := l.String()
+	if n := strings.Count(got, "\nsave\n"); n != 2 {
+		t.Errorf("expected two clips, got %d:\n%s", n, got)
+	}
+	if strings.Count(got, "save") != strings.Count(got, "restore") {
+		t.Errorf("expected a restore for each save:\n%s", got)
+	}
+	pm, err := render(t, e.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, pm, 10, 10, color.NRGBA{255, 255, 255, 255})
+	expect(t, pm, 30, 30, green)
+	expect(t, pm, 70, 30, green)
+	expect(t, pm, 30, 70, green)
+	expect(t, pm, 55, 55, color.NRGBA{255, 255, 255, 255})
+	expect(t, pm, 70, 70, green)
+	expect(t, pm, 90, 90, color.NRGBA{255, 255, 255, 255})
 }

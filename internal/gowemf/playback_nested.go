@@ -34,9 +34,16 @@ func backendAs[T any](b Backend) (T, bool) {
 
 // embeddedMetafile is a parsed EmfPlusMetafile image: its bytes, header and
 // size in image pixels, the units of a drawing's source rectangle.
+//
+// ivy: origin is the top left corner of the image in image pixels. GDI+
+// gives a metafile image the bounds of its frame or of its placeable
+// header, which need not start at 0, and a source rectangle is in those
+// coordinates. The pictures of poi/vsdx/60973.vsdx have frames that start
+// at (274, -658).
 type embeddedMetafile struct {
 	data   []byte
 	header Header
+	origin Point
 	size   Point
 }
 
@@ -65,8 +72,9 @@ func (p *player) metafileImage(r Record, obj *plusObject, img PlusImage) (*embed
 	case h.WMF != nil && h.Placeable != nil:
 		b := h.Placeable.Bounds
 		m.size = Point{abs(float64(b.Right) - float64(b.Left)), abs(float64(b.Bottom) - float64(b.Top))}
+		m.origin = Point{min(float64(b.Left), float64(b.Right)), min(float64(b.Top), float64(b.Bottom))} // ivy: see origin
 	case h.EMF != nil:
-		_, _, _, w, ht, err := emfFrame(h.EMF)
+		_, left, top, w, ht, err := emfFrame(h.EMF)
 		if err != nil {
 			return nil, p.embeddedError(r, err)
 		}
@@ -74,10 +82,11 @@ func (p *player) metafileImage(r Record, obj *plusObject, img PlusImage) (*embed
 			w, ht = w+1, ht+1 // the bounds fallback is already inclusive
 		}
 		m.size = Point{w, ht}
+		m.origin = Point{left, top} // ivy: see origin
 	default:
 		return nil, p.unsupported(r, "EMF+ metafile image: WMF without placeable bounds")
 	}
-	if !(m.size.X > 0 && m.size.Y > 0) || !finite(m.size.X) || !finite(m.size.Y) {
+	if !(m.size.X > 0 && m.size.Y > 0) || !finite(m.size.X) || !finite(m.size.Y) || !finite(m.origin.X) || !finite(m.origin.Y) {
 		return nil, p.embeddedError(r, malformed(0, "empty embedded metafile frame"))
 	}
 	obj.metafile = m

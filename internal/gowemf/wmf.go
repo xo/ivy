@@ -48,8 +48,11 @@ func (p *parser) wmf(placeable bool) error {
 	p.header.WMF = w
 	// ivy: Windows plays a file with bytes after its last record, so a size
 	// smaller than the data is not an error. A larger size means that the
-	// file is cut short.
-	if uint64(w.SizeWords)*2 > uint64(len(h)) {
+	// file is cut short, except for 22 bytes more in a file without a
+	// placeable header: a WMF picture of the store of Office Drawing, such
+	// as those of poi/xls/landscape-a4-drawing.xls, counts the placeable
+	// header that the store removed.
+	if size := uint64(w.SizeWords) * 2; size > uint64(len(h)) && (placeable || size != uint64(len(h))+22) {
 		return malformed(start+6, "WMF file size")
 	}
 	for off := start + 18; off < len(b); {

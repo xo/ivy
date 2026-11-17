@@ -86,6 +86,7 @@ func (b *backend) DrawRaster(r gowemf.RasterDraw, clip gowemf.Clip) error {
 			continue
 		}
 		if p.blend != okage.BlendModeSourceOver {
+			b.endClip()
 			b.d.BeginGroup(display.Group{Opacity: 1, Blend: p.blend, Isolated: true})
 		}
 		b.clipped(clip, func() {
@@ -95,6 +96,7 @@ func (b *backend) DrawRaster(r gowemf.RasterDraw, clip gowemf.Clip) error {
 			b.d.Restore()
 		})
 		if p.blend != okage.BlendModeSourceOver {
+			b.endClip()
 			b.d.EndGroup()
 		}
 	}

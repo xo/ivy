@@ -37,6 +37,10 @@ type backend struct {
 	firstSkip string
 	// patterns holds the pixmaps of the images of the patterns.
 	patterns map[image.Image]*okage.Pixmap
+	// clipOpen reports a clip that clipped left on the device after a
+	// Save: clip, which clips everything when clipEmpty is set.
+	clipOpen, clipEmpty bool
+	clip                gowemf.Clip
 }
 
 // The interfaces that a backend implements.
@@ -72,8 +76,10 @@ func (b *backend) near(x, y float64) bool {
 	return math.Abs(x-b.cx) <= b.far && math.Abs(y-b.cy) <= b.far
 }
 
-// close releases the caches of the backend.
+// close removes the clip that the backend left on the device, and releases
+// the caches of the backend.
 func (b *backend) close() {
+	b.endClip()
 	b.patterns = nil
 }
 

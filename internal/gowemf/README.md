@@ -22,7 +22,7 @@ Each copied file has the same path as in upstream.
 
 Two files are files of ivy, not of upstream:
 `playback_plus_string.go` draws the EMF+ DrawString record (change 11),
-and `ivy_test.go` holds the tests of the changes 6 to 11.
+and `ivy_test.go` holds the tests of the changes 6 to 11 and 13 to 16.
 
 The copy leaves out these files of upstream:
 
@@ -77,7 +77,8 @@ Each change is marked in the code with a comment that starts with `ivy:`.
      checked.
    - A file can have bytes after its EOF record. A size in the header that
      is smaller than the data is not an error. A larger size is still an
-     error, because the file is cut short.
+     error, because the file is cut short. Change 16 gives the one
+     exception.
    - A file can end without an EOF record, if its last record ends at the
      end of the data.
 7. `stream.go` and `stream_wmf.go` drop a record that Windows ignores, and
@@ -119,3 +120,19 @@ Each change is marked in the code with a comment that starts with `ivy:`.
 12. The tests of upstream that expect `ErrMalformed` for the cases of
     changes 6 and 7, or that expect DrawString to be reported, expect the
     behavior of ivy. Each such test has a comment that starts with `ivy:`.
+13. `decode_emf.go` does not compare the field nRgnSize of the region data
+    of an EMF record with the count of its rectangles. nRgnSize is the size
+    of a buffer, which Windows lets be 0, and some writers make it larger,
+    such as 168 bytes for one rectangle. The rectangles must still fit in
+    the record.
+14. `playback_nested.go` and `playback_plus.go` place the source rectangle
+    of an EMF+ DrawImage of a metafile in the coordinates of the bounds of
+    the metafile, as GDI+ does. The bounds are the frame of an EMF in
+    pixels, or the bounds of a placeable WMF, and they need not start at
+    0. A source rectangle can be outside the image by a rounding error of
+    float32, up to 0.001 pixel.
+15. `decode_wmf.go` reads a WMF CreateFontIndirect record whose face name
+    has fewer than 32 bytes, as MathType writes it.
+16. `wmf.go` reads a WMF without a placeable header whose header gives a
+    size 22 bytes larger than the data. A WMF picture of the store of
+    Office Drawing counts the placeable header that the store removed.

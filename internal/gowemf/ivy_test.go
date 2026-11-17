@@ -29,7 +29,10 @@ func TestTolerantFraming(t *testing.T) {
 			return b
 		}),
 		"wmf size too small": wmf(func(b []byte) []byte { put32(b, 6, 9); return b }),
-		"emf record count":   emf(func(b []byte) []byte { put32(b, 52, 3); return b }),
+		// A WMF of the store of Office Drawing counts the placeable header
+		// that the store removed.
+		"wmf size with a placeable header": wmf(func(b []byte) []byte { put32(b, 6, uint32(len(b)/2+11)); return b }),
+		"emf record count":                 emf(func(b []byte) []byte { put32(b, 52, 3); return b }),
 		"emf bytes after EOF": emf(func(b []byte) []byte {
 			b = append(b, 0, 0, 0, 0)
 			put32(b, 48, uint32(len(b)))
@@ -50,7 +53,13 @@ func TestTolerantFraming(t *testing.T) {
 	}
 	// A size larger than the data means that the file is cut short.
 	for name, b := range map[string][]byte{
-		"wmf": wmf(func(b []byte) []byte { put32(b, 6, 18); return b }),
+		"wmf":          wmf(func(b []byte) []byte { put32(b, 6, 18); return b }),
+		"wmf 22 bytes": wmf(func(b []byte) []byte { put32(b, 6, uint32(len(b)/2+12)); return b }),
+		"placeable wmf 22 bytes": func() []byte {
+			b := wmfFixture(true)
+			put32(b, 22+6, uint32((len(b)-22)/2+11))
+			return b
+		}(),
 		"emf": emf(func(b []byte) []byte { put32(b, 48, uint32(len(b)+4)); return b }),
 	} {
 		t.Run(name+" size too large", func(t *testing.T) {
@@ -202,5 +211,78 @@ func TestROP2Raster(t *testing.T) {
 		if got := rop2ReadsDestination(rop2); got != want {
 			t.Errorf("R2 %d reads the destination: %v", rop2, got)
 		}
+	}
+}
+
+// TestEMFRegionBufferSize checks that the region data of an EMF record
+// takes its rectangles from nCount, and not from nRgnSize, which can be 0
+// or the size of a larger buffer.
+func TestEMFRegionBufferSize(t *testing.T) {
+	for _, size := range []int32{0, 16, 168} {
+		// the size of the region data, the mode RGN_COPY, the header of 32
+		// bytes with one rectangle, the bounds, and the rectangle
+		body := cat(longs(48, 5, 32, 1, 1, size), longs(100, 43, 695, 513), longs(100, 43, 695, 513))
+		v, err := Decode(testRecord(EMF, EMRExtSelectClipRgn, 0, body), DecodeLimits{})
+		if err != nil {
+			t.Fatalf("nRgnSize %d: %v", size, err)
+		}
+		if r := v.(Region); r.Count != 1 || len(r.Rectangles) != 16 {
+			t.Fatalf("nRgnSize %d: %+v", size, r)
+		}
+	}
+	// A count of rectangles that do not fit in the data is still an error.
+	body := cat(longs(48, 5, 32, 1, 2, 32), longs(0, 0, 1, 1), longs(0, 0, 1, 1))
+	if _, err := Decode(testRecord(EMF, EMRExtSelectClipRgn, 0, body), DecodeLimits{}); !errors.Is(err, ErrMalformed) {
+		t.Fatal(err)
+	}
+}
+
+// TestPlayEMFPlusMetafileImageOrigin checks that the source rectangle of a
+// metafile image is in the coordinates of its frame, or of its placeable
+// bounds, which need not start at 0.
+func TestPlayEMFPlusMetafileImageOrigin(t *testing.T) {
+	half := plusRec(PlusSetPixelOffsetModeRecord, 4)
+	// innerEMF moved by (100, 50) pixels: the frame, the bounds and the
+	// red rectangle start there.
+	emf := emfScene(40, 20, 2, emfSelect(nullPen), emfBrush(1, 0, red), emfSelect(1), emfBox(EMRRectangle, 100, 50, 120, 60))
+	copy(emf[8:], longs(100, 50, 139, 69, 2500, 1250, 3500, 1750))
+	img := plusObj(1, 5, metafileImageObj(3, emf))
+	b, skipped := plusPlay(t, plusScene(96, 64, half, img, drawImage(1, [4]float64{100, 50, 41, 21}, [4]float64{10, 10, 82, 42})), PlayOptions{})
+	if len(skipped) != 0 || len(b.fills) != 1 || !pointsNear(b.fills[0].path.Points, Point{10, 10}, Point{10, 31}, Point{51, 31}, Point{51, 10}) {
+		t.Fatal("EMF", skipped, b.fills)
+	}
+	// The frame with the rounding errors of float32 is still inside.
+	b, skipped = plusPlay(t, plusScene(96, 64, half, img, drawImage(1, [4]float64{100.0001, 49.9999, 41.0001, 21.0002}, [4]float64{10, 10, 82, 42})), PlayOptions{})
+	if len(skipped) != 0 || len(b.fills) != 1 {
+		t.Fatal("EMF with rounding", skipped, b.fills)
+	}
+	// A placeable WMF with the bounds (-10, -20) to (38, 12).
+	wmf := wmfScene(38, 12, 2, wmfPen(5, 0, 0), wmfRec(MetaSelectObject, 0), wmfBrush(0, blue, 0), wmfRec(MetaSelectObject, 1), wmfBox(MetaRectangle, -10, -20, 14, -4))
+	put16(wmf, 6, uint16(0xfff6))
+	put16(wmf, 8, uint16(0xffec))
+	var sum uint16
+	for i := 0; i < 20; i += 2 {
+		sum ^= u16(wmf[i:])
+	}
+	put16(wmf, 20, sum)
+	points := plusRec(PlusDrawImagePointsRecord, 1, dwords(0xffffffff, 2), fl(-10, -20, 48, 32), dwords(3), fl(10, 10, 58, 10, 10, 42))
+	b, skipped = plusPlay(t, plusScene(96, 64, half, plusObj(1, 5, metafileImageObj(2, wmf)), points), PlayOptions{})
+	if len(skipped) != 0 || len(b.fills) != 1 || !pointsNear(b.fills[0].path.Points, Point{10, 10}, Point{10, 25}, Point{33, 25}, Point{33, 10}) {
+		t.Fatal("WMF", skipped, b.fills)
+	}
+}
+
+// TestWMFShortFaceName checks that a WMF CreateFontIndirect record with a
+// face name of fewer than 32 bytes decodes, as MathType writes it.
+func TestWMFShortFaceName(t *testing.T) {
+	// the height, the width, the escapement, the orientation, the weight,
+	// the flags, and "Symbol" with its NUL and one byte more
+	body := cat(words(-224, 0, 0, 0, 400), []byte{0, 0, 0, 2, 0, 0, 0, 0}, []byte("Symbol\x00\x15"))
+	v, err := Decode(testRecord(WMF, MetaCreateFontIndirect, 0, body), DecodeLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := v.(Font); string(f.FaceName) != "Symbol\x00\x15" || f.CharSet != 2 {
+		t.Fatalf("%+v", f)
 	}
 }

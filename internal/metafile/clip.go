@@ -7,15 +7,70 @@ import (
 	"github.com/xo/ivy/internal/gowemf"
 )
 
-// clipped calls draw inside the clip. A region that is the intersection of
-// paths, which is the clip of most files, becomes clip paths of the device.
-// Another region, such as a union or a difference, becomes the soft mask of a
-// group, which the device keeps for each region.
+// clipped calls draw with the clip of the device set to clip. The clip
+// stays on the device after draw, and the next call with the same clip
+// draws at once: a clip of okage is a mask of the size of the device, and
+// a picture with many records under one clip, such as the WMF pictures of
+// poi/xls/landscape-a4-drawing.xls, spends most of its time making the
+// same mask again. endClip removes the clip.
 func (b *backend) clipped(clip gowemf.Clip, draw func()) {
+	if b.clipOpen && sameClip(b.clip, clip) {
+		if !b.clipEmpty {
+			draw()
+		}
+		return
+	}
+	b.endClip()
 	if len(clip) == 0 {
 		draw()
 		return
 	}
+	var steps []*gowemf.ClipRegion
+	for _, r := range clip {
+		var ok bool
+		if steps, ok = clipSteps(r, steps); !ok {
+			b.clippedMasks(clip, draw)
+			return
+		}
+	}
+	b.d.Save()
+	b.clipOpen, b.clip, b.clipEmpty = true, clip, false
+	for _, s := range steps {
+		p := b.path(s.Area)
+		if p == nil {
+			// an empty area clips everything
+			b.clipEmpty = true
+			return
+		}
+		b.d.ClipPath(p, rule(s.Rule))
+	}
+	draw()
+}
+
+// endClip removes the clip that clipped left on the device.
+func (b *backend) endClip() {
+	if b.clipOpen {
+		b.d.Restore()
+		b.clipOpen, b.clip, b.clipEmpty = false, nil, false
+	}
+}
+
+// sameClip reports whether the clips a and b hold the same regions.
+func sameClip(a, b gowemf.Clip) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// clippedMasks calls draw with the clip set to clip, whose regions that
+// are not intersections of areas become masks of groups.
+func (b *backend) clippedMasks(clip gowemf.Clip, draw func()) {
 	b.d.Save()
 	defer b.d.Restore()
 	var masks []*gowemf.ClipRegion
