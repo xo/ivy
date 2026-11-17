@@ -5,6 +5,9 @@
 package pdffont
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -151,12 +154,25 @@ func TestCJKFallback(t *testing.T) {
 		g, ok := font.Glyph(gid, code).(*OutlineGlyph)
 		return gid, gid != GlyphIDNotdef && ok && !g.Outline().IsEmpty()
 	}
-	// あ is in Japan1, and 偞 is not. A code of UniJIS-UCS2-H is the
-	// character.
-	for _, code := range []uint32{0x3042, 0x6F22, 0x505E} {
+	// あ and 漢 are in Japan1. A code of UniJIS-UCS2-H is the character.
+	for _, code := range []uint32{0x3042, 0x6F22} {
 		if gid, ok := outline(code); !ok || gid&latinGlyph != 0 {
 			t.Errorf("%#x: expected a glyph of Droid Sans Fallback, got %#x", code, gid)
 		}
+	}
+	// 偞 is not in Japan1, so UniJIS-UCS2-H does not map it. The font draws
+	// nothing for it and does not advance, as MuPDF does.
+	if gid := font.MapCode(0x505E); gid != GlyphIDNotdef {
+		t.Errorf("0x505e: expected .notdef, got %#x", gid)
+	}
+	if g := font.Glyph(GlyphIDNotdef, 0x505E).(*OutlineGlyph); !g.Outline().IsEmpty() {
+		t.Error("0x505e: expected no outline")
+	}
+	if adv := font.CodeAdvance(0x505E); adv.X != 0 || adv.Y != 0 {
+		t.Errorf("0x505e: expected no advance, got %v", adv)
+	}
+	if adv := font.CodeAdvance(0x3042); adv.X != 1000 {
+		t.Errorf("0x3042: expected the advance DW, got %v", adv)
 	}
 	gid, ok := outline('A')
 	if !ok || gid&latinGlyph == 0 {
@@ -181,5 +197,89 @@ func TestCJKFallback(t *testing.T) {
 	}
 	if _, ok := outline('A'); !ok {
 		t.Error("expected a glyph of the standard font for A")
+	}
+}
+
+// symbolicGoRegular returns Go Regular with its cmap subtables of the
+// platform Windows marked as (3,0), the subtable of a symbolic font, and a
+// post table of version 3, without the names of the glyphs.
+func symbolicGoRegular(t *testing.T) []byte {
+	t.Helper()
+	data := bytes.Clone(goregular.TTF)
+	// offset returns the offset of the table tag in the table directory.
+	offset := func(tag string) int {
+		for i := range int(binary.BigEndian.Uint16(data[4:])) {
+			rec := data[12+16*i:]
+			if string(rec[:4]) == tag {
+				return int(binary.BigEndian.Uint32(rec[8:]))
+			}
+		}
+		t.Fatalf("Go Regular has no table %s", tag)
+		return 0
+	}
+	cmapAt := offset("cmap")
+	marked := 0
+	for i := range int(binary.BigEndian.Uint16(data[cmapAt+2:])) {
+		rec := cmapAt + 4 + 8*i
+		if binary.BigEndian.Uint16(data[rec:]) == 3 {
+			binary.BigEndian.PutUint16(data[rec+2:], 0)
+			marked++
+		}
+	}
+	if marked == 0 {
+		t.Fatal("Go Regular has no cmap subtable of the platform Windows")
+	}
+	binary.BigEndian.PutUint32(data[offset("post"):], 0x00030000)
+	return data
+}
+
+// TestSymbolicNamedTrueType checks that a symbolic TrueType font that the
+// file names and does not embed maps its codes through the (3,0) cmap
+// subtable of the font that the resolver gives, and not through the names
+// of the glyphs.
+func TestSymbolicNamedTrueType(t *testing.T) {
+	t.Parallel()
+	symbolic := symbolicGoRegular(t)
+	plain, err := newSfntProgram(goregular.TTF, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(q *FontQuery) (FontData, uint32, bool) {
+		if q.Named && q.Fallback.PostScriptName == "Wingdings" {
+			return symbolic, 0, true
+		}
+		return defaultResolver(q)
+	}
+	const font = `<</Type /Font /Subtype /TrueType /BaseFont /Wingdings
+		/FirstChar 65 /LastChar 160 /Widths [500]
+		/FontDescriptor <</Type /FontDescriptor /FontName /Wingdings /Flags %d>>>>`
+	for _, c := range []struct {
+		flags  int
+		mapped bool
+	}{
+		// symbolic
+		{4, true},
+		// nonsymbolic
+		{32, false},
+	} {
+		f, ok := NewFontCache().Font(dict(t, fmt.Sprintf(font, c.flags)), resolve, cmapResolver)
+		if !ok {
+			t.Fatal("cannot read the font")
+		}
+		// StandardEncoding has no name for the code 0xA0, and the cmap of
+		// Go Regular maps the no-break space U+00A0.
+		for _, r := range []rune{'A', 0xA0} {
+			exp, ok := plain.unicodeGlyph(r)
+			if !ok {
+				t.Fatalf("Go Regular has no glyph for %U", r)
+			}
+			got := f.MapCode(uint32(r))
+			if c.mapped && got != exp {
+				t.Errorf("flags %d: %U: expected the glyph %d of the (3,0) subtable, got %d", c.flags, r, exp, got)
+			}
+			if !c.mapped && r == 0xA0 && got != GlyphIDNotdef {
+				t.Errorf("flags %d: %U: expected .notdef, got %d", c.flags, r, got)
+			}
+		}
 	}
 }

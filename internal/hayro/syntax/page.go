@@ -306,6 +306,16 @@ func (p *Page) CropBox() Rect {
 	return p.cropBox
 }
 
+// SetCropBox replaces the crop box of the page with box. The page then
+// renders box, cut to its media box. A program must call it before the page
+// renders, and not while another goroutine uses the page.
+//
+// Port: upstream has no such method. The package pdf uses it to render
+// another page box, such as the MediaBox (D31).
+func (p *Page) SetCropBox(box Rect) {
+	p.cropBox = box
+}
+
 // IntersectedCropBox is Page::intersected_crop_box in hayro-syntax
 // src/page.rs. It returns the intersection of the crop box and the media
 // box.

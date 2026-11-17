@@ -374,6 +374,8 @@ func (o *OutlineGlyph) AdvanceWidth() (float32, bool) {
 // newOutlineGlyph is OutlineGlyph::new in hayro-font src/lib.rs.
 func newOutlineGlyph(font outlineFont, id GlyphID, charCode uint32) *OutlineGlyph {
 	hidden := id == GlyphIDNotdef && font.hidesNotdef()
+	// Port: a CID font draws nothing for a code that it skips.
+	hidden = hidden || font.type0 != nil && font.type0.skipsCode(charCode)
 	program := font.program()
 	if font.type0 != nil {
 		// Port: a glyph of a CID font can come from its latin font.

@@ -172,6 +172,56 @@ func TestRotateAndCropBox(t *testing.T) {
 	}
 }
 
+// TestPageBox checks that WithPageBox renders the chosen page box, and that
+// a page box that the page does not have takes its default (D31).
+func TestPageBox(t *testing.T) {
+	t.Parallel()
+	// red on the left half, blue on the right half, and a crop box and a
+	// trim box of the right half
+	buf := onePage("1 0 0 rg 0 0 50 100 re f 0 0 1 rg 50 0 50 100 re f",
+		"/CropBox [50 0 100 100] /TrimBox [50 50 100 100] /BleedBox [-10 0 100 100]", "")
+	red, blue := color.NRGBA{255, 0, 0, 255}, color.NRGBA{0, 0, 255, 255}
+	for _, c := range []struct {
+		name string
+		opts []Option
+		w, h float32
+		// the colors at the left and at the right of the middle row
+		left, right color.NRGBA
+	}{
+		{"default", nil, 50, 100, blue, blue},
+		{"CropBox", []Option{WithPageBox(CropBox)}, 50, 100, blue, blue},
+		{"MediaBox", []Option{WithPageBox(MediaBox)}, 100, 100, red, blue},
+		{"TrimBox", []Option{WithPageBox(TrimBox)}, 50, 50, blue, blue},
+		// the bleed box is cut to the media box
+		{"BleedBox", []Option{WithPageBox(BleedBox)}, 100, 100, red, blue},
+		// the page has no art box, which defaults to the crop box
+		{"ArtBox", []Option{WithPageBox(ArtBox)}, 50, 100, blue, blue},
+	} {
+		p := page(t, open(t, buf, c.opts...), 0)
+		if w, h := p.Size(); w != c.w || h != c.h {
+			t.Errorf("%s: expected a page of %g by %g points, got %g by %g", c.name, c.w, c.h, w, h)
+			continue
+		}
+		img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := img.Bounds()
+		y := b.Dy() / 2
+		if got := rgba(img, 2, y); got != c.left {
+			t.Errorf("%s: expected %v at the left, got %v", c.name, c.left, got)
+		}
+		if got := rgba(img, b.Dx()-3, y); got != c.right {
+			t.Errorf("%s: expected %v at the right, got %v", c.name, c.right, got)
+		}
+	}
+	// the rotation applies to the trim box
+	p := page(t, open(t, onePage("", "/TrimBox [0 0 50 100] /Rotate 90", ""), WithPageBox(TrimBox)), 0)
+	if w, h := p.Size(); w != 100 || h != 50 {
+		t.Errorf("rotated: expected a page of 100 by 50 points, got %g by %g", w, h)
+	}
+}
+
 func TestCancel(t *testing.T) {
 	var content strings.Builder
 	for range 200000 {

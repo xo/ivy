@@ -56,6 +56,7 @@ type Option func(*options)
 type options struct {
 	cfg         ivy.Config
 	annotations bool
+	box         Box
 }
 
 // WithConfig sets the configuration that every format shares.
@@ -71,6 +72,39 @@ func WithConfig(cfg ivy.Config) Option {
 func WithAnnotations(on bool) Option {
 	return func(o *options) {
 		o.annotations = on
+	}
+}
+
+// Box is a page box of a PDF page (ISO 32000-1, 14.11.2). The zero Box is
+// CropBox.
+type Box int
+
+// The page boxes.
+const (
+	// CropBox is the region that a viewer shows. A page without a CropBox
+	// uses its MediaBox.
+	CropBox Box = iota
+	// MediaBox is the whole medium of the page, with the margin of a
+	// printer, such as the crop marks.
+	MediaBox
+	// BleedBox is the region that a printer prints, with the bleed. A page
+	// without a BleedBox uses its CropBox.
+	BleedBox
+	// TrimBox is the size of the finished page after the trim. A page
+	// without a TrimBox uses its CropBox.
+	TrimBox
+	// ArtBox is the region of the meaningful content of the page. A page
+	// without an ArtBox uses its CropBox.
+	ArtBox
+)
+
+// WithPageBox sets the page box that each page renders, its size and its
+// clip (D31). The default is CropBox. A page box that a page does not have
+// takes its default from the PDF specification, and a page box is cut to
+// the MediaBox. The rotation of the page applies to each page box.
+func WithPageBox(box Box) Option {
+	return func(o *options) {
+		o.box = box
 	}
 }
 
@@ -126,6 +160,11 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if len(pages) > lim.MaxObjects {
 		return nil, fmt.Errorf("pdf of more than %d pages: %w", lim.MaxObjects, ivy.ErrLimit)
 	}
+	if o.box != CropBox {
+		for _, page := range pages {
+			page.SetCropBox(pageBox(page, o.box))
+		}
+	}
 	return &Document{
 		pdf:         pdf,
 		cache:       render.NewRenderCache(),
@@ -161,6 +200,29 @@ func load(ctx context.Context, data []byte, cfg ivy.Config, lim ivy.Limits) (*sy
 		return nil, fmt.Errorf("opening pdf: %w", err)
 	}
 	return pdf, nil
+}
+
+// pageBox returns the rectangle of box on page. A page without the box
+// uses its default (ISO 32000-1, 14.11.2): the CropBox for the BleedBox,
+// the TrimBox and the ArtBox. An unknown box is the CropBox.
+func pageBox(page *syntax.Page, box Box) syntax.Rect {
+	var key syntax.Name
+	switch box {
+	case MediaBox:
+		return page.MediaBox()
+	case BleedBox:
+		key = syntax.KeyBleedBox
+	case TrimBox:
+		key = syntax.KeyTrimBox
+	case ArtBox:
+		key = syntax.KeyArtBox
+	default:
+		return page.CropBox()
+	}
+	if r, ok := page.Raw().Get[syntax.Rect](key); ok {
+		return r
+	}
+	return page.CropBox()
 }
 
 // Close satisfies the ivy.Document interface.
@@ -399,14 +461,16 @@ type Page struct {
 	n    int
 }
 
-// Size satisfies the ivy.Page interface. It returns the size of the crop box
-// of the page, in points, after its rotation.
+// Size satisfies the ivy.Page interface. It returns the size of the page
+// box of WithPageBox, by default the CropBox, in points, after the rotation
+// of the page.
 func (p *Page) Size() (float32, float32) {
 	return p.page.RenderDimensions()
 }
 
 // Render satisfies the ivy.Page interface. It draws the content of the page
-// inside its crop box, rotated by the entry Rotate of the page.
+// inside the page box of WithPageBox, by default the CropBox, rotated by the
+// entry Rotate of the page.
 func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering pdf page %d: %w", p.n+1, err)

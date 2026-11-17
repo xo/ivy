@@ -237,6 +237,11 @@ type standardKind struct {
 	fallback     bool
 	codeToGlyph  [256]GlyphID
 	encodings    map[uint8]string
+	// symbolic is the (3,0) cmap subtable of a symbolic TrueType font that
+	// the file names and does not embed, or nil.
+	//
+	// Port: upstream draws such a font with a standard font.
+	symbolic *cmapSubtable
 }
 
 // newStandardKind is StandardKind::new in hayro-font src/standard_font.rs.
@@ -286,10 +291,39 @@ func newStandardKindWith(dict syntax.Dict, baseFont StandardFont, fallback bool,
 		fallback:     fallback,
 		encoding:     enc,
 	}
+	if named {
+		k.symbolic = symbolicSubtable(dict, descriptor, program)
+	}
 	for code := range 256 {
 		k.codeToGlyph[code] = k.lookupGlyph(uint8(code))
 	}
 	return k, true
+}
+
+// symbolicSubtable returns the (3,0) cmap subtable of program, for a
+// symbolic TrueType font of dict, or nil. A symbolic TrueType font maps a
+// code through that subtable (ISO 32000-1, 9.6.6.4), not through the names
+// of the glyphs.
+//
+// Port: upstream has no such function.
+func symbolicSubtable(dict, descriptor syntax.Dict, program *fontProgram) *cmapSubtable {
+	if subtype, _ := dict.Get[syntax.Name](syntax.KeySubtype); subtype != syntax.KeyTrueType {
+		return nil
+	}
+	bits, ok := descriptor.Get[uint32](syntax.KeyFlags)
+	if !ok {
+		return nil
+	}
+	flags, _ := fontFlagsFromBits(bits)
+	if !flags.contains(fontFlagSymbolic) || flags.contains(fontFlagNonSymbolic) {
+		return nil
+	}
+	for _, sub := range program.cmapSubtables() {
+		if sub.platform == cmapPlatformWindows && sub.encodingID == 0 {
+			return &sub
+		}
+	}
+	return nil
 }
 
 // codeToPSName is StandardKind::code_to_ps_name in hayro-font
@@ -311,7 +345,17 @@ func (k *standardKind) mapCode(code uint8) GlyphID {
 
 // lookupGlyph is StandardKind::lookup_glyph in hayro-font
 // src/standard_font.rs.
+//
+// Port: a font with a symbolic subtable maps the code through that subtable
+// first, as trueTypeEmbedded.lookupGlyph does for an embedded font.
 func (k *standardKind) lookupGlyph(code uint8) GlyphID {
+	if k.symbolic != nil {
+		for _, offset := range [...]uint32{0x0000, 0xF000, 0xF100, 0xF200} {
+			if g, ok := k.symbolic.mapCode(uint32(code) + offset); ok && g != GlyphIDNotdef {
+				return g
+			}
+		}
+	}
 	c, ok := k.codeToPSName(code)
 	if !ok {
 		return GlyphIDNotdef

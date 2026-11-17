@@ -51,6 +51,10 @@ type type0Font struct {
 	//
 	// Port: upstream does not read it.
 	unicode unicodeEncoding
+	// cjk is true for a font of one of the four CJK collections of Adobe.
+	//
+	// Port: upstream does not keep it.
+	cjk bool
 }
 
 // unicodeEncoding is the Unicode encoding of the codes of a predefined CMap
@@ -240,17 +244,37 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 		fallback:              fallback,
 		latin:                 latin,
 		unicode:               unicodeEncodingOf(encObj),
+		cjk:                   isCJK(characterCollection),
 		toUnicodeIsCIDIndexed: toUnicodeIsCIDIndexed,
 	}, true
 }
 
+// skipsCode reports whether the font draws nothing for code, and does not
+// advance for it: code is a code of a Unicode CMap of a CJK collection, such
+// as UniJIS-UCS2-H, that the CMap does not map, because the collection does
+// not hold its character.
+//
+// Port: upstream draws .notdef for such a code, and advances by the width
+// of CID 0. Go skips it, as MuPDF does.
+func (t *type0Font) skipsCode(code uint32) bool {
+	if !t.cjk || t.unicode == notUnicode {
+		return false
+	}
+	_, ok := t.codeToCID(code)
+	return !ok
+}
+
 // mapCode is Type0Font::map_code in hayro-font src/cid.rs.
 func (t *type0Font) mapCode(code uint32) GlyphID {
+	if t.skipsCode(code) {
+		return GlyphIDNotdef
+	}
 	cid, ok := t.codeToCID(code)
 	if t.latin != nil && (!ok || cid == 0) {
 		// Port: upstream draws nothing for a code that the collection does
 		// not hold. The code of a Unicode CMap, such as UniJIS-UCS2-H, is
-		// a character, so Go draws it with the fallback font.
+		// a character, so Go draws it with the fallback font, when the
+		// CMap maps it to CID 0.
 		if r, ok := t.unicode.char(code); ok {
 			return t.fallbackGlyph(r)
 		}
@@ -446,7 +470,12 @@ func (t *type0Font) isMonospace() bool {
 }
 
 // codeAdvance is Type0Font::code_advance in hayro-font src/cid.rs.
+//
+// Port: a code that skipsCode reports does not advance.
 func (t *type0Font) codeAdvance(code uint32) kurbo.Vec2 {
+	if t.skipsCode(code) {
+		return kurbo.Vec2{}
+	}
 	cid, _ := t.codeToCID(code)
 	if t.horizontal {
 		return kurbo.NewVec2(float64(t.horizontalWidth(cid)), 0)

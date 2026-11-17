@@ -374,6 +374,23 @@ func WithConfig(cfg ivy.Config) Option
 // WithAnnotations draws the annotations of each page. It is on by default.
 func WithAnnotations(on bool) Option
 
+// Box is a box of a page: the CropBox, the MediaBox, the BleedBox, the
+// TrimBox or the ArtBox (D31).
+type Box int
+
+const (
+	CropBox Box = iota // the default
+	MediaBox
+	BleedBox
+	TrimBox
+	ArtBox
+)
+
+// WithPageBox renders the box box of each page, with its size and its
+// clip. A box that a page does not have takes its default from the PDF
+// specification.
+func WithPageBox(box Box) Option
+
 // Open opens a PDF file.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error)
 
