@@ -193,9 +193,8 @@ func boxPDF() []byte {
 
 // TestRenderMediaBox renders a PDF file whose MediaBox is larger than its
 // CropBox. The row of the page shows the CropBox with each reference. A
-// second row shows the MediaBox, where Poppler draws the mark outside the
-// CropBox, and where ivy is unsupported until the package pdf has the
-// option of D31.
+// second row shows the MediaBox, where Poppler and ivy draw the mark outside
+// the CropBox (D31).
 func TestRenderMediaBox(t *testing.T) {
 	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo"} {
 		if _, err := exec.LookPath(name); err != nil {
@@ -239,9 +238,9 @@ func TestRenderMediaBox(t *testing.T) {
 	if d.Worst < 0 || d.Worst > 8 {
 		t.Errorf("expected ivy to look as the references at the CropBox, got: %.2f", d.Worst)
 	}
-	// each reference draws the MediaBox, and ivy cannot yet
-	if media.Ivy.Status != StatusUnsupported || media.Ivy.Error != errNoMediaBox.Error() {
-		t.Errorf("expected ivy to be unsupported at the MediaBox, got: %+v", media.Ivy)
+	// each reference draws the MediaBox, and so does ivy
+	if media.Ivy.Status != StatusOK || media.Ivy.Size != image.Pt(200, 200) {
+		t.Errorf("expected ivy to draw the MediaBox, 200×200, got: %+v", media.Ivy)
 	}
 	if len(media.Refs) != 3 {
 		t.Fatalf("expected 3 references at the MediaBox, got: %d", len(media.Refs))
@@ -263,8 +262,15 @@ func TestRenderMediaBox(t *testing.T) {
 			t.Errorf("expected %s to draw the mark at the MediaBox, got: %x %x %x", c.Name, r, g, b)
 		}
 	}
-	if d.MediaBoxWorst == nil || *d.MediaBoxWorst != -1 {
-		t.Errorf("expected the worst of the MediaBox to be -1 without ivy, got: %v", d.MediaBoxWorst)
+	img, err := readImage(filepath.Join(out, media.Ivy.Image))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, g, b, _ := img.At(20, 180).RGBA(); r > 0x2000 || g > 0x2000 || b > 0x2000 {
+		t.Errorf("expected ivy to draw the mark at the MediaBox, got: %x %x %x", r, g, b)
+	}
+	if d.MediaBoxWorst == nil || *d.MediaBoxWorst < 0 || *d.MediaBoxWorst > 8 {
+		t.Errorf("expected ivy to look as the references at the MediaBox, got: %v", d.MediaBoxWorst)
 	}
 	if d.Disagree != 0 || media.Disagrees {
 		t.Errorf("expected the row of the MediaBox out of Disagree, got: %d %t", d.Disagree, media.Disagrees)

@@ -214,9 +214,9 @@ pdftoppm -f N -l N -singlefile -r DPI -png -aa yes -aaVector yes [-opw PASSWORD 
 pdftocairo -f N -l N -singlefile -r DPI -png -antialias gray [-opw PASSWORD -upw PASSWORD] file.pdf out
 ```
 
-The cell of ivy in this row needs the option `pdf.WithPageBox` of D31.
-Until the package `pdf` has it, the cell has the status `unsupported` and
-the text "ivy cannot render the MediaBox yet (D31)".
+ivy renders the cell of this row with the option
+`pdf.WithPageBox(pdf.MediaBox)` of D31, and with the configuration of the
+row of the CropBox.
 
 MuPDF 1.28 gives the image of `-b mediabox` the size of the MediaBox, but
 it clips the drawing to the CropBox. Its image does not show the marks in

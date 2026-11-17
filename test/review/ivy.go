@@ -350,17 +350,40 @@ func (d *ivyDoc) close() {
 	}
 }
 
-// errNoMediaBox is the error of ivyMediaBox until the package pdf has the
-// option WithPageBox (D31).
-var errNoMediaBox = errors.New("ivy cannot render the MediaBox yet (D31)")
-
 // ivyMediaBox renders page n, from 0, of the PDF file at path at its
-// MediaBox, at dpi over white. password opens a file with a password, and
-// fonts is the folder of the fonts of ivy. It will open the file with
-// pdf.Open and the option pdf.WithPageBox(pdf.MediaBox) of D31. Until the
-// package pdf has that option, it returns errNoMediaBox, and the cell of
-// ivy of a row of the MediaBox has the status unsupported.
-func ivyMediaBox(ctx context.Context, path, password, fonts string, n int, dpi float32) (image.Image, error) {
-	_, _, _, _, _, _ = ctx, path, password, fonts, n, dpi
-	return nil, errNoMediaBox
+// MediaBox, at dpi over white, with the configuration cfg of the row of the
+// CropBox. It opens the file with pdf.Open and the option
+// pdf.WithPageBox(pdf.MediaBox) of D31.
+func ivyMediaBox(ctx context.Context, path string, cfg ivy.Config, n int, dpi float32) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening the file: %w", err)
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("reading the size of the file: %w", err)
+	}
+	img, err := call(ctx, func() (image.Image, error) {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+		doc, err := pdf.Open(ctx, io.NewSectionReader(f, 0, st.Size()), pdf.WithConfig(cfg), pdf.WithPageBox(pdf.MediaBox))
+		if err != nil {
+			return nil, fmt.Errorf("opening with pdf: %w", err)
+		}
+		defer func() { _ = doc.Close() }()
+		page, err := doc.Page(ctx, n)
+		if err != nil {
+			return nil, fmt.Errorf("getting the page: %w", err)
+		}
+		img, err := ivy.RenderImage(ctx, page, dpi, color.White)
+		if err != nil {
+			return img, fmt.Errorf("rendering: %w", err)
+		}
+		return img, nil
+	})
+	// a stuck call keeps the file, as openIvy does
+	if !errors.Is(err, errStuck) {
+		_ = f.Close()
+	}
+	return img, err
 }

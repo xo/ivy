@@ -617,7 +617,8 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 	// ivy opens the document
 	ivyCtx, cancelIvy := context.WithTimeout(ctx, opts.Timeout)
 	defer cancelIvy()
-	doc, openTime, err := openIvy(ivyCtx, path, e.Kind, ivyConfig(opts, fonts, e.Password(), jb.paper))
+	cfg := ivyConfig(opts, fonts, e.Password(), jb.paper)
+	doc, openTime, err := openIvy(ivyCtx, path, e.Kind, cfg)
 	d.OpenMS = ms(openTime)
 	stuck := errors.Is(err, errStuck)
 	// a page can get stuck too, so the close checks stuck at the end
@@ -787,7 +788,7 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 
 		// the MediaBox of a PDF file, if it differs from the CropBox
 		if r.mediaBox && routeGroup.skip == "" && (routeGroup.pages < 0 || n < routeGroup.pages) {
-			mediaRow(ivyCtx, refCtx, d, routeGroup, path, n, ivyDPI, filepath.Join(dir, fmt.Sprintf("p%d-media", n+1)), rel, opts, names)
+			mediaRow(ivyCtx, refCtx, d, routeGroup, path, cfg, n, ivyDPI, filepath.Join(dir, fmt.Sprintf("p%d-media", n+1)), rel, opts, names)
 		}
 	}
 	d.RenderMS = ms(renderTime)
@@ -986,10 +987,11 @@ func abs(v int) int {
 
 // mediaRow adds a row of the MediaBox of page n, from 0, of the PDF file at
 // path to d, if the MediaBox of the page differs from its CropBox (D31).
-// ivy renders the row with ivyMediaBox, and the references of route with
-// mediaRenderers, into images at prefix. The row does not count for Worst
-// and Disagree of d. It counts for MediaBoxWorst.
-func mediaRow(ivyCtx, refCtx context.Context, d *DocReport, route *refGroup, path string, n int, dpi float32,
+// ivy renders the row with ivyMediaBox and the configuration cfg of the row
+// of the CropBox, and the references of route with mediaRenderers, into
+// images at prefix. The row does not count for Worst and Disagree of d. It
+// counts for MediaBoxWorst.
+func mediaRow(ivyCtx, refCtx context.Context, d *DocReport, route *refGroup, path string, cfg ivy.Config, n int, dpi float32,
 	prefix string, rel func(string) string, opts RenderOptions, names []string,
 ) {
 	differ, err := pdfBoxesDiffer(refCtx, route.job, route.prep.in, n+1)
@@ -1004,12 +1006,9 @@ func mediaRow(ivyCtx, refCtx context.Context, d *DocReport, route *refGroup, pat
 	d.Rows = append(d.Rows, row)
 	row.Ivy = &Cell{Name: "ivy"}
 	t := time.Now()
-	img, err := ivyMediaBox(ivyCtx, path, d.Password(), filepath.Join(opts.Repo, "fonts"), n, dpi)
+	img, err := ivyMediaBox(ivyCtx, path, cfg, n, dpi)
 	row.Ivy.MS = ms(time.Since(t))
 	row.Ivy.Status = statusOf(ivyCtx, err)
-	if errors.Is(err, errNoMediaBox) {
-		row.Ivy.Status, row.Ivy.MS = StatusUnsupported, 0
-	}
 	if err != nil {
 		row.Ivy.Error = err.Error()
 	}

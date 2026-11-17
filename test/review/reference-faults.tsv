@@ -13,3 +13,6 @@ poi/xlsx/landscape-a4-tables.xlsx	*	msoffice	Excel in the Windows VM prints the 
 poi/xls/landscape-a4-drawing.xls	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
 poi/xls/landscape-a4-japanese.xls	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
 poi/doc/word6-sections.doc	*	msoffice	Word draws the text with MS Gothic, because Windows has no Liberation Serif, which the file names. ivy draws Liberation Serif.
+poi/ppt/backgrounds.ppt	2	msoffice	PowerPoint fills the background with red and green crosses, from a picture of the store that is a photo. ivy fills it with the mix of the two colors of the pattern, as MS-ODRAW describes a pattern fill.
+poi/ppt/backgrounds.ppt	3	msoffice	PowerPoint draws the background white. ivy tiles the picture of the texture fill, as MS-ODRAW describes it.
+idpf/epub/page-blanche.epub	*	calibre	calibre puts the pages of this book of fixed layout on the paper of its options, with the margins of an ebook, and adds a page of the cover. ivy gives each page the size of the viewport of its document, as the file asks (D32).

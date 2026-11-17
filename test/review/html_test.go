@@ -26,7 +26,7 @@ func TestWriteHTML(t *testing.T) {
 				}},
 			}, {
 				Page: 1, Box: BoxMedia, RefsDiff: 0.75,
-				Ivy:  &Cell{Name: "ivy", Status: StatusUnsupported, Error: errNoMediaBox.Error()},
+				Ivy:  &Cell{Name: "ivy", Status: StatusUnsupported, Error: "ivy cannot render the MediaBox yet (D31)"},
 				Refs: []*Cell{{Name: "MuPDF", Image: "d/001/p1-media-mupdf.png", Thumb: "d/001/p1-media-mupdf.jpg", Size: image.Pt(900, 1100)}},
 			}},
 			MediaBoxWorst: new(-1.0),
