@@ -8,10 +8,11 @@
 //
 // The package reads CR2, NEF, NRW, ARW, SRF, SR2, DNG, ORF, RW2, PEF and SRW,
 // which are forms of TIFF, RAF of Fujifilm, and CR3 of Canon, which is a form
-// of ISO BMFF. It registers CR2, CR3, ORF, RW2 and RAF with the package image,
-// so that image.Decode returns the largest preview. The other formats start as
-// a plain TIFF file does, so the package does not register them, and a
-// program opens them with Open.
+// of ISO BMFF. An ORF file keeps its large preview in the maker notes of
+// Olympus, which the package reads too. It registers CR2, CR3, ORF, RW2 and
+// RAF with the package image, so that image.Decode returns the largest
+// preview. The other formats start as a plain TIFF file does, so the package
+// does not register them, and a program opens them with Open.
 package camera
 
 import (

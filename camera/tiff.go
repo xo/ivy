@@ -23,6 +23,7 @@ const (
 	tagJPEGLength      = 0x0202
 	tagExifIFD         = 0x8769
 	tagDateOriginal    = 0x9003
+	tagMakerNote       = 0x927c
 	// tagJpgFromRaw holds the whole JPEG of an RW2 file of Panasonic.
 	tagJpgFromRaw = 0x002e
 )
@@ -119,25 +120,14 @@ func (t *tiffReader) walkIFD(off int64, depth int) (int64, error) {
 		return 0, fmt.Errorf("more than %d tiff ifds: %w", t.lim.MaxObjects, ivy.ErrLimit)
 	}
 	t.seen[off] = true
-	buf, ok := t.read(off, 2)
-	if !ok {
-		return 0, nil
+	fields, next, err := t.fields(off)
+	if err != nil || fields == nil {
+		return 0, err
 	}
-	n := int(t.order.Uint16(buf))
-	if n > maxEntries {
-		return 0, fmt.Errorf("tiff ifd of %d entries: %w", n, ivy.ErrFormat)
-	}
-	buf, ok = t.read(off+2, int64(n)*12+4)
-	if !ok {
-		return 0, nil
-	}
-	fields := make(map[uint16]field, n)
-	for i := range n {
-		e := buf[i*12 : i*12+12]
-		fields[t.order.Uint16(e)] = field{typ: t.order.Uint16(e[2:]), count: t.order.Uint32(e[4:]), value: e[8:12]}
-	}
-	next := int64(t.order.Uint32(buf[n*12:]))
 	t.readFields(fields)
+	if f, ok := fields[tagMakerNote]; ok && f.typ == typeUndefined {
+		t.makerNote(f)
+	}
 	for _, tag := range []uint16{tagSubIFDs, tagExifIFD} {
 		f, ok := fields[tag]
 		if !ok {
@@ -150,6 +140,29 @@ func (t *tiffReader) walkIFD(off int64, depth int) (int64, error) {
 		}
 	}
 	return next, nil
+}
+
+// fields reads the entries of the IFD at off, and the offset of the next
+// IFD. It returns nil if the IFD is outside the file.
+func (t *tiffReader) fields(off int64) (map[uint16]field, int64, error) {
+	buf, ok := t.read(off, 2)
+	if !ok {
+		return nil, 0, nil
+	}
+	n := int(t.order.Uint16(buf))
+	if n > maxEntries {
+		return nil, 0, fmt.Errorf("tiff ifd of %d entries: %w", n, ivy.ErrFormat)
+	}
+	buf, ok = t.read(off+2, int64(n)*12+4)
+	if !ok {
+		return nil, 0, nil
+	}
+	fields := make(map[uint16]field, n)
+	for i := range n {
+		e := buf[i*12 : i*12+12]
+		fields[t.order.Uint16(e)] = field{typ: t.order.Uint16(e[2:]), count: t.order.Uint32(e[4:]), value: e[8:12]}
+	}
+	return fields, int64(t.order.Uint32(buf[n*12:])), nil
 }
 
 // readFields keeps the JPEG images and the facts of the camera that the fields
