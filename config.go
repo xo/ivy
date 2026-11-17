@@ -40,6 +40,40 @@ type Config struct {
 	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
 	// WOFF2 files within Limits, and ignores the other files.
 	Fonts fs.FS
+	// Paper is the page of a document whose file gives none, such as a
+	// text file, an HTML file or an ebook. The zero Paper keeps the default
+	// of the format, US Letter in portrait (D32).
+	Paper Paper
+}
+
+// Paper is the size of a page in points, 1/72 inch. The zero Paper is the
+// default of the format.
+type Paper struct {
+	Width, Height float32
+}
+
+// The common papers, in portrait.
+var (
+	Letter = Paper{Width: 612, Height: 792}
+	Legal  = Paper{Width: 612, Height: 1008}
+	A4     = Paper{Width: 595.28, Height: 841.89}
+	A5     = Paper{Width: 419.53, Height: 595.28}
+)
+
+// Landscape returns p with its longer side across.
+func (p Paper) Landscape() Paper {
+	if p.Height > p.Width {
+		p.Width, p.Height = p.Height, p.Width
+	}
+	return p
+}
+
+// Portrait returns p with its longer side down.
+func (p Paper) Portrait() Paper {
+	if p.Width > p.Height {
+		p.Width, p.Height = p.Height, p.Width
+	}
+	return p
 }
 
 // Log returns the logger of the configuration. It returns a logger that

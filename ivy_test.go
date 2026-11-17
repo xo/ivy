@@ -238,3 +238,18 @@ func TestConfigLog(t *testing.T) {
 		t.Error("expected a logger")
 	}
 }
+
+func TestPaper(t *testing.T) {
+	if p, exp := A4.Landscape(), (Paper{Width: 841.89, Height: 595.28}); p != exp {
+		t.Errorf("expected %v, got: %v", exp, p)
+	}
+	if p := A4.Landscape().Portrait(); p != A4 {
+		t.Errorf("expected %v, got: %v", A4, p)
+	}
+	if p := Letter.Portrait(); p != Letter {
+		t.Errorf("expected %v, got: %v", Letter, p)
+	}
+	if p := (Paper{}).Landscape(); p != (Paper{}) {
+		t.Errorf("expected the zero Paper, got: %v", p)
+	}
+}
