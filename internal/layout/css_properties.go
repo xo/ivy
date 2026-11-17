@@ -167,6 +167,8 @@ var InitialValues = map[string]Value{
 	"hyphens":               String("manual"),
 	"letter_spacing":        String("normal"),
 	"tab_size":              Int(8),
+	"tab_stops":             String("none"),
+	"text_autospace":        String("none"),
 	"text_align_all":        String("start"),
 	"text_align_last":       String("auto"),
 	"text_indent":           Dimension{0, "px"},
@@ -290,6 +292,10 @@ var InitialValues = map[string]Value{
 	// Proprietary
 	"anchor": nil,
 	"lang":   nil,
+
+	// The properties that ivy adds, with the prefix -ivy-.
+	"margin_box_fit": String("none"),
+	"static_top":     String("auto"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -350,6 +356,8 @@ var Inherited = map[string]bool{
 	"overflow_wrap":           true,
 	"quotes":                  true,
 	"tab_size":                true,
+	"tab_stops":               true,
+	"text_autospace":          true,
 	"text_align_all":          true,
 	"text_align_last":         true,
 	"text_indent":             true,

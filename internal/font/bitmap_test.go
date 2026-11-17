@@ -2,6 +2,7 @@ package font
 
 import (
 	"encoding/binary"
+	"image"
 	"slices"
 	"testing"
 
@@ -136,5 +137,48 @@ func TestNoHorizontalMetrics(t *testing.T) {
 	gid, _ := f.Glyph('A')
 	if adv := f.Advance(gid); adv != 0 {
 		t.Errorf("expected no advance, got %v", adv)
+	}
+}
+
+// TestBitmap checks the bitmap of a glyph without an outline: the space of
+// the Go font, with a bitmap of 8 by 8 pixels at 12 pixels to the em.
+func TestBitmap(t *testing.T) {
+	plain, err := Load(goregular.TTF, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, _ := plain.Glyph(' ')
+	letter, _ := plain.Glyph('A')
+	eblc, ebdt := bitmapStrike(uint16(space))
+	f, err := Load(withTables(goregular.TTF, map[string][]byte{"EBLC": eblc, "EBDT": ebdt}), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Outline(space) != nil {
+		t.Fatal("expected no outline for the space")
+	}
+	b, ok := f.Bitmap(space)
+	if !ok {
+		t.Fatal("expected the bitmap of the space")
+	}
+	const em = float32(8) / 12
+	if !b.Mask || b.X != 0 || b.Y != -em || b.W != em || b.H != em {
+		t.Errorf("expected a mask of %v em above the baseline, got %+v", em, b)
+	}
+	if got := b.Image.Bounds(); got != image.Rect(0, 0, 8, 8) {
+		t.Fatalf("expected 8 by 8 pixels, got %v", got)
+	}
+	// The bitmap is a frame: a full first row, and the edges of the
+	// second row.
+	for x, want := range []uint8{0xff, 0, 0, 0, 0, 0, 0, 0xff} {
+		if got := b.Image.(*image.Alpha).AlphaAt(x, 1).A; got != want {
+			t.Errorf("pixel (%d, 1) = %d, want %d", x, got, want)
+		}
+	}
+	if got := b.Image.(*image.Alpha).AlphaAt(3, 0).A; got != 0xff {
+		t.Errorf("pixel (3, 0) = %d, want 255", got)
+	}
+	if _, ok := f.Bitmap(letter); ok {
+		t.Error("expected no bitmap for a glyph without one")
 	}
 }

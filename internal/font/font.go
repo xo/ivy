@@ -29,6 +29,9 @@ type Face struct {
 	face     *gofont.Face
 	upem     float32
 	outlines map[GID]*okage.Path
+	// bitmaps holds the bitmaps that Bitmap decoded, and nil for a glyph
+	// without one.
+	bitmaps map[GID]*Bitmap
 }
 
 // Load reads the font in data, which is TrueType, OpenType or CFF in an

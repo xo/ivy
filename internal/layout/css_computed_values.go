@@ -324,6 +324,7 @@ func init() {
 	registerComputer(computeLineHeight, "line-height")
 	registerComputer(computeLang, "lang")
 	registerComputer(computeTabSize, "tab-size")
+	registerComputer(computeTabStops, "tab-stops")
 	registerComputer(computeTransform, "transform")
 	registerComputer(computeVerticalAlign, "vertical-align")
 	registerComputer(computeWordSpacing, "word-spacing")

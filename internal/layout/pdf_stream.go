@@ -974,6 +974,62 @@ func (s *stream) fillGlyphs(run display.GlyphRun) {
 	})
 }
 
+// fillBoldGlyphs fills a run of glyphs, and strokes their outlines with
+// the fill and a line of width points, for a synthetic bold face.
+//
+// Port: upstream has no synthetic bold. Pango asks Cairo to embolden a face
+// that has no bold.
+func (s *stream) fillBoldGlyphs(run display.GlyphRun, width float64) {
+	shader := s.shader(s.state.fill)
+	if shader == nil || run.Face == nil || len(run.Glyphs) == 0 {
+		return
+	}
+	p := run.Path()
+	s.record(func(d display.Device) {
+		if sh := shader(); sh != nil {
+			d.FillGlyphs(run, sh)
+			if p != nil {
+				st := okage.DefaultStroke()
+				st.Width = float32(width)
+				st.LineJoin = okage.LineJoinRound
+				d.StrokePath(p, st, sh)
+			}
+		}
+	})
+}
+
+// drawGlyphBitmap draws the bitmap of a glyph whose origin is at (x, y), at
+// the font size size: a color bitmap as an image, and a mask with the color
+// of the filling.
+//
+// Port: upstream draws the bitmap glyphs with Cairo.
+func (s *stream) drawGlyphBitmap(b *ivyfont.Bitmap, x, y, size float64) {
+	alpha := s.state.fill.alpha
+	px := b.Image.Bounds()
+	if alpha <= 0 || px.Dx() <= 0 || px.Dy() <= 0 {
+		return
+	}
+	sx, sy := float64(b.W)*size/float64(px.Dx()), float64(b.H)*size/float64(px.Dy())
+	t := okage.TransformFromRow(float32(sx), 0, 0, float32(sy),
+		float32(x+float64(b.X)*size-float64(px.Min.X)*sx), float32(y+float64(b.Y)*size-float64(px.Min.Y)*sy))
+	opts := display.ImageOptions{Opacity: float32(min(alpha, 1)), Smooth: s.dc.interpolate}
+	if mask, ok := b.Image.(*image.Alpha); ok && b.Mask {
+		shader := s.shader(s.state.fill)
+		if shader == nil {
+			return
+		}
+		opts.Opacity = 1
+		s.record(func(d display.Device) {
+			if sh := shader(); sh != nil {
+				d.FillMask(mask, t, opts, sh)
+			}
+		})
+		return
+	}
+	img := b.Image
+	s.record(func(d display.Device) { d.DrawImage(img, t, opts) })
+}
+
 // absolute returns the transform from the current user space to the pixels
 // of the device.
 func (s *stream) absolute() Matrix {

@@ -915,6 +915,24 @@ func (fc *FontConfiguration) face(id svg.FontID, style *Style) *font.Face {
 	return f
 }
 
+// syntheticBold reports whether the text of a style draws the face id in a
+// synthetic bold: the style asks for a bold weight, the face is not bold,
+// and the face has no variations that make it bold. A family without a
+// bold face, such as SimSun, then still draws its bold text bold.
+//
+// Port: upstream draws with Pango, which emboldens such a face with Cairo.
+func (fc *FontConfiguration) syntheticBold(id svg.FontID, style *Style) bool {
+	if fontWeight(style.Get("font_weight")) < 600 || fc.db == nil {
+		return false
+	}
+	info, ok := fc.db.Face(id)
+	if !ok || info.Weight >= 600 {
+		return false
+	}
+	f := fc.face(id, style)
+	return f != nil && len(f.Coords()) == 0
+}
+
 // parseFont parses the font id with go-text, or returns nil.
 func (fc *FontConfiguration) parseFont(id svg.FontID) (ft *font.Font) {
 	defer func() {

@@ -948,13 +948,16 @@ func updatePageGroups(pageGroups *[]pageGroup, resumeAt skipStack, next nextPage
 	}
 }
 
-// makePage is make_page in weasyprint/layout/page.py: it returns one laid
-// out page without margin boxes, and where the next page resumes.
+// makePageGrown is make_page in weasyprint/layout/page.py: it returns one
+// laid out page without margin boxes, and where the next page resumes.
 //
 // It starts with the initial values from lc.pageMaker[index]. The
 // resulting values, used as initial values for the next page, are stored
 // in lc.pageMaker.
-func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, skipStack) {
+//
+// Port: grow makes the top and the bottom margins of the page larger, for
+// -ivy-margin-box-fit. See makePage.
+func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow pageGrowth) (*Box, skipStack) {
 	pageNumber := index + 1
 	pageMakers := lc.pageMaker
 	pageIsEmpty := true
@@ -1020,6 +1023,7 @@ func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, ski
 	page.PositionY = 0
 	pageWidth(page, lc, cbWidth)
 	pageHeight(page, lc, cbHeight)
+	grow.apply(page)
 	initialContainingBlock := page
 	var previousResumeAt skipStack
 	if blank {

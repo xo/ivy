@@ -240,3 +240,44 @@ func TestBookDraw(t *testing.T) {
 		t.Error("Draw does not draw the pixels of Render")
 	}
 }
+
+// TestBookPageCounter checks that the counter page goes on across the
+// documents of a book, in any order of the calls.
+func TestBookPageCounter(t *testing.T) {
+	src := testBook(3, nil)
+	src.FS.(fstest.MapFS)["c0.xhtml"] = &fstest.MapFile{Data: []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><body>` +
+		`<p>One</p><p style="break-before: page">Two</p></body></html>`)}
+	src.StyleSheets = append(src.StyleSheets, `@page { @top-center { content: counter(page) } }`)
+	number := func(b *Book, n int) string {
+		t.Helper()
+		p, err := b.Page(context.Background(), n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var text string
+		for _, child := range p.(*bookPage).box.Children {
+			if child.AtKeyword == "@top-center" {
+				child.Descendants(func(d *Box) bool {
+					if d.Kind == KindText {
+						text += d.Text
+					}
+					return true
+				})
+			}
+		}
+		return text
+	}
+	b := NewBook(src, BookOptions{})
+	for _, n := range []int{3, 0, 1, 2} {
+		if got, want := number(b, n), fmt.Sprint(n+1); got != want {
+			t.Errorf("page %d: got the number %q, want %q", n, got, want)
+		}
+	}
+	b = NewBook(src, BookOptions{})
+	if n, err := b.PageCount(context.Background()); err != nil || n != 4 {
+		t.Fatalf("got %d pages and %v, want 4", n, err)
+	}
+	if got := number(b, 2); got != "3" {
+		t.Errorf("page 2 after the count: got the number %q, want 3", got)
+	}
+}

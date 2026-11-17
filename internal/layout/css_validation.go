@@ -285,6 +285,15 @@ func preprocessDeclarationsTo(log *logger, baseURL string, declarations, prelude
 			continue
 		}
 
+		// Port: the properties that ivy adds are only known with the
+		// prefix -ivy-.
+		if unprefixedName, ok := strings.CutPrefix(name, ivyPrefix); ok && ivyProperties[unprefixedName] {
+			name = unprefixedName
+		} else if ivyProperties[name] {
+			validationError(false, "the property is only known with the prefix "+ivyPrefix)
+			continue
+		}
+
 		if unprefixedName, ok := strings.CutPrefix(name, prefix); ok {
 			switch {
 			case proprietary[unprefixedName]:

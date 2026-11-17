@@ -245,6 +245,12 @@ type Box struct {
 	// JustificationSpacing is the spacing that justifies a text box.
 	JustificationSpacing float64
 
+	// isTab marks the text box of one tab, which the layout places at the
+	// tab stops of -ivy-tab-stops, and tab is its stop. Upstream has no tab
+	// stops.
+	isTab bool
+	tab   tabStop
+
 	// GridX is the position of a cell, a column or a column group in the
 	// grid of its table.
 	GridX int

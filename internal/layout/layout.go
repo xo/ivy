@@ -199,6 +199,10 @@ type DocumentOptions struct {
 	CounterStyle CounterStyle
 	// Footnotes are the footnotes that BuildFormattingStructure returns.
 	Footnotes []*Box
+	// PagesBefore is the number of pages before the document, such as the
+	// pages of the documents before it in a Book. The counter page of its
+	// first page is PagesBefore + 1. Upstream has no such option.
+	PagesBefore int
 }
 
 // Document is layout_document in weasyprint/layout/__init__.py: the layout
@@ -256,6 +260,9 @@ type Document struct {
 	// err is the error that stopped the layout. The document gives it
 	// again.
 	err error
+
+	// pagesBefore is DocumentOptions.PagesBefore.
+	pagesBefore int
 }
 
 // NewDocument returns the layout of a document: the HTML document, the box
@@ -276,8 +283,9 @@ func NewDocument(html *HTML, root *Box, styleFor *StyleFor, opts DocumentOptions
 		// Port: upstream lays out as many pages as the document makes. The
 		// port lays out at most Limits.MaxObjects / 16 pages, 65,536 by
 		// default.
-		maxPages: max(1, limits.MaxObjects/16),
-		finished: map[int]*Box{},
+		maxPages:    max(1, limits.MaxObjects/16),
+		finished:    map[int]*Box{},
+		pagesBefore: max(opts.PagesBefore, 0),
 	}
 	return d
 }
@@ -392,7 +400,15 @@ func (d *Document) completeLayout() {
 func (d *Document) startLoop() {
 	lc := d.lc
 	if d.loop == 0 {
-		lc.pageMaker = []*pageMaker{newPageMakerFromRootBox(d.root)}
+		first := newPageMakerFromRootBox(d.root)
+		if d.pagesBefore > 0 {
+			// Port: upstream has no pages before a document. The counter
+			// page starts from them, and the increment of the first page
+			// gives PagesBefore + 1.
+			first.counterValues["page"] = []int{d.pagesBefore}
+			first.counterScopes[0]["page"] = true
+		}
+		lc.pageMaker = []*pageMaker{first}
 	} else {
 		lc.footnotes = slices.Clone(d.originalFootnotes)
 	}
@@ -732,6 +748,11 @@ type layoutContext struct {
 	maxWork   int
 	depth     int
 	interrupt func() error
+
+	// tabOrigin is the start edge of the margin box of the block container
+	// of the line that the layout places, from which the tab stops of
+	// -ivy-tab-stops are measured. Upstream has no tab stops.
+	tabOrigin float64
 }
 
 // newLayoutContext is LayoutContext.__init__ in

@@ -88,6 +88,7 @@ one of its functions.
 | none | | `source.go` | 37 | `Source`, the input of a format |
 | none | | `book.go` | 503 | `Book`, the pages of a whole `Source`. See "The book" |
 | none | | `objects.go` | 156 | The metafiles of Windows and the objects of a `Source`. See "The metafiles and the objects" |
+| none | | `css_ivy.go`, `layout_tabs.go`, `layout_page_fit.go`, `text_autospace.go` | 621 | The properties that ivy adds for the word processors. See "The properties of ivy" |
 | `tests/testing_utils.py` | | `testing_utils_test.go` | 641 | Ported, without `tree_position` |
 | `tests/test_boxes.py` | 1280 | `formatting_structure_build_test.go` | 649 | Ported. The tests that need the layout are in `layout_page_test.go` |
 | `tests/test_text.py` | 1671 | `text_line_break_test.go`, `layout_text_test.go` | 1533 | The tests that split lines and the tests of `text-transform`, then the tests that need the layout |
@@ -111,6 +112,7 @@ one of its functions.
 | `tests/draw/test_x.py`, 23 files | 11854 | `draw_x_test.go` | 14111 | Ported. See "The tests" |
 | `tests/test_stacking.py`, `test_acid2.py`, `test_unicode.py`, `test_api.py` | | `stacking_test.go`, `acid2_test.go`, `unicode_test.go`, `api_test.go` | 444 | The tests that draw pixels. The other tests of `test_api.py` test the API of Python, the command line and the PDF file |
 | none | | `book_test.go` | 242 | The tests of `Book` |
+| none | | `layout_tabs_test.go`, `layout_page_fit_test.go`, `text_autospace_test.go`, `draw_synthetic_bold_test.go`, `draw_bitmap_glyph_test.go` | 479 | The tests of the properties of ivy, of the synthetic bold and of the bitmap glyphs |
 | none | | `book_fonts_test.go` | 158 | The tests of the font files of a book |
 
 The other files of `weasyprint/` write PDF, which ivy does not write, or
@@ -492,7 +494,15 @@ port draws onto the display list of D10 instead.
 6. `draw_text.go` draws `TextLine.GlyphRuns` of the first line of the
    layout of a text box, with the outlines of its faces. The faces are the
    faces of go-text of the `FontConfiguration`, with the variations of the
-   style, and `internal/font` gives their outlines.
+   style, and `internal/font` gives their outlines. A glyph without an
+   outline draws the bitmap of the font when it has one, such as an emoji
+   of the tables CBDT and sbix, or a glyph of `weasyprint.otb`. A bitmap
+   of one bit for each pixel is a mask that the color of the text fills.
+   When the style asks for a weight of 600 or more, and the face is not
+   bold and has no variations, the glyphs draw in a synthetic bold: the
+   outlines are filled, and stroked with a line of 1/24 of the font size,
+   as FreeType emboldens a face for Pango. A family without a bold face,
+   such as SimSun, then draws its bold text bold.
 7. The colors are converted to sRGB. DeviceCMYK is converted without a
    profile.
 8. An SVG image is rendered by okage into pixels at the scale of the device,
@@ -521,8 +531,11 @@ out the whole book.
 2. The layout is lazy. `Page(ctx, n)` lays out only the documents and the
    pages up to page `n`. A document that needs `counter(pages)` is laid out
    whole, as `Document.Page` does.
-3. The pages are numbered across the book. `counter(page)` and
-   `counter(pages)` restart in each document.
+3. The pages are numbered across the book. `counter(page)` goes on across
+   the documents: `DocumentOptions.PagesBefore` gives each document the
+   number of pages before it. `counter(pages)` is the number of pages of
+   each document, because the number of pages of the book is known only
+   after the layout of the whole book.
 4. The book keeps the layout of at most 4 documents, the most recently
    used. A document that it drops is laid out again when a page of it is
    asked for. The pages that a program holds stay valid.
@@ -585,6 +598,64 @@ the shared sets.
 Calibri with Carlito and Arial with Liberation Sans, and the order of the
 lookup. It reads the files from the folder, because the main module cannot
 import the module of the fonts.
+
+## The properties of ivy
+
+`css_ivy.go` is not a port. It adds four properties for the formats of the
+word processors, such as `docx` and `odf`. Upstream does not have them. A
+style sheet names each one with the prefix `-ivy-`, such as
+`-ivy-tab-stops`, and the validation ignores the name without the prefix.
+
+1. `-ivy-tab-stops` places the tabs of a text at tab stops, as Word and
+   LibreOffice do. Its value is `none`, the initial value, `auto`, or a
+   list of stops separated by commas. A stop is a length, an alignment
+   `left`, `right`, `center` or `decimal`, `left` by default, and a
+   string, the leader that fills the tab, such as `'.'`. An example is
+   `-ivy-tab-stops: 36pt, 432pt right '.'`. The property is inherited. The
+   rules are these:
+   1. With `none`, a tab goes to the next multiple of `tab-size` from the
+      start of its text box, as in upstream.
+   2. Otherwise, each tab of a text is a text box of its own. A tab goes
+      to the first stop after the place where it starts. The positions
+      are measured from the start edge of the margin box of the block
+      container of the line, the left margin of a paragraph whose
+      `margin-left` is its indent. After the last stop, and for `auto`,
+      the tab goes to the next multiple of `tab-size` from that edge, a
+      default stop that aligns left.
+   3. The text after a tab, up to the next tab or to the end of the line,
+      starts at a stop that aligns left, ends at a stop that aligns right,
+      has its center at a stop that centers, and has its first full stop
+      at a decimal stop. A decimal stop without a full stop in the text
+      aligns right. When the text before the tab goes past the place, the
+      tab has no width.
+   4. The leader is drawn as many times as it fits in the tab, and ends at
+      the end of the tab. An underline of the text of the tab underlines
+      the tab.
+   5. The breaking of the line gives the tabs their width at stops that
+      align left, and no width at the other stops. After the line, the
+      layout places each tab again, from left to right. A line with a tab
+      to a stop that does not align left can go past the width of the
+      line. The tabs of a right-to-left text keep `tab-size`.
+2. `-ivy-margin-box-fit` is `none`, the initial value, or `grow`. With
+   `grow` on a page, when the content of the margin boxes at the top or at
+   the bottom of the page is taller than its margin, the margin grows to
+   hold it, and the page is made again. The content is measured from the
+   margin edge of its first box to the margin edge of its last box, with
+   the margins of the last children of the blocks, and the padding and the
+   border of the margin box. A margin grows to at most 40% of the height
+   of the page. It is the place of the text of Word below a tall header.
+3. `-ivy-static-top` is `auto`, the initial value, or `block`. With
+   `block`, the static position of an absolutely positioned box of a line
+   is at the top of the part of the block container of the line on its
+   page, inside its border, and not below the line. It is the place of a
+   shape that a paragraph of Word anchors.
+4. `-ivy-text-autospace` is `none`, the initial value, or one or both of
+   `ideograph-alpha` and `ideograph-numeric`, as `text-autospace` of CSS
+   Text 4. It adds 1/8 em after a character of Han, Hiragana, Katakana or
+   Bopomofo that a letter, or a digit, of a text that is not full width
+   follows, and before such a character after one. The space is added in
+   one text box only. The property is inherited. It is the space of
+   `w:autoSpaceDE` and `w:autoSpaceDN` of Word.
 
 ## The hooks for the later stages
 
@@ -889,9 +960,10 @@ Each guard is marked with `Port:` in the code.
    images.
 3. The writing of PDF of `pdf/` and `document.py`, the links, the
    bookmarks, the anchors, the forms and the tags of a tagged PDF.
-4. `draw_emojis` and the color glyphs of SVG, PNG and COLR. `internal/font`
-   gives the outlines of the glyphs only. The bitmap glyphs of a font, such
-   as `weasyprint.otb`, are not drawn either.
+4. `draw_emojis` and the color glyphs of the tables SVG and COLR. okage
+   draws such glyphs in the text of an SVG image, and has no API that
+   draws a glyph of a face. The bitmap glyphs are drawn, see "The
+   drawing".
 5. The profiles of the colors: DeviceCMYK, Lab and the colors of
    `@color-profile` are converted to sRGB without a profile.
 6. `text/ffi.py`, the constants of Pango and Fontconfig, and the cache of
@@ -935,9 +1007,6 @@ values of upstream stay the same, except in these places, which a comment
    24 differ, on the diagonal edges of the nose: Ghostscript paints each
    pixel that a path touches, and okage the pixels whose center the path
    covers.
-3. `test_page_counters` of `tests/test_boxes.py` expects one line in a
-   margin box of 10px. The port breaks the text of the box into three
-   lines, and the test reads the text of the lines. See "Open problems".
 
 On 2026-11-17, the package runs 1346 test functions with 1373 subtests.
 1284 functions and 1355 subtests pass, and 62 functions and 18 subtests are
@@ -1010,15 +1079,11 @@ return an `*ivy.PartialError` that wraps `ivy.ErrLimit` or `ivy.ErrFormat`. Run 
    as upstream lays it out again. A long text without the short text of
    upstream, such as a text of `white-space: pre-wrap` with a large width,
    costs time in the square of its length.
-3. In `test_page_counters`, the port gives the margin box the min-content
-   width of its text, as the code of `compute_variable_dimension` and of
-   the setter of `OrientedBox.outer` reads, and breaks the text into three
-   lines. Upstream expects one line. The cause is not known.
-4. The fixed boxes of the later pages, and the target counters of the later
+3. The fixed boxes of the later pages, and the target counters of the later
    pages, are missing from a page that `Document.Page` returns before the
    whole layout. A program that needs them calls `Count` first.
-5. `counter(page)` and `counter(pages)` restart in each document of a
-   `Book`.
-6. A gradient without `extend`, such as a repeating gradient, paints its
+4. `counter(pages)` is the number of pages of each document of a `Book`,
+   not of the whole book.
+5. A gradient without `extend`, such as a repeating gradient, paints its
    first and its last colors past its domain. okage has no spread mode that
    paints nothing.

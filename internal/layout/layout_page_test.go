@@ -2177,7 +2177,8 @@ func TestMarginBoxStringSet10(t *testing.T) {
 
 // TestPageCounters is test_page_counters.
 func TestPageCounters(t *testing.T) {
-	// Test page-based counters.
+	// Test page-based counters. The spaces of the content are no-break
+	// spaces, as in upstream, so the text stays on one line.
 	pages := pageRender(t, `
       <style>
         @page {
@@ -2186,24 +2187,19 @@ func TestPageCounters(t *testing.T) {
           size: 30px;
           margin: 10px;
           @bottom-center {
-            content: "Page " counter(page) " of " counter(pages) ".";
+            content: "Page " counter(page) " of " counter(pages) ".";
           }
         }
       </style>
       <p>lorem ipsum dolor
     `, 3)
 	for i, page := range pages {
-		// Adapted: upstream expects one line. The page is 10px wide, so the
-		// margin box gets the width of its widest word, and the port breaks
-		// its text into three lines. The test reads the text of the lines.
 		bottomCenter := unpack(t, page, 2)[1]
-		var texts []string
-		for _, line := range bottomCenter.Children {
-			texts = append(texts, pageTexts(line))
-		}
-		want := fmt.Sprintf("Page %d of 3.", i+1)
-		if got := strings.Join(texts, " "); got != want {
-			t.Errorf("text %q, want %q", got, want)
+		lineBox := only(t, bottomCenter)
+		textBox := only(t, lineBox)
+		want := fmt.Sprintf("Page\u00a0%d\u00a0of\u00a03.", i+1)
+		if textBox.Text != want {
+			t.Errorf("text %q, want %q", textBox.Text, want)
 		}
 	}
 }

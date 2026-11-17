@@ -382,6 +382,10 @@ type TextLayout struct {
 	shaped   *shapedText
 	attrs    []LogAttr
 	tabWidth float64
+	// autospace holds, for each cluster, whether the space of
+	// -ivy-text-autospace comes after it. It is nil until autospaceAfter
+	// computes it.
+	autospace []bool
 }
 
 // newTextLayout is Layout.__init__ in weasyprint/text/line_break.py.
@@ -445,6 +449,7 @@ func (l *TextLayout) SetText(text string, justify bool) {
 	l.shaped = nil
 	l.attrs = nil
 	l.tabWidth = 0
+	l.autospace = nil
 	if strings.Contains(text, "\t") {
 		l.setTabs()
 	}
@@ -477,6 +482,7 @@ func (l *TextLayout) Deactivate() {
 	l.Style = nil
 	l.shaped = nil
 	l.attrs = nil
+	l.autospace = nil
 }
 
 // Reactivate is Layout.reactivate in weasyprint/text/line_break.py. It sets
@@ -529,9 +535,11 @@ type TextLine struct {
 	wrapped bool
 }
 
-// clusterSpacing returns the spacing after a cluster: the letter spacing,
-// and the word spacing after a space.
-func (l *TextLayout) clusterSpacing(c *textCluster) float64 {
+// clusterSpacing returns the spacing after the cluster i: the letter
+// spacing, the word spacing after a space, and the space of
+// -ivy-text-autospace.
+func (l *TextLayout) clusterSpacing(i int) float64 {
+	c := &l.shapedText().clusters[i]
 	var spacing float64
 	letterSpacing := l.Style.Get("letter_spacing")
 	if !isStr(letterSpacing, "normal") {
@@ -546,16 +554,22 @@ func (l *TextLayout) clusterSpacing(c *textCluster) float64 {
 		}
 		spacing += wordSpacing
 	}
+	if l.autospaceAfter(i) {
+		// Port: upstream has no text-autospace.
+		spacing += l.fontSize * autospaceRatio
+	}
 	return spacing
 }
 
-// advance returns the advance of a cluster at the position x of the line.
-func (l *TextLayout) advance(c *textCluster, x float64) float64 {
+// advance returns the advance of the cluster i at the position x of the
+// line.
+func (l *TextLayout) advance(i int, x float64) float64 {
+	c := &l.shapedText().clusters[i]
 	if c.r == '\t' && l.tabWidth > 0 {
 		next := (math.Floor(x/l.tabWidth+1e-9) + 1) * l.tabWidth
 		return next - x
 	}
-	return c.advance*l.fontSize + l.clusterSpacing(c)
+	return c.advance*l.fontSize + l.clusterSpacing(i)
 }
 
 // FirstLine is Layout.get_first_line in weasyprint/text/line_break.py. It
@@ -605,7 +619,7 @@ loop:
 			}
 			lastBreak = i
 		}
-		x += l.advance(c, x)
+		x += l.advance(i, x)
 		if isForcedBreak(c.r) {
 			end, next, hasNext = i+1, c.end, true
 			break
@@ -656,7 +670,7 @@ func (l *TextLayout) measureLine(line *TextLine) {
 	for i := line.first; i < line.last; i++ {
 		c := &s.clusters[i]
 		if !zeroLast || i != line.last-1 {
-			x += l.advance(c, x)
+			x += l.advance(i, x)
 		}
 		run := s.runs[c.run]
 		ascent = max(ascent, run.ascent)
@@ -731,11 +745,11 @@ func (line *TextLine) GlyphRuns() []GlyphRun {
 			}
 			c := &s.clusters[g.cluster]
 			if g.cluster != lastCluster && lastCluster >= 0 {
-				x += l.clusterSpacing(&s.clusters[lastCluster])
+				x += l.clusterSpacing(lastCluster)
 			}
 			advance := g.advance * l.fontSize
 			if c.r == '\t' {
-				advance = l.advance(c, x)
+				advance = l.advance(g.cluster, x)
 			}
 			gr.Glyphs = append(gr.Glyphs, Glyph{
 				ID: g.id, X: x + g.xOffset*l.fontSize, Y: -g.yOffset * l.fontSize,
@@ -745,7 +759,7 @@ func (line *TextLine) GlyphRuns() []GlyphRun {
 			lastCluster = g.cluster
 		}
 		if lastCluster >= 0 {
-			x += l.clusterSpacing(&s.clusters[lastCluster])
+			x += l.clusterSpacing(lastCluster)
 		}
 		if len(gr.Glyphs) > 0 {
 			runs = append(runs, gr)

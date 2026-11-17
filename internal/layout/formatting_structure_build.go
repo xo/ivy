@@ -194,6 +194,9 @@ func (b *builder) buildFormattingStructure(elementTree *Element) (*Box, error) {
 	b.targetCollector.CheckPendingTargets()
 	box.ProcessWhitespace(false)
 	box.ProcessTextTransform()
+	// Port: upstream has no tab stops. The tabs of -ivy-tab-stops take
+	// text boxes of their own.
+	splitTabs(box)
 
 	box.IsForRootElement = true
 	// If this is changed, maybe update weasy.layout.page.make_margin_boxes()

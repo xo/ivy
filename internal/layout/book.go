@@ -54,9 +54,9 @@ type BookOptions struct {
 // numbered across the book, from 0.
 //
 // The layout is lazy: Page(n) lays out only the documents and the pages up to
-// page n. Each document is one document of upstream, so the counters of the
-// pages, such as counter(page) and counter(pages), restart in each document,
-// and counter(pages) lays out the whole document that uses it.
+// page n. Each document is one document of upstream. counter(page) goes on
+// across the documents. counter(pages) is the number of pages of the
+// document, and it lays out the whole document that uses it.
 //
 // A document that cannot be read or laid out is logged and left out, so a
 // book with one bad chapter still opens. If no document gives a page, the
@@ -94,6 +94,9 @@ type bookDocument struct {
 	// failed is set when the layout of the document failed after count
 	// pages. The document keeps these pages.
 	failed bool
+	// before is the number of pages of the documents before it, which
+	// the counter page of the document starts from.
+	before int
 }
 
 // NewBook returns the book of the documents of src. It reads no document
@@ -143,6 +146,7 @@ func (b *Book) PageCount(ctx context.Context) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, bd := range b.docs {
+		b.place(bd, n)
 		count, err := b.count(ctx, bd)
 		if err != nil {
 			return 0, err
@@ -179,6 +183,7 @@ func (b *Book) Page(ctx context.Context, n int) (ivy.Page, error) {
 			offset += bd.count
 			continue
 		}
+		b.place(bd, offset)
 		box, err := b.page(ctx, bd, n-offset)
 		switch {
 		case err == nil:
@@ -207,7 +212,7 @@ func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Errorf("laying out %s: %w", bd.path, err)
 	}
-	doc, err := b.build(bd.path)
+	doc, err := b.build(bd.path, bd.before)
 	if err != nil {
 		b.skip(bd, err)
 		return false, nil
@@ -222,6 +227,16 @@ func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
 	return true, nil
 }
 
+// place sets the number of pages before a document. A loaded document
+// whose number changes, which a document before it that failed later can
+// make, is laid out again.
+func (b *Book) place(bd *bookDocument, before int) {
+	if bd.before != before {
+		bd.before = before
+		b.unload(bd)
+	}
+}
+
 // touch moves a loaded document to the end of the loaded documents.
 func (b *Book) touch(bd *bookDocument) {
 	for i, l := range b.loaded {
@@ -234,7 +249,7 @@ func (b *Book) touch(bd *bookDocument) {
 
 // build reads a document of the source, computes its styles and builds its
 // boxes.
-func (b *Book) build(path string) (doc *Document, err error) {
+func (b *Book) build(path string, before int) (doc *Document, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			doc, err = nil, fmt.Errorf("%w: panic in %s: %v", ivy.ErrFormat, path, r)
@@ -277,6 +292,7 @@ func (b *Book) build(path string) (doc *Document, err error) {
 		TargetCollector: targetCollector,
 		CounterStyle:    counterStyle,
 		Footnotes:       footnotes,
+		PagesBefore:     before,
 	}), nil
 }
 

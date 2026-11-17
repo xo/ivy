@@ -8,9 +8,11 @@
 // Port: upstream writes the glyphs of the runs of Pango as text operators of
 // PDF, with the widths and the mapping to Unicode of each glyph. The port
 // fills the outlines of the glyphs of TextLine.GlyphRuns, at the positions
-// of the shaper, so the widths and the kerning of PDF are not needed. The
-// emojis of the SVG, PNG and COLR tables are not drawn: internal/font gives
-// the outlines of the glyphs only, so such a glyph draws nothing.
+// of the shaper, so the widths and the kerning of PDF are not needed. A
+// glyph without an outline that has a bitmap, such as an emoji of the
+// tables CBDT and sbix, draws its bitmap. The glyphs of the tables SVG and
+// COLR are not drawn: internal/font gives their outlines only, which the
+// fonts of emojis often do not have, so such a glyph draws nothing.
 
 package layout
 
@@ -23,6 +25,7 @@ import (
 	"github.com/xo/okage/tinycss2"
 
 	"github.com/xo/ivy/internal/display"
+	ivyfont "github.com/xo/ivy/internal/font"
 )
 
 // maxEllipsisLoops bounds the words that block-ellipsis removes from a
@@ -73,6 +76,10 @@ func drawText(s *stream, textbox *Box, offsetX float64, textOverflow string, blo
 	s.setColor(getColor(style, "color"), false)
 	layout.Reactivate(style)
 	drawFirstLine(s, textbox, textOverflow, blockEllipsis, x, y)
+	if textbox.isTab {
+		// Port: upstream has no tab stops.
+		drawTabLeader(s, textbox, y)
+	}
 
 	// Draw the line through.
 	if textDecorationValues.Has("line-through") {
@@ -92,7 +99,8 @@ func isNone(v Value) bool {
 // first line of a text box, whose baseline starts at (x, y).
 //
 // Port: upstream returns the emojis of the line, which draw_emojis draws.
-// The port draws no emoji, see the comment of the file.
+// The port draws the bitmaps of the glyphs that have one in the line, and
+// no emoji of the tables SVG and COLR, see the comment of the file.
 func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis Value, x, y float64) {
 	layout := textbox.TextLayout
 	style := textbox.Style
@@ -168,6 +176,7 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 			continue
 		}
 		glyphs := make([]display.Glyph, 0, len(run.Glyphs))
+		var bitmaps []glyphBitmap
 		for _, g := range run.Glyphs {
 			r, _ := utf8.DecodeRuneInString(layout.Text[min(g.Cluster, len(layout.Text)):])
 			if unicode.IsControl(r) {
@@ -183,15 +192,40 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 						r, r)
 				}
 			}
+			if face.Outline(g.ID) == nil {
+				// Port: upstream draws the bitmap glyphs, such as the
+				// color emojis of CBDT and sbix, with Cairo.
+				if b, ok := face.Bitmap(g.ID); ok {
+					bitmaps = append(bitmaps, glyphBitmap{b, x + g.X, y + g.Y})
+					continue
+				}
+			}
 			glyphs = append(glyphs, display.Glyph{ID: g.ID, X: float32(x + g.X), Y: float32(y + g.Y)})
 		}
-		s.fillGlyphs(display.GlyphRun{
+		for _, b := range bitmaps {
+			s.drawGlyphBitmap(b.bitmap, b.x, b.y, run.Size)
+		}
+		glyphRun := display.GlyphRun{
 			Face:      face,
 			Size:      float32(run.Size),
 			Glyphs:    glyphs,
 			Transform: okage.IdentityTransform(),
-		})
+		}
+		if fc.syntheticBold(run.Font, style) {
+			// Port: upstream has no synthetic bold, see syntheticBold.
+			// The stroke grows the outlines by a 48th of an em on each
+			// side, as FreeType emboldens a glyph.
+			s.fillBoldGlyphs(glyphRun, run.Size/24)
+			continue
+		}
+		s.fillGlyphs(glyphRun)
 	}
+}
+
+// glyphBitmap is the bitmap of a glyph whose origin is at (x, y).
+type glyphBitmap struct {
+	bitmap *ivyfont.Bitmap
+	x, y   float64
 }
 
 // isInvisible reports whether r draws nothing, such as a space or a control

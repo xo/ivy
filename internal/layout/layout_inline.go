@@ -200,6 +200,11 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 
 	excludedShapes := &shapeList{boxes: slices.Clone(lc.excludedShapes())}
 
+	// Port: upstream has no tab stops. They are measured from the start
+	// edge of the margin box of the block container of the line.
+	defer func(origin float64) { lc.tabOrigin = origin }(lc.tabOrigin)
+	lc.tabOrigin = containingBlock.PositionX
+
 	var line *Box
 	var resumeAt skipStack
 	var linePlaceholders, waitingFloats []*Box
@@ -222,6 +227,7 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 			&waitingFloats, &lineChildren, firstLetterStyle, firstLineStyle)
 		line, resumeAt = split.box, split.resumeAt
 		preservedLineBreak := split.preservedLineBreak
+		alignTabs(line, lc.tabOrigin)
 		linebox.Width, linebox.Height = line.Width, line.Height
 
 		if isPhantomLinebox(line) && !preservedLineBreak {
@@ -294,6 +300,14 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 	appendBoxes(fixedBoxes, lineFixed...)
 
 	for _, placeholder := range linePlaceholders {
+		if isStr(placeholder.Style.Get("static_top"), "block") {
+			// Port: upstream has no -ivy-static-top. The static position is
+			// at the top of the part of the block container on this page,
+			// inside its border.
+			top := containingBlock.PositionY + containingBlock.MarginTop + containingBlock.BorderTopWidth
+			placeholder.Translate(line.PositionX-placeholder.PositionX, top-placeholder.PositionY, false)
+			continue
+		}
 		if tupleHas(placeholder.Style.Specified("display"), "inline") {
 			// Inline-level static position:
 			placeholder.Translate(0, positionY-placeholder.PositionY, false)
@@ -675,6 +689,10 @@ func splitInlineLevel(lc *layoutContext, box *Box, positionX, maxX, bottomSpace 
 		isLineStart := lineChildren == nil || len(*lineChildren) == 0
 		newBox, resumeIndex, hasResume, preservedLineBreak := splitTextBox(
 			lc, box, maxX-positionX, skipBytes, isLineStart)
+		if newBox != nil && newBox.isTab {
+			// Port: upstream has no tab stops.
+			lc.placeTab(newBox, positionX)
+		}
 		result.box = newBox
 		result.preservedLineBreak = preservedLineBreak
 
