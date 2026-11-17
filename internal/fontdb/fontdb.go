@@ -22,6 +22,15 @@
 // fallback with the fallback selector of okage, which looks at each face
 // of the database.
 //
+// EastAsian sorts the East Asian faces of a database, such as the Japanese,
+// Chinese and Korean fonts of the system, by their kind (serif or sans) and
+// their language. Find gives such a face for an East Asian font that the
+// database does not hold, such as a Mincho face for MS Mincho. The layout
+// does the same. It also draws an East Asian character that no font of the
+// text draws with such a face, the language of the text first, before
+// Droid Sans Fallback. The fonts module and the Go fonts hold no such face,
+// so without the fonts of the system the pages do not change (D23).
+//
 // The formats share the database of the same font files, when the value of
 // the fs.FS is comparable, such as the embed.FS of the module
 // github.com/xo/ivy/fonts. They share at most 16 sets. Load reads the files

@@ -26,6 +26,13 @@ import (
 //     only, in any case. TimesNewRomanPSMT finds Times New Roman.
 //  3. The family of the substitute of such a family, such as Liberation
 //     Sans for Arial (font.Substitute).
+//  4. For an East Asian font, such as MS Mincho or ＭＳ 明朝, an East Asian
+//     face of db of the same kind and language (ClassifyName and
+//     EastAsian.Families) that draws the Probe of the language.
+//
+// The names of a family include the names in other languages that the name
+// table of a font holds, such as ＭＳ 明朝 for MS Mincho, and Find compares
+// the full-width forms of the Latin letters as their ASCII forms.
 //
 // It returns false if db holds none of them.
 func Find(db *svg.FontDatabase, name string, weight uint16, italic bool) (svg.FontID, bool) {
@@ -75,14 +82,24 @@ func Find(db *svg.FontDatabase, name string, weight uint16, italic bool) (svg.Fo
 			}
 		}
 	}
+	kind, lang, ok := ClassifyName(name)
+	if !ok {
+		return 0, false
+	}
+	probe := Probe(lang)
+	for _, family := range NewEastAsian(db, 0, db.Len()).Families(kind, lang) {
+		if id, ok := query(family); ok && draws(db, id, probe) {
+			return id, true
+		}
+	}
 	return 0, false
 }
 
 // familyKey returns the key of a family name: its letters and digits in
-// lower case.
+// lower case, with the full-width forms as their ASCII forms.
 func familyKey(name string) string {
 	var b strings.Builder
-	for _, r := range name {
+	for _, r := range foldWidth(name) {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(unicode.ToLower(r))
 		}

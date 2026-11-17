@@ -122,17 +122,30 @@ func clampDirectory(data []byte) ([]byte, error) {
 }
 
 // Glyph returns the glyph of the character r, and false if the font has none.
-func (f *Face) Glyph(r rune) (GID, bool) {
+func (f *Face) Glyph(r rune) (gid GID, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	gid, ok := f.face.NominalGlyph(r)
-	return GID(gid), ok
+	// go-text can panic on a malformed font (D5).
+	defer func() {
+		if recover() != nil {
+			gid, ok = 0, false
+		}
+	}()
+	g, ok := f.face.NominalGlyph(r)
+	return GID(g), ok
 }
 
-// Advance returns the horizontal advance of the glyph, in ems.
-func (f *Face) Advance(gid GID) float32 {
+// Advance returns the horizontal advance of the glyph, in ems. It returns
+// 0 when the font holds no advance for the glyph.
+func (f *Face) Advance(gid GID) (adv float32) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// go-text panics on a font whose hmtx table holds no metrics (D5).
+	defer func() {
+		if recover() != nil {
+			adv = 0
+		}
+	}()
 	return f.face.HorizontalAdvance(opentype.GID(gid)) / f.upem
 }
 
@@ -151,9 +164,18 @@ func (f *Face) Outline(gid GID) *okage.Path {
 	return p
 }
 
-// outline builds the outline of the glyph.
-func (f *Face) outline(gid GID) *okage.Path {
-	outline, ok := f.face.GlyphData(opentype.GID(gid)).(gofont.GlyphOutline)
+// outline builds the outline of the glyph, from the table glyf, CFF or
+// CFF2. It reads no embedded bitmap. GlyphData of go-text gives the bitmap
+// of a glyph first when the font has one, as Calibri, Cambria and Lucida
+// Console have in EBDT, and that bitmap holds no outline.
+func (f *Face) outline(gid GID) (p *okage.Path) {
+	// go-text can panic on a malformed font (D5).
+	defer func() {
+		if recover() != nil {
+			p = nil
+		}
+	}()
+	outline, ok := f.face.GlyphDataOutline(opentype.GID(gid))
 	if !ok || len(outline.Segments) == 0 {
 		return nil
 	}
@@ -179,9 +201,9 @@ func (f *Face) outline(gid GID) *okage.Path {
 			pb.CubicTo(x1, y1, x2, y2, x, y)
 		}
 	}
-	p, ok := pb.Finish()
+	path, ok := pb.Finish()
 	if !ok {
 		return nil
 	}
-	return p
+	return path
 }
