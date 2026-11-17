@@ -446,6 +446,14 @@ func FuzzOpen(f *testing.F) {
 		f.Add(buf)
 	}
 	f.Add(pkgFile(`<Path Data="M 0,0 A 5,5 0 1 1 9,9 Z" Fill="#FF0000"/>`))
+	f.Add(pkgFile(`<Canvas OpacityMask="#80000000"><Path Data="M 0,0 H 9 V 9 Z" Fill="#FF0000" Stroke="#00FF00">` +
+		`<Path.OpacityMask><LinearGradientBrush MappingMode="Absolute" StartPoint="0,0" EndPoint="9,0">` +
+		`<LinearGradientBrush.GradientStops><GradientStop Offset="0" Color="#FF000000"/></LinearGradientBrush.GradientStops>` +
+		`</LinearGradientBrush></Path.OpacityMask></Path></Canvas>`))
+	f.Add(pkgFile(`<FixedPage.Resources><ResourceDictionary><VisualBrush x:Key="v" Viewbox="0,0,4,4" Viewport="0,0,4,4" ` +
+		`TileMode="FlipXY"><VisualBrush.Visual><Path Data="M 0,0 H 2 V 2 Z" Fill="{StaticResource v}"/></VisualBrush.Visual>` +
+		`</VisualBrush></ResourceDictionary></FixedPage.Resources>` +
+		`<Path Data="M 0,0 H 9 V 9 Z" Fill="{StaticResource v}" Stroke="{StaticResource v}"/>`))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))

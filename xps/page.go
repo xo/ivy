@@ -13,15 +13,34 @@ import (
 	"github.com/xo/okage/roxmltree"
 )
 
-// renderer walks one FixedPage and sends its marks to a device.
+// renderer walks one FixedPage, or the visual of a VisualBrush, and sends
+// its marks to a device.
 type renderer struct {
 	ctx  context.Context
 	doc  *Document
 	part string
 	dev  display.Device
-	// err is the first error of an element that the renderer left out.
+	// ctm is the transform from the user space to the pixels of the device,
+	// and stack holds the transforms that save pushed.
+	ctm   okage.Transform
+	stack []okage.Transform
+	// area is the target of the device, in its pixels.
+	area okage.Rect
+	// visuals is the number of VisualBrush elements that the walk is inside.
+	visuals int
+	// w is the state that the renderers of the visuals of a page share.
+	w *walk
+}
+
+// walk is the state of the walk of one page, which the renderers of its
+// visuals share.
+type walk struct {
+	// err is the first error of an element that the walk left out.
 	err   error
 	count int
+	// pixels is the number of pixels that the visuals and the tiles of the
+	// brushes drew.
+	pixels int64
 }
 
 // fail keeps the first error of an element that the renderer leaves out, and
@@ -31,9 +50,30 @@ func (r *renderer) fail(err error) {
 		return
 	}
 	r.doc.log.Debug("xps: element left out", "page", r.part, "err", err)
-	if r.err == nil {
-		r.err = err
+	if r.w.err == nil {
+		r.w.err = err
 	}
+}
+
+// save pushes the state of the device and the current transform.
+func (r *renderer) save() {
+	r.dev.Save()
+	r.stack = append(r.stack, r.ctm)
+}
+
+// restore pops the state that the last save pushed.
+func (r *renderer) restore() {
+	r.dev.Restore()
+	if n := len(r.stack); n > 0 {
+		r.ctm = r.stack[n-1]
+		r.stack = r.stack[:n-1]
+	}
+}
+
+// concat multiplies the current transform by t, so that t applies first.
+func (r *renderer) concat(t okage.Transform) {
+	r.dev.Concat(t)
+	r.ctm = r.ctm.PreConcat(t)
 }
 
 // resources is a resource dictionary, with the dictionary of the parent
@@ -105,12 +145,12 @@ func (r *renderer) children(n roxmltree.Node, res *resources, depth int) {
 // element walks one element. It returns false when the walk must stop: the
 // context is done, or a limit is reached.
 func (r *renderer) element(n roxmltree.Node, res *resources, depth int) bool {
-	r.count++
+	r.w.count++
 	switch {
 	case r.ctx.Err() != nil:
 		r.fail(r.ctx.Err())
 		return false
-	case r.count > r.doc.lim.MaxObjects:
+	case r.w.count > r.doc.lim.MaxObjects:
 		r.fail(fmt.Errorf("page of more than %d elements: %w", r.doc.lim.MaxObjects, ivy.ErrLimit))
 		return false
 	case depth > r.doc.lim.MaxDepth:
@@ -128,20 +168,60 @@ func (r *renderer) element(n roxmltree.Node, res *resources, depth int) bool {
 	return true
 }
 
-// begin saves the state, and applies the RenderTransform and the Clip of n.
-// The caller restores the state.
-func (r *renderer) begin(n roxmltree.Node, res *resources) {
-	r.dev.Save()
+// begin saves the state, and applies the RenderTransform, the Clip and the
+// OpacityMask of n. An opacity below 1, or an OpacityMask, draws n as a
+// group. The caller calls the function that begin returns, to end the group
+// and restore the state.
+func (r *renderer) begin(n roxmltree.Node, res *resources, opacity float32) func() {
+	r.save()
 	t, err := r.transformOf(n, "RenderTransform", res)
 	r.fail(err)
-	r.dev.Concat(t)
+	r.concat(t)
 	if g, ok, err := r.geometryOf(n, "Clip", res); err != nil {
 		r.fail(err)
 	} else if ok {
 		r.dev.ClipPath(g.path, g.rule)
 	}
-	if _, ok := property(n, "OpacityMask"); ok || hasAttr(n, "OpacityMask") {
-		r.fail(fmt.Errorf("opacity mask: %w", ivy.ErrUnsupported))
+	mask := r.opacityMask(n, res)
+	if mask == nil && opacity >= 1 {
+		return r.restore
+	}
+	r.dev.BeginGroup(display.Group{Opacity: opacity, Mask: mask})
+	return func() {
+		r.dev.EndGroup()
+		r.restore()
+	}
+}
+
+// opacityMask returns the alpha mask of the OpacityMask of n, or nil if n
+// has none. The brush of the mask fills the part of the user space that the
+// target shows. A mask applies only where n draws, so the result is the same
+// as a fill of the bounds of n.
+func (r *renderer) opacityMask(n roxmltree.Node, res *resources) *display.Mask {
+	if _, ok := property(n, "OpacityMask"); !ok && !hasAttr(n, "OpacityMask") {
+		return nil
+	}
+	b, err := r.brushOf(n, "OpacityMask", res, 1)
+	if err != nil {
+		// the element draws without its mask
+		r.fail(fmt.Errorf("opacity mask: %w", err))
+		return nil
+	}
+	ctm := r.ctm
+	var area *okage.Path
+	if inv, ok := ctm.Invert(); ok {
+		if rect, ok := r.area.Transform(inv); ok {
+			area = okage.PathFromRect(rect)
+		}
+	}
+	return &display.Mask{
+		Type: okage.MaskTypeAlpha,
+		Content: func(d display.Device) {
+			// a brush that draws nothing hides the element
+			if b != nil && area != nil {
+				b.paint(d, ctm, area, okage.FillRuleWinding)
+			}
+		},
 	}
 }
 
@@ -153,49 +233,52 @@ func opacityOf(n roxmltree.Node) float32 {
 // canvas walks a Canvas. A canvas with an opacity draws as a group.
 func (r *renderer) canvas(n roxmltree.Node, res *resources, depth int) {
 	res = r.resourcesOf(n, res)
-	r.begin(n, res)
-	defer r.dev.Restore()
-	if op := opacityOf(n); op < 1 {
-		r.dev.BeginGroup(display.Group{Opacity: op})
-		defer r.dev.EndGroup()
-	}
+	end := r.begin(n, res, opacityOf(n))
+	defer end()
 	r.children(n, res, depth)
 }
 
-// path draws a Path: its fill, then its stroke.
+// path draws a Path: its fill, then its stroke. The Opacity of the path
+// multiplies the alpha of its brushes.
 func (r *renderer) path(n roxmltree.Node, res *resources) {
 	g, ok, err := r.geometryOf(n, "Data", res)
 	if err != nil || !ok || g.path == nil {
 		r.fail(err)
 		return
 	}
-	r.begin(n, res)
-	defer r.dev.Restore()
+	end := r.begin(n, res, 1)
+	defer end()
 	op := opacityOf(n)
 	fill, err := r.brushOf(n, "Fill", res, op)
 	r.fail(err)
 	if fill != nil {
-		r.fill(g.path, g.rule, fill)
+		fill.paint(r.dev, r.ctm, g.path, g.rule)
 	}
 	stroke, err := r.brushOf(n, "Stroke", res, op)
 	r.fail(err)
-	if stroke != nil && stroke.shader != nil {
-		r.dev.StrokePath(g.path, strokeOf(n), stroke.shader)
+	if stroke != nil {
+		r.stroke(g.path, strokeOf(n), stroke)
 	}
 }
 
-// fill fills a path with a brush.
-func (r *renderer) fill(p *okage.Path, rule okage.FillRule, b *brush) {
-	if b.img == nil {
-		r.dev.FillPath(p, rule, b.shader)
+// stroke strokes a path with a brush. A brush that is not a shader fills the
+// outline of the stroke.
+func (r *renderer) stroke(p *okage.Path, s okage.Stroke, b *brush) {
+	if b.draw == nil {
+		r.dev.StrokePath(p, s, b.shader)
 		return
 	}
-	r.dev.Save()
-	defer r.dev.Restore()
-	r.dev.ClipPath(p, rule)
-	r.dev.Concat(b.t)
-	r.dev.ClipPath(okage.PathFromRect(b.viewport), okage.FillRuleWinding)
-	r.dev.DrawImage(b.img, display.RectTransform(b.img.Bounds().Size(), b.dst), display.ImageOptions{Opacity: b.opacity, Smooth: true})
+	scale := okage.ComputeResolutionScale(r.ctm)
+	if s.Dash != nil {
+		dashed, ok := p.Dash(s.Dash, scale)
+		if !ok {
+			return
+		}
+		p = dashed
+	}
+	if outline, ok := p.Stroke(&s, scale); ok {
+		b.paint(r.dev, r.ctm, outline, okage.FillRuleWinding)
+	}
 }
 
 // strokeOf returns the stroke of a Path.
@@ -382,24 +465,24 @@ func (r *renderer) glyphs(n roxmltree.Node, res *resources) {
 	if len(run.Glyphs) == 0 {
 		return
 	}
+	end := r.begin(n, res, 1)
+	defer end()
 	fill, err := r.brushOf(n, "Fill", res, opacityOf(n))
 	if err != nil || fill == nil {
 		r.fail(err)
 		return
 	}
-	r.begin(n, res)
-	defer r.dev.Restore()
-	if fill.img == nil {
+	if fill.draw == nil {
 		r.dev.FillGlyphs(run, fill.shader)
 	} else if p := run.Path(); p != nil {
-		r.fill(p, okage.FillRuleWinding, fill)
+		fill.paint(r.dev, r.ctm, p, okage.FillRuleWinding)
 	}
-	if strings.Contains(attr(n, "StyleSimulations"), "Bold") && fill.shader != nil {
+	if strings.Contains(attr(n, "StyleSimulations"), "Bold") {
 		// a bold simulation widens each glyph by 2 percent of an em
 		if p := run.Path(); p != nil {
 			stroke := okage.DefaultStroke()
 			stroke.Width = run.Size * 0.02
-			r.dev.StrokePath(p, stroke, fill.shader)
+			r.stroke(p, stroke, fill)
 		}
 	}
 }

@@ -6,10 +6,14 @@
 // the display list of ivy (D10). The fonts are embedded, and the package
 // undoes their obfuscation (D12).
 //
-// The package draws solid colors, linear and radial gradients, and image
-// brushes, with transforms, clips and the opacity of canvases. A VisualBrush,
-// an OpacityMask, a sideways glyph run and an image in JPEG XR are left out,
-// and the page that holds one returns an *ivy.PartialError (D5).
+// The package draws solid colors, linear and radial gradients, image brushes
+// and visual brushes, with transforms, clips, opacities and opacity masks. A
+// brush that tiles draws its tile into a pixmap at the resolution of the
+// target, and repeats it. The modes FlipX, FlipY and FlipXY repeat a tile of
+// two or four mirrored copies. A VisualBrush nests at most 4 deep, and the
+// tiles and the visuals of a page draw at most Limits.MaxPixels pixels. A
+// sideways glyph run and an image in JPEG XR are left out, and the page that
+// holds one returns an *ivy.PartialError (D5).
 package xps
 
 import (
@@ -379,19 +383,21 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 	if err != nil {
 		return err
 	}
-	dev := display.NewOkage(dst, t.PreScale(pointsPerUnit, pointsPerUnit))
-	return p.draw(ctx, root, dev)
+	ctm := t.PreScale(pointsPerUnit, pointsPerUnit)
+	area, _ := okage.RectFromXYWH(0, 0, float32(dst.Width()), float32(dst.Height()))
+	return p.draw(ctx, root, display.NewOkage(dst, ctm), ctm, area)
 }
 
-// draw walks the page onto a device.
-func (p *Page) draw(ctx context.Context, root roxmltree.Node, dev display.Device) error {
-	r := &renderer{ctx: ctx, doc: p.doc, part: p.part, dev: dev}
+// draw walks the page onto a device. ctm maps the units of the page to the
+// pixels of the device, and area is the target of the device in its pixels.
+func (p *Page) draw(ctx context.Context, root roxmltree.Node, dev display.Device, ctm okage.Transform, area okage.Rect) error {
+	r := &renderer{ctx: ctx, doc: p.doc, part: p.part, dev: dev, ctm: ctm, area: area, w: &walk{}}
 	r.page(root)
-	if r.err != nil {
+	if r.w.err != nil {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("rendering xps page: %w", err)
 		}
-		return &ivy.PartialError{Err: r.err}
+		return &ivy.PartialError{Err: r.w.err}
 	}
 	return nil
 }

@@ -3,33 +3,40 @@ package xps
 import (
 	"cmp"
 	"fmt"
-	"image"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/raster"
 	"github.com/xo/okage"
 	"github.com/xo/okage/roxmltree"
 )
 
-// brush is a brush of XPS, ready to fill a path. A brush is a shader, or an
-// image that draws once into a viewport.
+// brush is a brush of XPS, ready to fill a path. A brush is a shader, or a
+// function that draws its content, for an ImageBrush or a VisualBrush that
+// does not tile.
 type brush struct {
 	shader okage.Shader
-
-	// img draws into dst, inside the viewport, with the transform t and the
-	// opacity, for an ImageBrush that does not tile.
-	img      image.Image
-	dst      okage.Rect
-	viewport okage.Rect
-	t        okage.Transform
-	opacity  float32
-
-	// pix keeps the pixmap of a tiled image alive for its pattern.
+	// draw draws the content onto d, whose transform is ctm, in the user
+	// space of the fill, without a clip.
+	draw func(d display.Device, ctm okage.Transform)
+	// pix keeps the pixmap of a tile alive for its pattern.
 	pix *okage.Pixmap
+}
+
+// paint fills p with b on the device d, whose transform is ctm.
+func (b *brush) paint(d display.Device, ctm okage.Transform, p *okage.Path, rule okage.FillRule) {
+	if b.draw == nil {
+		d.FillPath(p, rule, b.shader)
+		return
+	}
+	d.Save()
+	defer d.Restore()
+	d.ClipPath(p, rule)
+	b.draw(d, ctm)
 }
 
 // parseColor parses a color of XPS: #RRGGBB, #AARRGGBB, sc#R,G,B,
@@ -155,6 +162,8 @@ func (r *renderer) brushNode(n roxmltree.Node, res *resources, opacity float32) 
 		return r.gradient(n, res, opacity)
 	case "ImageBrush":
 		return r.imageBrush(n, res, opacity)
+	case "VisualBrush":
+		return r.visualBrush(n, res, opacity)
 	}
 	return nil, fmt.Errorf("brush %s: %w", local(n), ivy.ErrUnsupported)
 }
@@ -229,7 +238,7 @@ func (r *renderer) gradient(n roxmltree.Node, res *resources, opacity float32) (
 }
 
 // imageBrush returns the brush of an image. Its Viewbox in the image maps
-// onto its Viewport in the user space. ivy takes the units of a Viewbox as
+// onto its Viewport in the space of the brush. ivy takes the units of a Viewbox as
 // pixels of the image at 96 dots per inch, unless the Viewbox starts at the
 // origin, and then it covers the whole image (D5).
 func (r *renderer) imageBrush(n roxmltree.Node, res *resources, opacity float32) (*brush, error) {
@@ -256,24 +265,35 @@ func (r *renderer) imageBrush(n roxmltree.Node, res *resources, opacity float32)
 		return nil, fmt.Errorf("image brush of an empty image: %w", ivy.ErrFormat)
 	}
 	t := r.brushTransform(n, res)
-	switch tile := attr(n, "TileMode"); tile {
-	case "", "None":
-		return &brush{img: img, dst: dst, viewport: viewport, t: t, opacity: opacity}, nil
-	default:
-		pix, err := raster.Pixmap(img)
-		if err != nil {
+	content := func(d display.Device, _ okage.Transform, _ okage.Rect, opacity float32) {
+		d.DrawImage(img, display.RectTransform(size, dst), display.ImageOptions{Opacity: opacity, Smooth: true})
+	}
+	mode := attr(n, "TileMode")
+	if mode == "" || mode == "None" {
+		return r.once(viewport, t, opacity, content), nil
+	}
+	// the pixels of the image are the tile when the image fills the
+	// viewport
+	var base *okage.Pixmap
+	if near(dst, viewport) {
+		if base, err = raster.Pixmap(img); err != nil {
 			return nil, err
 		}
-		spread := okage.SpreadModeRepeat
-		if strings.HasPrefix(tile, "Flip") {
-			spread = okage.SpreadModeReflect
-		}
-		// the pattern maps the pixels of the image onto dst, and repeats
-		pattern := t.PreConcat(okage.TransformFromTranslate(dst.X(), dst.Y())).
-			PreScale(dst.Width()/float32(size.X), dst.Height()/float32(size.Y))
-		shader := okage.NewPattern(pix.AsRef(), spread, okage.FilterQualityBilinear, opacity, pattern)
-		return &brush{shader: shader, pix: pix}, nil
 	}
+	return r.tile(viewport, t, mode, opacity, base, content)
+}
+
+// near reports whether the rectangles a and b are the same, to a part in a
+// thousand of their size.
+func near(a, b okage.Rect) bool {
+	eps := 1e-3 * max(a.Width(), a.Height(), b.Width(), b.Height())
+	return abs(a.Left()-b.Left()) <= eps && abs(a.Top()-b.Top()) <= eps &&
+		abs(a.Right()-b.Right()) <= eps && abs(a.Bottom()-b.Bottom()) <= eps
+}
+
+// abs returns the absolute value of v.
+func abs(v float32) float32 {
+	return float32(math.Abs(float64(v)))
 }
 
 // propertyElement returns the property element <owner.name> of n itself.
