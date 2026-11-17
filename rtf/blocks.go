@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/xo/ivy/internal/ebook"
 )
 
 // headerLine is the height of a line of a header, in twips, for the
@@ -96,27 +98,81 @@ func (c *converter) color(i int) string {
 
 // family returns the value of font-family of the font f, and its name.
 func (c *converter) family(f int) (string, string) {
-	e, ok := c.fonts[f]
-	if !ok || strings.TrimSpace(e.name) == "" {
+	family := c.families(f)
+	if family == "" {
 		return "", ""
 	}
-	name := strings.TrimSpace(e.name)
-	generic := e.generic
-	if generic == "" || generic == "symbol" {
-		generic = "serif"
-	}
+	return family, strings.TrimSpace(c.fonts[f].name)
+}
+
+// families returns the value of font-family of the fonts, in order, with
+// the generic family of the first font that the font table names, or "".
+func (c *converter) families(fonts ...int) string {
 	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range name {
-		if r == '"' || r == '\\' {
-			b.WriteByte('\\')
+	generic := ""
+	for _, f := range fonts {
+		e, ok := c.fonts[f]
+		if !ok || strings.TrimSpace(e.name) == "" {
+			continue
 		}
-		if r >= 0x20 && r != 0x7f {
-			b.WriteRune(r)
+		if generic == "" {
+			generic = e.generic
+			if generic == "" || generic == "symbol" {
+				generic = "serif"
+			}
+		}
+		b.WriteByte('"')
+		for _, r := range strings.TrimSpace(e.name) {
+			if r == '"' || r == '\\' {
+				b.WriteByte('\\')
+			}
+			if r >= 0x20 && r != 0x7f {
+				b.WriteRune(r)
+			}
+		}
+		b.WriteString(`", `)
+	}
+	if generic == "" {
+		return ""
+	}
+	return b.String() + generic
+}
+
+// The values of \fcharset of the East Asian fonts, and their languages.
+var eastAsianCharsets = map[int]string{128: "ja", 129: "ko", 134: "zh-CN", 136: "zh-TW"}
+
+// eastAsianFont reports whether the properties p have an East Asian font
+// other than the font of the run: the font of \dbch\af, if it has the
+// \fcharset of an East Asian font.
+func (c *converter) eastAsianFont(p charProps) bool {
+	if p.fontEA < 0 || p.fontEA == p.font {
+		return false
+	}
+	e, ok := c.fonts[p.fontEA]
+	if !ok || strings.TrimSpace(e.name) == "" {
+		return false
+	}
+	_, cjk := eastAsianCharsets[e.charset]
+	return cjk
+}
+
+// eastAsianLang returns the language of the East Asian text of the
+// properties p: the language of \langfe, else the language of the
+// \fcharset of the East Asian font, or "".
+func (c *converter) eastAsianLang(p charProps) string {
+	if p.langEA > 0 && p.langEA != 1024 {
+		if v := ebook.LCIDLanguage(uint32(p.langEA)); v != "" {
+			return v
 		}
 	}
-	b.WriteString(`", ` + generic)
-	return b.String(), name
+	for _, f := range [...]int{p.fontEA, p.font} {
+		if e, ok := c.fonts[f]; ok {
+			if v, cjk := eastAsianCharsets[e.charset]; cjk {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 // runStyle returns the style attribute of a run with the properties p. A
@@ -124,7 +180,12 @@ func (c *converter) family(f int) (string, string) {
 // properties that differ from \plain.
 func (c *converter) runStyle(p charProps) string {
 	var s css
-	if p.font != c.docFont {
+	if ea := c.eastAsianFont(p); ea {
+		// the East Asian font comes after the font of the run, and the
+		// layout takes a character that the first font does not have from
+		// it
+		s.set("font-family", c.families(p.font, p.fontEA))
+	} else if p.font != c.docFont {
 		family, _ := c.family(p.font)
 		s.set("font-family", family)
 	}
@@ -256,19 +317,20 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	return s.String()
 }
 
-// endParagraph ends the current paragraph of the target of s.
+// endParagraph ends the current paragraph of the target of s. A
+// paragraph out of the table of its level closes the tables that nest
+// deeper.
 func (c *converter) endParagraph(s *state) {
 	c.flushBytes(s)
 	t := s.target
 	c.flushRun(t)
-	if !s.par.inTable && t.table {
-		c.closeTable(t)
-	}
+	lvl := paraLevel(s.par)
+	c.closeTables(t, lvl)
 	out := &t.out
-	if s.par.inTable {
-		out = &t.cell
+	if lvl > 0 {
+		out = &t.level(lvl).cell
 	}
-	if t == c.body && !s.par.inTable {
+	if t == c.body && lvl == 0 {
 		c.openSection()
 	}
 	out.WriteString(`<p style="` + attrText(c.paraStyle(s.par, s.chr, t.breakNext)) + `">`)
@@ -282,43 +344,92 @@ func (c *converter) endParagraph(s *state) {
 	t.para.Reset()
 }
 
-// endCell ends the current cell of a row.
-func (c *converter) endCell(s *state) {
-	c.flushBytes(s)
-	t := s.target
-	c.flushRun(t)
-	if t.para.Len() > 0 {
-		s.par.inTable = true
-		c.endParagraph(s)
-	}
-	if len(t.row) < 1024 {
-		t.row = append(t.row, t.cell.String())
-	}
-	t.cell.Reset()
+// tableLevel is the table of a target at one level of nesting: the rows
+// that wait for the end of the table, the cells of the current row, and
+// the blocks of the current cell.
+type tableLevel struct {
+	open bool
+	row  []string
+	cell strings.Builder
+	rows []tableRow
 }
 
-// endRow ends the current row of a table, with the definition of the row.
-// The rows of a table wait for its end, as the edges of the cells of all
-// its rows make its columns.
-func (c *converter) endRow(s *state) {
+// maxNesting is the deepest level of the tables that nest. A table that
+// nests deeper is part of the table at that level.
+const maxNesting = 16
+
+// level returns the table of the level n of t, from 1.
+func (t *target) level(n int) *tableLevel {
+	n = min(max(n, 1), maxNesting)
+	for len(t.levels) < n {
+		t.levels = append(t.levels, &tableLevel{})
+	}
+	return t.levels[n-1]
+}
+
+// paraLevel returns the level of the table of a paragraph with the
+// properties p, from 1, or 0 for a paragraph out of a table.
+func paraLevel(p paraProps) int {
+	if !p.inTable {
+		return 0
+	}
+	return min(max(p.itap, 1), maxNesting)
+}
+
+// cellLevel returns the level of the table of the cell or the row that
+// \cell or \row ends, or \nestcell or \nestrow when nested is set.
+func cellLevel(p paraProps, nested bool) int {
+	if !nested {
+		return 1
+	}
+	return max(paraLevel(p), 2)
+}
+
+// endCell ends the current cell of a row of a table at the level of
+// cellLevel.
+func (c *converter) endCell(s *state, nested bool) {
 	c.flushBytes(s)
 	t := s.target
 	c.flushRun(t)
-	if t.para.Len() > 0 || t.cell.Len() > 0 {
-		c.endCell(s)
+	lvl := cellLevel(s.par, nested)
+	if t.para.Len() > 0 {
+		s.par.inTable = true
+		s.par.itap = max(s.par.itap, lvl)
+		c.endParagraph(s)
 	}
-	if !t.table {
-		if t == c.body {
+	c.closeTables(t, lvl)
+	l := t.level(lvl)
+	if len(l.row) < 1024 {
+		l.row = append(l.row, l.cell.String())
+	}
+	l.cell.Reset()
+}
+
+// endRow ends the current row of a table at the level of cellLevel, with
+// the definition of the row. The rows of a table wait for its end, as the
+// edges of the cells of all its rows make its columns.
+func (c *converter) endRow(s *state, nested bool) {
+	c.flushBytes(s)
+	t := s.target
+	c.flushRun(t)
+	lvl := cellLevel(s.par, nested)
+	l := t.level(lvl)
+	if t.para.Len() > 0 || l.cell.Len() > 0 {
+		c.endCell(s, nested)
+	}
+	c.closeTables(t, lvl)
+	if !l.open {
+		if t == c.body && lvl == 1 {
 			c.openSection()
 		}
-		t.table = true
+		l.open = true
 	}
 	def := c.row
 	def.cells = append([]cellDef(nil), c.row.cells...)
-	if len(t.rows) < c.lim.MaxObjects {
-		t.rows = append(t.rows, tableRow{def: def, cells: append([]string(nil), t.row...)})
+	if len(l.rows) < c.lim.MaxObjects {
+		l.rows = append(l.rows, tableRow{def: def, cells: append([]string(nil), l.row...)})
 	}
-	t.row = t.row[:0]
+	l.row = l.row[:0]
 }
 
 // tableRow is a row of a table that waits for the end of the table: its
@@ -339,16 +450,35 @@ func (r *rowDef) edges() []int {
 	return out
 }
 
-// closeTable closes the table of a target, and writes its rows. Each cell
+// closeTable closes the tables of a target.
+func (c *converter) closeTable(t *target) {
+	c.closeTables(t, 0)
+}
+
+// closeTables closes the tables of t that nest deeper than the level lvl,
+// the deepest first. A table that nests goes into the current cell of the
+// table around it.
+func (c *converter) closeTables(t *target, lvl int) {
+	for n := len(t.levels); n > lvl; n-- {
+		l := t.levels[n-1]
+		if !l.open {
+			continue
+		}
+		out := &t.out
+		if n > 1 {
+			out = &t.level(n - 1).cell
+		}
+		c.writeTable(out, l)
+	}
+}
+
+// writeTable closes the table l, and writes its rows to out. Each cell
 // covers the columns between its edges, as in Word, where each row has
 // cells of its own.
-func (c *converter) closeTable(t *target) {
-	if !t.table {
-		return
-	}
-	t.table = false
-	rows := t.rows
-	t.rows = nil
+func (c *converter) writeTable(out *strings.Builder, l *tableLevel) {
+	l.open = false
+	rows := l.rows
+	l.rows = nil
 	if len(rows) == 0 {
 		return
 	}
@@ -386,38 +516,61 @@ func (c *converter) closeTable(t *target) {
 			st.set("margin-left", pt(grid[0]))
 		}
 	}
-	t.out.WriteString(`<table style="` + attrText(st.String()) + `">`)
+	out.WriteString(`<table style="` + attrText(st.String()) + `">`)
 	if len(grid) > 1 {
-		t.out.WriteString("<colgroup>")
+		out.WriteString("<colgroup>")
 		for k := 1; k < len(grid); k++ {
-			t.out.WriteString(`<col style="width: ` + pt(grid[k]-grid[k-1]) + `"/>`)
+			out.WriteString(`<col style="width: ` + pt(grid[k]-grid[k-1]) + `"/>`)
 		}
-		t.out.WriteString("</colgroup>")
+		out.WriteString("</colgroup>")
 	}
 	// the rows of \trhdr at the start of the table repeat at the top of
-	// each page
+	// each page, and the cells of the header rows merge among themselves
 	head := 0
 	for head < len(rows) && rows[head].def.header {
 		head++
 	}
 	if head > 0 && head < len(rows) {
-		t.out.WriteString("<thead>")
-		for _, row := range rows[:head] {
-			c.writeRow(t, row, column, len(grid) > 1)
+		out.WriteString("<thead>")
+		for i := range rows[:head] {
+			c.writeRow(out, rows[:head], i, column, len(grid) > 1)
 		}
-		t.out.WriteString("</thead>")
+		out.WriteString("</thead>")
 		rows = rows[head:]
 	}
-	t.out.WriteString("<tbody>")
-	for _, row := range rows {
-		c.writeRow(t, row, column, len(grid) > 1)
+	out.WriteString("<tbody>")
+	for i := range rows {
+		c.writeRow(out, rows, i, column, len(grid) > 1)
 	}
-	t.out.WriteString("</tbody></table>")
+	out.WriteString("</tbody></table>")
 }
 
-// writeRow writes a row of a table. column returns the column of the grid
-// at an edge, when grid is set.
-func (c *converter) writeRow(t *target, row tableRow, column func(int) int, grid bool) {
+// rowSpan returns the number of rows from the row k that the cell of the
+// row k whose left edge is x covers: the cell, and the cells of \clvmrg
+// at the same edge in the rows below it.
+func rowSpan(rows []tableRow, k, x int) int {
+	n := 1
+	for _, row := range rows[k+1:] {
+		edges := row.def.edges()
+		merged := false
+		for i, d := range row.def.cells {
+			if abs(edges[i]-x) < 40 {
+				merged = d.vmerge == 'r'
+				break
+			}
+		}
+		if !merged {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// writeRow writes the row k of the rows of a table. column returns the
+// column of the grid at an edge, when grid is set.
+func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, column func(int) int, grid bool) {
+	row := rows[k]
 	r := row.def
 	edges := r.edges()
 	var rs css
@@ -428,17 +581,17 @@ func (c *converter) writeRow(t *target, row tableRow, column func(int) int, grid
 		}
 		rs.set("height", pt(h))
 	}
-	t.out.WriteString(`<tr style="` + attrText(rs.String()) + `">`)
+	out.WriteString(`<tr style="` + attrText(rs.String()) + `">`)
 	at := 0
 	if grid {
 		if k := column(edges[0]); k > 0 {
-			t.out.WriteString(`<td colspan="` + strconv.Itoa(k) + `" style="border: none"></td>`)
+			out.WriteString(`<td colspan="` + strconv.Itoa(k) + `" style="border: none"></td>`)
 			at = k
 		}
 	}
 	for i, html := range row.cells {
 		var cs css
-		span := 1
+		span, vspan := 1, 1
 		if i < len(r.cells) {
 			def := r.cells[i]
 			// the cells that \clmrg merges into this one
@@ -453,6 +606,14 @@ func (c *converter) writeRow(t *target, row tableRow, column func(int) int, grid
 			}
 			if def.merged {
 				continue
+			}
+			if def.vmerge == 'r' {
+				// a cell that the cell above covers
+				at += span
+				continue
+			}
+			if def.vmerge == 'f' {
+				vspan = rowSpan(rows, k, edges[i])
 			}
 			for _, b := range [...]struct {
 				on   bool
@@ -485,20 +646,23 @@ func (c *converter) writeRow(t *target, row tableRow, column func(int) int, grid
 			}
 		}
 		at += span
-		t.out.WriteString("<td")
+		out.WriteString("<td")
 		if span > 1 {
-			t.out.WriteString(` colspan="` + strconv.Itoa(span) + `"`)
+			out.WriteString(` colspan="` + strconv.Itoa(span) + `"`)
 		}
-		t.out.WriteString(` style="` + attrText(cs.String()) + `">`)
+		if vspan > 1 {
+			out.WriteString(` rowspan="` + strconv.Itoa(vspan) + `"`)
+		}
+		out.WriteString(` style="` + attrText(cs.String()) + `">`)
 		if html == "" {
 			html = "<p><br/></p>"
 		}
-		t.out.WriteString(html + "</td>")
+		out.WriteString(html + "</td>")
 	}
-	t.out.WriteString("</tr>")
+	out.WriteString("</tr>")
 }
 
-// endTarget ends the paragraph, the row and the table of a target.
+// endTarget ends the paragraph, the rows and the tables of a target.
 func (c *converter) endTarget(t *target) {
 	c.flushRun(t)
 	if t.para.Len() > 0 {
@@ -508,9 +672,9 @@ func (c *converter) endTarget(t *target) {
 		}
 		c.endParagraph(s)
 	}
-	if len(t.row) > 0 || t.cell.Len() > 0 {
+	if len(t.levels) > 0 && (len(t.levels[0].row) > 0 || t.levels[0].cell.Len() > 0) {
 		s := &state{dest: destText, chr: t.runProps, par: paraProps{inTable: true}, target: t}
-		c.endRow(s)
+		c.endRow(s, false)
 	}
 	c.closeTable(t)
 }
@@ -540,6 +704,19 @@ func (c *converter) openSection() {
 	// The headers and the footers of the section before stay, until the
 	// section gives its own.
 	c.body.out.WriteString(`<div class="section" style="` + attrText(s.String()) + `">`)
+	c.writeFixed()
+}
+
+// writeFixed writes the images of the WordArt of the headers and the
+// footers into the open section, where they show on each page.
+func (c *converter) writeFixed() {
+	if !c.open {
+		return
+	}
+	for _, html := range c.fixed {
+		c.body.out.WriteString(html)
+	}
+	c.fixed = nil
 }
 
 // closeSection closes the element of the current section, and writes the
@@ -606,6 +783,7 @@ func (c *converter) endNested(parent, s *state) {
 	// A header or a footer is a running element at the start of its
 	// section.
 	c.openSection()
+	c.writeFixed()
 	c.hfNum++
 	name := "hf" + strconv.Itoa(c.hfNum)
 	c.running[s.kind] = name
@@ -713,4 +891,12 @@ func symbolRune(r rune) rune {
 		return '•'
 	}
 	return r
+}
+
+// abs returns the absolute value of v.
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

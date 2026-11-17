@@ -5,7 +5,7 @@ import "strings"
 // skipped are the destinations that the conversion leaves out with their
 // content.
 var skipped = map[string]bool{
-	"stylesheet": true, "listtable": true, "listoverridetable": true, "revtbl": true,
+	"listtable": true, "listoverridetable": true, "revtbl": true,
 	"rsidtbl": true, "generator": true, "nonshppict": true, "objdata": true,
 	"objclass": true, "objname": true, "themedata": true, "colorschememapping": true,
 	"datastore": true, "latentstyles": true, "xmlnstbl": true, "mmathPr": true,
@@ -19,6 +19,7 @@ var skipped = map[string]bool{
 	"oldcprops": true, "oldpprops": true, "oldtprops": true, "oldsprops": true,
 	"panose": true, "falt": true, "fontemb": true, "fontfile": true, "keywords": true,
 	"doccomm": true, "comment": true, "hlinkbase": true, "buptim": true, "printim": true,
+	"nonesttables": true,
 }
 
 // infoText are the fields of \info whose text the conversion keeps.
@@ -39,6 +40,10 @@ func (c *converter) word(s *state, t token) {
 		return
 	}
 	if s.dest == destSkip || s.dest == destShapeName {
+		return
+	}
+	if s.dest == destStyleSheet {
+		c.styleWord(s, t)
 		return
 	}
 	switch s.dest {
@@ -74,6 +79,14 @@ func (c *converter) word(s *state, t token) {
 			return
 		}
 	}
+	switch t.word {
+	case "s":
+		c.applyStyle(s, 'p', t.param, 0)
+		return
+	case "cs":
+		c.applyStyle(s, 'c', t.param, 0)
+		return
+	}
 	if c.charWord(s, t) || c.paraWord(s, t) || c.tableWord(t) || c.sectionWord(t) {
 		return
 	}
@@ -85,6 +98,8 @@ func (c *converter) word(s *state, t token) {
 func (c *converter) destination(s *state, t token, starred bool) bool {
 	w := t.word
 	switch {
+	case w == "stylesheet":
+		s.dest = destStyleSheet
 	case w == "fonttbl":
 		s.dest = destFontTable
 	case w == "colortbl":
@@ -106,14 +121,16 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 	case w == "shpinst":
 		s.dest = destShape
 		c.shapeBox = [4]int{}
+		c.shapeProps = nil
 	case w == "sn" && s.dest == destShape:
 		s.dest = destShapeName
 		c.shapeProp = ""
 	case w == "sv" && s.dest == destShape:
 		// Only the picture of the property pib is the picture of the
-		// shape. The other pictures fill it.
+		// shape. The other pictures fill it, and the other values are
+		// text
 		if strings.TrimSpace(c.shapeProp) != "pib" {
-			s.dest = destSkip
+			s.dest = destShapeValue
 		}
 	case w == "shprslt":
 		// The result of a shape repeats the picture of \shpinst.
@@ -135,6 +152,14 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		}
 		s.dest = destPict
 		s.pict = &picture{scaleX: 100, scaleY: 100}
+	case w == "nesttableprops":
+		// the definition of a row of a table that nests, before its
+		// \nestrow. The definition of the row around it comes back at
+		// the end of the group
+		s.kind = "nesttableprops"
+		saved := c.row
+		saved.cells = append([]cellDef(nil), c.row.cells...)
+		s.row = &saved
 	case w == "shppict":
 	case w == "field":
 		s.field = &field{}
@@ -163,6 +188,10 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		s.par = defaultPara()
 	case skipped[w]:
 		s.dest = destSkip
+	case s.dest == destStyleSheet:
+		// another control word of the style sheet, such as \cs after \*,
+		// is a word of a style
+		return false
 	case starred:
 		// An unknown destination after \* is left out.
 		s.dest = destSkip
@@ -170,6 +199,74 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		return false
 	}
 	return true
+}
+
+// The limits of the style sheet: the number of the styles, the number of
+// the control words of a style, and the depth of the styles that a style
+// is based on.
+const (
+	maxStyles     = 4096
+	maxStyleWords = 256
+	maxStyleDepth = 8
+)
+
+// styleWord handles a control word of a style of the style sheet. The
+// first control word of a group of the style sheet starts a style, which
+// is a paragraph style until \cs says that it is a character style.
+func (c *converter) styleWord(s *state, t token) {
+	if s.style == nil {
+		if len(c.styles) >= maxStyles {
+			return
+		}
+		s.style = &styleEntry{kind: 'p', base: -1}
+		c.styles = append(c.styles, s.style)
+	}
+	e := s.style
+	switch t.word {
+	case "s":
+		e.kind, e.num = 'p', t.param
+	case "cs":
+		e.kind, e.num = 'c', t.param
+	case "ds", "ts", "tsrowd":
+		// a style of a section or of a table is not applied
+		e.kind = 0
+	case "sbasedon":
+		e.base = t.param
+	case "u", "uc", "plain", "pard":
+	default:
+		if len(e.words) < maxStyleWords {
+			e.words = append(e.words, t)
+		}
+	}
+}
+
+// applyStyle applies the formatting of the style num of the kind, 'p' or
+// 'c', to s: the formatting of the style that it is based on, then its
+// own. A paragraph style sets the properties of the paragraph and of its
+// characters, and a character style the properties of the characters.
+// The control words after \s or \cs override the style.
+func (c *converter) applyStyle(s *state, kind byte, num, depth int) {
+	if depth > maxStyleDepth {
+		return
+	}
+	var e *styleEntry
+	for _, st := range c.styles {
+		if st.kind == kind && st.num == num {
+			e = st
+			break
+		}
+	}
+	if e == nil {
+		return
+	}
+	if e.base >= 0 && e.base != num {
+		c.applyStyle(s, kind, e.base, depth+1)
+	}
+	for _, w := range e.words {
+		if !c.charWord(s, w) && kind == 'p' {
+			c.paraWord(s, w)
+		}
+	}
 }
 
 // inNote reports whether the current group is in a footnote.
@@ -334,6 +431,16 @@ func (c *converter) charWord(s *state, t token) bool {
 		ch.spacing = t.param * 5
 	case "expndtw":
 		ch.spacing = t.param
+	case "dbch":
+		s.dbch = true
+	case "loch", "hich":
+		s.dbch = false
+	case "af":
+		if s.dbch {
+			ch.fontEA = t.param
+		}
+	case "langfe":
+		ch.langEA = t.param
 	case "uc":
 		s.uc = min(max(t.param, 0), 16)
 	case "u":
@@ -381,6 +488,9 @@ func (c *converter) paraWord(s *state, t token) bool {
 		p.pageBrk = true
 	case "intbl":
 		p.inTable = true
+	case "itap":
+		p.itap = min(max(t.param, 0), maxNesting)
+		p.inTable = p.itap > 0
 	case "cbpat":
 		p.shading = t.param
 	case "brdrt":
@@ -472,6 +582,10 @@ func (c *converter) tableWord(t token) bool {
 		cell().valign = 'b'
 	case "clmrg":
 		cell().merged = true
+	case "clvmgf":
+		cell().vmerge = 'f'
+	case "clvmrg":
+		cell().vmerge = 'r'
 	case "clpadl", "clpadr", "clpadt", "clpadb":
 		cell().setPad(t.word[5], t.param)
 	case "trpaddl", "trpaddr", "trpaddt", "trpaddb":
@@ -583,9 +697,9 @@ func (c *converter) special(s *state, t token) {
 		c.endParagraph(s)
 		s.target.breakNext = "column"
 	case "cell", "nestcell":
-		c.endCell(s)
+		c.endCell(s, t.word == "nestcell")
 	case "row", "nestrow":
-		c.endRow(s)
+		c.endRow(s, t.word == "nestrow")
 	case "sect":
 		if s.target == c.body {
 			c.endParagraph(s)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/charset"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/memfs"
 )
@@ -59,8 +60,13 @@ const (
 	// destShape is the instruction of a shape, \shpinst. Its text is left
 	// out, and its picture is shown.
 	destShape
-	// destShapeName is the name of a property of a shape, \sn.
+	// destShapeName is the name of a property of a shape, \sn, and
+	// destShapeValue its value, \sv.
 	destShapeName
+	destShapeValue
+	// destStyleSheet is the style sheet, \stylesheet, whose styles the
+	// conversion keeps.
+	destStyleSheet
 )
 
 // charProps are the properties of the characters.
@@ -74,6 +80,10 @@ type charProps struct {
 	vertical                int
 	spacing                 int
 	highlight               int
+	// fontEA is the font of the double-byte characters, which \dbch\af
+	// sets, or -1, and langEA the language of the East Asian text, an LCID
+	// from \langfe, or 0.
+	fontEA, langEA int
 }
 
 // paraProps are the properties of a paragraph.
@@ -85,9 +95,12 @@ type paraProps struct {
 	lineMultiple                 bool
 	keepNext, keepLines, pageBrk bool
 	inTable                      bool
-	shading                      int
-	borderTop, borderBottom      bool
-	borderLeft, borderRight      bool
+	// itap is the level of the table of the paragraph, from 1, for a
+	// table that nests in a cell.
+	itap                    int
+	shading                 int
+	borderTop, borderBottom bool
+	borderLeft, borderRight bool
 	// side is the side of the border that the next border word sets.
 	side byte
 }
@@ -116,6 +129,9 @@ type cellDef struct {
 	top, bottom, left, right2 bool
 	valign                    byte
 	merged                    bool
+	// vmerge is 'f' for the first cell of cells that merge down, \clvmgf,
+	// and 'r' for a cell that the cell above covers, \clvmrg.
+	vmerge byte
 }
 
 // setPad sets the padding of the side, 'l', 'r', 't' or 'b', in twips.
@@ -184,6 +200,24 @@ type state struct {
 	closeLink bool
 	// kind names a header, a footer or a footnote that the group holds.
 	kind string
+	// dbch is set after \dbch, until \loch or \hich, while \af sets the
+	// font of the double-byte characters.
+	dbch bool
+	// row is the definition of the row of the table around a table that
+	// nests, which \nesttableprops keeps.
+	row *rowDef
+	// style is the style of the style sheet that the group defines.
+	style *styleEntry
+}
+
+// styleEntry is a style of the style sheet: its kind, 'p' for a paragraph
+// style and 'c' for a character style, its number, the style that it is
+// based on, or -1, and the control words of its formatting.
+type styleEntry struct {
+	kind  byte
+	num   int
+	base  int
+	words []token
 }
 
 // target is a flow of blocks: the body, a header, a footer or a footnote.
@@ -201,13 +235,9 @@ type target struct {
 	// \listtext, and markerAt its place in para.
 	marker   string
 	markerAt int
-	// table is set while a table is open, row holds the cells of the
-	// current row, and cell the blocks of the current cell.
-	table bool
-	row   []string
-	cell  strings.Builder
-	// rows holds the rows of the open table.
-	rows []tableRow
+	// levels holds the tables of the target, by their level of nesting
+	// from 1.
+	levels []*tableLevel
 }
 
 // converter converts RTF into XHTML.
@@ -237,10 +267,18 @@ type converter struct {
 	high rune
 	// starred is set after \*, until the next control word.
 	starred bool
+	// styles holds the styles of the style sheet.
+	styles []*styleEntry
 	// shapeProp is the name of the last property of a shape, and shapeBox
 	// the box of the shape in twips: left, top, right and bottom.
 	shapeProp string
 	shapeBox  [4]int
+	// shapeProps holds the values of the properties of the shape, by
+	// their names, and fixed the images of the WordArt of the headers and
+	// the footers, which wait for the element of their section.
+	shapeProps map[string]string
+	fixed      []string
+	fixedSeen  map[string]bool
 
 	doc     sectionProps
 	section sectionProps
@@ -292,7 +330,7 @@ func paperTwips(v float32) int {
 
 // defaultChar returns the properties of \plain.
 func (c *converter) defaultChar() charProps {
-	return charProps{font: c.docFont, size: 24}
+	return charProps{font: c.docFont, size: 24, fontEA: -1}
 }
 
 // defaultPara returns the properties of \pard.
@@ -384,7 +422,7 @@ func (c *converter) token(t token) {
 			return
 		}
 		s := *c.top()
-		s.closeLink, s.kind, s.info = false, "", ""
+		s.closeLink, s.kind, s.info, s.row = false, "", "", nil
 		c.stack = append(c.stack, &s)
 		return
 	case tokenClose:
@@ -469,6 +507,8 @@ func (c *converter) text(s *state, b []byte) {
 		if len(c.shapeProp) < 64 {
 			c.shapeProp += string(b)
 		}
+	case destShapeValue:
+		c.shapeValue(c.decode(b, s))
 	}
 }
 
@@ -520,8 +560,11 @@ func (c *converter) symbol(s *state, t token) {
 // runes writes text that is already Unicode.
 func (c *converter) runes(s *state, text string) {
 	if s.dest != destText || s.chr.hidden {
-		if s.dest == destInfoText {
+		switch s.dest {
+		case destInfoText:
 			c.infoFields[s.info] += text
+		case destShapeValue:
+			c.shapeValue(text)
 		}
 		return
 	}
@@ -634,11 +677,23 @@ func (c *converter) flushRun(t *target) {
 		return
 	}
 	style := c.runStyle(t.runProps)
-	if style != "" {
-		t.para.WriteString(`<span style="` + attrText(style) + `">`)
+	// the East Asian language selects the font of the East Asian text,
+	// as in the package docx
+	lang := ""
+	if strings.ContainsFunc(t.run.String(), fontdb.IsCJK) {
+		if v := c.eastAsianLang(t.runProps); v != "" {
+			lang = ` lang="` + attrText(v) + `"`
+		}
+	}
+	if style != "" || lang != "" {
+		t.para.WriteString(`<span` + lang)
+		if style != "" {
+			t.para.WriteString(` style="` + attrText(style) + `"`)
+		}
+		t.para.WriteString(">")
 	}
 	escape(&t.para, t.run.String(), false)
-	if style != "" {
+	if style != "" || lang != "" {
 		t.para.WriteString("</span>")
 	}
 	t.run.Reset()
@@ -653,6 +708,10 @@ func (c *converter) closeGroup() {
 	switch {
 	case s.dest == destPict && s.pict != nil && s.pict != parent.pict:
 		c.endPicture(parent, s.pict)
+	case s.kind == "nesttableprops" && s.row != nil:
+		c.row = *s.row
+	case s.dest == destShape && parent.dest != destShape:
+		c.endShape(parent)
 	case s.kind == "listtext" && s.target != parent.target:
 		c.flushRun(s.target)
 		c.listText(parent, s)

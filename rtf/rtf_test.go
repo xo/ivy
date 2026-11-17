@@ -267,3 +267,134 @@ func TestTableGrid(t *testing.T) {
 		t.Errorf("expected no top border:\n%s", html)
 	}
 }
+
+// TestEastAsianFont checks that a run gives the font of \dbch\af after its
+// font, when that font has the \fcharset of an East Asian font, and the
+// language of \langfe or of the \fcharset on its East Asian text
+// (libreoffice/rtf/chart-outline.rtf).
+func TestEastAsianFont(t *testing.T) {
+	doc := `{\rtf1\ansi\deff0{\fonttbl{\f0\froman\fcharset0 Times New Roman;}{\f1\fswiss\fcharset0 Arial;}` +
+		`{\f14\froman\fcharset136 PMingLiU;}{\f15\fmodern\fcharset128 MS Mincho;}}` +
+		`\pard\plain\f1\langfe1028\loch\af1\hich\af1\dbch\af14 \u27161?\u38988? text\par` +
+		`\pard\plain\f1\dbch\af0 Latin only\par` +
+		`\pard\plain\f1\dbch\af15 \u12354?\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	for _, want := range []string{
+		`<span lang="zh-TW" style="font-family: &quot;Arial&quot;, &quot;PMingLiU&quot;, sans-serif">標題 text</span>`,
+		`<span style="font-family: &quot;Arial&quot;, sans-serif">Latin only</span>`,
+		`<span lang="ja" style="font-family: &quot;Arial&quot;, &quot;MS Mincho&quot;, sans-serif">あ</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+}
+
+// TestVerticalMerge checks that the cells of \clvmgf and \clvmrg merge
+// into one cell of rows (libreoffice/rtf/landscape-a4-table.rtf).
+func TestVerticalMerge(t *testing.T) {
+	doc := `{\rtf1\ansi` +
+		`\trowd\clvmgf\cellx1440\cellx2880\pard\intbl Merged\cell B1\cell\row` +
+		`\trowd\clvmrg\cellx1440\cellx2880\pard\intbl\cell B2\cell\row` +
+		`\trowd\cellx1440\cellx2880\pard\intbl A3\cell B3\cell\row}`
+	html, _ := convertHTML(t, []byte(doc))
+	if !strings.Contains(html, `<td rowspan="2" style="padding-left: 5.4pt; padding-right: 5.4pt"><p `) {
+		t.Errorf("expected a cell of two rows:\n%s", html)
+	}
+	if n := strings.Count(html, "<td"); n != 5 {
+		t.Errorf("expected 5 cells, got %d:\n%s", n, html)
+	}
+}
+
+// TestNestedTable checks that a table of \itap2 goes into the cell of the
+// table around it, with the row of \nesttableprops, and that the text of
+// \nonesttables is left out.
+func TestNestedTable(t *testing.T) {
+	doc := `{\rtf1\ansi` +
+		`\trowd\cellx2880\cellx5760` +
+		`\pard\intbl\itap2 N1\nestcell N2\nestcell{\*\nesttableprops\trowd\cellx1000\cellx2000\nestrow}{\nonesttables\par}` +
+		`\pard\intbl Outer\cell Right\cell` +
+		`\trowd\cellx2880\cellx5760\row\pard After\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	if n := strings.Count(html, "<table"); n != 2 {
+		t.Fatalf("expected 2 tables, got %d:\n%s", n, html)
+	}
+	inner := strings.LastIndex(html, "<table")
+	outerCell := strings.Index(html, "<td")
+	if inner < outerCell || !strings.Contains(html[inner:], "N2") || strings.Index(html, "Outer") < inner {
+		t.Errorf("expected the nested table in the first cell before its text:\n%s", html)
+	}
+	if !strings.Contains(html, `<col style="width: 50pt"/>`) || !strings.Contains(html, `<col style="width: 144pt"/>`) {
+		t.Errorf("expected the columns of both tables:\n%s", html)
+	}
+	if !strings.Contains(html, "After") {
+		t.Errorf("expected the text after the table:\n%s", html)
+	}
+}
+
+// TestStyleSheet checks that a paragraph takes the formatting of its style
+// and of the style that it is based on, and a run the formatting of its
+// character style, before the control words after them.
+func TestStyleSheet(t *testing.T) {
+	doc := `{\rtf1\ansi\deff0{\fonttbl{\f0\froman Times New Roman;}}` +
+		`{\stylesheet{\ql\fs24 Normal;}{\s1\sbasedon2\b\fs32 Heading;}{\s2\qc\i Base;}{\*\cs10\additive\ul Emphasis;}}` +
+		`\pard\plain\s1 Title\par` +
+		`\pard\plain\s1\qr\b0 Right\par` +
+		`\pard\plain Plain {\cs10 under}\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	for _, want := range []string{
+		`text-align: center"><span style="font-size: 16pt; font-weight: bold; font-style: italic">Title</span>`,
+		`text-align: right"><span style="font-size: 16pt; font-style: italic">Right</span>`,
+		`<span style="text-decoration-line: underline">under</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Heading") || strings.Contains(html, "Normal") {
+		t.Errorf("expected the names of the styles left out:\n%s", html)
+	}
+}
+
+// TestWatermark checks that the WordArt of a header, such as the watermark
+// of libreoffice/rtf/watermark.rtf, shows once on each page, turned and
+// centered on the margins, with its text, its fill and its opacity.
+func TestWatermark(t *testing.T) {
+	shape := `{\shp{\*\shpinst\shpleft0\shptop0\shpright8484\shpbottom4242\shpwr3` +
+		`{\sp{\sn shapeType}{\sv 136}}{\sp{\sn rotation}{\sv 20643840}}{\sp{\sn gtextUNICODE}{\sv ASAP}}` +
+		`{\sp{\sn gtextFont}{\sv DejaVu Sans}}{\sp{\sn fillColor}{\sv 6108695}}{\sp{\sn fillOpacity}{\sv 32768}}` +
+		`{\sp{\sn posh}{\sv 2}}{\sp{\sn posrelh}{\sv 0}}{\sp{\sn posv}{\sv 2}}{\sp{\sn posrelv}{\sv 0}}{\sp{\sn fBehindDocument}{\sv 1}}}` +
+		`{\shprslt\par}}`
+	doc := `{\rtf1\ansi\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440` +
+		`{\header\pard ` + shape + `\par}{\headerf\pard ` + shape + `\par}\titlepg\pard Body\par}`
+	d, err := Open(t.Context(), bytes.NewReader([]byte(doc)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := fs.ReadFile(src.FS, documentName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(data)
+	if n := strings.Count(html, "<img"); n != 1 {
+		t.Fatalf("expected one image of the watermark, got %d:\n%s", n, html)
+	}
+	// a box of 424.2 by 212.1 points turned by 315 degrees, centered on
+	// the margins of 468 by 648 points
+	if !strings.Contains(html, `style="position: fixed; left: 9.03pt; top: 99.03pt; width: 449.93pt; height: 449.93pt; z-index: -1"`) {
+		t.Errorf("expected the image fixed at the center of the margins:\n%s", html)
+	}
+	svg, err := fs.ReadFile(src.FS, "media/1.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`rotate(315)`, `textLength="424.2"`, `fill="#17365d" fill-opacity="0.5"`, `font-family="'DejaVu Sans', sans-serif"`, `>ASAP</text>`} {
+		if !strings.Contains(string(svg), want) {
+			t.Errorf("expected %q in the svg:\n%s", want, svg)
+		}
+	}
+}

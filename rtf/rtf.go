@@ -8,10 +8,12 @@
 // of the paragraphs, the tables, the pictures in PNG, JPEG, EMF and WMF,
 // the sections with their pages and margins, the headers and the footers,
 // the footnotes, the fields with their last result, and the text in each
-// code page of the Encoding Standard and in Unicode. It does not apply the
-// style sheet of the file, because a writer of RTF repeats the formatting
-// of each style in each paragraph. A rendering is good enough for a review
-// (D5).
+// code page of the Encoding Standard and in Unicode. The tables have their
+// merged cells and the tables that nest in their cells. A paragraph and a
+// run take the formatting of their styles of the style sheet first. A run
+// gives its East Asian font of \dbch after its font, and the language of
+// its East Asian text. The WordArt of a header, such as a watermark,
+// shows on each page. A rendering is good enough for a review (D5).
 package rtf
 
 import (
