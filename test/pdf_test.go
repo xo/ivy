@@ -36,7 +36,7 @@ var popplerDiffers = map[string]string{
 // from the standard fonts, which are not the same files. It is at most about
 // 7 on a page that both programs draw the same.
 func TestPDF(t *testing.T) {
-	names, err := filepath.Glob(filepath.Join("..", "pdf", "internal", "interpret", "testdata", "*.pdf"))
+	names, err := filepath.Glob(filepath.Join("..", "internal", "hayro", "interpret", "testdata", "*.pdf"))
 	if err != nil {
 		t.Fatal(err)
 	}

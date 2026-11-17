@@ -1,0 +1,74 @@
+%!PS-Adobe-3.0
+%%Title: shapes
+%%BoundingBox: 0 0 612 792
+%%Pages: 1
+%%EndComments
+%%Page: 1 1
+% the painting of paths: fills, strokes with caps, joins and dashes, arcs,
+% curves, clips, colors in several color spaces, an image, a shading and a
+% pattern
+gsave
+0.9 setgray 36 36 540 720 rectfill
+grestore
+gsave
+72 650 translate
+1 0 0 setrgbcolor 0 0 100 80 rectfill
+0 0.6 0 setrgbcolor 130 40 40 0 360 arc fill
+0 0 1 setrgbcolor 200 0 moveto 300 0 lineto 250 80 lineto closepath fill
+0 1 1 0 setcmykcolor 340 0 80 80 rectfill
+0.1 0.8 0.9 sethsbcolor 440 0 40 80 rectfill
+grestore
+gsave
+72 520 translate
+0 setgray 12 setlinewidth
+0 setlinecap 0 0 moveto 100 0 lineto stroke
+1 setlinecap 0 30 moveto 100 30 lineto stroke
+2 setlinecap 0 60 moveto 100 60 lineto stroke
+0 setlinejoin 140 0 moveto 180 80 lineto 220 0 lineto stroke
+1 setlinejoin 240 0 moveto 280 80 lineto 320 0 lineto stroke
+2 setlinejoin 340 0 moveto 380 80 lineto 420 0 lineto stroke
+3 setlinewidth [12 6] 0 setdash 0 setlinecap
+440 0 moveto 470 80 lineto stroke
+[] 0 setdash
+grestore
+gsave
+72 380 translate
+0.5 0 0.5 setrgbcolor 4 setlinewidth
+0 0 moveto 30 100 70 -40 100 60 curveto stroke
+newpath 200 50 50 30 150 arcn closepath
+0 0.5 0.5 setrgbcolor fill
+newpath 300 0 moveto 360 0 360 100 20 arcto 4 {pop} repeat 360 100 lineto 2 setlinewidth stroke
+gsave
+400 0 100 100 rectclip
+newpath 450 50 70 0 360 arc 0.2 0.4 0.8 setrgbcolor fill
+grestore
+grestore
+gsave
+72 230 translate
+100 100 scale
+4 4 8 [4 0 0 -4 0 4] <00ff00ff ff00ff00 4080c0ff ffc08040> image
+grestore
+gsave
+220 230 translate
+<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 150 0]
+   /Function << /FunctionType 2 /Domain [0 1] /C0 [1 1 0] /C1 [0 0 1] /N 1 >>
+   /Extend [false false] >>
+gsave 0 0 150 100 rectclip shfill grestore
+grestore
+gsave
+400 230 translate
+<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20
+   /PaintProc { pop 1 0 0 setrgbcolor 0 0 10 10 rectfill 0 0 1 setrgbcolor 10 10 10 10 rectfill } >>
+matrix makepattern setpattern
+0 0 140 100 rectfill
+grestore
+gsave
+72 80 translate
+[/Separation /Orange /DeviceCMYK { dup 0.6 mul 0 3 1 roll exch 0 } ] setcolorspace
+0.8 setcolor 0 0 100 100 rectfill
+[/Indexed /DeviceRGB 2 <ff0000 00ff00 0000ff>] setcolorspace
+2 setcolor 140 0 100 100 rectfill
+1 setcolor 280 0 100 100 rectfill
+grestore
+showpage
+%%EOF

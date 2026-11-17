@@ -1,6 +1,6 @@
 name	url	kind	license	base	matched	path
 psd	https://github.com/oov/psd	copy	MIT	a5d50ec0acac	a5d50ec0acac	psd/internal/oovpsd
-hayro	https://github.com/LaurenzV/hayro	port	Apache-2.0 OR MIT	61f50b42a7f7b15764780b9ba534cba91488bb28	61f50b42a7f7b15764780b9ba534cba91488bb28	pdf/internal, internal/ccitt, internal/jbig2, internal/jpeg2000
+hayro	https://github.com/LaurenzV/hayro	port	Apache-2.0 OR MIT	61f50b42a7f7b15764780b9ba534cba91488bb28	61f50b42a7f7b15764780b9ba534cba91488bb28	internal/hayro, internal/ccitt, internal/jbig2, internal/jpeg2000
 moxcms	https://github.com/awxkee/moxcms	port	BSD-3-Clause OR Apache-2.0	1e2befc3042408f1f454db2d584b82db55014956	1e2befc3042408f1f454db2d584b82db55014956	internal/moxcms
 weasyprint	https://github.com/Kozea/WeasyPrint	port	BSD-3-Clause	69b19deb03ddf53907899ec450da03117c6a0a8c	69b19deb03ddf53907899ec450da03117c6a0a8c	internal/layout
 goldmark	https://github.com/yuin/goldmark	copy	MIT	d473f9516b6bba29f524dc0a1798890b8263674b	d473f9516b6bba29f524dc0a1798890b8263674b	internal/goldmark

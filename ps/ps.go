@@ -1,11 +1,14 @@
 // Package ps opens PostScript and EPS files.
 //
-// On 2026-11-16 a document gives the previews that an EPS file carries (D11):
-// the TIFF image of the binary header of a DOS EPS file, and the bitmap of an
-// EPSI file, between %%BeginPreview and %%EndPreview. A WMF preview waits for
-// the reader of phase 5, and the pages wait for a PostScript interpreter,
-// which is in the long tail (D1). A document also says its title, its author,
-// its creator and its date, from its DSC comments.
+// A document gives its pages: an interpreter of PostScript Level 2, with the
+// parts of Level 3 that files use, runs the program and draws each page onto
+// the display list (D29). A PostScript file gives one page for each
+// showpage. An EPS file gives one page, the size of its bounding box.
+//
+// A document also gives the previews that an EPS file carries (D11): the
+// TIFF image of the binary header of a DOS EPS file, and the bitmap of an
+// EPSI file, between %%BeginPreview and %%EndPreview. A document also says
+// its title, its author, its creator and its date, from its DSC comments.
 package ps
 
 import (
@@ -20,8 +23,10 @@ import (
 	"image/color"
 	"io"
 	"iter"
+	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/image/tiff"
@@ -73,19 +78,35 @@ func WithConfig(cfg ivy.Config) Option {
 // Document is an open PostScript or EPS file.
 type Document struct {
 	src  ivy.Source
+	cfg  ivy.Config
 	lim  ivy.Limits
 	info ivy.Info
+
+	// ps is the section of src that holds the PostScript.
+	ps *io.SectionReader
+	// eps is true for an EPS file, and bbox is its bounding box: llx, lly,
+	// urx and ury. hasBBox is true when the file gives it.
+	eps     bool
+	bbox    [4]float64
+	hasBBox bool
+	// media is the size of the page that %%DocumentMedia gives, or zero.
+	media [2]float64
 
 	// tiff is the section of the TIFF preview of a DOS EPS file.
 	tiff *io.SectionReader
 	// epsi is the preview of an EPSI file.
 	epsi *epsiPreview
+
+	mu    sync.Mutex
+	run   *run
+	fonts *fontSource
 }
 
 // The capabilities of a document.
 var (
 	_ ivy.Previewer = (*Document)(nil)
 	_ ivy.Describer = (*Document)(nil)
+	_ ivy.Pager     = (*Document)(nil)
 )
 
 // Open opens a PostScript or an EPS file. It returns an error that wraps
@@ -95,14 +116,19 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error
 	for _, opt := range opts {
 		opt(&o)
 	}
-	d := &Document{src: src, lim: o.cfg.Limits.WithDefaults()}
+	d := &Document{src: src, cfg: o.cfg, lim: o.cfg.Limits.WithDefaults()}
 	ps, err := d.readDOSHeader()
 	if err != nil {
 		return nil, err
 	}
+	d.ps = ps
 	if err := d.readComments(ctx, ps); err != nil {
 		return nil, err
 	}
+	if d.eps && !d.hasBBox {
+		d.readTrailer(ps)
+	}
+	d.fonts = newFontSource(o.cfg, d.lim)
 	return d, nil
 }
 
@@ -146,9 +172,11 @@ func (d *Document) readDOSHeader() (*io.SectionReader, error) {
 func (d *Document) readComments(ctx context.Context, ps *io.SectionReader) error {
 	r := bufio.NewReaderSize(io.LimitReader(ps, d.lim.MaxMemory), 4096)
 	first, err := readLine(r)
-	if err != nil || !strings.HasPrefix(first, "%!PS") {
-		return fmt.Errorf("file does not start with %%!PS: %w", ivy.ErrFormat)
+	if err != nil || !strings.HasPrefix(first, "%!") {
+		// a file of PostScript starts with %! (D29)
+		return fmt.Errorf("file does not start with %%!: %w", ivy.ErrFormat)
 	}
+	d.eps = strings.Contains(first, "EPSF") || d.tiff != nil
 	header := true
 	for {
 		if err := ctx.Err(); err != nil {
@@ -198,6 +226,73 @@ func (d *Document) readComment(line string) {
 		d.info.Producer = value
 	case "%%CreationDate":
 		d.info.Created = dscTime(value)
+	case "%%BoundingBox":
+		if !d.hasBBox {
+			d.bbox, d.hasBBox = dscBox(value)
+		}
+	case "%%HiResBoundingBox":
+		if box, ok := dscBox(value); ok {
+			d.bbox, d.hasBBox = box, true
+		}
+	case "%%DocumentMedia":
+		// %%DocumentMedia: name width height weight color type
+		if f := strings.Fields(value); len(f) >= 3 {
+			w, err1 := strconv.ParseFloat(f[1], 64)
+			h, err2 := strconv.ParseFloat(f[2], 64)
+			if err1 == nil && err2 == nil && w >= 1 && h >= 1 && d.media == [2]float64{} {
+				d.media = [2]float64{w, h}
+			}
+		}
+	}
+}
+
+// dscBox reads the four numbers of a bounding box. A box of width or height
+// 0, or (atend), is no box.
+func dscBox(value string) ([4]float64, bool) {
+	f := strings.Fields(value)
+	if len(f) != 4 {
+		return [4]float64{}, false
+	}
+	var box [4]float64
+	for i, s := range f {
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			return [4]float64{}, false
+		}
+		box[i] = v
+	}
+	if box[2] <= box[0] || box[3] <= box[1] {
+		return [4]float64{}, false
+	}
+	return box, true
+}
+
+// maxTrailer is the length of the end of a file that readTrailer reads.
+const maxTrailer = 16 << 10
+
+// readTrailer reads the bounding box of an EPS file that gives it at its
+// end, with %%BoundingBox: (atend).
+func (d *Document) readTrailer(ps *io.SectionReader) {
+	size := ps.Size()
+	off := max(size-maxTrailer, 0)
+	buf := make([]byte, size-off)
+	n, _ := ps.ReadAt(buf, off)
+	lines := strings.FieldsFunc(string(buf[:n]), func(r rune) bool { return r == '\n' || r == '\r' })
+	for _, line := range lines {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "%%BoundingBox":
+			if box, ok := dscBox(value); ok && !d.hasBBox {
+				d.bbox, d.hasBBox = box, true
+			}
+		case "%%HiResBoundingBox":
+			if box, ok := dscBox(value); ok {
+				d.bbox, d.hasBBox = box, true
+			}
+		}
 	}
 }
 

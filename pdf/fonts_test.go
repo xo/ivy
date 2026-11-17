@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/xo/ivy"
-	"github.com/xo/ivy/pdf/internal/cmap"
-	"github.com/xo/ivy/pdf/internal/pdffont"
+	"github.com/xo/ivy/internal/hayro/cmap"
+	"github.com/xo/ivy/internal/hayro/pdffont"
 )
 
 // fontsDir is the folder of the module github.com/xo/ivy/fonts in the

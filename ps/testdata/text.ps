@@ -1,0 +1,60 @@
+%!PS-Adobe-3.0
+%%Title: text
+%%BoundingBox: 0 0 612 792
+%%Pages: 1
+%%EndComments
+%%Page: 1 1
+% the standard fonts, reencoded fonts, a Type 3 font, charpath, and the
+% operators of show
+/Helvetica findfont 24 scalefont setfont
+72 720 moveto (Helvetica 24 point) show
+/Times-Roman findfont 24 scalefont setfont
+72 690 moveto (Times-Roman 24 point) show
+/Courier findfont 18 scalefont setfont
+72 660 moveto (Courier 18 point) show
+/Helvetica-Bold findfont 18 scalefont setfont
+72 630 moveto (Helvetica-Bold) show
+/Times-Italic findfont 18 scalefont setfont
+72 600 moveto (Times-Italic) show
+% a reencoded font
+/Helvetica findfont dup length dict begin
+  { 1 index /FID ne { def } { pop pop } ifelse } forall
+  /Encoding ISOLatin1Encoding def
+  currentdict end
+/Helvetica-Latin1 exch definefont pop
+/Helvetica-Latin1 20 selectfont
+72 560 moveto (caf\351 na\357ve \374ber) show
+% ashow, widthshow and kshow
+/Times-Roman 16 selectfont
+72 520 moveto 4 0 (spaced out) ashow
+72 495 moveto 10 0 32 (wide spaces here) widthshow
+% charpath, stroked
+/Helvetica-Bold 60 selectfont
+72 400 moveto (Outline) true charpath 1 setlinewidth 0 0 1 setrgbcolor stroke
+% a centered string
+/Times-Bold 30 selectfont
+(Centered) dup stringwidth pop 612 exch sub 2 div 340 moveto show
+% rotated text
+gsave 300 200 translate 30 rotate
+/Courier-Bold 24 selectfont 0 0 moveto (rotated) show grestore
+% a Type 3 font
+8 dict begin
+/FontType 3 def
+/FontMatrix [0.001 0 0 0.001 0 0] def
+/FontBBox [0 0 1000 1000] def
+/Encoding 256 array def 0 1 255 { Encoding exch /.notdef put } for
+Encoding 97 /box put Encoding 98 /disc put
+/CharProcs 3 dict def
+CharProcs begin
+/.notdef { } def
+/box { 100 100 800 800 rectfill } def
+/disc { 500 500 400 0 360 arc fill } def
+end
+/BuildGlyph { 1000 0 0 0 1000 1000 setcachedevice exch /CharProcs get exch 2 copy known not { pop /.notdef } if get exec } def
+/BuildChar { 1 index /Encoding get exch get 1 index /BuildGlyph get exec } def
+currentdict end
+/Shapes exch definefont pop
+0.6 0 0 setrgbcolor
+/Shapes 40 selectfont 72 120 moveto (abab) show
+showpage
+%%EOF

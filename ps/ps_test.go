@@ -2,9 +2,11 @@ package ps
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +155,106 @@ func TestDSCTime(t *testing.T) {
 	}
 }
 
+// renderPage renders page n of a document at 72 dots per inch.
+func renderPage(t *testing.T, d *Document, n int) (image.Image, error) {
+	t.Helper()
+	p, err := d.Page(t.Context(), n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ivy.RenderImage(t.Context(), p, 72, color.White)
+}
+
+func TestPages(t *testing.T) {
+	// a file that starts with a bare %! is PostScript (D29)
+	program := "%!\n0 0 1 setrgbcolor 0 0 100 100 rectfill showpage\n1 0 0 setrgbcolor 0 0 100 100 rectfill showpage\n"
+	d, err := Open(t.Context(), bytes.NewReader([]byte(program)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := d.PageCount(t.Context())
+	if err != nil || n != 2 {
+		t.Fatalf("expected 2 pages, got: %d, %v", n, err)
+	}
+	p, err := d.Page(t.Context(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w, h := p.Size(); w != 612 || h != 792 {
+		t.Errorf("expected a page of 612 by 792, got: %g by %g", w, h)
+	}
+	img, err := renderPage(t, d, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the page has y down: the square is at the bottom left
+	if r, g, b, _ := img.At(50, 792-50).RGBA(); r>>8 != 255 || g>>8 != 0 || b>>8 != 0 {
+		t.Errorf("expected red, got: %d %d %d", r>>8, g>>8, b>>8)
+	}
+	if _, err := d.Page(t.Context(), 2); !errors.Is(err, ivy.ErrPageRange) {
+		t.Errorf("expected ErrPageRange, got: %v", err)
+	}
+}
+
+func TestEPSPage(t *testing.T) {
+	// plain.eps draws a gradient of 16 by 8 from red at the top to blue
+	d := open(t, "plain.eps")
+	n, err := d.PageCount(t.Context())
+	if err != nil || n != 1 {
+		t.Fatalf("expected 1 page, got: %d, %v", n, err)
+	}
+	img, err := renderPage(t, d, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Bounds().Size() != image.Pt(16, 8) {
+		t.Fatalf("expected 16x8, got: %v", img.Bounds().Size())
+	}
+	top := color.RGBAModel.Convert(img.At(8, 0)).(color.RGBA)
+	bottom := color.RGBAModel.Convert(img.At(8, 7)).(color.RGBA)
+	if top.R < 200 || top.B > 50 || bottom.B < 200 || bottom.R > 50 {
+		t.Errorf("expected red over blue, got: %v over %v", top, bottom)
+	}
+}
+
+func TestPartialPage(t *testing.T) {
+	// an error of the program ends the page, which keeps what it drew
+	d, err := Open(t.Context(), bytes.NewReader([]byte("%!PS\n0 0 100 100 rectfill undefinedname\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := renderPage(t, d, 0)
+	var pe *ivy.PartialError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected a PartialError, got: %v", err)
+	}
+	if r, _, _, _ := img.At(50, 792-50).RGBA(); r>>8 != 0 {
+		t.Errorf("expected black, got: %d", r>>8)
+	}
+}
+
+func TestCancelPages(t *testing.T) {
+	d, err := Open(t.Context(), bytes.NewReader([]byte("%!PS\n{ 1 pop } loop\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := d.PageCount(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got: %v", err)
+	}
+}
+
+// fuzzSeeds are small programs for the fuzz test.
+var fuzzSeeds = []string{
+	"%!PS\n/Helvetica findfont 12 scalefont setfont 10 10 moveto (Hello) show showpage\n",
+	"%!PS\n<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill\n",
+	"%!PS\n100 100 scale 2 2 8 [2 0 0 2 0 0] <00ff ff00> image\n",
+	"%!PS\n<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20 /PaintProc { pop 0 0 10 20 rectfill } >> matrix makepattern setpattern 0 0 100 100 rectfill\n",
+	"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 10 10\n[/Indexed /DeviceRGB 1 <ff000000ff00>] setcolorspace 1 setcolor 0 0 10 10 rectfill\n",
+	"%!PS\n8 dict begin /FontType 3 def /FontMatrix [0.01 0 0 0.01 0 0] def /FontBBox [0 0 100 100] def /Encoding 256 array def 0 1 255 { Encoding exch /a put } for /BuildChar { pop pop 100 0 0 0 100 100 setcachedevice 0 0 50 100 rectfill } def currentdict end /T exch definefont 10 scalefont setfont 0 0 moveto (ab) show\n",
+}
+
 func FuzzOpen(f *testing.F) {
 	for _, name := range []string{"tiff4-preview.eps", "tiff8-preview.eps", "half.epsi", "plain.eps"} {
 		buf, err := os.ReadFile(filepath.Join("testdata", name))
@@ -161,7 +263,10 @@ func FuzzOpen(f *testing.F) {
 		}
 		f.Add(buf)
 	}
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16}}
+	for _, s := range fuzzSeeds {
+		f.Add([]byte(s))
+	}
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 12, MaxDepth: 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {
@@ -169,9 +274,21 @@ func FuzzOpen(f *testing.F) {
 		}
 		for p, err := range d.Previews(t.Context()) {
 			if err != nil {
-				return
+				break
 			}
 			_, _ = p.Decode(t.Context())
 		}
+		n, err := d.PageCount(t.Context())
+		if err != nil || n == 0 {
+			return
+		}
+		p, err := d.Page(t.Context(), 0)
+		if err != nil {
+			return
+		}
+		w, h := p.Size()
+		// a page of the fuzz test renders at most 1 million pixels
+		dpi := float32(math.Min(72, 72*1000/math.Max(float64(w), float64(h))))
+		_, _ = ivy.RenderImage(t.Context(), p, dpi, color.White)
 	})
 }

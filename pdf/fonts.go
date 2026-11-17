@@ -9,9 +9,9 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fontdb"
-	"github.com/xo/ivy/pdf/internal/cmap"
-	"github.com/xo/ivy/pdf/internal/interpret"
-	"github.com/xo/ivy/pdf/internal/pdffont"
+	"github.com/xo/ivy/internal/hayro/cmap"
+	"github.com/xo/ivy/internal/hayro/interpret"
+	"github.com/xo/ivy/internal/hayro/pdffont"
 )
 
 // cjkProbes holds a character of each CJK collection of Adobe. A face that

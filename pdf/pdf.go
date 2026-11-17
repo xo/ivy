@@ -33,9 +33,9 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
-	"github.com/xo/ivy/pdf/internal/interpret"
-	"github.com/xo/ivy/pdf/internal/render"
-	"github.com/xo/ivy/pdf/internal/syntax"
+	"github.com/xo/ivy/internal/hayro/interpret"
+	"github.com/xo/ivy/internal/hayro/render"
+	"github.com/xo/ivy/internal/hayro/syntax"
 )
 
 // Format describes the package for the registry of a program. It lists the

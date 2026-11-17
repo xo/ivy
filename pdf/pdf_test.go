@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/xo/ivy"
-	"github.com/xo/ivy/pdf/internal/interpret"
+	"github.com/xo/ivy/internal/hayro/interpret"
 	"github.com/xo/okage"
 )
 
@@ -83,7 +83,7 @@ func rgba(img image.Image, x, y int) color.NRGBA {
 func testFiles(t testing.TB) []string {
 	t.Helper()
 	var files []string
-	for _, dir := range []string{"internal/interpret/testdata", "internal/syntax/testdata"} {
+	for _, dir := range []string{"../internal/hayro/interpret/testdata", "../internal/hayro/syntax/testdata"} {
 		names, err := filepath.Glob(filepath.Join(dir, "*.pdf"))
 		if err != nil {
 			t.Fatal(err)
@@ -341,7 +341,7 @@ func TestPreviews(t *testing.T) {
 }
 
 func TestAnnotations(t *testing.T) {
-	buf, err := os.ReadFile(filepath.Join("internal", "interpret", "testdata", "annotation_checkbox.pdf"))
+	buf, err := os.ReadFile(filepath.Join("..", "internal", "hayro", "interpret", "testdata", "annotation_checkbox.pdf"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestAnnotations(t *testing.T) {
 }
 
 func TestConcurrentRender(t *testing.T) {
-	buf, err := os.ReadFile(filepath.Join("internal", "interpret", "testdata", "pattern_shading_on_text.pdf"))
+	buf, err := os.ReadFile(filepath.Join("..", "internal", "hayro", "interpret", "testdata", "pattern_shading_on_text.pdf"))
 	if err != nil {
 		t.Fatal(err)
 	}
