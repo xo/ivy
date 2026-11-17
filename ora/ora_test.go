@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"testing"
+	"time"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
@@ -130,4 +131,42 @@ func FuzzOpen(f *testing.F) {
 		dst, _ := okage.NewPixmap(8, 8)
 		_ = page.Render(t.Context(), dst, okage.IdentityTransform())
 	})
+}
+
+func TestDescribe(t *testing.T) {
+	info := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE document-info PUBLIC '-//KDE//DTD document-info 1.1//EN' 'http://www.calligra.org/DTD/document-info-1.1.dtd'>
+<document-info xmlns="http://www.calligra.org/DTD/document-info">
+ <about>
+  <title>Ivy leaves</title>
+  <subject>plants</subject>
+  <initial-creator>Someone else</initial-creator>
+  <date>2024-05-02T11:00:00</date>
+  <creation-date>2024-05-01T10:20:30</creation-date>
+  <language>en</language>
+ </about>
+ <author><full-name>Ann Painter</full-name></author>
+</document-info>`
+	d, err := Open(t.Context(), bytes.NewReader(file(mimeKrita, fixture.Entry{Name: "documentinfo.xml", Data: []byte(info)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Describe(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Ivy leaves" || got.Subject != "plants" || got.Language != "en" ||
+		len(got.Authors) != 1 || got.Authors[0] != "Ann Painter" ||
+		!got.Created.Equal(time.Date(2024, 5, 1, 10, 20, 30, 0, time.UTC)) ||
+		!got.Modified.Equal(time.Date(2024, 5, 2, 11, 0, 0, 0, time.UTC)) {
+		t.Errorf("expected the facts of documentinfo.xml, got: %+v", got)
+	}
+	// an OpenRaster file has no facts
+	d, err = Open(t.Context(), bytes.NewReader(file(mimeORA, fixture.Entry{Name: "stack.xml", Data: []byte(`<image w="6" h="4"/>`)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.Describe(t.Context()); err != nil || got.Title != "" {
+		t.Errorf("expected no facts, got: %+v %v", got, err)
+	}
 }

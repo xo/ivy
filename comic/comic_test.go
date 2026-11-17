@@ -2,11 +2,13 @@ package comic
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"image"
 	"image/color"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
@@ -26,11 +28,13 @@ func pages() []fixture.Entry {
 
 func TestOpen(t *testing.T) {
 	for name, buf := range map[string][]byte{
-		"cbz": fixture.Zip(pages()...),
-		"cbt": fixture.Tar(pages()...),
+		"cbz":           fixture.Zip(pages()...),
+		"cbt":           fixture.Tar(pages()...),
+		"cbz zipcrypto": fixture.EncryptedZip(fixture.ZipCrypto, "secret", pages()...),
+		"cbz aes":       fixture.EncryptedZip(fixture.WinZipAES2, "secret", pages()...),
 	} {
 		t.Run(name, func(t *testing.T) {
-			d, err := Format.Open(t.Context(), bytes.NewReader(buf), ivy.Config{})
+			d, err := Format.Open(t.Context(), bytes.NewReader(buf), ivy.Config{Password: "secret"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -115,10 +119,27 @@ func TestNaturalCompare(t *testing.T) {
 	}
 }
 
+func TestPassword(t *testing.T) {
+	buf := fixture.EncryptedZip(fixture.WinZipAES1, "secret", pages()...)
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ErrPassword without a password, got: %v", err)
+	}
+	cfg := ivy.Config{PasswordFunc: func(context.Context, int) (string, error) { return "secret", nil }}
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := d.PageCount(t.Context()); n != 3 {
+		t.Errorf("expected three pages, got: %d", n)
+	}
+}
+
 func FuzzOpen(f *testing.F) {
 	f.Add(fixture.Zip(pages()...))
 	f.Add(fixture.Tar(pages()...))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 64}}
+	f.Add(fixture.EncryptedZip(fixture.ZipCrypto, "secret", pages()...))
+	f.Add(fixture.EncryptedZip(fixture.WinZipAES1, "secret", pages()...))
+	cfg := ivy.Config{Password: "secret", Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 64}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {
@@ -131,4 +152,63 @@ func FuzzOpen(f *testing.F) {
 			_, _ = ivy.RenderImage(t.Context(), p, 36, nil)
 		}
 	})
+}
+
+func TestDescribe(t *testing.T) {
+	info := `<?xml version="1.0" encoding="utf-8"?>
+<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+	<Series>Ivy</Series><Number>3</Number>
+	<Writer>Ann Writer, Bob Writer</Writer>
+	<Year>2024</Year><Month>5</Month>
+	<LanguageISO>en</LanguageISO>
+</ComicInfo>`
+	entries := append(pages(), fixture.Entry{Name: "ComicInfo.xml", Data: []byte("\xef\xbb\xbf" + info)})
+	// the entry of pages() is in a folder, and the first one wins
+	entries[2].Data = []byte(info)
+	for name, buf := range map[string][]byte{
+		"cbz":           fixture.Zip(entries...),
+		"cbt":           fixture.Tar(entries...),
+		"cbz zipcrypto": fixture.EncryptedZip(fixture.ZipCrypto, "secret", entries...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: "secret"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n, _ := d.PageCount(t.Context()); n != 3 {
+				t.Errorf("expected three pages, got: %d", n)
+			}
+			got, err := d.Describe(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := ivy.Info{
+				Title:    "Ivy 3",
+				Authors:  []string{"Ann Writer", "Bob Writer"},
+				Language: "en",
+				Created:  time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
+			}
+			if got.Title != want.Title || !slices.Equal(got.Authors, want.Authors) || got.Language != want.Language || !got.Created.Equal(want.Created) {
+				t.Errorf("expected %+v, got: %+v", want, got)
+			}
+		})
+	}
+	// a title wins over the series, and a comic without ComicInfo.xml has
+	// no facts
+	buf := fixture.Zip(fixture.Entry{Name: "ComicInfo.xml", Data: []byte(`<ComicInfo><Title>Alone</Title><Series>S</Series></ComicInfo>`)},
+		fixture.Entry{Name: "1.png", Data: fixture.PNG(4, 4, color.White)})
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.Describe(t.Context()); err != nil || got.Title != "Alone" {
+		t.Errorf("expected the title Alone, got: %+v %v", got, err)
+	}
+	d, err = Open(t.Context(), bytes.NewReader(fixture.Zip(fixture.Entry{Name: "1.png", Data: fixture.PNG(4, 4, color.White)})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := d.Describe(t.Context()); err != nil || got.Title != "" {
+		t.Errorf("expected no facts, got: %+v %v", got, err)
+	}
 }

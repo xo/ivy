@@ -2,13 +2,17 @@
 // CBT, a tar archive of images.
 //
 // Each image is a page, in the natural order of the names, so that page2.jpg
-// comes before page10.jpg. The first page is the cover (D11). CBR and CB7 need
+// comes before page10.jpg. The first page is the cover (D11). A CBZ file whose
+// images ZipCrypto or the AES of WinZip encrypts opens with the password of
+// ivy.Config, or with its function PasswordFunc (D12). A document describes
+// the comic from its ComicInfo.xml. CBR and CB7 need
 // outside packages for RAR and 7z, and they come as modules of their own after
 // the maintainers approve the packages (D6, D7).
 package comic
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -18,8 +22,10 @@ import (
 	"iter"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	_ "golang.org/x/image/webp" // the WebP decoder, for image.Decode
 
@@ -60,6 +66,8 @@ func WithConfig(cfg ivy.Config) Option {
 type Document struct {
 	lim     ivy.Limits
 	entries []entry
+	// comicInfo is the entry ComicInfo.xml, or nil.
+	comicInfo *entry
 
 	mu    sync.Mutex
 	pages map[int]*raster.Page
@@ -69,6 +77,7 @@ type Document struct {
 var (
 	_ ivy.Pager     = (*Document)(nil)
 	_ ivy.Previewer = (*Document)(nil)
+	_ ivy.Describer = (*Document)(nil)
 )
 
 // entry is one image of the archive.
@@ -90,28 +99,42 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error
 	}
 	d := &Document{lim: o.cfg.Limits.WithDefaults(), pages: make(map[int]*raster.Page)}
 	var err error
-	if d.entries, err = zipEntries(src, d.lim); errors.Is(err, ivy.ErrFormat) {
+	if d.entries, err = zipEntries(ctx, src, o.cfg); errors.Is(err, ivy.ErrFormat) {
 		d.entries, err = tarEntries(src, d.lim)
 	}
 	if err != nil {
 		return nil, err
 	}
+	d.entries = slices.DeleteFunc(d.entries, func(e entry) bool {
+		if !isComicInfo(e.name) {
+			return false
+		}
+		if d.comicInfo == nil {
+			d.comicInfo = &e
+		}
+		return true
+	})
 	slices.SortStableFunc(d.entries, func(a, b entry) int {
 		return naturalCompare(a.name, b.name)
 	})
 	return d, nil
 }
 
-// zipEntries lists the images of a zip archive.
-func zipEntries(src ivy.Source, lim ivy.Limits) ([]entry, error) {
-	archive, err := zipdoc.Open(src, lim)
+// zipEntries lists the images of a zip archive, and its ComicInfo.xml. If the archive encrypts an
+// image, it finds the password with the smallest one (D12).
+func zipEntries(ctx context.Context, src ivy.Source, cfg ivy.Config) ([]entry, error) {
+	archive, err := zipdoc.Open(src, cfg.Limits)
 	if err != nil {
 		return nil, err
 	}
 	var entries []entry
+	var smallest *zip.File
 	for _, f := range archive.Files() {
-		if f.FileInfo().IsDir() || !isImage(f.Name) {
+		if f.FileInfo().IsDir() || !isImage(f.Name) && !isComicInfo(f.Name) {
 			continue
+		}
+		if zipdoc.Encrypted(f) && isImage(f.Name) && (smallest == nil || f.CompressedSize64 < smallest.CompressedSize64) {
+			smallest = f
 		}
 		entries = append(entries, entry{name: f.Name, open: func() (io.ReadCloser, error) {
 			buf, err := archive.Read(f)
@@ -121,10 +144,15 @@ func zipEntries(src ivy.Source, lim ivy.Limits) ([]entry, error) {
 			return io.NopCloser(bytes.NewReader(buf)), nil
 		}})
 	}
+	if smallest != nil {
+		if err := archive.Unlock(ctx, smallest, cfg); err != nil {
+			return nil, fmt.Errorf("opening comic book archive: %w", err)
+		}
+	}
 	return entries, nil
 }
 
-// tarEntries lists the images of a tar archive. A tar archive has no index,
+// tarEntries lists the images of a tar archive, and its ComicInfo.xml. A tar archive has no index,
 // so tarEntries reads each header once, and keeps the offset of its data.
 func tarEntries(src ivy.Source, lim ivy.Limits) ([]entry, error) {
 	counter := &countingReader{r: io.NewSectionReader(src, 0, src.Size())}
@@ -140,7 +168,7 @@ func tarEntries(src ivy.Source, lim ivy.Limits) ([]entry, error) {
 		case n >= lim.MaxObjects:
 			return nil, fmt.Errorf("archive of more than %d entries: %w", lim.MaxObjects, ivy.ErrLimit)
 		}
-		if hdr.Typeflag != tar.TypeReg || !isImage(hdr.Name) {
+		if hdr.Typeflag != tar.TypeReg || !isImage(hdr.Name) && !isComicInfo(hdr.Name) {
 			continue
 		}
 		off, size := counter.n, hdr.Size
@@ -179,6 +207,64 @@ func isImage(name string) bool {
 		return true
 	}
 	return false
+}
+
+// isComicInfo reports whether name is the file ComicInfo.xml of the
+// Anansi Project, which describes a comic, at the root of the archive or in
+// one folder.
+func isComicInfo(name string) bool {
+	return strings.EqualFold(path.Base(name), "ComicInfo.xml") && strings.Count(strings.Trim(name, "/"), "/") <= 1 &&
+		!strings.Contains(name, "__MACOSX/")
+}
+
+// Describe satisfies the ivy.Describer interface. It reads the title, the
+// writers, the language and the date of the comic from its ComicInfo.xml. A
+// comic without one has no facts. The title is the field Title, or the
+// fields Series and Number.
+func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
+	if err := ctx.Err(); err != nil {
+		return ivy.Info{}, fmt.Errorf("describing comic: %w", err)
+	}
+	if d.comicInfo == nil {
+		return ivy.Info{}, nil
+	}
+	rc, err := d.comicInfo.open()
+	if err != nil {
+		return ivy.Info{}, err
+	}
+	defer func() { _ = rc.Close() }()
+	buf, err := raster.ReadAll(rc, d.lim.MaxMemory)
+	if err != nil {
+		return ivy.Info{}, err
+	}
+	doc, err := zipdoc.ParseXML(buf, d.lim)
+	if err != nil {
+		return ivy.Info{}, fmt.Errorf("reading %s: %w", d.comicInfo.name, err)
+	}
+	root := doc.RootElement()
+	var info ivy.Info
+	info.Title = zipdoc.ChildText(root, "Title")
+	if info.Title == "" {
+		info.Title = strings.TrimSpace(zipdoc.ChildText(root, "Series") + " " + zipdoc.ChildText(root, "Number"))
+	}
+	for w := range strings.SplitSeq(zipdoc.ChildText(root, "Writer"), ",") {
+		if w = strings.TrimSpace(w); w != "" {
+			info.Authors = append(info.Authors, w)
+		}
+	}
+	info.Language = zipdoc.ChildText(root, "LanguageISO")
+	if year, err := strconv.Atoi(zipdoc.ChildText(root, "Year")); err == nil && year > 0 && year < 10000 {
+		month, err := strconv.Atoi(zipdoc.ChildText(root, "Month"))
+		if err != nil || month < 1 || month > 12 {
+			month = 1
+		}
+		day, err := strconv.Atoi(zipdoc.ChildText(root, "Day"))
+		if err != nil || day < 1 || day > 31 {
+			day = 1
+		}
+		info.Created = time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
+	}
+	return info, nil
 }
 
 // Close satisfies the ivy.Document interface.

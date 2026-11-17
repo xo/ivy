@@ -2,7 +2,10 @@
 //
 // Both formats are zip archives that hold the layers of an image and the
 // merged image, mergedimage.png. A document has one page, the merged image,
-// and gives the thumbnail of the file as its preview (D11). The package also
+// and gives the thumbnail of the file as its preview (D11). A Krita file
+// describes itself in documentinfo.xml: its title, its author, its subject,
+// its language and its dates. The stack.xml of OpenRaster holds no such
+// facts, only the size of the image and its layers. The package also
 // registers both formats with the package image, so that image.Decode reads
 // the merged image.
 package ora
@@ -16,6 +19,7 @@ import (
 	"io"
 	"iter"
 	"strings"
+	"time"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/raster"
@@ -72,6 +76,7 @@ type Document struct {
 var (
 	_ ivy.Pager     = (*Document)(nil)
 	_ ivy.Previewer = (*Document)(nil)
+	_ ivy.Describer = (*Document)(nil)
 )
 
 // Open opens an OpenRaster or a Krita file. It returns an error that wraps
@@ -148,6 +153,56 @@ func (d *Document) Previews(ctx context.Context) iter.Seq2[ivy.Preview, error] {
 		zipdoc.Candidate{Kind: ivy.Thumbnail, Name: "Thumbnails/thumbnail.png"},
 		zipdoc.Candidate{Kind: ivy.Thumbnail, Name: "preview.png"},
 	)
+}
+
+// Describe satisfies the ivy.Describer interface. It reads the
+// documentinfo.xml of a Krita file. An OpenRaster file has no facts.
+func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
+	if err := ctx.Err(); err != nil {
+		return ivy.Info{}, fmt.Errorf("describing %s: %w", d.mime, err)
+	}
+	f := d.archive.Find("documentinfo.xml")
+	if d.mime != mimeKrita || f == nil {
+		return ivy.Info{}, nil
+	}
+	doc, err := d.archive.ParseXML(f)
+	if err != nil {
+		return ivy.Info{}, fmt.Errorf("reading documentinfo.xml: %w", err)
+	}
+	var info ivy.Info
+	var name, creator string
+	for c := range doc.RootElement().Children() {
+		switch c.TagName().Name() {
+		case "about":
+			info.Title = zipdoc.ChildText(c, "title")
+			info.Subject = zipdoc.ChildText(c, "subject")
+			info.Language = zipdoc.ChildText(c, "language")
+			info.Created = kritaDate(zipdoc.ChildText(c, "creation-date"))
+			info.Modified = kritaDate(zipdoc.ChildText(c, "date"))
+			creator = zipdoc.ChildText(c, "initial-creator")
+		case "author":
+			name = zipdoc.ChildText(c, "full-name")
+		}
+	}
+	if name == "" {
+		name = creator
+	}
+	if name != "" {
+		info.Authors = []string{name}
+	}
+	return info, nil
+}
+
+// kritaDate parses a date of documentinfo.xml, such as
+// "2024-05-01T10:20:30", which has no zone. It returns the zero time for
+// another text.
+func kritaDate(s string) time.Time {
+	for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // Decode reads an OpenRaster or a Krita file from r, and returns its merged

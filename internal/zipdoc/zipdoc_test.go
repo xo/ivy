@@ -71,11 +71,6 @@ func TestReadLimits(t *testing.T) {
 	if _, err := a.Read(a.Find("big")); !errors.Is(err, ivy.ErrLimit) {
 		t.Errorf("expected ErrLimit, got: %v", err)
 	}
-	f := a.Find("big")
-	f.Flags |= 0x1
-	if _, err := a.Read(f); !errors.Is(err, ivy.ErrUnsupported) {
-		t.Errorf("expected ErrUnsupported, got: %v", err)
-	}
 }
 
 func TestDecodable(t *testing.T) {
@@ -86,5 +81,29 @@ func TestDecodable(t *testing.T) {
 		if got := Decodable(name); got != want {
 			t.Errorf("%s: expected %v, got: %v", name, want, got)
 		}
+	}
+}
+
+func TestParseXML(t *testing.T) {
+	a := open(t, ivy.Limits{MaxObjects: 8},
+		fixture.Entry{Name: "a.xml", Data: []byte("\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"windows-1252\"?>\n<a><b> one <i>two</i></b><c/></a>")},
+		fixture.Entry{Name: "big.xml", Data: []byte("<a><b/><b/><b/><b/><b/><b/><b/><b/><b/></a>")},
+		fixture.Entry{Name: "bad.xml", Data: []byte("<a><b></a>")},
+	)
+	doc, err := a.ParseXML(a.Find("a.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ChildText(doc.RootElement(), "b"); got != "one two" {
+		t.Errorf("expected %q, got: %q", "one two", got)
+	}
+	if got := ChildText(doc.RootElement(), "missing"); got != "" {
+		t.Errorf("expected nothing, got: %q", got)
+	}
+	if _, err := a.ParseXML(a.Find("big.xml")); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ErrLimit, got: %v", err)
+	}
+	if _, err := a.ParseXML(a.Find("bad.xml")); !errors.Is(err, ivy.ErrFormat) {
+		t.Errorf("expected ErrFormat, got: %v", err)
 	}
 }

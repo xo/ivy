@@ -27,6 +27,10 @@ type Archive struct {
 	zr    *zip.Reader
 	lim   ivy.Limits
 	names map[string]*zip.File
+	// keyed is true once the format called Unlock, and password is the
+	// password of the encrypted entries.
+	keyed    bool
+	password string
 }
 
 // Open opens the zip archive in src. It returns an error that wraps
@@ -102,13 +106,18 @@ func (a *Archive) Decode(ctx context.Context, f *zip.File) (image.Image, error) 
 	return raster.Decode(ctx, buf, a.lim)
 }
 
-// open opens the entry f. It refuses an entry that the archive encrypts.
+// open opens the entry f. It decrypts an entry that the archive encrypts
+// with the password that Unlock found, and refuses it if the format did not
+// call Unlock.
 func (a *Archive) open(f *zip.File) (io.ReadCloser, error) {
-	if f.Flags&0x1 != 0 {
-		return nil, fmt.Errorf("encrypted zip entry %s: %w", f.Name, ivy.ErrUnsupported)
-	}
 	if f.UncompressedSize64 > uint64(a.lim.MaxMemory) {
 		return nil, fmt.Errorf("zip entry %s of %d bytes: %w", f.Name, f.UncompressedSize64, ivy.ErrLimit)
+	}
+	if Encrypted(f) {
+		if !a.keyed {
+			return nil, fmt.Errorf("encrypted zip entry %s: %w", f.Name, ivy.ErrUnsupported)
+		}
+		return a.decrypt(f, a.password)
 	}
 	rc, err := f.Open()
 	if err != nil {
