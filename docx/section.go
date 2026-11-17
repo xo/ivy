@@ -42,6 +42,9 @@ type section struct {
 	// the edge of the page, and "text" from the text. bordersOn is
 	// "allPages", "firstPage" or "notFirstPage".
 	bordersFrom, bordersOn string
+	// bordersShadow is set when the right or the bottom border of the
+	// pages has a shadow.
+	bordersShadow bool
 	// bordersName is the name of the running element of the borders, or "".
 	bordersName string
 }
@@ -100,6 +103,14 @@ func parseSection(n roxmltree.Node, paper ivy.Paper) *section {
 			borders(p, "pg.", c)
 			for i, side := range [...]string{"top", "right", "bottom", "left"} {
 				s.borders[i] = p["pg."+side]
+			}
+			for e := range c.Children() {
+				if e.IsElement() && (e.TagName().Name() == "right" || e.TagName().Name() == "bottom") {
+					switch ooxml.Attr(e, "shadow") {
+					case "1", "true", "on":
+						s.bordersShadow = true
+					}
+				}
 			}
 		case "headerReference", "footerReference":
 			kind := strings.TrimSuffix(c.TagName().Name(), "Reference")
@@ -315,17 +326,21 @@ func (c *converter) pageRules(s *section) {
 		}
 		return "element(" + name + ")"
 	}
-	// header returns the rules of the headers and the footers of the kind,
-	// with the margins at the top and the bottom that hold them.
+	// header returns the rules of the headers and the footers of the kind.
 	header := func(kind string) string {
-		top, bottom := c.bodyMargins(s, s.running["header."+kind], s.running["footer."+kind])
-		return "margin-top: " + pt(top) + "; margin-bottom: " + pt(bottom) + "; " +
-			"@top-center { content: " + box("header."+kind) + "; padding-top: " + pt(min(s.header, s.top)) + " } " +
+		return "@top-center { content: " + box("header."+kind) + "; padding-top: " + pt(min(s.header, s.top)) + " } " +
 			"@bottom-center { content: " + box("footer."+kind) + "; padding-bottom: " + pt(min(s.footer, s.bottom)) + " }"
 	}
+	// Word puts the text of a page below its header, and above its
+	// footer: the top of the text is the larger of the top margin and the
+	// distance of the header from the top of the paper plus the height of
+	// the header, and the same holds for the footer at the bottom. The
+	// layout makes the margins of a page larger when its header or its
+	// footer needs it.
 	w := &c.sheet
 	w.WriteString("@page " + s.name + " { size: " + pt(s.width) + " " + pt(s.height) +
-		"; margin: " + pt(s.top) + " " + pt(s.right) + " " + pt(s.bottom) + " " + pt(s.left+s.gutter) + "; ")
+		"; margin: " + pt(s.top) + " " + pt(s.right) + " " + pt(s.bottom) + " " + pt(s.left+s.gutter) +
+		"; -ivy-margin-box-fit: grow; ")
 	w.WriteString(header("default"))
 	if s.bordersName != "" && s.bordersOn != "firstPage" {
 		w.WriteString(" " + c.bordersBox(s.bordersName))
@@ -386,6 +401,30 @@ func (c *converter) pageBorders(s *section) {
 	}
 	s.bordersName = "pb" + strconv.Itoa(c.section+1)
 	c.w.WriteString(`<div style="position: running(` + s.bordersName + `)"><div style="position: relative; height: 0">`)
+	if s.bordersShadow {
+		// Word draws the shadow of the borders as a black band as wide as
+		// the border, outside the right and the bottom borders, moved
+		// down and right by that width.
+		var sh css
+		w := 0.0
+		for _, i := range [...]int{1, 2} {
+			if f := strings.Fields(s.borders[i]); lines[i] != "" && len(f) == 4 {
+				w = max(w, min(max(number(f[1], 4)/8, 0.25), 12))
+			}
+		}
+		sh.set("position", "absolute")
+		sh.set("left", pt(left+w))
+		sh.set("top", pt(top+w))
+		sh.set("width", pt(right-left))
+		sh.set("height", pt(bottom-top))
+		sh.set("box-sizing", "border-box")
+		for _, i := range [...]int{1, 2} {
+			if lines[i] != "" {
+				sh.set("border-"+[...]string{"top", "right", "bottom", "left"}[i], pt(w)+" solid #000000")
+			}
+		}
+		c.w.WriteString(`<div style="` + attrText(sh.String()) + `"></div>`)
+	}
 	c.w.WriteString(`<div style="` + attrText(st.String()) + `"></div></div></div>`)
 }
 

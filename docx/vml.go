@@ -105,8 +105,13 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			s.set("top", pt(y-sec.top))
 		case "margin", "top-margin-area":
 			s.set("top", pt(y))
-		default:
+		case "line":
 			s.set("margin-top", pt(y))
+		default:
+			// The shape is placed from the top of the part of its
+			// paragraph on the page of its anchor, as in Word.
+			s.set("margin-top", pt(y))
+			s.set("-ivy-static-top", "block")
 		}
 		if strings.HasPrefix(strings.TrimSpace(st["z-index"]), "-") {
 			s.set("z-index", "-1")

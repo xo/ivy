@@ -24,7 +24,7 @@ const documentName = "index.xhtml"
 // formatting of each element in its style attribute, and the rules of each
 // section after this style sheet.
 const styleSheet = `html { font-family: serif; font-size: 10pt; line-height: 1.17 }
-body { margin: 0; counter-reset: note }
+body { margin: 0; counter-reset: note; -ivy-text-autospace: ideograph-alpha ideograph-numeric }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2 }
 table { border-collapse: collapse; border-spacing: 0 }
 td { padding: 0; vertical-align: top; border: none }

@@ -2,6 +2,7 @@ package docx
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -53,11 +54,34 @@ func (c *converter) blocks(n roxmltree.Node, tc *cellStyle) {
 		return
 	}
 	defer c.leave()
+	last, skip := cellEnd(n)
 	for e := range n.Children() {
-		if e.IsElement() {
+		if e.IsElement() && (!skip || e.ID() != last) {
 			c.block(e, tc)
 		}
 	}
+}
+
+// cellEnd returns the empty paragraph that ends the cell n after a table,
+// which takes no height in Word, and false when there is none. A cell must
+// end with a paragraph, so Word writes one after a table that ends a cell.
+func cellEnd(n roxmltree.Node) (roxmltree.NodeID, bool) {
+	if n.TagName().Name() != "tc" {
+		return 0, false
+	}
+	prev, last := "", ""
+	var id roxmltree.NodeID
+	var p roxmltree.Node
+	for e := range n.Children() {
+		if e.IsElement() {
+			prev, last = last, e.TagName().Name()
+			id, p = e.ID(), e
+		}
+	}
+	if prev == "tbl" && last == "p" && empty(p) {
+		return id, true
+	}
+	return 0, false
 }
 
 // alternative returns the content of mc:AlternateContent that the
@@ -397,7 +421,111 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 		s.set("widows", "1")
 	}
 	s.set("tab-size", pt(c.defaultTab))
+	s.set("-ivy-tab-stops", tabStops(ppr))
+	// Word adds a space between East Asian text and Latin text, and
+	// between East Asian text and digits, unless w:autoSpaceDE and
+	// w:autoSpaceDN turn it off (ECMA-376 Part 1, 17.3.1.2 and 17.3.1.3).
+	// The style sheet turns both on.
+	if v, ok := autospace(ppr); ok {
+		s.set("-ivy-text-autospace", v)
+	}
 	return s.String()
+}
+
+// autospace returns the value of -ivy-text-autospace of a paragraph with
+// the properties ppr, and false when it is the value of the style sheet,
+// with both spaces.
+func autospace(ppr props) (string, bool) {
+	off := func(name string) bool {
+		_, ok := ppr[name]
+		return ok && !ppr.on(name)
+	}
+	var v []string
+	if !off("autoSpaceDE") {
+		v = append(v, "ideograph-alpha")
+	}
+	if !off("autoSpaceDN") {
+		v = append(v, "ideograph-numeric")
+	}
+	switch len(v) {
+	case 2:
+		return "", false
+	case 0:
+		return "none", true
+	}
+	return v[0], true
+}
+
+// tabLeaders maps the leaders of the tab stops of Word to the text that
+// fills a tab (ECMA-376 Part 1, 17.18.85).
+var tabLeaders = map[string]string{
+	"dot":        ".",
+	"hyphen":     "-",
+	"underscore": "_",
+	"heavy":      "_",
+	"middleDot":  "\b7",
+}
+
+// tabStops returns the value of -ivy-tab-stops of a paragraph with the
+// properties ppr: its custom tab stops, from the left margin, and the
+// hanging indent, which Word uses as a stop too. Without a stop, it is
+// "auto", so that the default stops of tab-size also start at the left
+// margin, as in Word.
+func tabStops(ppr props) string {
+	type stop struct {
+		pos           int
+		align, leader string
+	}
+	var stops []stop
+	for k, v := range ppr {
+		pos, ok := strings.CutPrefix(k, "tab.")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(pos)
+		if err != nil {
+			continue
+		}
+		val, leader, _ := strings.Cut(v, " ")
+		align := ""
+		switch val {
+		case "left", "start", "num":
+			align = "left"
+		case "right", "end":
+			align = "right"
+		case "center", "decimal":
+			align = val
+		default:
+			// "clear" removes a stop, and "bar" draws a line that is not
+			// a stop.
+			continue
+		}
+		stops = append(stops, stop{n, align, tabLeaders[leader]})
+	}
+	if hanging := ppr.num("ind.hanging", 0); hanging > 0 {
+		left := int(ppr.num("ind.left", 0))
+		if !slices.ContainsFunc(stops, func(s stop) bool { return s.pos == left }) {
+			stops = append(stops, stop{left, "left", ""})
+		}
+	}
+	if len(stops) == 0 {
+		return "auto"
+	}
+	slices.SortFunc(stops, func(a, b stop) int { return a.pos - b.pos })
+	// Word keeps at most 64 custom stops in a paragraph.
+	stops = stops[:min(len(stops), 64)]
+	var b strings.Builder
+	for i, s := range stops {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(pt(float64(s.pos) / 20))
+		b.WriteString(" " + s.align)
+		if s.leader != "" {
+			b.WriteString(" '" + s.leader + "'")
+		}
+	}
+	return b.String()
 }
 
 // lineHeight returns the value of line-height of a paragraph.

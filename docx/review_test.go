@@ -2,12 +2,11 @@ package docx
 
 import (
 	"bytes"
+	"image"
 	"image/color"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -212,25 +211,29 @@ func TestHeaderHeight(t *testing.T) {
 	text := strings.Repeat("The header of the page has a long text. ", 30)
 	header := fixture.WordXML("w:hdr", `<w:p><w:r><w:t>`+text+`</w:t></w:r></w:p>`)
 	footer := fixture.WordXML("w:ftr", `<w:p><w:r><w:t>Footer</w:t></w:r></w:p>`)
-	body := `<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rIdH"/>` +
+	red := `<w:r><w:rPr><w:color w:val="FF0000"/><w:b/><w:sz w:val="48"/></w:rPr><w:t>BODY</w:t></w:r>`
+	body := `<w:p>` + red + `</w:p><w:p><w:pPr><w:pageBreakBefore/></w:pPr>` + red + `</w:p>` +
+		`<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/>` +
 		`<w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="12240" w:h="15840"/>` +
 		`<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr>`
-	_, sheet := convertHTML(t, fixture.DOCX(body,
+	d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(body,
 		fixture.WordPart{ID: "rIdH", Type: "header", Name: "word/header1.xml", Data: header},
-		fixture.WordPart{ID: "rIdF", Type: "footer", Name: "word/footer1.xml", Data: footer}))
-	// The text of about 1200 characters of 10 points takes 13 lines of
-	// 11.7 points on the 468 points of the column.
-	m := regexp.MustCompile(`margin-top: ([0-9.]+)pt; margin-bottom: ([0-9.]+)pt`).FindStringSubmatch(sheet)
-	if m == nil {
-		t.Fatalf("expected the margins in the style sheet:\n%s", sheet)
+		fixture.WordPart{ID: "rIdF", Type: "footer", Name: "word/footer1.xml", Data: footer})))
+	if err != nil {
+		t.Fatal(err)
 	}
-	top, _ := strconv.ParseFloat(m[1], 64)
-	bottom, _ := strconv.ParseFloat(m[2], 64)
-	if top < 150 || top > 220 {
-		t.Errorf("expected a top margin of about 190 points, got %g", top)
-	}
-	if bottom != 72 {
-		t.Errorf("expected a bottom margin of 72 points, got %g", bottom)
+	for i := range 2 {
+		img := render(t, d, i)
+		// The text of about 1200 characters of 10 points takes about 13
+		// lines from 36 points down, and the body starts below it.
+		bodyBox := redBox(img)
+		if bodyBox.Empty() || bodyBox.Min.Y < 150 || bodyBox.Min.Y > 240 {
+			t.Errorf("page %d: expected the body below the header, at about 190 points, got %v", i, bodyBox)
+		}
+		headerBox := inkBox(img, image.Rect(0, 0, 612, bodyBox.Min.Y-8))
+		if headerBox.Empty() || headerBox.Min.Y > 40 || headerBox.Max.Y < 150 {
+			t.Errorf("page %d: expected the header from 36 points down, got %v", i, headerBox)
+		}
 	}
 }
 
@@ -323,5 +326,62 @@ func TestFooterDrawingTop(t *testing.T) {
 	// points from the top of the paper, 654 from the top of the page area
 	if got := c.paragraphTop(); got != 654 {
 		t.Errorf("expected the paragraph at 654 points, got %g", got)
+	}
+}
+
+// TestPageBordersShadow checks that the shadow of the borders of a page
+// draws a black band outside the right and the bottom borders, as Word
+// does on the A5 page of aspose/docx/rendering.docx.
+func TestPageBordersShadow(t *testing.T) {
+	side := `w:val="single" w:sz="24" w:space="24" w:color="92D050" w:shadow="1"`
+	body := `<w:p><w:r><w:t>Text</w:t></w:r></w:p><w:sectPr><w:pgSz w:w="8391" w:h="11907"/>` +
+		`<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:pgBorders w:offsetFrom="page">` +
+		`<w:top ` + side + `/><w:left ` + side + `/><w:bottom ` + side + `/><w:right ` + side + `/></w:pgBorders></w:sectPr>`
+	d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := render(t, d, 0)
+	// The right border of 3 points ends 24 points from the right edge of
+	// the paper of 419.55 points, and the bottom border 24 points from the
+	// bottom edge of 595.35 points. The shadow is the 3 points after them.
+	dark := func(x, y int) bool {
+		c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
+		return c.R < 60 && c.G < 60 && c.B < 60
+	}
+	for _, p := range [][2]int{{397, 300}, {200, 573}, {395, 573}} {
+		if !dark(p[0], p[1]) {
+			t.Errorf("expected the shadow at %v, got %v", p, img.At(p[0], p[1]))
+		}
+	}
+	for _, p := range [][2]int{{21, 300}, {200, 22}, {397, 26}} {
+		if dark(p[0], p[1]) {
+			t.Errorf("expected no shadow at %v", p)
+		}
+	}
+}
+
+// TestVMLShapeNextPage checks that a VML shape that the part of a paragraph
+// on the next page anchors is placed from the top of that part, as in Word
+// (libreoffice/docx/mixed-orientation.docx).
+func TestVMLShapeNextPage(t *testing.T) {
+	text := strings.Repeat("The paragraph goes on to the next page. ", 160)
+	shape := `<w:r><w:pict><v:rect style="position:absolute;margin-left:92pt;margin-top:81pt;width:50pt;height:30pt" fillcolor="#ff0000"/></w:pict></w:r>`
+	body := `<w:p><w:r><w:t>` + text + `</w:t></w:r>` + shape + `<w:r><w:t>End.</w:t></w:r></w:p>` + tabsSection
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	if !strings.Contains(html, "-ivy-static-top: block") {
+		t.Errorf("expected the shape to start at the top of its paragraph:\n%s", html)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if box := redBox(render(t, d, 0)); !box.Empty() {
+		t.Errorf("expected no shape on the first page, got %v", box)
+	}
+	// The part of the paragraph on the second page starts at the top
+	// margin of 72 points.
+	if box := redBox(render(t, d, 1)); box.Min.Y < 150 || box.Min.Y > 156 || box.Min.X < 162 || box.Min.X > 166 {
+		t.Errorf("expected the shape at (164, 153), got %v", box)
 	}
 }

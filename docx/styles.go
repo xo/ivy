@@ -168,7 +168,8 @@ func parsePPr(n roxmltree.Node) props {
 		switch name {
 		case "jc", "pStyle", "outlineLvl":
 			p[name] = ooxml.Attr(c, "val")
-		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens", "snapToGrid":
+		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens", "snapToGrid",
+			"autoSpaceDE", "autoSpaceDN":
 			v := ooxml.Attr(c, "val")
 			if v == "" {
 				v = "1"
@@ -197,6 +198,18 @@ func parsePPr(n roxmltree.Node) props {
 			}
 		case "pBdr":
 			borders(p, "bdr.", c)
+		case "tabs":
+			// A tab stop is the key "tab." and its position, so that the
+			// stops of a style and of a paragraph merge by position, and
+			// "clear" removes a stop of the style (ECMA-376 Part 1,
+			// 17.3.1.37 and 17.3.1.38).
+			for e := range c.Children() {
+				if e.IsElement() && e.TagName().Name() == "tab" {
+					if pos, err := strconv.Atoi(ooxml.Attr(e, "pos")); err == nil {
+						p["tab."+strconv.Itoa(pos)] = ooxml.Attr(e, "val") + " " + ooxml.Attr(e, "leader")
+					}
+				}
+			}
 		case "shd":
 			if fill := shading(c); fill != "" {
 				p["shd"] = fill

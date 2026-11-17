@@ -10,15 +10,12 @@ import (
 
 // The height of a header or a footer.
 //
-// Word puts the text of a page below its header, and above its footer: the
-// top of the text is the larger of the top margin and the distance of the
-// header from the top of the paper plus the height of the header, and the
-// same holds for the footer at the bottom. The layout places a header in
-// the margin of the page, and does not move the text. So the conversion
-// estimates the height of each header and each footer from its paragraphs,
-// and makes the margin of the page larger when the header or the footer
-// needs it. The estimate also gives the top of each paragraph of a header
-// or a footer, where the drawings that the paragraph anchors start.
+// The layout measures a header and a footer, and makes the margins of the
+// page larger when they need it (-ivy-margin-box-fit). A drawing that a
+// paragraph of a header or a footer anchors starts at the top of the
+// paragraph. The drawings are in a box of their own at the edge of the
+// header or the footer, so the conversion estimates the top of each
+// paragraph, and the height of a footer, from the paragraphs.
 
 // avgCharWidth is the mean width of a character of text, as a multiple of
 // the size of its font. It is a mean of the fonts of Office.
@@ -199,22 +196,4 @@ func (c *converter) paragraphHeight(p roxmltree.Node, width float64) float64 {
 type hfHeight struct {
 	height float64
 	tops   map[roxmltree.NodeID]float64
-}
-
-// bodyMargins returns the top and the bottom margins of a page of the
-// section s whose header is the running element header and whose footer is
-// the running element footer, either of which can be "": the margins of
-// the section, or larger ones that hold the header and the footer, as in
-// Word.
-func (c *converter) bodyMargins(s *section, header, footer string) (float64, float64) {
-	top, bottom := s.top, s.bottom
-	if h, ok := c.hfHeights[header]; ok && header != "" {
-		top = max(top, min(s.header, s.top)+h.height)
-	}
-	if h, ok := c.hfHeights[footer]; ok && footer != "" {
-		bottom = max(bottom, min(s.footer, s.bottom)+h.height)
-	}
-	// The text keeps at least a fifth of the page.
-	limit := s.height * 0.4
-	return min(top, max(s.top, limit)), min(bottom, max(s.bottom, limit))
 }

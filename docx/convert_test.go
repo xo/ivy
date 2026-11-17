@@ -168,9 +168,9 @@ func TestConvert(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		// The header of one line at 18 points from the top of the paper
-		// takes more than the margin of 36 points, which grows to hold it.
-		`@page s1 { size: 419.6pt 595.35pt; margin: 36pt 36pt 36pt 36pt; margin-top: 40.49pt; margin-bottom: 36pt; @top-center { content: element(hf1); padding-top: 18pt }`,
+		// The header at 18 points from the top of the paper can take more
+		// than the margin of 36 points, which then grows to hold it.
+		`@page s1 { size: 419.6pt 595.35pt; margin: 36pt 36pt 36pt 36pt; -ivy-margin-box-fit: grow; @top-center { content: element(hf1); padding-top: 18pt }`,
 	} {
 		if !strings.Contains(sheet, want) {
 			t.Errorf("expected the style sheet to hold %q, got:\n%s", want, sheet)

@@ -78,11 +78,14 @@ func (c *converter) graphic(n roxmltree.Node, w, h float64, alt string) bool {
 			return c.shape(e, w, h)
 		case "wgp", "grpSp":
 			return c.group(e, w, h)
+		case "wpc":
+			// A drawing canvas holds its shapes and pictures as a group
+			// does, at their places from its corner.
+			return c.group(e, w, h)
 		case "chart":
 			return c.chart(e, w, h)
-		case "relIds", "wpc":
-			c.log.Debug("docx: diagram or canvas left out")
-			return false
+		case "relIds":
+			return c.diagram(e, w, h)
 		}
 	}
 	return false
