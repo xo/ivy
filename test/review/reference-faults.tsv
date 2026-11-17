@@ -8,3 +8,7 @@
 name	page	reference	note
 poi/vsdx/60489.vsdx	*	soffice	LibreOffice draws the actor shapes broken and wraps their labels.
 poi/vsdx/60973.vsdx	*	soffice	LibreOffice draws square corners where the Rounding cell asks for round ones, draws green boxes around the cloud and the router pictures that the file does not have, and draws a stray column of vertical text.
+poi/xlsx/picture.xlsx	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
+poi/xlsx/landscape-a4-tables.xlsx	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
+poi/xls/landscape-a4-drawing.xls	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
+poi/xls/landscape-a4-japanese.xls	*	msoffice	Excel in the Windows VM prints the A4 sheet (paperSize 9) on US Letter, and Word keeps A4. ivy keeps A4, as the file asks.
