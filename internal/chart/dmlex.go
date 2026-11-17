@@ -125,7 +125,7 @@ func (p *dmlParser) plotAreaEx(n roxmltree.Node, data map[string]exData) {
 		}
 	}
 	for _, pl := range c.plots {
-		if pl.kind == kindBar && pl.special != "funnel" {
+		if pl.kind == kindBar {
 			if gap, ok := p.catGap(n); ok {
 				pl.gap = gap
 			}
@@ -202,6 +202,10 @@ func (p *dmlParser) axisEx(n roxmltree.Node) axis {
 func (p *dmlParser) seriesEx(n roxmltree.Node, data map[string]exData) {
 	c := p.c
 	layout := ooxml.Attr(n, "layoutId")
+	if hidden := ooxml.Attr(n, "hidden"); hidden == "1" || hidden == "true" {
+		// a hidden series draws nothing, and the legend leaves it out
+		return
+	}
 	s := &series{}
 	for _, pl := range c.plots {
 		s.index += len(pl.series)
@@ -237,10 +241,14 @@ func (p *dmlParser) seriesEx(n roxmltree.Node, data map[string]exData) {
 	pl := &plot{kind: kindBar, grouping: "clustered", gap: 150, overlap: math.NaN(), bubbleScale: 100}
 	switch layout {
 	case "funnel":
-		pl.horizontal, pl.special, pl.gap = true, "funnel", 6
-		if !s.labels.set {
-			s.labels = labels{set: true, value: true, position: "ctr"}
+		// A funnel draws its first series only, as Excel and PowerPoint
+		// do, with the labels that the series asks for.
+		for _, other := range c.plots {
+			if other.special == "funnel" {
+				return
+			}
 		}
+		pl.horizontal, pl.special, pl.gap = true, "funnel", 6
 	case "waterfall":
 		pl.special, pl.gap = "waterfall", 50
 		if hasLayout {

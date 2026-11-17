@@ -21,12 +21,14 @@
 //
 // The charts of the types bar, column, line, area, pie, doughnut, scatter,
 // bubble, radar and stock draw in their own form, and a combination of them
-// draws with a secondary axis of values. A 3D chart draws as its 2D form,
-// and a bar of pie or a pie of pie as a pie. Of the charts of Office 2016,
-// the funnel, the waterfall, the histogram, the Pareto chart and the box
-// and whisker chart draw in their own form. A surface chart, a treemap, a
-// sunburst and a region map draw as a frame with their title and their
-// type.
+// draws with a secondary axis of values. The trendlines, the error bars and
+// the drop lines of a series draw too, and a date axis places its
+// categories by their dates. A 3D chart draws as its 2D form, and a bar of
+// pie or a pie of pie as a pie. Of the charts of Office 2016, the funnel,
+// the waterfall, the histogram, the Pareto chart and the box and whisker
+// chart draw in their own form, and a hidden series draws nothing. A
+// surface chart, a treemap, a sunburst and a region map draw as a frame
+// with their title and their type. The data tables are left out.
 package chart
 
 import (
@@ -212,8 +214,11 @@ type plot struct {
 	// special is the layout of a chart of Office 2016 that draws as bars:
 	// funnel, waterfall or pareto.
 	special string
-	labels  labels
-	series  []*series
+	// drop is the line of the drop lines of a line or an area chart, or
+	// nil.
+	drop   *stroke
+	labels labels
+	series []*series
 }
 
 // series is one series of a plot.
@@ -265,6 +270,16 @@ type series struct {
 	format string
 	// totals holds the points of a waterfall that are totals.
 	totals map[int]bool
+	// trends are the trendlines, and errs the error bars.
+	trends []trendline
+	errs   []errBars
+	// dates are the numbers of the categories, which a date axis places
+	// by their dates, and dateFormat their number format.
+	dates      []float64
+	dateFormat string
+	// span draws a line across the missing values, such as the days
+	// without a value of a date axis.
+	span bool
 }
 
 // labels are the labels on the data of a plot or a series.
@@ -350,8 +365,11 @@ type axis struct {
 	between, betweenSet bool
 	// reverse draws the axis from its maximum, c:orientation maxMin.
 	reverse bool
-	// date says that the axis is c:dateAx, whose categories are dates.
-	date bool
+	// date says that the axis is c:dateAx, whose categories are dates,
+	// and baseUnit is its unit: days, months or years, or empty for the
+	// automatic unit.
+	date     bool
+	baseUnit string
 	// rotation is the angle of the labels in degrees, counterclockwise, if
 	// hasRotation.
 	rotation    float64

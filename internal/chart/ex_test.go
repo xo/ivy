@@ -259,3 +259,35 @@ func TestLabelText(t *testing.T) {
 		t.Errorf("expected the parts on their own lines, got %q", got)
 	}
 }
+
+// TestFunnelSeries checks that a funnel draws its first series only, with
+// the gap of its axis and without labels that the series does not ask
+// for, and that a hidden series draws nothing.
+func TestFunnelSeries(t *testing.T) {
+	buf := string(exXML("", "funnel", "", []string{"a", "b"}, []float64{10, 6}))
+	buf = strings.Replace(buf, `</cx:series></cx:plotAreaRegion>`, `</cx:series>`+
+		`<cx:series layoutId="funnel" hidden="1"><cx:tx><cx:txData><cx:v>Hidden</cx:v></cx:txData></cx:tx><cx:dataId val="0"/></cx:series>`+
+		`<cx:series layoutId="funnel"><cx:tx><cx:txData><cx:v>Second</cx:v></cx:txData></cx:tx><cx:dataId val="0"/></cx:series></cx:plotAreaRegion>`, 1)
+	c, err := Parse([]byte(buf), Options{Theme: testTheme(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.plots) != 1 || len(c.plots[0].series) != 1 || c.plots[0].series[0].name != "S" {
+		t.Fatalf("expected one plot of the first series, got: %d plots", len(c.plots))
+	}
+	pl := c.plots[0]
+	if pl.gap != 50 {
+		t.Errorf("expected the gap of 50%% of the axis, got: %v", pl.gap)
+	}
+	if pl.series[0].labels.set {
+		t.Error("expected no labels")
+	}
+	// a hidden series of another layout draws nothing either
+	buf = strings.Replace(string(exXML("", "waterfall", "", []string{"a"}, []float64{1})), `<cx:series layoutId="waterfall"`, `<cx:series layoutId="waterfall" hidden="1"`, 1)
+	if c, err = Parse([]byte(buf), Options{Theme: testTheme(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.plots) != 0 {
+		t.Errorf("expected no plot, got: %d", len(c.plots))
+	}
+}

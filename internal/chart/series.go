@@ -285,6 +285,12 @@ func (pl *plane) bars(p *plot) {
 			if math.IsNaN(v) {
 				continue
 			}
+			if len(s.errs) > 0 && wf == nil && p.special == "" {
+				mid := (p0 + p1) / 2
+				pl.errorBars(s, "y", s.vals, i, mid, hi, func(x, y float64) (float64, float64) {
+					return pl.pt(x, y, p.secondary)
+				})
+			}
 			t, ok := tagOf(lab, i, func(l labels) string {
 				return labelText(l, seriesName(s), pl.catName(s, i), v, math.NaN(), s.format)
 			})
@@ -297,6 +303,12 @@ func (pl *plane) bars(p *plot) {
 				}
 				pl.barLabel(t, b, hi >= lo)
 			}
+		}
+	}
+	for _, s := range p.series {
+		if len(s.trends) > 0 && p.special == "" {
+			n := min(pl.n, len(s.vals))
+			pl.trendlines(s, catXs(n), s.vals[:n], pl.catAt(p))
 		}
 	}
 }
@@ -432,6 +444,7 @@ func (pl *plane) lines(p *plot) {
 	if p.upDown {
 		pl.upDown(p)
 	}
+	pl.dropLines(p, highs)
 	for k, s := range p.series {
 		n := min(pl.n, max(len(s.vals), len(s.cats)))
 		points := make([][2]float64, 0, n)
@@ -442,12 +455,12 @@ func (pl *plane) lines(p *plot) {
 				v = highs[k][i]
 			}
 			if math.IsNaN(v) {
-				switch pl.c.blanks {
-				case "zero":
-					v = 0
-				case "span":
+				switch {
+				case s.span || pl.c.blanks == "span":
 					vals[i] = math.NaN()
 					continue
+				case pl.c.blanks == "zero":
+					v = 0
 				}
 			}
 			vals[i] = v
@@ -461,6 +474,8 @@ func (pl *plane) lines(p *plot) {
 			}
 			cv.stroke(curve(points, p.smooth || s.smooth, p.step), s.color, width, s.dash, true)
 		}
+		at := pl.catAt(p)
+		pl.trendlines(s, catXs(n), s.vals[:min(n, len(s.vals))], at)
 		marker := cv.markerOf(p, s)
 		size := cv.markerSize(p, s)
 		lab := labelsOf(p, s)
@@ -468,6 +483,7 @@ func (pl *plane) lines(p *plot) {
 			if math.IsNaN(v) {
 				continue
 			}
+			pl.errorBars(s, "y", s.vals, i, float64(i+1), v, at)
 			x, y := pl.pt(pl.center(i), v, p.secondary)
 			cv.marker(marker, x, y, size, s, s.color)
 			t, ok := tagOf(lab, i, func(l labels) string {
@@ -559,6 +575,7 @@ func (pl *plane) areas(p *plot) {
 		lows, highs = pl.stack(p)
 	}
 	origin := pl.origin(p.secondary)
+	defer pl.dropLines(p, highs)
 	for k, s := range p.series {
 		n := min(pl.n, max(len(s.vals), len(s.cats)))
 		if n == 0 {
@@ -610,6 +627,7 @@ func (pl *plane) areas(p *plot) {
 			}
 			cv.stroke(path, line, width, s.dash, true)
 		}
+		pl.trendlines(s, catXs(n), s.vals[:min(n, len(s.vals))], pl.catAt(p))
 		lab := labelsOf(p, s)
 		if !lab.any() {
 			continue
@@ -662,6 +680,14 @@ func (pl *plane) scatterPlot(p *plot) {
 			}
 			cv.stroke(curve(points, p.smooth || s.smooth, p.step), s.color, width, s.dash, true)
 		}
+		at := func(x, y float64) (float64, float64) { return pl.xy(x, y, p.secondary) }
+		if len(s.trends) > 0 {
+			xs := make([]float64, len(s.vals))
+			for i := range xs {
+				xs[i] = xOf(s, i)
+			}
+			pl.trendlines(s, xs, s.vals, at)
+		}
 		marker := cv.markerOf(p, s)
 		if !p.lines && marker == "" && !s.noMarker {
 			marker = autoMarkers[max(0, s.index)%len(autoMarkers)]
@@ -672,6 +698,10 @@ func (pl *plane) scatterPlot(p *plot) {
 			x := xOf(s, i)
 			if math.IsNaN(v) || math.IsNaN(x) {
 				continue
+			}
+			if len(s.errs) > 0 {
+				pl.errorBars(s, "y", s.vals, i, x, v, at)
+				pl.errorBars(s, "x", s.xs, i, x, v, at)
 			}
 			px, py := pl.xy(x, v, p.secondary)
 			cv.marker(marker, px, py, size, s, s.color)

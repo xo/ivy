@@ -69,6 +69,7 @@ func Parse(buf []byte, opts Options) (c *Chart, err error) {
 	} else {
 		p.chart(chart)
 	}
+	c.placeDates()
 	c.finish()
 	c.styleText()
 	return c, nil
@@ -478,6 +479,8 @@ func (p *dmlParser) axis(n roxmltree.Node) axis {
 		switch e.TagName().Name() {
 		case "axId":
 			a.id = v
+		case "baseTimeUnit":
+			a.baseUnit = v
 		case "crossAx":
 			a.cross = v
 		case "delete":
@@ -653,6 +656,9 @@ func (p *dmlParser) plot(n roxmltree.Node) (*plot, string) {
 			pl.hiLow = true
 		case "upDownBars":
 			pl.upDown = true
+		case "dropLines":
+			drop := p.strokeOf(e)
+			pl.drop = &drop
 		case "dLbls":
 			pl.labels = p.labels(e)
 		case "ser":
@@ -822,12 +828,29 @@ func (p *dmlParser) series(n roxmltree.Node, pl *plot) *series {
 				continue
 			}
 			s.cats = p.categories(strs, nums, format, isNum)
+			if isNum {
+				s.dates, s.dateFormat = nums, format
+			}
 		case "val", "yVal":
 			_, s.vals, s.format, _ = p.data(e)
 		case "bubbleSize":
 			_, s.sizes, _, _ = p.data(e)
 		case "smooth":
 			s.smooth = boolVal(e)
+		case "trendline":
+			if len(s.trends) < maxTrends {
+				s.trends = append(s.trends, p.trendline(e))
+			}
+		case "errBars":
+			if len(s.errs) < maxTrends {
+				s.errs = append(s.errs, p.errBars(e))
+			}
+		}
+	}
+	if pl.kind != kindScatter {
+		// the error bars of a chart of categories go along the values
+		for i := range s.errs {
+			s.errs[i].dir = "y"
 		}
 	}
 	if s.index < 0 {
