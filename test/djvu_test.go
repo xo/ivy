@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -223,4 +224,89 @@ func decodePPM(r *bufio.Reader) (image.Image, error) {
 		}
 	}
 	return img, nil
+}
+
+// TestDJVUIW44 compares a standalone IW44 image, FORM:PM44 in color and
+// FORM:BM44 in gray, with the image that ddjvu renders at its size in
+// pixels. The test makes each image from the BG44 chunks of a test file of
+// djvu.
+func TestDJVUIW44(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []struct{ name, typ string }{{"photo.djvu", "PM44"}, {"gray.djvu", "BM44"}} {
+		t.Run(c.typ, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "djvu", "testdata", c.name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			iw := iw44File(t, data, c.typ)
+			path := filepath.Join(dir, c.typ+".djvu")
+			if err := os.WriteFile(path, iw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			d, err := djvu.Open(t.Context(), bytes.NewReader(iw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := d.Page(t.Context(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ivy.RenderImage(t.Context(), page, 72, color.White)
+			if err != nil {
+				t.Fatal(err)
+			}
+			size := got.Bounds().Size()
+			bin, err := exec.LookPath("ddjvu")
+			if err != nil {
+				t.Fatalf("oracle ddjvu is not installed: %v", err)
+			}
+			cmd := exec.CommandContext(t.Context(), bin, "-format=ppm", fmt.Sprintf("-size=%dx%d", size.X, size.Y), path)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("running ddjvu: %v: %s", err, stderr.String())
+			}
+			want, err := decodePPM(bufio.NewReader(&stdout))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want.Bounds().Size() != size {
+				t.Fatalf("expected %v, got: %v", want.Bounds().Size(), size)
+			}
+			diff := meanDiff(got, want)
+			t.Logf("mean difference: %.2f", diff)
+			if diff < 0 || diff > djvuMeanDiff {
+				t.Errorf("expected the image of ddjvu within %d, got: %.2f", djvuMeanDiff, diff)
+			}
+		})
+	}
+}
+
+// iw44File returns a standalone IW44 file of the type typ with the BG44
+// chunks of the single page DjVu file data.
+func iw44File(t *testing.T, data []byte, typ string) []byte {
+	t.Helper()
+	body := []byte(typ)
+	// the chunks of FORM:DJVU follow AT&T, its header and its type
+	for off := 16; off+8 <= len(data); {
+		n := int(binary.BigEndian.Uint32(data[off+4:]))
+		if off+8+n > len(data) {
+			break
+		}
+		if string(data[off:off+4]) == "BG44" {
+			body = append(body, typ...)
+			body = binary.BigEndian.AppendUint32(body, uint32(n))
+			body = append(body, data[off+8:off+8+n]...)
+			if n%2 == 1 {
+				body = append(body, 0)
+			}
+		}
+		off += 8 + n + n%2
+	}
+	if len(body) == len(typ) {
+		t.Fatal("expected BG44 chunks")
+	}
+	out := []byte("AT&TFORM")
+	out = binary.BigEndian.AppendUint32(out, uint32(len(body)))
+	return append(out, body...)
 }

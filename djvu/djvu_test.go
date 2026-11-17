@@ -384,7 +384,9 @@ func TestErrors(t *testing.T) {
 		{"empty", nil, ivy.ErrFormat},
 		{"text", []byte("hello, this is not a djvu file"), ivy.ErrFormat},
 		{"other form", form("ABCD", chunk("INFO", info2550())), ivy.ErrFormat},
-		{"iw44 photo", form("PM44", chunk("PM44", []byte{0, 1})), ivy.ErrUnsupported},
+		{"iw44 photo without a size", form("PM44", chunk("PM44", []byte{0, 1})), ivy.ErrFormat},
+		{"iw44 photo without data", form("PM44", chunk("INFO", info2550())), ivy.ErrFormat},
+		{"shared data", form("DJVI", chunk("Djbz", []byte{1})), ivy.ErrUnsupported},
 		{"indirect", testFile(t, "indirect/index.djvu"), ivy.ErrUnsupported},
 		{"no info", form("DJVU", chunk("Sjbz", []byte{1, 2, 3})), ivy.ErrFormat},
 	} {
@@ -436,7 +438,6 @@ func TestLimits(t *testing.T) {
 		lim  ivy.Limits
 	}{
 		{"bundled.djvu", ivy.Limits{MaxObjects: 3}},
-		{"bundled.djvu", ivy.Limits{MaxDepth: 1}},
 	} {
 		_, err := Open(t.Context(), bytes.NewReader(testFile(t, c.name)), WithConfig(ivy.Config{Limits: c.lim}))
 		if !errors.Is(err, ivy.ErrLimit) {
@@ -452,6 +453,8 @@ func TestLimits(t *testing.T) {
 		{"photo.djvu", ivy.Limits{MaxMemory: 1 << 20}},
 		{"mmr.djvu", ivy.Limits{MaxPixels: 1 << 20}},
 		{"jpeg.djvu", ivy.Limits{MaxPixels: 1 << 20}},
+		// a bundled document reads the chunks of a page when it renders
+		{"bundled.djvu", ivy.Limits{MaxDepth: 1}},
 	} {
 		d := open(t, c.name, ivy.Config{Limits: c.lim})
 		page, _ := d.Page(t.Context(), 0)

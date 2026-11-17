@@ -17,6 +17,7 @@ import (
 	"github.com/xo/ivy/djvu/internal/iw44"
 	"github.com/xo/ivy/djvu/internal/jb2"
 	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/jpeg2000"
 	"github.com/xo/ivy/internal/raster"
 )
 
@@ -243,7 +244,13 @@ func (p *Page) decode(ctx context.Context) (*layers, error) {
 	fail := func(what string, err error) {
 		errs = append(errs, fmt.Errorf("decoding the %s of djvu page %d: %w", what, p.n+1, format(err)))
 	}
-	mask, err := p.d.doc.Mask(p.p)
+	pd, pp, err := p.load()
+	if err != nil {
+		fail("page", err)
+		l.err = errors.Join(errs...)
+		return l, nil
+	}
+	mask, err := pd.Mask(pp)
 	if err != nil {
 		fail("mask", err)
 	}
@@ -251,17 +258,17 @@ func (p *Page) decode(ctx context.Context) (*layers, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("rendering djvu page %d: %w", p.n+1, err)
 	}
-	if l.pal, err = p.p.Palette(); err != nil {
+	if l.pal, err = pp.Palette(); err != nil {
 		fail("palette", err)
 		l.pal = nil
 	}
-	if l.bg, err = p.source(ctx, "BG44", "BGjp"); err != nil {
+	if l.bg, err = p.source(ctx, pp, "BG44", "BGjp", "BG2k"); err != nil {
 		fail("background", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("rendering djvu page %d: %w", p.n+1, err)
 	}
-	if l.fg, err = p.source(ctx, "FG44", "FGjp"); err != nil {
+	if l.fg, err = p.source(ctx, pp, "FG44", "FGjp", "FG2k"); err != nil {
 		fail("foreground", err)
 	}
 	if err := ctx.Err(); err != nil {
@@ -271,22 +278,41 @@ func (p *Page) decode(ctx context.Context) (*layers, error) {
 	return l, nil
 }
 
-// source decodes the IW44 layer of the chunks iw, or the JPEG layer of the
-// chunk jp. A layer that decodes in part comes with its error.
-func (p *Page) source(ctx context.Context, iw, jp string) (source, error) {
-	if cs := p.p.Form.All(iw); len(cs) > 0 {
-		dec, err := p.p.Layer(iw)
+// load returns the page and its document. A page of a bundled document
+// reads its component, and the components that it includes, from the
+// source.
+func (p *Page) load() (*doc.Document, *doc.Page, error) {
+	if p.d.bundle == nil {
+		return p.d.doc, p.p, nil
+	}
+	c, ok := p.d.bundle.pageComponent(p.n)
+	if !ok {
+		return nil, nil, fmt.Errorf("djvu page %d not in the directory: %w", p.n+1, ivy.ErrFormat)
+	}
+	return p.d.bundle.page(c)
+}
+
+// source decodes the IW44 layer of the chunks iw, the JPEG layer of the
+// chunk jp, or the JPEG 2000 layer of the chunk j2k. A layer that decodes
+// in part comes with its error.
+func (p *Page) source(ctx context.Context, pp *doc.Page, iw, jp, j2k string) (source, error) {
+	if cs := pp.Form.All(iw); len(cs) > 0 {
+		dec, err := pp.Layer(iw)
 		if dec == nil {
 			return source{}, err
 		}
 		w, h, _ := iw44.Size(cs[0].Data)
 		return source{iw: dec, w: w, h: h}, err
 	}
-	c := p.p.Form.Find(jp)
-	if c == nil {
+	var img image.Image
+	var err error
+	if c := pp.Form.Find(jp); c != nil {
+		img, err = raster.Decode(ctx, c.Data, p.d.lim)
+	} else if c := pp.Form.Find(j2k); c != nil {
+		img, err = decodeJPEG2000(ctx, c.Data, p.d.lim)
+	} else {
 		return source{}, nil
 	}
-	img, err := raster.Decode(ctx, c.Data, p.d.lim)
 	if err != nil {
 		return source{}, err
 	}
@@ -617,4 +643,21 @@ func correct(pix []byte, gamma float64) {
 	for i := 0; i+2 < len(pix); i += 4 {
 		pix[i], pix[i+1], pix[i+2] = lut[pix[i]], lut[pix[i+1]], lut[pix[i+2]]
 	}
+}
+
+// decodeJPEG2000 decodes a layer in JPEG 2000, a raw codestream or a JP2
+// file, with the port of hayro-jpeg2000 (D17). The colors of an ICC profile
+// become sRGB.
+func decodeJPEG2000(ctx context.Context, data []byte, lim ivy.Limits) (image.Image, error) {
+	settings := jpeg2000.DefaultDecodeSettings()
+	settings.Limits = lim
+	settings.Cancel = jpeg2000.NewCancelHandle(jpeg2000.CancelFunc(func() bool { return ctx.Err() != nil }))
+	img, err := jpeg2000.DecodeImage(data, &settings, jpeg2000.MoxcmsTransform)
+	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, fmt.Errorf("decoding jpeg 2000: %w", cerr)
+		}
+		return nil, fmt.Errorf("decoding jpeg 2000: %w", err)
+	}
+	return img, nil
 }

@@ -130,6 +130,14 @@ func ParseDir(b []byte) (*Dir, error) {
 	return parseDir(b, ivy.Limits{})
 }
 
+// ParseDirWithin is ParseDir within lim.MaxMemory.
+//
+// ivy: added, so that ivy reads the directory of a bundled document
+// before its components.
+func ParseDirWithin(b []byte, lim ivy.Limits) (*Dir, error) {
+	return parseDir(b, lim)
+}
+
 // parseDir is ParseDir within lim.MaxMemory.
 //
 // ivy: added.
