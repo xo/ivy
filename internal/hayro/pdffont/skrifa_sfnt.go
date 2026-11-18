@@ -213,22 +213,11 @@ func (f *sfntProgram) postVersion() (uint32, bool) {
 	return binary.BigEndian.Uint32(f.post), true
 }
 
-// outline draws a glyph into the pen, scaled to UnitsPerEm.
-//
-// Port: skrifa draws the glyphs of a CFF table with the FontMatrix of the
-// table, and with the seac of endchar. go-text draws them without either,
-// so Go draws them with the CFF table. Without a FontMatrix, a glyph has
-// the scale of unitsPerEm, as in go-text.
+// outline draws a glyph into the pen, scaled to UnitsPerEm. typesetting
+// draws the glyphs of a CFF table with the FontMatrix of the table and with
+// seac, as skrifa does (okage D59).
 func (f *sfntProgram) outline(gid GlyphID, pen *outlinePath) {
 	if int(gid) >= f.numGlyphs {
-		return
-	}
-	if f.cff != nil && int(gid) < f.cff.numGlyphs {
-		m, ok := f.cff.matrixOf(gid)
-		if !ok {
-			m = kurbo.AffineScale(float64(1 / f.upem))
-		}
-		f.cff.outlineWith(gid, m, pen)
 		return
 	}
 	var out gofont.GlyphOutline

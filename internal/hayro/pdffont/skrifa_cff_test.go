@@ -207,18 +207,15 @@ func TestCFFSeac(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accent, base, dx, dy, ok := f.seac(3)
-	if !ok || accent != 2 || base != 1 || dx != 100 || dy != 200 {
-		t.Fatalf("expected the accent 2 at (100, 200) on the base 1, got %d at (%g, %g) on %d (%v)", accent, dx, dy, base, ok)
-	}
-	if _, _, _, _, ok := f.seac(1); ok {
-		t.Error("expected no seac for glyph 1")
-	}
-	// the scale of the default FontMatrix to UnitsPerEm
+	// the scale of the default FontMatrix to UnitsPerEm: glyph 3 draws the
+	// base glyph 1 and the accent 2 at (100, 200)
 	s := float64(UnitsPerEm) * 0.001
 	exp := kurbo.NewRect(0, 0, 130*s, 230*s)
 	if got := bounds(t, f, 3); !near(got, exp) {
 		t.Errorf("expected the bounds %v, got %v", exp, got)
+	}
+	if got, exp := bounds(t, f, 1), kurbo.NewRect(0, 0, 100*s, 100*s); !near(got, exp) {
+		t.Errorf("expected the bounds %v of glyph 1, got %v", exp, got)
 	}
 }
 
@@ -287,33 +284,5 @@ func TestCFFExpertCharset(t *testing.T) {
 	f.readEncoding([]byte{0, 0, 0x80, 0, 1, 0x41, 0, 230}, 2)
 	if g, ok := f.encodingGlyph(0x41); !ok || g != 3 {
 		t.Errorf("expected glyph 3 for the code 0x41, got %d (%v)", g, ok)
-	}
-}
-
-// TestCFFFDSelectRanges checks that the ranges of an FDSelect of format 3
-// that go back set each glyph once, so that a malformed font cannot keep
-// the reader busy for a long time.
-func TestCFFFDSelectRanges(t *testing.T) {
-	t.Parallel()
-	// ranges that start at 0 and at 0xffff in turn: each range that starts
-	// at 0 ends at 0xffff
-	const n = 0xfffe
-	data := binary.BigEndian.AppendUint16([]byte{3}, n)
-	for i := range n {
-		first := 0
-		if i%2 == 1 {
-			first = 0xffff
-		}
-		data = append(binary.BigEndian.AppendUint16(data, uint16(first)), byte(i%2))
-	}
-	data = binary.BigEndian.AppendUint16(data, 0xffff)
-	selection, ok := cffFDSelect(data, 0xffff, 2)
-	if !ok {
-		t.Fatal("expected the FDSelect to read")
-	}
-	for gid, fd := range selection {
-		if fd != 0 {
-			t.Fatalf("expected the font dictionary 0 for glyph %d, got %d", gid, fd)
-		}
 	}
 }

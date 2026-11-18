@@ -10,7 +10,7 @@
 // go-text parses a bare CFF font with cff.Parse of its package font/cff, and
 // it gives the charstrings, the outline of a glyph (CFF.LoadGlyph) and the
 // name of a glyph (CFF.GlyphName). This file uses it for that work. go-text
-// v0.3.5 has four gaps:
+// v0.3.5 has two gaps:
 //
 //  1. cff.Parse skips the built-in encoding ("skip encoding" in
 //     font/cff/parser.go). hayro-font maps the codes of an embedded font
@@ -18,19 +18,12 @@
 //  2. The charset and the FDSelect of a CFF are unexported fields. Nothing
 //     maps a CID to a glyph (glyph_by_cid), or tells whether the font is a
 //     CIDFont (is_cid_keyed).
-//  3. The FontMatrix of the Top DICT and of the font dictionaries of a
-//     CIDFont is a no-op in the parser. A bare CFF font in a PDF file can
-//     use a matrix other than 0.001, and a CIDFont often has the identity
-//     matrix in its Top DICT and the matrix 0.001 in each font dictionary.
-//  4. The charstring handler of CFF.LoadGlyph ends a glyph at endchar, and
-//     ignores the accented glyph that endchar with four operands builds
-//     from two glyphs of StandardEncoding, the seac of Type 1.
 //
-// This file reads the Top DICT, the charset, the encoding, the font
-// dictionaries, the FDSelect and the subroutines for these four items. It
-// leaves the charstrings to go-text. For a glyph of seac, it finds the two
-// glyphs with the interpreter of go-text, and draws them with
-// CFF.LoadGlyph.
+// go-text had two more gaps, the FontMatrix and the seac of Type 1, and
+// typesetting of okage v0.11.0 closes them in CFF.LoadGlyph (okage D59).
+// This file reads the Top DICT, the charset and the encoding for the two
+// gaps that stay. It leaves the charstrings, the FontMatrix and seac to
+// typesetting.
 
 package pdffont
 
@@ -43,7 +36,6 @@ import (
 
 	"github.com/xo/okage/kurbo"
 	"github.com/xo/okage/typesetting/font/cff"
-	ps "github.com/xo/okage/typesetting/font/cff/interpreter"
 	ot "github.com/xo/okage/typesetting/font/opentype"
 	"github.com/xo/okage/typesetting/font/opentype/tables"
 
@@ -60,36 +52,12 @@ const (
 // maxCFFDictOperands bounds the operands of one operator of a DICT.
 const maxCFFDictOperands = 48
 
-// maxCFFFontDicts bounds the font dictionaries of a CIDFont. FDSelect gives
-// the index of a font dictionary in one byte.
-const maxCFFFontDicts = 256
-
-// cffDefaultMatrix is the FontMatrix of a CFF font that gives none.
-var cffDefaultMatrix = kurbo.NewAffine([6]float64{0.001, 0, 0, 0.001, 0, 0})
-
 // cffProgram is a CFF font: the charstrings that go-text reads, and the data of
 // the Top DICT that go-text does not give.
 type cffProgram struct {
 	ot        *cff.CFF
 	numGlyphs int
 	isCID     bool
-
-	// matrix is the FontMatrix of the Top DICT, or cffDefaultMatrix.
-	// hasMatrix is false if the Top DICT gives no FontMatrix.
-	matrix    kurbo.Affine
-	hasMatrix bool
-	// fdMatrices holds the matrix of each font dictionary of a CIDFont,
-	// with the matrix of the Top DICT, and fdHasMatrix whether the Top DICT
-	// or the font dictionary gives it. fdSelect holds the index of the font
-	// dictionary of each glyph. They are nil for a font that is not a
-	// CIDFont.
-	fdMatrices  []kurbo.Affine
-	fdHasMatrix []bool
-	fdSelect    []uint8
-
-	// globalSubrs and localSubrs are the subroutines of a font that is not
-	// a CIDFont, for the glyphs of seac.
-	globalSubrs, localSubrs [][]byte
 
 	// charset holds the SID of each glyph, or its CID in a CIDFont.
 	charset []uint16
@@ -117,7 +85,6 @@ func newCFFProgram(data []byte) (*cffProgram, error) {
 	f := &cffProgram{
 		ot:        ot,
 		numGlyphs: len(ot.Charstrings),
-		matrix:    cffDefaultMatrix,
 	}
 	for i := range f.codes {
 		f.codes[i] = -1
@@ -131,8 +98,7 @@ func newCFFProgram(data []byte) (*cffProgram, error) {
 // errCFF is the error of a malformed CFF font.
 var errCFF = fmt.Errorf("malformed CFF font: %w", ivy.ErrFormat)
 
-// readTopDict reads the font matrix, the charset, the encoding, the font
-// dictionaries, the FDSelect and the subroutines from the Top DICT.
+// readTopDict reads the charset and the encoding from the Top DICT.
 func (f *cffProgram) readTopDict(data []byte) error {
 	if len(data) < 4 {
 		return errCFF
@@ -144,15 +110,14 @@ func (f *cffProgram) readTopDict(data []byte) error {
 	if err != nil {
 		return err
 	}
-	dicts, pos, err := cffIndex(data, pos)
+	dicts, _, err := cffIndex(data, pos)
 	if err != nil {
 		return err
 	}
 	if len(dicts) == 0 {
 		return errCFF
 	}
-	charsetOffset, encodingOffset, fdArrayOffset, fdSelectOffset := 0, 0, -1, -1
-	var private []float64
+	charsetOffset, encodingOffset := 0, 0
 	err = cffDict(dicts[0], func(op int, args []float64) {
 		last := -1
 		if len(args) > 0 {
@@ -163,155 +128,18 @@ func (f *cffProgram) readTopDict(data []byte) error {
 			charsetOffset = max(last, 0)
 		case 16:
 			encodingOffset = max(last, 0)
-		case 18:
-			private = append(private[:0], args...)
 		case 1200 + 30:
 			f.isCID = true
-		case 1200 + 36:
-			fdArrayOffset = last
-		case 1200 + 37:
-			fdSelectOffset = last
-		case 1200 + 7:
-			if len(args) == 6 {
-				f.matrix, f.hasMatrix = kurbo.NewAffine([6]float64(args)), true
-			}
 		}
 	})
 	if err != nil {
 		return err
 	}
 	f.readCharset(data, charsetOffset)
-	if f.isCID {
-		f.readFontDicts(data, fdArrayOffset, fdSelectOffset)
-		return nil
+	if !f.isCID {
+		f.readEncoding(data, encodingOffset)
 	}
-	f.readEncoding(data, encodingOffset)
-	// The subroutines are only for the glyphs of seac. A font without them
-	// draws its glyphs.
-	if _, pos, err = cffIndex(data, pos); err == nil {
-		f.globalSubrs, _, _ = cffIndex(data, pos)
-	}
-	f.localSubrs = cffLocalSubrs(data, private)
 	return nil
-}
-
-// cffLocalSubrs returns the local subroutines of the Private DICT that the
-// operands private of the operator Private give, or nil.
-func cffLocalSubrs(data []byte, private []float64) [][]byte {
-	if len(private) != 2 {
-		return nil
-	}
-	size, offset := int(private[0]), int(private[1])
-	if size <= 0 || offset < 0 || offset > len(data) || size > len(data)-offset {
-		return nil
-	}
-	subrs := -1
-	_ = cffDict(data[offset:offset+size], func(op int, args []float64) {
-		if op == 19 && len(args) > 0 {
-			subrs = int(args[len(args)-1])
-		}
-	})
-	if subrs <= 0 || subrs > len(data)-offset {
-		return nil
-	}
-	items, _, _ := cffIndex(data, offset+subrs)
-	return items
-}
-
-// readFontDicts reads the FontMatrix of each font dictionary of the
-// FDArray at fdArrayOffset, and the FDSelect at fdSelectOffset, of a
-// CIDFont. A malformed FDArray or FDSelect leaves the matrix of the Top
-// DICT to each glyph.
-//
-// Port: skrifa combines the two matrices as FreeType does. The matrix of
-// the Top DICT applies after that of the font dictionary, without its
-// translation. Without a matrix in the Top DICT, the matrix of the font
-// dictionary applies alone.
-func (f *cffProgram) readFontDicts(data []byte, fdArrayOffset, fdSelectOffset int) {
-	if fdArrayOffset <= 0 || fdSelectOffset <= 0 || fdSelectOffset >= len(data) {
-		return
-	}
-	dicts, _, err := cffIndex(data, fdArrayOffset)
-	if err != nil || len(dicts) == 0 || len(dicts) > maxCFFFontDicts {
-		return
-	}
-	top := f.matrix
-	top[4], top[5] = 0, 0
-	matrices := make([]kurbo.Affine, len(dicts))
-	has := make([]bool, len(dicts))
-	for i, d := range dicts {
-		matrices[i], has[i] = f.matrix, f.hasMatrix
-		_ = cffDict(d, func(op int, args []float64) {
-			if op != 1200+7 || len(args) != 6 {
-				return
-			}
-			m := kurbo.NewAffine([6]float64(args))
-			if f.hasMatrix {
-				m = top.Mul(m)
-			}
-			matrices[i], has[i] = m, true
-		})
-	}
-	selection, ok := cffFDSelect(data[fdSelectOffset:], f.numGlyphs, len(dicts))
-	if !ok {
-		return
-	}
-	f.fdMatrices, f.fdHasMatrix, f.fdSelect = matrices, has, selection
-}
-
-// cffFDSelect reads an FDSelect of the format 0 or 3. It returns the index
-// of the font dictionary of each of numGlyphs glyphs, and false if the
-// FDSelect is malformed or names a font dictionary past count.
-func cffFDSelect(data []byte, numGlyphs, count int) ([]uint8, bool) {
-	if len(data) < 1 {
-		return nil, false
-	}
-	selection := make([]uint8, numGlyphs)
-	switch data[0] {
-	case 0:
-		if len(data) < 1+numGlyphs {
-			return nil, false
-		}
-		copy(selection, data[1:1+numGlyphs])
-	case 3:
-		if len(data) < 3 {
-			return nil, false
-		}
-		n := int(binary.BigEndian.Uint16(data[1:]))
-		if len(data) < 3+3*n+2 {
-			return nil, false
-		}
-		// The ranges ascend. A range that goes back starts after the end
-		// of the ranges before it, so that each glyph is set once.
-		next := 0
-		for i := range n {
-			r := data[3+3*i:]
-			first, fd := int(binary.BigEndian.Uint16(r)), r[2]
-			end := min(int(binary.BigEndian.Uint16(r[3:])), numGlyphs)
-			for gid := max(first, next); gid < end; gid++ {
-				selection[gid] = fd
-			}
-			next = max(next, end)
-		}
-	default:
-		return nil, false
-	}
-	for _, fd := range selection {
-		if int(fd) >= count {
-			return nil, false
-		}
-	}
-	return selection, true
-}
-
-// matrixOf returns the FontMatrix of a glyph, and false if the font gives
-// none for it. The matrix is then cffDefaultMatrix.
-func (f *cffProgram) matrixOf(gid GlyphID) (kurbo.Affine, bool) {
-	if int(gid) < len(f.fdSelect) {
-		fd := f.fdSelect[gid]
-		return f.fdMatrices[fd], f.fdHasMatrix[fd]
-	}
-	return f.matrix, f.hasMatrix
 }
 
 // readCharset reads the charset at offset. A malformed charset leaves the
@@ -329,9 +157,9 @@ func (f *cffProgram) readCharset(data []byte, offset int) {
 		return
 	case 1, 2:
 		// Expert and ExpertSubset: the SID of each glyph is in a table.
-		table := cffExpertCharset[:]
+		table := cff.CharsetExpert[:]
 		if offset == 2 {
-			table = cffExpertSubsetCharset[:]
+			table = cff.CharsetExpertSubset[:]
 		}
 		f.charset = make([]uint16, f.numGlyphs)
 		copy(f.charset, table)
@@ -510,27 +338,14 @@ func (f *cffProgram) encodingGlyph(code uint8) (GlyphID, bool) {
 	return 0, false
 }
 
-// outline draws a glyph into the pen, scaled by the font matrix to
-// UnitsPerEm.
+// outline draws a glyph into the pen, scaled to UnitsPerEm. CFF.LoadGlyph
+// applies the FontMatrix of the glyph, and draws a glyph of seac (okage
+// D59).
 func (f *cffProgram) outline(gid GlyphID, pen *outlinePath) {
-	m, _ := f.matrixOf(gid)
-	f.outlineWith(gid, m, pen)
-}
-
-// outlineWith draws a glyph into the pen, scaled by matrix to UnitsPerEm. A
-// glyph of seac draws its accent and its base glyph.
-func (f *cffProgram) outlineWith(gid GlyphID, matrix kurbo.Affine, pen *outlinePath) {
 	if int(gid) >= f.numGlyphs {
 		return
 	}
-	m := kurbo.AffineScale(float64(UnitsPerEm)).Mul(matrix)
-	if accent, base, dx, dy, ok := f.seac(gid); ok {
-		// skrifa draws the accent first, at its offset, and then the base
-		// glyph.
-		drawSegments(f.segments(accent), m.Mul(kurbo.AffineTranslate(kurbo.NewVec2(dx, dy))), pen)
-		drawSegments(f.segments(base), m, pen)
-	}
-	drawSegments(f.segments(gid), m, pen)
+	drawSegments(f.segments(gid), kurbo.AffineScale(float64(UnitsPerEm)/f.ot.UnitsPerEm()), pen)
 }
 
 // segments returns the outline of a glyph from go-text, in the units of
@@ -543,90 +358,6 @@ func (f *cffProgram) segments(gid GlyphID) []ot.Segment {
 		return goTextError(err)
 	})
 	return segs
-}
-
-// seac returns the accent and the base glyph of a glyph that endchar
-// builds from two glyphs of StandardEncoding, and the offset of the accent.
-// It returns false for another glyph, for a CIDFont, and for a code of
-// StandardEncoding that the font does not draw.
-//
-// Port: skrifa finds the glyph of a code of StandardEncoding through its SID
-// and the charset. Go finds it through the name of the code, which is the
-// standard string of the SID.
-func (f *cffProgram) seac(gid GlyphID) (accent, base GlyphID, dx, dy float64, ok bool) {
-	if f.isCID || int(gid) >= f.numGlyphs {
-		return 0, 0, 0, 0, false
-	}
-	var (
-		m      ps.Machine
-		finder seacFinder
-	)
-	err := safely(func() error {
-		return m.Run(f.ot.Charstrings[gid], f.localSubrs, f.globalSubrs, &finder)
-	})
-	if err != nil || !finder.found {
-		return 0, 0, 0, 0, false
-	}
-	glyph := func(code float64) (GlyphID, bool) {
-		if code < 0 || code > 255 {
-			return 0, false
-		}
-		name, ok := standardGet(uint8(code))
-		if !ok {
-			return 0, false
-		}
-		return f.glyphByName(name)
-	}
-	a := finder.args
-	accent, ok1 := glyph(a[3])
-	base, ok2 := glyph(a[2])
-	if !ok1 || !ok2 {
-		return 0, 0, 0, 0, false
-	}
-	return accent, base, a[0], a[1], true
-}
-
-// seacFinder is a handler of Type 2 charstrings that finds the operands of
-// an endchar with four operands, adx ady bchar achar, the seac of Type 1. It
-// counts the stem hints so that it skips the bytes of a hintmask, and it
-// ignores the other operators.
-type seacFinder struct {
-	stems ps.CharstringReader
-	found bool
-	args  [4]float64
-}
-
-// Context satisfies the ps.OperatorHandler interface.
-func (*seacFinder) Context() ps.Context { return ps.Type2Charstring }
-
-// Apply satisfies the ps.OperatorHandler interface.
-func (s *seacFinder) Apply(state *ps.Machine, op ps.Operator) error {
-	if !op.IsEscaped {
-		switch op.Operator {
-		case 11: // return
-			return state.Return()
-		case 10: // callsubr
-			return ps.LocalSubr(state)
-		case 29: // callgsubr
-			return ps.GlobalSubr(state)
-		case 14: // endchar
-			// An optional width comes before the four operands.
-			if n := state.ArgStack.Top; n == 4 || n == 5 {
-				s.found = true
-				copy(s.args[:], state.ArgStack.Vals[n-4:n])
-			}
-			return ps.ErrInterrupt
-		case 1, 18: // hstem, hstemhm
-			s.stems.Hstem(state)
-		case 3, 23: // vstem, vstemhm
-			s.stems.Vstem(state)
-		case 19, 20: // hintmask, cntrmask
-			s.stems.Hintmask(state)
-			return nil
-		}
-	}
-	state.ArgStack.Clear()
-	return nil
 }
 
 // cffIndex reads the INDEX at pos. It returns the items and the position
@@ -818,30 +549,3 @@ func safely(fn func() error) (err error) {
 	}()
 	return fn()
 }
-
-// cffExpertCharset and cffExpertSubsetCharset are the SIDs of the glyphs of
-// the predefined charsets Expert and ExpertSubset (Adobe Technical Note
-// 5176, The Compact Font Format Specification, Appendix C).
-var (
-	cffExpertCharset = [166]uint16{
-		0, 1, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 13, 14, 15, 99,
-		239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 27, 28, 249, 250, 251, 252,
-		253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 109, 110,
-		267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282,
-		283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298,
-		299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314,
-		315, 316, 317, 318, 158, 155, 163, 319, 320, 321, 322, 323, 324, 325, 326, 150,
-		164, 169, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340,
-		341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356,
-		357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372,
-		373, 374, 375, 376, 377, 378,
-	}
-	cffExpertSubsetCharset = [87]uint16{
-		0, 1, 231, 232, 235, 236, 237, 238, 13, 14, 15, 99, 239, 240, 241, 242,
-		243, 244, 245, 246, 247, 248, 27, 28, 249, 250, 251, 253, 254, 255, 256, 257,
-		258, 259, 260, 261, 262, 263, 264, 265, 266, 109, 110, 267, 268, 269, 270, 272,
-		300, 301, 302, 305, 314, 315, 158, 155, 163, 320, 321, 322, 323, 324, 325, 326,
-		150, 164, 169, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
-		340, 341, 342, 343, 344, 345, 346,
-	}
-)

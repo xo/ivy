@@ -20,8 +20,8 @@ found these faults. Each item names a file of the corpus.
 1. Draw a stroke of 1 pixel or less as dark as MuPDF and Poppler do.
    `pdfjs/pdf/a1-plans.pdf` draws its thin lines lighter, because a line
    across a pixel border spreads over two light pixels. It needs stroke
-   adjustment, which snaps a thin stroke to the pixels. Source: `pdf` and
-   okage.
+   adjustment, which snaps a thin stroke to the pixels. Item 9 of "Using
+   okage v0.11.0" does it. Source: `pdf` and okage.
 2. Draw the WordArt and the preset shapes of a Word 97 document that `msdoc`
    does not draw yet, the text of a shape in a group, the arrowheads and the
    comments. Move the two readers of Office Drawing of `msdoc` (`picture.go`
@@ -183,13 +183,7 @@ The pages of Visio came on 2026-11-17 (D30).
 1. Read the NCX and the guide of a MOBI file, and the table of contents of
    an EPUB, when the API has a capability for a table of contents (D37).
    Source: the packages `mobi` and `epub`.
-2. Bound the time of the selector matcher of okage. A `:has()` selector
-   costs time in the square of the number of elements. Source: stage A of
-   the layout.
-3. Draw the color glyphs of SVG and COLR. The layout draws the bitmap glyphs
-   of sbix, CBDT, EBDT and bdat. okage draws SVG and COLR glyphs inside
-   `svg`, and does not export it. Source: stage D of the layout.
-4. Read the profiles of colors when the layout draws, with
+2. Read the profiles of colors when the layout draws, with
    `internal/moxcms`. DeviceCMYK, Lab and `@color-profile` become sRGB
    without a profile. Source: stage D of the layout.
 
@@ -202,15 +196,12 @@ The pages of Visio came on 2026-11-17 (D30).
    again: a small Rust program renders each page with hayro in
    `upstream/hayro`, with `RenderSettings.hinting` on and off, and a small
    Go program counts the pixels of ink that differ. Source: D19.
-3. Draw a group that is not isolated onto its backdrop, and draw a knockout
-   group. The device of okage draws each group as isolated, and not as
-   knockout. hayro does the same. Source: the port of the crate hayro.
-4. Read a PDF file through the `io.ReaderAt` of its source. `pdf.Open` reads
+3. Read a PDF file through the `io.ReaderAt` of its source. `pdf.Open` reads
    the whole file into memory, and D39 refuses a file larger than
    `Limits.MaxMemory`. The port works on one `[]byte`, so a reader that
    pages needs a rewrite of its reader and its xref layer. Source: the
    package `pdf`.
-5. Compare the pages of ivy with the pages of hayro in the test module. On
+4. Compare the pages of ivy with the pages of hayro in the test module. On
    2026-11-16, a scratch program rendered the 63 test files of
    `internal/hayro/interpret` with hayro, and ivy matched each page within a
    mean difference of 1.5. pdftoppm draws 11 of those pages in another way,
@@ -238,66 +229,53 @@ The pages of Visio came on 2026-11-17 (D30).
 4. Check the previews of the maker notes of Olympus with a real ORF file.
    The tests build the files in memory. Source: `camera`, 2026-11-17.
 
+## Using okage v0.11.0
+
+okage v0.11.0 gives what the work for okage asked for, in the decisions
+okage D53 to okage D59. ivy requires it. The CFF fonts of `pdf` take the
+charsets, `seac` and the FontMatrix from it. These changes let ivy use the
+other new parts and remove its own copies.
+
+1. Fill the shadings of types 4 to 7 with `okage.NewMeshGradient` in
+   `internal/hayro/render/paint.go` and `ps/internal/graphics/shading.go`,
+   in place of the sampled texture. A color that a function gives is not
+   linear in the triangle, so the patches split until it is close to linear
+   (okage D55).
+2. Use `okage.SpreadModeDecal` for an axial or a radial shading with no
+   extend at either end, in `internal/hayro/render/paint.go`,
+   `ps/internal/graphics/shading.go` and `gradientShader` of
+   `internal/layout/pdf_stream.go` (okage D55).
+3. Draw a group that is not isolated onto its backdrop, and a knockout
+   group, with `Pixmap.RemoveBackdrop` and `Pixmap.Knockout` in
+   `internal/display/okage.go`. Make the soft masks with
+   `okage.MaskFromLuminance` and `Mask.ApplyTransfer` (okage D56).
+4. Take the parsed fonts, the faces, the cmap lookups and the metrics from
+   the `svg.FontDatabase` of `internal/fontdb`, in `internal/layout`,
+   `internal/fontdb/find.go`, `internal/metafile/text.go` and
+   `internal/chart/text.go`. Map the weight, the stretch and the style with
+   `svg.AutoFontVariations` (okage D57).
+5. Draw the color glyphs of SVG and COLR in `drawFirstLine` of
+   `internal/layout/draw_text.go`, with `FontDatabase.ColorGlyph` (okage
+   D57).
+6. Build an inline `<svg>` and a sized SVG image with `roxmltree.Builder`
+   and `svg.FromXMLTree` in `internal/layout/images.go`, in place of XML
+   text, and read the size with `svg.NodeDimensions` (okage D58).
+7. Remove the check of far points (`near`) in `internal/metafile`. A fill
+   with huge coordinates no longer panics (okage D53).
+8. Fill small glyphs with `Paint.Coverage` set to `okage.Coverage8x8` in
+   `internal/display/okage.go`, in place of `fillFine`, and amend D28
+   (okage D54).
+9. Set `Paint.StrokeAdjust` from the key SA of PDF and from `strokeadjust`
+   of PostScript, and make sure that `pdfjs/pdf/a1-plans.pdf` draws its thin
+   lines as dark as MuPDF does (okage D54).
+10. Remove the fill of a straight solid line in `drawShape` of
+    `msdoc/shape.go`. A thin stroke of a straight line draws now (okage
+    D54).
+
 ## Work for okage
 
-Each item is a request to okage (D8). Do not edit okage from this
-repository. Ask a maintainer or the `okage` peer, as `AGENTS.md` says.
-
-1. A fill of a mesh of triangles with colors that the fill interpolates, for
-   the shadings of types 4 to 7 of PDF and PostScript. Source:
-   `docs/FORMATS.md`, "What okage lacks".
-2. Make sure that okage draws a soft mask of luminance and an isolated group,
-   as PDF and XPS need. Source: `docs/FORMATS.md`.
-3. Add a note to okage `docs/FORMATS.md` that the PDF reader, EPS and
-   Illustrator go to ivy, and that okage draws their pages. Source: D14.
-4. Give the text API of okage what the layout needs: the advance and the
-   byte offset of each cluster, the features, the language and the spacing of
-   a run, the parsed face and its metrics, and the map from a weight to the
-   axes of a variable font. The layout shapes with go-text itself, and it
-   parses each face a second time. Source: stage B of the layout.
-5. Let `svg` read the width, the height and the viewBox of an SVG image
-   before it parses the image, take an element that is already parsed, and
-   accept an image of size zero. The layout reads the size again with
-   `roxmltree`, and it writes an inline `<svg>` back to XML. Source: stage B
-   of the layout.
-6. A spread mode of a gradient that paints nothing before the first stop
-   and after the last stop, for the gradients of the layout. Source: stage
-   D of the layout.
-7. Make the antialiased `FillPath` and `StrokePath` safe with huge
-   coordinates. With points near 1e12 device pixels, they panic with "slice
-   bounds out of range" in `subPixmapMut.slice16AtXY`. A quadrilateral with
-   points near 1.5e13 under `TransformFromScale(0.09, 0.09)` on a pixmap of
-   32 by 32 shows it. `internal/metafile` leaves out such paths. Source:
-   the fuzz test of `emf`.
-8. A fast path in `DrawPixmap` for an image that is aligned to the pixels
-   and drawn with the nearest filter. It takes about 40 percent of the time
-   of a page of DjVu, in the highp pipeline. Source: phase 6.
-9. A finer coverage of small glyphs in the rasterizer, with 8 by 8
-   samples in each pixel, as the references of the visual review draw.
-   `internal/display` now fills small glyphs at twice their size and
-   averages them (D28). A change of the rasterizer of okage would differ
-   from tiny-skia, so it needs a decision of okage. Source: D28.
-10. Let a program look up a character in a face with the cmap that okage
-    caches. `DefaultFallbackSelector` and ivy parse the cmap again for each
-    lookup. Source: the CJK fonts of the system, 2026-11-17.
-11. Export the predefined charsets of CFF (ISOAdobe, Expert and
-    ExpertSubset), and draw `seac` and the FontMatrix of each font
-    dictionary in `cff.LoadGlyph`. ivy keeps copies of the charset tables
-    of the specification in the port of hayro-font. Source: the CFF of
-    `pdf`, 2026-11-17.
-12. A public function that turns one glyph of a face into something to
-    draw, an `svg.Tree` in em units or paths with paints, with the
-    variations and the palette of CPAL, for the SVG and COLR glyphs of the
-    layout. Source: the color glyphs of the layout, 2026-11-17.
-13. Apply the PairPos subtables of a GPOS extension lookup (type 9) with
-    flag 8, as Calibri has. The pairs t-a, a-t, t-e and n-t of Calibri do
-    not kern, and "AV" does. Source: the kerning of `internal/drawingml`,
-    2026-11-17.
-14. Draw an SVG path with a stroke only, under about 0.75 points, when the
-    path has no width or no height. It draws nothing, where a closed
-    rectangle with the same stroke draws. `msdoc` fills the area of a
-    straight solid line instead. Source: the shapes of `msdoc`,
-    2026-11-17.
+Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
+No item is open. okage v0.11.0 did the items of 2026-11-17.
 
 ## Work for iv
 
