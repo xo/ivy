@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"image/png"
 	"math"
+	"slices"
 	"testing"
 
 	"github.com/xo/ivy"
@@ -167,7 +168,8 @@ func TestPathGradient(t *testing.T) {
 }
 
 // TestShadeType checks the flags of fillShadeType, the angle of a scaled
-// shading, and the stops of fillShadeColors, which mix linearly.
+// shading, and the stops of fillShadeColors, which mix linearly. Every
+// parameter of sigma draws the curve of the default.
 func TestShadeType(t *testing.T) {
 	var s Style
 	tests := []struct {
@@ -182,6 +184,8 @@ func TestShadeType(t *testing.T) {
 		{typ: 0x40000003, set: true, stops: 33},
 		{set: false, stops: 33, scaled: true},
 		{typ: 0x40000003, set: true, stops: 2, colors: true},
+		// the parameter in the high 16 bits does not change the curve
+		{typ: 0x10000003, set: true, stops: 33},
 	}
 	for i, test := range tests {
 		var p Props
@@ -202,6 +206,15 @@ func TestShadeType(t *testing.T) {
 		if len(g.Stops) != test.stops || g.Scaled != test.scaled {
 			t.Errorf("%d: expected %d stops and scaled %t, got %d and %t", i, test.stops, test.scaled, len(g.Stops), g.Scaled)
 		}
+	}
+	stops := func(typ uint32) []drawingml.Stop {
+		var p Props
+		p.Set(PropFillType, FillShade)
+		p.Set(PropFillShadeType, typ)
+		return s.Fill(Chain{&p}).Gradient.Stops
+	}
+	if !slices.Equal(stops(0x10000003), stops(0x40000003)) {
+		t.Error("expected the curve of the default for every parameter of sigma")
 	}
 }
 
@@ -279,7 +292,8 @@ func TestTransform(t *testing.T) {
 }
 
 // TestWordArt checks that the text of a WordArt shape draws as the
-// outlines of its glyphs, and that each line fills its share of the box.
+// outlines of its glyphs, and that each line fills its share of the box
+// when gtextAlign stretches the lines.
 func TestWordArt(t *testing.T) {
 	var text []byte
 	for _, r := range "Hi\nthere" {
@@ -291,6 +305,7 @@ func TestWordArt(t *testing.T) {
 	opt = le.AppendUint32(opt, uint32(len(text)))
 	p.Read(append(opt, text...), 1)
 	p.Set(PropFillColor, 0x0000FF)
+	p.Set(PropGtextAlign, alignStretch)
 	sh := &Shape{Type: SptTextEffectMin, Props: p}
 	c := Chain{&sh.Props}
 	if !WordArt(sh, c) {
@@ -324,8 +339,9 @@ func TestLineOutline(t *testing.T) {
 	if f == nil {
 		t.Fatal("expected a face")
 	}
+	g := gtext{face: f, spacing: 1}
 	bounds := func(s string) float32 {
-		p, ok := lineOutline(f, s)
+		p, ok := g.lineOutline(s)
 		if !ok {
 			t.Fatalf("expected the outline of %q", s)
 		}

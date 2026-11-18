@@ -408,6 +408,40 @@ func TestCircleGradient(t *testing.T) {
 	}
 }
 
+// TestODFGradients checks the paths of the gradients of OpenDocument, as
+// LibreOffice draws them: a radial path is a circle of the diagonal of the
+// box, an ellipsoid one stretches with the box, a square one is the square
+// of the longer side, and the angle turns a square.
+func TestODFGradients(t *testing.T) {
+	center := Insets{L: 0.5, T: 0.5, R: 0.5, B: 0.5}
+	for _, tt := range []struct {
+		path      string
+		angle     float64
+		x, y, red int
+	}{
+		// the radius is half the diagonal, 158 points
+		{"radial", 0, 299, 50, 13},
+		{"radial", 0, 150, 99, 175},
+		// the ellipse goes through the corners: both points are at 0.71
+		// of its radii
+		{"ellipsoid", 0, 299, 50, 75},
+		{"ellipsoid", 0, 150, 99, 75},
+		// the square has sides of 300 points
+		{"square", 0, 299, 50, 0},
+		{"square", 0, 150, 99, 170},
+		{"rectangular", 0, 150, 99, 0},
+		// turned by 45 degrees, the square holds the box, with sides of
+		// 283 points, and the point is at a quarter of the way
+		{"square", 45, 150, 99, 191},
+	} {
+		g := Gradient{Path: tt.path, Angle: tt.angle, Focus: center, Stops: []Stop{{Pos: 0, Color: White}, {Pos: 1, Color: Black}}}
+		pix := renderPaint(t, Paint{Kind: PaintGradient, Gradient: g}, 300, 100)
+		if r := red(pix, uint32(tt.x), uint32(tt.y)); r < tt.red-8 || r > tt.red+8 {
+			t.Errorf("%s at %g degrees: expected about %d at (%d, %d), got %d", tt.path, tt.angle, tt.red, tt.x, tt.y, r)
+		}
+	}
+}
+
 // TestTwoStops checks that a gradient of DrawingML with two stops at 0 and 1
 // mixes in linear light along the curve of sigma, as PowerPoint draws it,
 // and that the other gradients keep their stops.

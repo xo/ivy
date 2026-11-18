@@ -202,12 +202,7 @@ func (d *Document) slidePage(ctx context.Context, n int) (*page, error) {
 			b.scheme = s
 		}
 	}
-	b.style = &odraw.Style{
-		Scheme:     func(i uint32) drawingml.RGBA { return b.scheme[i&7] },
-		Picture:    d.picture,
-		Background: b.scheme[0],
-		Log:        b.log,
-	}
+	b.style = b.newStyle()
 	b.hf = d.doc.hf
 	if hf := readHeadersFooters(body); hf.ok {
 		b.hf = hf
@@ -223,6 +218,18 @@ func (d *Document) slidePage(ctx context.Context, n int) (*page, error) {
 		}
 	})
 	return pg, nil
+}
+
+// newStyle returns the style that turns the shapes of the slide into
+// figures, with the colors of its scheme.
+func (b *builder) newStyle() *odraw.Style {
+	return &odraw.Style{
+		Scheme:     func(i uint32) drawingml.RGBA { return b.scheme[i&7] },
+		Picture:    b.d.picture,
+		Background: b.scheme[0],
+		Log:        b.log,
+		Fonts:      b.d.fonts(),
+	}
 }
 
 // fillPage fills the whole page with pt.

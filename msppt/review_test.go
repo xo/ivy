@@ -30,12 +30,7 @@ func testBuilder(fonts []string, m *master) *builder {
 	}
 	d.pics = odraw.NewPictures(nil, nil, cfg)
 	b := &builder{d: d, scene: drawingml.NewScene(cfg), scheme: defaultScheme, master: m, log: cfg.Log()}
-	b.style = &odraw.Style{
-		Scheme:     func(i uint32) drawingml.RGBA { return b.scheme[i&7] },
-		Picture:    d.picture,
-		Background: b.scheme[0],
-		Log:        b.log,
-	}
+	b.style = b.newStyle()
 	return b
 }
 
@@ -268,4 +263,30 @@ func TestReadHeadersFooters(t *testing.T) {
 // units16 returns the characters of s in UTF-16.
 func units16(s string) []uint16 {
 	return utf16.Encode([]rune(s))
+}
+
+// TestWordArt checks that a shape of WordArt draws the outlines of its
+// text with its fill, and not the rectangle of its type.
+func TestWordArt(t *testing.T) {
+	var text []byte
+	for _, r := range "WordArt" {
+		text = binary.LittleEndian.AppendUint16(text, uint16(r))
+	}
+	sh := testShape(odraw.SptTextEffectMin, 0, map[uint16]uint32{odraw.PropFillColor: 0xFF})
+	opt := binary.LittleEndian.AppendUint16(nil, odraw.PropGtextUnicode|0x8000)
+	opt = binary.LittleEndian.AppendUint32(opt, uint32(len(text)))
+	sh.Props.Read(append(opt, text...), 1)
+	b := testBuilder(nil, nil)
+	b.addShape(sh, nil)
+	if len(b.figures) != 1 {
+		t.Fatalf("expected one figure, got %d", len(b.figures))
+	}
+	f := b.figures[0]
+	if len(f.Paths) != 1 || f.Fill.Kind != drawingml.PaintSolid || f.Fill.Color.R != 1 {
+		t.Fatalf("expected the glyphs of one line with the red fill, got %d paths and %+v", len(f.Paths), f.Fill)
+	}
+	// the outlines of the glyphs have far more points than a rectangle
+	if n := len(f.Paths[0].Path.Points()); n < 20 {
+		t.Errorf("expected the outlines of the glyphs, got %d points", n)
+	}
 }

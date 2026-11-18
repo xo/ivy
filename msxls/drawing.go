@@ -15,6 +15,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
@@ -115,6 +116,7 @@ func (w *workbook) drawings(ctx context.Context, sh *sheet.Sheet, raw *rawSheet,
 		Picture:    d.picture,
 		Background: drawingml.White,
 		Log:        cfg.Log(),
+		Fonts:      fontdb.Of(cfg),
 	}
 	d.matchObjs(od.Root, lim.MaxDepth)
 	for _, top := range od.Root.Children {

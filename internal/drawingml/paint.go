@@ -66,10 +66,13 @@ type Gradient struct {
 	// Stops are the stops, in order.
 	Stops []Stop
 	// Path is "" for a linear gradient, and "circle", "rect" or "shape" for
-	// a gradient along a path.
+	// a gradient along a path. The paths "radial", "ellipsoid", "square"
+	// and "rectangular" are the path gradients of OpenDocument, which
+	// LibreOffice draws.
 	Path string
 	// Angle is the direction of a linear gradient, in degrees, clockwise
-	// from the x axis.
+	// from the x axis. It turns a path of OpenDocument clockwise about its
+	// center.
 	Angle float64
 	// Scaled scales the angle with the box of the shape.
 	Scaled bool
@@ -442,8 +445,12 @@ func (g *Gradient) shader(box okage.Rect) (okage.Shader, bool) {
 		r := math.Hypot(max(cx, 1-cx)*w, max(cy, 1-cy)*h)
 		c := okage.PointFromXY(float32(x+cx*w), float32(y+cy*h))
 		sh, ok = okage.NewRadialGradient(c, 0, c, float32(r), stops, okage.SpreadModePad, okage.IdentityTransform())
+	case "radial", "ellipsoid", "square", "rectangular":
+		sh, ok = g.odfShader(x, y, w, h, stops)
 	default:
-		sh, ok = g.rectShader(x, y, w, h)
+		f := g.Focus
+		ts := okage.TransformFromTranslate(float32(x), float32(y)).PreScale(float32(w), float32(h))
+		sh, ok = rectMesh(g.Stops, unit(f.L), unit(f.T), 1-unit(f.R), 1-unit(f.B), ts)
 	}
 	if !ok {
 		return okage.SolidColor(g.Stops[len(g.Stops)-1].Color.Okage()), true
@@ -468,32 +475,64 @@ func linearEnds(angle, w, h float64) (okage.Point, okage.Point) {
 // A stroke or a path that goes out of the box draws there.
 const rectMargin = 1000
 
-// rectShader returns the shader of a gradient of the path "rect" or
-// "shape" over the box at x, y of the size w by h. The first stop is on the
+// odfShader returns the shader of a path gradient of OpenDocument over the
+// box at x, y of the size w by h, as LibreOffice draws it. The path is
+// centered on the center of the focus, and the angle turns it. A radial
+// path is a circle of the diagonal of the box, and an ellipsoid path an
+// ellipse of the shape of the box through its corners. A rectangular path
+// is the box, made larger to hold the box when it turns, and a square path
+// is the square of the longer side of that box.
+func (g *Gradient) odfShader(x, y, w, h float64, stops []okage.GradientStop) (okage.Shader, bool) {
+	f := g.Focus
+	cx := x + (unit(f.L)+1-unit(f.R))/2*w
+	cy := y + (unit(f.T)+1-unit(f.B))/2*h
+	ts := okage.TransformFromTranslate(float32(cx), float32(cy)).PreRotate(float32(g.Angle))
+	switch g.Path {
+	case "radial", "ellipsoid":
+		rx, ry := w/math.Sqrt2, h/math.Sqrt2
+		if g.Path == "radial" {
+			rx = math.Hypot(w, h) / 2
+			ry = rx
+		}
+		ts = ts.PreScale(float32(rx), float32(ry))
+		o := okage.PointFromXY(0, 0)
+		return okage.NewRadialGradient(o, 0, o, 1, stops, okage.SpreadModePad, ts)
+	}
+	sin, cos := math.Sincos(g.Angle * math.Pi / 180)
+	sin, cos = math.Abs(sin), math.Abs(cos)
+	bw, bh := w*cos+h*sin, w*sin+h*cos
+	if g.Path == "square" {
+		bw = max(bw, bh)
+		bh = bw
+	}
+	ts = ts.PreScale(float32(bw), float32(bh)).PreTranslate(-0.5, -0.5)
+	return rectMesh(g.Stops, 0.5, 0.5, 0.5, 0.5, ts)
+}
+
+// rectMesh returns the shader of a gradient of the path "rect" or "shape"
+// over the unit square, which ts maps onto the box. The focus is the
+// rectangle from l, t to r, b in the unit square. The first stop is on the
 // edge of the focus, and the last one on the edge of the box. A stop
 // between them is on the rectangle that is that fraction of the way from
 // the focus to the box. Lines from the corners of the focus to the corners
 // of the box join the four sides, as PowerPoint draws them. The shape of
-// the path "shape" is drawn as its box.
+// the path "shape" is drawn as its box, as PowerPoint draws the shading
+// msofillShadeShape of Office Drawing.
 //
 // In each of the four parts between the focus and the box, the fraction is
 // linear in the distance from the side of the focus. A mesh of triangles
 // with a color at each corner then draws each band between two stops
 // exactly.
-func (g *Gradient) rectShader(x, y, w, h float64) (okage.Shader, bool) {
-	stops := g.Stops
+func rectMesh(stops []Stop, l, t, r, b float64, ts okage.Transform) (okage.Shader, bool) {
 	if stops[0].Pos > 0 {
 		stops = append([]Stop{{Pos: 0, Color: stops[0].Color}}, stops...)
 	}
 	if last := stops[len(stops)-1]; last.Pos < 1 {
 		stops = append(stops[:len(stops):len(stops)], Stop{Pos: 1, Color: last.Color})
 	}
-	f := g.Focus
-	l, r := unit(f.L), 1-unit(f.R)
 	if l > r {
 		l, r = (l+r)/2, (l+r)/2
 	}
-	t, b := unit(f.T), 1-unit(f.B)
 	if t > b {
 		t, b = (t+b)/2, (t+b)/2
 	}
@@ -542,7 +581,6 @@ func (g *Gradient) rectShader(x, y, w, h float64) (okage.Shader, bool) {
 			okage.MeshTriangle{vertex(at(cp), last), vertex(at(oq), last), vertex(at(op), last)},
 		)
 	}
-	ts := okage.TransformFromTranslate(float32(x), float32(y)).PreScale(float32(w), float32(h))
 	return okage.NewMeshGradient(tris, ts)
 }
 

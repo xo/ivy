@@ -37,8 +37,11 @@ import (
 	"iter"
 	"sync"
 
+	"github.com/xo/okage/svg"
+
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/msole"
 	"github.com/xo/ivy/internal/odraw"
 )
@@ -81,8 +84,20 @@ type Document struct {
 	mu          sync.Mutex
 	masterCache map[uint32]*master
 	pics        *odraw.Pictures
+	// fontDB is the font database of the configuration, which draws the
+	// text of WordArt. fontsOnce reads it on first use.
+	fontsOnce sync.Once
+	fontDB    *svg.FontDatabase
 	// ctx is the context of the page that is being built.
 	ctx context.Context
+}
+
+// fonts returns the font database of the configuration of d.
+func (d *Document) fonts() *svg.FontDatabase {
+	d.fontsOnce.Do(func() {
+		d.fontDB = fontdb.Of(d.cfg)
+	})
+	return d.fontDB
 }
 
 // The capabilities of a document.

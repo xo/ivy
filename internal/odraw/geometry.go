@@ -129,38 +129,6 @@ func (s *Style) Geometry(sh *Shape, c Chain, w, h float64) ([]drawingml.Path, bo
 	return paths, !open
 }
 
-// adjustOf returns the first adjust value of the preset of the shape type
-// typ with the properties c, in a box of w by h points, as a guide of
-// ECMA-376 with the name of names[0]. adjustValue is in units of 21600. Of
-// a rounded rectangle, it is the radius as a share of the shorter side, and
-// of a triangle, the apex as a share of the width, as ECMA-376 has them. Of
-// a parallelogram and a hexagon, it is the slant as a share of the width,
-// and 5400 by default, where ECMA-376 takes a share of the shorter side. It
-// returns nil for the default of ECMA-376.
-func adjustOf(typ int, c Chain, names []string, w, h float64) []drawingml.Guide {
-	if len(names) == 0 {
-		return nil
-	}
-	v, ok := c.Get(PropAdjust1)
-	switch typ {
-	case SptRoundRect, sptTriangle:
-		if !ok {
-			return nil
-		}
-		return []drawingml.Guide{drawingml.AdjustValue(names[0], float64(int32(v))*100000/geoSize)}
-	case sptParallelogram, sptHexagon:
-		if !ok {
-			v = 5400
-		}
-		ss := min(w, h)
-		if !(ss > 0) {
-			return nil
-		}
-		return []drawingml.Guide{drawingml.AdjustValue(names[0], float64(int32(v))/geoSize*w/ss*100000)}
-	}
-	return nil
-}
-
 // The types of the segments of a path of MS-ODRAW 2.4.30.
 const (
 	segLineTo  = 0

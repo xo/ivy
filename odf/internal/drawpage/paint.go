@@ -216,14 +216,16 @@ func gradient(g roxmltree.Node, alpha float64) drawingml.Paint {
 		gr.Scaled = false
 		list := make([]drawingml.Stop, 0, len(stops)+1)
 		if style == "axial" {
-			// the start at both edges and the end in the middle
-			for _, s := range stops {
-				list = append(list, drawingml.Stop{Pos: border/2 + s.Pos*(0.5-border/2), Color: s.Color})
-			}
+			// the end at both edges, with half the border at each edge,
+			// and the start in the middle, as LibreOffice draws it
+			last := stops[len(stops)-1]
+			list = append(list, drawingml.Stop{Pos: 0, Color: last.Color})
 			for i := len(stops) - 1; i >= 0; i-- {
-				list = append(list, drawingml.Stop{Pos: 1 - border/2 - stops[i].Pos*(0.5-border/2), Color: stops[i].Color})
+				list = append(list, drawingml.Stop{Pos: border/2 + (1-stops[i].Pos)*(0.5-border/2), Color: stops[i].Color})
 			}
-			list = append([]drawingml.Stop{{Pos: 0, Color: stops[0].Color}}, list...)
+			for _, s := range stops {
+				list = append(list, drawingml.Stop{Pos: 1 - border/2 - (1-s.Pos)*(0.5-border/2), Color: s.Color})
+			}
 		} else {
 			list = append(list, drawingml.Stop{Pos: 0, Color: stops[0].Color})
 			for _, s := range stops {
@@ -234,10 +236,13 @@ func gradient(g roxmltree.Node, alpha float64) drawingml.Paint {
 	default:
 		// radial, ellipsoid, square and rectangular: the start at the
 		// edge and the end at the center, where the stops of DrawingML
-		// start
-		gr.Path = "circle"
-		if style == "square" || style == "rectangular" {
-			gr.Path = "rect"
+		// start. The angle turns the path counterclockwise.
+		gr.Path = style
+		switch style {
+		case "ellipsoid", "square", "rectangular":
+			gr.Angle = -angle
+		default:
+			gr.Path = "radial"
 		}
 		cx, ok1 := percent(at(g, nsDraw, "cx"))
 		cy, ok2 := percent(at(g, nsDraw, "cy"))

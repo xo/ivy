@@ -26,7 +26,11 @@ const (
 )
 
 // The flags of the property fillShadeType of MS-ODRAW (MSOSHADETYPE). The
-// default is a shading with gamma and sigma.
+// default is a shading with gamma and sigma, and the parameter 16384 in
+// the high 16 bits. The parameter is for the flag of a flat band, which
+// MS-ODRAW does not define. Office draws the curve of sigma with a value of
+// its own and does not read the parameter, so the package does not read it
+// either.
 const (
 	shadeGamma   = 0x1
 	shadeSigma   = 0x2
@@ -351,7 +355,7 @@ func (s *Style) Figure(sh *Shape, c Chain, r Rect) *drawingml.Figure {
 	var filled bool
 	f.Paths, filled = s.Geometry(sh, c, w, h)
 	if WordArt(sh, c) {
-		if paths, ok := s.wordArt(c, w, h); ok {
+		if paths, ok := s.wordArt(sh, c, w, h); ok {
 			f.Paths, filled = paths, true
 		} else if s.Fonts != nil {
 			// WordArt without text draws nothing
