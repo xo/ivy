@@ -17,6 +17,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/sheet"
 )
 
 // open opens buf.
@@ -282,16 +283,30 @@ func FuzzOpen(f *testing.F) {
 	f.Add([]byte("caf\xe9|\x80\n"), rune(0))
 	f.Add([]byte("a;b,c\n1;2,3\n"), ';')
 	f.Add([]byte("a¦\"b¦c\"¦d\n1¦2¦3"), '¦')
+	f.Add([]byte(strings.Repeat("a,\"b\nc\",3\n", 150)), rune(0))
 	f.Fuzz(func(t *testing.T, buf []byte, sep rune) {
+		// parts of 1 page, so that a sheet of 2 pages is laid out in parts
+		// (D55)
+		ctx := sheet.WithPartPages(t.Context(), 1)
 		cfg := ivy.Config{Limits: ivy.Limits{MaxObjects: 1 << 12, MaxMemory: 1 << 20}}
-		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), WithSeparator(sep))
+		d, err := Open(ctx, bytes.NewReader(buf), WithConfig(cfg), WithSeparator(sep))
 		if err != nil {
 			return
 		}
-		page, err := d.Page(t.Context(), 0)
+		page, err := d.Page(ctx, 0)
 		if err != nil {
 			t.Fatalf("expected page 0 of any text: %v", err)
 		}
-		_, _ = ivy.RenderImage(t.Context(), page, 8, color.White)
+		_, _ = ivy.RenderImage(ctx, page, 8, color.White)
+		n, err := d.PageCount(ctx)
+		if err != nil {
+			// such as a text of more pages than the limits allow
+			return
+		}
+		if page, err := d.Page(ctx, n-1); err != nil {
+			t.Fatalf("expected the last page of any text: %v", err)
+		} else {
+			_, _ = ivy.RenderImage(ctx, page, 8, color.White)
+		}
 	})
 }

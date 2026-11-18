@@ -275,8 +275,20 @@ func TestBookPagesCounter(t *testing.T) {
 	if got := bookMarginText(t, b, 0); got != "1/4" {
 		t.Errorf("page 1: got %q, want 1/4", got)
 	}
-	if b.loads != 3 {
-		t.Errorf("page 1 loaded %d documents, want 3", b.loads)
+	// The documents use counter(pages) only in their margin boxes, so
+	// countAll counts the documents after the first one at the same time,
+	// on more than one CPU (D55).
+	want := 1
+	if runtime.GOMAXPROCS(0) < 2 {
+		want = 3
+	}
+	if b.loads != want {
+		t.Errorf("page 1 loaded %d documents, want %d", b.loads, want)
+	}
+	for _, bd := range b.docs {
+		if bd.count < 0 {
+			t.Errorf("expected the count of %s after page 1", bd.path)
+		}
 	}
 	for _, n := range []int{3, 1, 2} {
 		if got, want := bookMarginText(t, b, n), fmt.Sprintf("%d/4", n+1); got != want {

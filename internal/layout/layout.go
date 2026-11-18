@@ -205,6 +205,13 @@ type DocumentOptions struct {
 	// pages of the documents before it in a Book. The counter page of its
 	// first page is PagesBefore + 1. Upstream has no such option.
 	PagesBefore int
+	// Part is the part of a long document that the document is, or nil
+	// (D55). The document then keeps only the pages of the part: its pages
+	// are the pages from the page that starts at the cut row to the page
+	// before the page that holds the probe row. counter(page) of the first
+	// page that it keeps is PagesBefore + 1, and counter(pages) counts the
+	// pages that it keeps. Upstream has no such option.
+	Part *Part
 }
 
 // Document is layout_document in weasyprint/layout/__init__.py: the layout
@@ -272,8 +279,14 @@ type Document struct {
 
 	// whole is set when the styles need the whole layout before a page.
 	whole bool
-	// usesPages is set when the styles use the counter pages.
-	usesPages bool
+	// usesPages is set when the styles use the counter pages, and
+	// pagesInContent when the styles of the elements use it, and not only
+	// the margin boxes (D55).
+	usesPages      bool
+	pagesInContent bool
+
+	// part is the state of a part of a long document, or nil (D55).
+	part *partState
 }
 
 // NewDocument returns the layout of a document: the HTML document, the box
@@ -299,6 +312,11 @@ func NewDocument(html *HTML, root *Box, styleFor *StyleFor, opts DocumentOptions
 		pagesBefore: max(opts.PagesBefore, 0),
 		whole:       styleFor.uses.any(),
 		usesPages:   styleFor.uses.pages,
+
+		pagesInContent: styleFor.uses.pagesInContent,
+	}
+	if opts.Part != nil {
+		d.part = newPartState(opts.Part, html.EtreeElement)
 	}
 	return d
 }
@@ -330,6 +348,11 @@ func (d *Document) Page(ctx context.Context, i int) (page *Box, err error) {
 // It returns the errors of Page.
 func (d *Document) Count(ctx context.Context) (n int, err error) {
 	err = d.run(ctx, func() {
+		if d.part != nil {
+			first, last, _, _ := d.partEnd(-1)
+			n = last - first
+			return
+		}
 		d.completeLayout()
 		n = len(d.pages)
 	})
@@ -380,6 +403,19 @@ func (d *Document) run(ctx context.Context, f func()) (err error) {
 // page returns the finished page of index i, or nil when the document has
 // fewer pages. It lays out the pages that it needs.
 func (d *Document) page(i int) *Box {
+	if d.part != nil {
+		return d.partPage(i)
+	}
+	d.layoutTo(i)
+	if i >= len(d.pages) {
+		return nil
+	}
+	return d.finish(i)
+}
+
+// layoutTo lays out the pages up to the page of index i, or the whole
+// document when the document or the page needs it.
+func (d *Document) layoutTo(i int) {
 	if !d.complete && !d.whole && d.loop == 0 {
 		for d.iter == nil && d.loop == 0 && !d.complete {
 			d.startLoop()
@@ -391,10 +427,6 @@ func (d *Document) page(i int) *Box {
 	if !d.complete && (d.whole || d.loop > 0 || d.needsWholeDocument(i)) {
 		d.completeLayout()
 	}
-	if i >= len(d.pages) {
-		return nil
-	}
-	return d.finish(i)
 }
 
 // completeLayout lays out the whole document, with the loop of
@@ -429,6 +461,9 @@ func (d *Document) startLoop() {
 		d.originalFootnotes = slices.Clone(lc.footnotes)
 	}
 	d.pages = nil
+	if d.part != nil {
+		d.part.pages = d.part.pages[:0]
+	}
 	d.iter = newPageIter(lc, d.root, d.html, d.prevPages)
 }
 
@@ -458,12 +493,13 @@ func (d *Document) step() {
 
 	// Check whether another round is required.
 	reloop := false
+	total := d.totalPages()
 	for _, pageData := range lc.pageMaker {
 		// Update pages.
 		// Port: the counter pages also counts the pages before and after
 		// the document, such as the pages of the other documents of a
 		// Book.
-		pageData.counterValues["pages"] = []int{d.pagesBefore + d.actualTotalPages + d.pagesAfter}
+		pageData.counterValues["pages"] = []int{total}
 		if pageData.contentChanged {
 			reloop = true
 		} else if pageData.pagesWanted {
@@ -506,6 +542,9 @@ func (d *Document) needsWholeDocument(i int) bool {
 type wholeLayoutUses struct {
 	// pages is set when the styles use counter(pages) or counters(pages).
 	pages bool
+	// pagesInContent is set when the styles of the elements use the
+	// counter pages, and not only the margin boxes of the pages (D55).
+	pagesInContent bool
 	// targets is set when the styles use target-counter(),
 	// target-counters() or target-text().
 	targets bool
@@ -522,6 +561,7 @@ func (u wholeLayoutUses) any() bool {
 // add adds the features of v to u.
 func (u *wholeLayoutUses) add(v wholeLayoutUses) {
 	u.pages = u.pages || v.pages
+	u.pagesInContent = u.pagesInContent || v.pagesInContent
 	u.targets = u.targets || v.targets
 	u.fixed = u.fixed || v.fixed
 }
@@ -532,7 +572,14 @@ func (u wholeLayoutUses) forProperty(name string) wholeLayoutUses {
 	if name == "position" {
 		return wholeLayoutUses{fixed: u.fixed}
 	}
-	return wholeLayoutUses{pages: u.pages, targets: u.targets}
+	return wholeLayoutUses{pages: u.pages, pagesInContent: u.pagesInContent, targets: u.targets}
+}
+
+// inContent returns u for a use in the styles of the elements: a use of
+// the counter pages is a use in the content.
+func (u wholeLayoutUses) inContent() wholeLayoutUses {
+	u.pagesInContent = u.pagesInContent || u.pages
+	return u
 }
 
 // wholeLayoutProperties are the properties whose values can need the whole
@@ -551,26 +598,36 @@ var wholeLayoutProperties = [...]string{"content", "string_set", "bookmark_label
 // the document, so it can count a feature that its computed value does not
 // use.
 //
+// A use of the counter pages in the styles of the elements is a use in the
+// content. A use in the @page rules and their margin rules is not, because
+// the number of pages does not change the layout of the content (D55).
+//
 // Port: upstream always lays out the whole document.
 func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLayoutUses {
 	var uses wholeLayoutUses
-	// pending holds the values with var(), and pendingNames the names of
-	// their properties.
+	// pending holds the values with var(), pendingNames the names of their
+	// properties, and pendingContent whether they are values of elements.
 	var pending []*Pending
 	var pendingNames []string
-	look := func(name string, value Value) {
+	var pendingContent []bool
+	look := func(name string, value Value, content bool) {
 		if p, ok := value.(*Pending); ok {
 			pending = append(pending, p)
 			pendingNames = append(pendingNames, name)
+			pendingContent = append(pendingContent, content)
 			return
 		}
-		uses.add(valueUses(name, value))
+		v := valueUses(name, value)
+		if content {
+			v = v.inContent()
+		}
+		uses.add(v)
 	}
 	for _, k := range cascaded.order {
 		style, _ := cascaded.styles.get(k)
 		for _, name := range wholeLayoutProperties {
 			if cv, ok := style[name]; ok {
-				look(name, cv.value)
+				look(name, cv.value, true)
 			}
 		}
 	}
@@ -578,7 +635,7 @@ func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLa
 		for _, rule := range *sheet.sheet.PageRules {
 			for _, d := range rule.Declarations {
 				if slices.Contains(wholeLayoutProperties[:], d.Name) {
-					look(d.Name, d.Value)
+					look(d.Name, d.Value, false)
 				}
 			}
 		}
@@ -619,7 +676,11 @@ func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLa
 		if slices.ContainsFunc(p.Tokens, checkVar) {
 			v.add(custom)
 		}
-		uses.add(v.forProperty(pendingNames[i]))
+		v = v.forProperty(pendingNames[i])
+		if pendingContent[i] {
+			v = v.inContent()
+		}
+		uses.add(v)
 	}
 	return uses
 }
@@ -755,8 +816,16 @@ func (d *Document) finish(i int) *Box {
 	// boxes changes. The port gives copies, so that a page finished again
 	// gets the same margin boxes.
 	quoteDepth := pageData.quoteDepth
+	counterValues := cloneCounterValues(pageData.counterValues)
+	if values := counterValues["page"]; d.part != nil && len(values) > 0 {
+		// Port: the first page that a part of a long document keeps has
+		// the number PagesBefore + 1 (D55).
+		values = slices.Clone(values)
+		values[len(values)-1] -= d.partFirst()
+		counterValues["page"] = values
+	}
 	children = append(children, makeMarginBoxes(lc, page, &quoteDepth,
-		cloneCounterValues(pageData.counterValues), cloneCounterScopes(pageData.counterScopes))...)
+		counterValues, cloneCounterScopes(pageData.counterScopes))...)
 	page.Children = children
 	layoutBackgrounds(page, lc.getImageFromURI)
 	d.finished[i] = page

@@ -54,6 +54,49 @@ type Source struct {
 	// shows the object. A name holds only ASCII letters, digits, "-", "_"
 	// and ".". The layout reads no file for an object.
 	Objects map[string]Object
+
+	// Splitter cuts the long documents into parts that a Book lays out on
+	// their own, or nil (D55).
+	Splitter Splitter
+}
+
+// Splitter cuts a long document of a Source, such as a long sheet, into
+// parts. A Book lays out each part as a document of its own, so that the
+// first page of the document does not wait for the whole document, and
+// PageCount lays out the parts at the same time (D55). A Splitter must be
+// safe for concurrent use.
+type Splitter interface {
+	// Split returns the parts of the document path, in order, or nil when
+	// the book lays out the document whole.
+	Split(path string) []Part
+	// Recut returns the part that takes the place of next, the part after
+	// part, when the probe row of part does not start a page. row is the
+	// first row of the page that holds the probe row of part. The new part
+	// starts at that row and ends where next ends.
+	Recut(part, next Part, row int) Part
+}
+
+// Part is a part of a long document (D55). A row of a part is an element
+// tr of its document. The rows are counted in tree order, from 0.
+//
+// The document of a part holds more rows than the pages that the book
+// keeps. The rows before the cut row keep the borders and the merged cells
+// above the cut row as the whole document has them. The probe row and the
+// rows after it keep the borders and the merged cells below the last row
+// that the part keeps.
+type Part struct {
+	// Path is the path in FS of the HTML document of the part.
+	Path string
+	// Cut is the cut row, or -1 for none. The book drops the pages before
+	// the page that starts at the cut row.
+	Cut int
+	// Probe is the probe row, or -1 for none. The book drops the page that
+	// holds the probe row and the pages after it. When the probe row does
+	// not start that page, the book asks Splitter.Recut for the next part.
+	Probe int
+	// Pages is the number of pages that the format expects the book to
+	// keep of the part.
+	Pages int
 }
 
 // ObjectScheme is the scheme of the URL of an object of Source.Objects. No

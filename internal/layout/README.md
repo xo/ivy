@@ -85,8 +85,9 @@ one of its functions.
 | `logger.py` | 21 | `logger.go` | 55 | Ported |
 | none | | `value.go` | 329 | The Go types of the values of the styles |
 | none | | `tree.go` | 342 | The document tree and its adapter for `cssselect2` |
-| none | | `source.go` | 37 | `Source`, the input of a format |
-| none | | `book.go` | 503 | `Book`, the pages of a whole `Source`. See "The book" |
+| none | | `source.go` | 130 | `Source`, the input of a format, and the parts of a long document |
+| none | | `book.go` | 931 | `Book`, the pages of a whole `Source`. See "The book" |
+| none | | `part.go` | 254 | The pages of a part of a long document. See "The document" |
 | none | | `objects.go` | 232 | The metafiles of Windows, the objects of a `Source`, and the boxes of display lists. See "The metafiles and the objects" |
 | none | | `css_ivy.go`, `layout_tabs.go`, `layout_page_fit.go`, `text_autospace.go` | 621 | The properties that ivy adds for the word processors. See "The properties of ivy" |
 | `tests/testing_utils.py` | | `testing_utils_test.go` | 641 | Ported, without `tree_position` |
@@ -477,7 +478,25 @@ The cascade finds these features when it computes the styles
 `bookmark-label` and `position` of each cascaded style, and the
 declarations of the `@page` rules. A declaration of an element that the
 cascade overrides does not count. A value with `var()` counts the features
-of the tokens of all the custom properties of the document.
+of the tokens of all the custom properties of the document. The cascade
+also tells whether the styles of the elements use `counter(pages)`, or only
+the `@page` rules and their margin rules. When only the margin boxes use
+it, the number of pages does not change the layout of the content (D55).
+
+`DocumentOptions.Part` makes the document a part of a long document, such
+as a part of a long sheet (D55). This is not a port. A row of a part is an
+element `tr`, and the rows are counted in tree order. A page starts at a
+row when the row is the first row of the bodies of the tables on the page,
+and the page before does not hold the same row. The rows of a header or a
+footer of a table do not count. The document keeps the pages from the page
+that starts at the cut row to the page before the page that holds the
+probe row. When the probe row does not start its page, `Probe` reports the
+first row of the last page that starts at a row, up to the page of the
+probe row. The document then keeps the pages before that page.
+`counter(page)` of the first page that the document keeps is
+`PagesBefore + 1`, and `counter(pages)` counts only the pages that it
+keeps. `Page(ctx, i)` gives a page only when the end of the part cannot
+move before that page, so it lays out the page after it too.
 
 Upstream changes the pages of its list in place when it adds the margin
 boxes. The port adds them to copies of the page box and of the box of the
@@ -562,7 +581,9 @@ out the whole book.
    `counter(pages)`, it first counts the pages of all the documents after
    it, from the last one. So a page of that document comes after the
    layout of the whole book. A book whose documents do not use
-   `counter(pages)` stays lazy.
+   `counter(pages)` stays lazy. A document that uses `counter(pages)` only
+   in its margin boxes counts its own pages before the pages after it,
+   because the number of pages does not change its layout (D55).
 4. The book keeps the layout of at most 4 documents, the most recently
    used. A document that it drops is laid out again when a page of it is
    asked for. The pages that a program holds stay valid.
@@ -584,6 +605,24 @@ out the whole book.
    the clip and the groups of the device apply to the page. A format that
    draws a page of a book inside a page of its own uses it, such as the
    text of a shape of a slide in `internal/drawingml`.
+8. `PageCount`, and a document that waits for the count of the documents
+   after it, first lay out the documents whose count is not known on up to
+   8 goroutines, each with a font configuration of its own (D48). A
+   goroutine keeps the count and drops the layout. A document that uses
+   `counter(pages)` in its content keeps no count from a goroutine. A
+   document that uses it only in its margin boxes keeps its count (D55).
+9. A `Source` can give a `Splitter`, which cuts a long document, such as a
+   long sheet, into parts (D55). `NewBook` makes a document of the book for
+   each part, with `DocumentOptions.Part`. The goroutines of item 8 lay out
+   the parts at the same time. The count of a part is good when the probe
+   row of the part before it starts a page. So `PageCount` and `Page` walk
+   the parts in order. When the probe row of a part does not start a page,
+   the book asks `Splitter.Recut` for a new next part. The new part starts
+   at the row that `Document.Probe` reports, and ends where the old next
+   part ends, so the parts after it stay good when its probe row starts a
+   page. When `Page(ctx, n)` asks for a page past the pages that a part is
+   expected to keep, the book first counts the parts up to that page on the
+   goroutines.
 
 The fonts of a book are the fonts of `BookOptions.Fonts`. By default, they
 are the database that `Load` of `internal/fontdb` gives for

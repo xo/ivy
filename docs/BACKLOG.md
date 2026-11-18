@@ -210,34 +210,29 @@ The pages of Visio came on 2026-11-17 (D30).
    `msppt`.
 6. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
    the test module. Source: `msdoc`, `msxls` and `msppt`.
-7. Lay out a long sheet in parts, so that page 0 does not wait for the
-   whole sheet. A sheet of 20,000 rows takes about 4 seconds before its
-   first page. It needs a document of a `layout.Book` that goes on with the
-   pages and the counters of the document before it, so that `&P` and `&N`
-   stay right. Source: `internal/sheet` and `internal/layout`.
-8. Draw the color scales, the data bars and the icon sets of the spreadsheets
+7. Draw the color scales, the data bars and the icon sets of the spreadsheets
    of `odf` (calcext), and their annotations. Source: `odf`.
-9. Draw the glow, the soft edge, the inner shadow and the reflection of
+8. Draw the glow, the soft edge, the inner shadow and the reflection of
    DrawingML. Find which side of a line the thick line of `thickThin` and
    `thinThick` takes. Source: `internal/drawingml`. On 2026-11-18 no page that
    the review renders uses these effects. Only slide 23 of
    `poi/pptx/custom-geometry.pptx` has an inner shadow.
-10. Draw the objects of OpenDocument that only an SVM picture shows, and
-    `fo:clip` of the pictures of a text. No permissive decoder of SVM is
-    known, and D45 lets it wait. Source: `odf`.
-11. Compare the custom caps and the arrows of EMF+ lines with GDI+.
+9. Draw the objects of OpenDocument that only an SVM picture shows, and
+   `fo:clip` of the pictures of a text. No permissive decoder of SVM is
+   known, and D45 lets it wait. Source: `odf`.
+10. Compare the custom caps and the arrows of EMF+ lines with GDI+.
     `internal/gowemf` draws them with a geometry that MS-EMFPLUS does not
     define. Draw the triangle cap and the anchor caps (round, diamond and
     arrow), which gowemf reports. Source: `internal/gowemf`.
-12. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
+11. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
     in OPAQUE mode, and the source of an EMF+ DrawImage of a metafile outside
     the metafile with a tile mode. `internal/gowemf` reports them. The blend
     modes of the raster operations are exact for black and white masks only.
     Source: `internal/metafile` and `internal/gowemf`.
-13. Take a fallback face for the characters that the face of a run of a
+12. Take a fallback face for the characters that the face of a run of a
     metafile lacks, such as Arabic in Carlito. The run draws the empty glyph
     of its face. Source: `internal/metafile`.
-14. Test change 19 of `internal/gowemf` (D53) with a metafile that a program
+13. Test change 19 of `internal/gowemf` (D53) with a metafile that a program
     wrote. The corpus of the review has no record that names its glyphs by
     index, so only synthetic records test the text of the indexes. Add to the
     corpus an EMF from a printer driver or from Uniscribe, and an EMF+ Dual
@@ -300,13 +295,13 @@ D59 added. These items are left.
 The measurement of the speed of 2026-11-18 and D47 left these items. Each
 time is for a page at 96 dpi.
 
-1. Lay out a long sheet in parts of about 16 pages that end at a probe row, as
-   D55 decides, so that the first page of a large sheet does not wait for the
-   whole sheet. `datasets/csv/world-cities.csv` needs about 1.4 s and
-   `poi/xlsx/many-merges.xlsx` about 1 s before the first page today. A book
-   also keeps the count of a document whose `counter(pages)` is only in its
-   margin boxes (D55, which amends D48). Source: `internal/sheet`,
-   `internal/layout` and D55.
+1. Predict the height of a row whose line of text is higher than the row.
+   `internal/sheet` predicts the page breaks of a long sheet from the heights
+   of its rows (D55). At a small scale, such as fit to page at 30%, the line
+   of the font and the halves of the borders make a row of 4.5 points about
+   4.53 points high. Then the probe row of each part does not start a page,
+   and the book lays out the parts one after the other. Text that wraps does
+   the same. Source: `internal/sheet`.
 2. Draw the soft masks of `hayro/pdf/tile-clamp-bug.pdf` faster. A group
    now draws its soft mask only on the pixels that it composites, but in
    this document each group covers almost all of the clip of its band. So
@@ -331,6 +326,16 @@ time is for a page at 96 dpi.
    `splitInlineBox` and `shapeText` of the layout, and from
    `addRelevantSelectors` and `newElementWrapper` of `cssselect2` in okage.
    Source: `internal/layout`.
+5. Render each page of a long sheet without a second layout of its parts.
+   `PageCount` lays out the parts on goroutines and drops their layouts (D48),
+   so the pages after it lay out each part again, with its lead page and its
+   probe page. On 2026-11-18 the mean time of a page of
+   `datasets/csv/world-cities.csv` went from 32.5 ms to 36.9 ms, and of
+   `poi/xlsx/many-merges.xlsx` from 25.6 ms to 28.8 ms. Source:
+   `internal/layout`.
+6. Find why each page of `poi/xls/basic-expense-template-2011.xls` takes about
+   675 ms. It makes `TestSheetParts` of the test module take about 157 s.
+   Source: `msxls` and `internal/sheet`.
 
 ## Work for okage
 

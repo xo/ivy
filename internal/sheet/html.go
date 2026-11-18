@@ -47,6 +47,10 @@ const gridColor = "#c8c8c8"
 // A sheet shows at most Limits.MaxObjects / 4 cells and rows in all, with
 // the bands of its columns. At the limit, the sheet stops, its last line
 // says so, and the log has a warning. The sheets after it still show.
+//
+// A sheet of 32 pages or more is also cut into parts of about 16 pages,
+// which the book lays out on their own (D55). The Splitter of the source
+// gives the parts, and its FS gives their documents.
 func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, error) {
 	lim := opts.Limits.WithDefaults()
 	log := opts.Logger
@@ -55,6 +59,8 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 	}
 	var fsys memfs.FS
 	src := layout.Source{FS: &fsys, Title: wb.Title, Objects: wb.Objects}
+	parts := partPages(ctx)
+	sheets := map[string]*parted{}
 	for name, data := range wb.Files {
 		fsys.Add(name, data)
 	}
@@ -75,6 +81,9 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 		}
 		name := "sheet" + strconv.Itoa(i+1) + ".html"
 		fsys.Add(name, []byte(doc))
+		if p := w.split(name, parts); p != nil {
+			sheets[name] = p
+		}
 		for path, data := range w.files {
 			fsys.Add(path, data)
 		}
@@ -95,6 +104,11 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 		b.WriteString("</style></head><body></body></html>")
 		fsys.Add("empty.html", []byte(b.String()))
 		src.Documents = append(src.Documents, "empty.html")
+	}
+	if len(sheets) > 0 {
+		// A long sheet is laid out in parts (D55).
+		s := &splitter{fs: &fsys, sheets: sheets}
+		src.FS, src.Splitter = s, s
 	}
 	return src, nil
 }
@@ -131,6 +145,19 @@ type writer struct {
 	// of the conditional formats.
 	files map[string][]byte
 	body  strings.Builder
+	// tables holds the tables of body, for the parts of a long sheet. rec
+	// is the table whose rows the writer records, or nil. top and bottom
+	// are the widest borders at the top and at the bottom of the cells of
+	// the row that the writer writes (D55).
+	tables      []tableSpan
+	rec         *tableSpan
+	top, bottom float64
+	// tall holds the images that show whole in their first cell, because
+	// they are taller than maxSliceRows rows.
+	tall []int
+	// headHTML is the start of the document, up to the start tag of its
+	// body.
+	headHTML string
 }
 
 // derivedKey names a style that conditional formats make: the style of
@@ -174,6 +201,9 @@ func newWriter(ctx context.Context, wb *Workbook, sh *Sheet, lim ivy.Limits) *wr
 	w.ends = make([][2]int, len(w.images))
 	for i, img := range w.images {
 		w.ends[i][0], w.ends[i][1] = w.imageEnd(img)
+		if w.ends[i][0]-img.Row >= maxSliceRows {
+			w.tall = append(w.tall, i)
+		}
 	}
 	return w
 }
@@ -285,15 +315,23 @@ func (w *writer) document() (string, bool, error) {
 		w.body.WriteString(html.EscapeString(w.sh.Note))
 		w.body.WriteString("</p>")
 	}
+	w.headHTML = w.head()
+	var b strings.Builder
+	b.WriteString(w.headHTML)
+	b.WriteString(w.body.String())
+	b.WriteString("</body></html>\n")
+	return b.String(), true, nil
+}
+
+// head returns the start of the document, up to the start tag of its body.
+func (w *writer) head() string {
 	var b strings.Builder
 	b.WriteString("<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>")
 	b.WriteString(html.EscapeString(w.sh.Name))
 	b.WriteString("</title><style>\n")
 	w.css(&b)
 	b.WriteString("</style></head><body>")
-	b.WriteString(w.body.String())
-	b.WriteString("</body></html>\n")
-	return b.String(), true, nil
+	return b.String()
 }
 
 // comments writes the comments of the cells on pages after the cells, as
@@ -959,6 +997,7 @@ func (w *writer) table(r Range, band []int) error {
 		return nil
 	}
 	b := &w.body
+	span := tableSpan{start: b.Len()}
 	b.WriteString(`<table class="sh"`)
 	total := 0.0
 	for _, c := range band {
@@ -978,15 +1017,32 @@ func (w *writer) table(r Range, band []int) error {
 		head := Range{Row0: max(0, t.First), Row1: min(t.Last, MaxRows-1), Col0: r.Col0, Col1: r.Col1}
 		if head.Row0 <= head.Row1 {
 			b.WriteString("<thead>")
-			if err := w.rows(head, band, false); err != nil {
+			var titles tableSpan
+			w.rec = &titles
+			err := w.rows(head, band, false)
+			w.rec = nil
+			if err != nil {
 				return err
 			}
 			b.WriteString("</thead>")
+			span.heads = len(titles.rows)
+			for _, row := range titles.rows {
+				span.head += row.h
+			}
+			if len(titles.rows) > 0 {
+				span.headTop = titles.rows[0].top
+			}
 		}
 	}
 	b.WriteString("<tbody>")
+	span.body = b.Len()
+	w.rec = &span
 	err := w.rows(r, band, sh.TitleRows != nil)
+	w.rec = nil
+	span.rowsEnd = b.Len()
 	b.WriteString("</tbody></table>")
+	span.end = b.Len()
+	w.tables = append(w.tables, span)
 	return err
 }
 
@@ -1051,6 +1107,9 @@ type mergeState struct {
 	started bool
 	// cols are the indexes in the band of its columns.
 	lo, hi int
+	// first and last are the first and the last row of the merge among
+	// the rows that the writer records, or -1.
+	first, last int
 }
 
 // rows writes the rows of the range r for the columns of band.
@@ -1068,9 +1127,12 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		if lo >= hi {
 			continue
 		}
-		merges = append(merges, &mergeState{m: m, lo: lo, hi: hi})
+		merges = append(merges, &mergeState{m: m, lo: lo, hi: hi, first: -1, last: -1})
 	}
 	slices.SortFunc(merges, func(a, b *mergeState) int { return a.m.Row0 - b.m.Row0 })
+	if rec := w.rec; rec != nil {
+		defer rec.holdRows(merges)
+	}
 	var active []*mergeState
 	next := 0
 	cover := make([]*mergeState, len(band))
@@ -1112,6 +1174,20 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		if !w.spend(1) {
 			return nil
 		}
+		if rec := w.rec; rec != nil {
+			k := len(rec.rows)
+			for _, m := range active {
+				if m.first < 0 {
+					m.first = k
+				}
+				m.last = k
+			}
+			rec.rows = append(rec.rows, rowSpan{
+				off: w.body.Len(), h: round2(h * w.scale), brk: w.rowBreaks[i] && !firstRow,
+				first: -1, last: -1, inTall: w.inTall(i),
+			})
+			w.top, w.bottom = 0, 0
+		}
 		w.body.WriteString("<tr")
 		if w.rowBreaks[i] && !firstRow {
 			w.body.WriteString(` class="pb"`)
@@ -1127,11 +1203,15 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 				text[k] = true
 			}
 		}
-		if !w.cells(i, row, band, cover, text, skipTitles) {
-			w.body.WriteString("</tr>")
+		ok := w.cells(i, row, band, cover, text, skipTitles)
+		w.body.WriteString("</tr>")
+		if rec := w.rec; rec != nil {
+			last := &rec.rows[len(rec.rows)-1]
+			last.top, last.bottom = w.top, w.bottom
+		}
+		if !ok {
 			return nil
 		}
-		w.body.WriteString("</tr>")
 	}
 	return nil
 }
@@ -1172,6 +1252,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		} else {
 			b.WriteString(`<td colspan="` + strconv.Itoa(empty) + `"></td>`)
 		}
+		w.borders(0)
 		empty, gap = 0, false
 		return true
 	}
@@ -1222,6 +1303,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		if style != 0 {
 			w.used[style] = true
 		}
+		w.borders(style)
 		st := w.style(style)
 		var class []string
 		if style != 0 {

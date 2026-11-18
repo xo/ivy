@@ -93,6 +93,10 @@ func (o BookOptions) NewFontConfiguration() *FontConfiguration {
 // takes the number of pages of a document to be the same whatever the
 // number of its first page.
 //
+// When the Source has a Splitter, the book lays out each part of a long
+// document as a document of its own, and drops the pages of a part that
+// the parts before it and after it keep (D55).
+//
 // A document that cannot be read or laid out is logged and left out, so a
 // book with one bad chapter still opens. If no document gives a page, the
 // book returns the first error.
@@ -156,6 +160,23 @@ type bookDocument struct {
 	// after is the number of pages of the documents after it, which the
 	// counter pages adds, or -1 when it is not known yet.
 	after int
+
+	// part is the part of a long document that the document is, or nil
+	// (D55). source is the index of the long document in Source.Documents.
+	part   *Part
+	source int
+	// starts is set when the part is known to start at a page: it is the
+	// first part, or the probe row of the part before it starts a page.
+	starts bool
+	// probed is set when the layout found the end of the part. probeOK
+	// is set when its probe row starts a page, and probeRow is the row
+	// that the next part starts at otherwise.
+	probed   bool
+	probeOK  bool
+	probeRow int
+	// loading is set while the book reads and lays out the document, so
+	// that the document does not wait for itself.
+	loading bool
 }
 
 // NewBook returns the book of the documents of src. It reads no document
@@ -185,10 +206,26 @@ func NewBook(src Source, opts BookOptions) *Book {
 		log.Warn("layout: book with too many documents", "documents", len(docs), "max", n)
 		docs = docs[:n]
 	}
-	for _, path := range docs {
-		b.docs = append(b.docs, &bookDocument{path: path, count: -1, after: -1})
+	for i, path := range docs {
+		var parts []Part
+		if src.Splitter != nil {
+			parts = src.Splitter.Split(path)
+		}
+		if len(parts) == 0 {
+			b.docs = append(b.docs, &bookDocument{path: path, count: -1, after: -1, source: i})
+			continue
+		}
+		for k := range parts {
+			b.docs = append(b.docs, b.newPart(parts[k], i, k == 0))
+		}
 	}
 	return b
+}
+
+// newPart returns the document of the part p of the long document of the
+// index source in Source.Documents. starts is set for its first part.
+func (b *Book) newPart(p Part, source int, starts bool) *bookDocument {
+	return &bookDocument{path: p.Path, count: -1, after: -1, part: &p, source: source, starts: starts}
 }
 
 // maxPages is the number of pages of a book: the bound of the pages of one
@@ -201,8 +238,12 @@ func (b *Book) maxPages() int {
 func (b *Book) PageCount(ctx context.Context) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.countAll(ctx)
-	for _, bd := range b.docs {
+	b.countAll(ctx, b.docs)
+	for i := range b.docs {
+		if err := b.fix(ctx, i); err != nil {
+			return 0, err
+		}
+		bd := b.docs[i]
 		b.place(bd, n)
 		count, err := b.count(ctx, bd)
 		if err != nil {
@@ -232,9 +273,18 @@ func (b *Book) Page(ctx context.Context, n int) (ivy.Page, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	offset := 0
-	for _, bd := range b.docs {
+	for i := range b.docs {
 		if offset >= b.maxPages() {
 			return nil, fmt.Errorf("book of more than %d pages: %w", b.maxPages(), ivy.ErrLimit)
+		}
+		if err := b.fix(ctx, i); err != nil {
+			return nil, err
+		}
+		bd := b.docs[i]
+		if bd.part != nil && bd.count < 0 && n-offset >= bd.part.Pages {
+			// The page is past the part: count the parts up to the page at
+			// the same time, as PageCount does.
+			b.countAll(ctx, b.partsTo(i, n-offset))
 		}
 		if bd.count >= 0 && n >= offset+bd.count {
 			offset += bd.count
@@ -260,37 +310,77 @@ func (b *Book) Page(ctx context.Context, n int) (ivy.Page, error) {
 
 // load reads, styles and builds a document, and keeps it among the loaded
 // documents. It returns false for a document that cannot be read, which the
-// book leaves out with 0 pages. When the document uses counter(pages), it
-// counts the pages of the documents after it first. It returns the error of
-// ctx, and an error that wraps ivy.ErrLimit when the book has too many
-// pages.
-func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
-	if bd.doc != nil {
+// book leaves out with 0 pages. When the document uses counter(pages) in its
+// content, it counts the pages of the documents after it first. When page
+// is set, a document that uses counter(pages) only in its margin boxes
+// counts them too. It returns the error of ctx, and an error that wraps
+// ivy.ErrLimit when the book has too many pages.
+func (b *Book) load(ctx context.Context, bd *bookDocument, page bool) (bool, error) {
+	if bd.doc == nil {
+		if err := ctx.Err(); err != nil {
+			return false, fmt.Errorf("laying out %s: %w", bd.path, err)
+		}
+		doc, err := b.build(bd)
+		if err != nil {
+			b.skip(bd, err)
+			return false, nil
+		}
+		b.loads++
+		bd.doc = doc
+		b.keepLoaded(bd)
+	} else {
 		b.touch(bd)
-		return true, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return false, fmt.Errorf("laying out %s: %w", bd.path, err)
-	}
-	doc, err := b.build(bd.path, bd.before)
-	if err != nil {
-		b.skip(bd, err)
-		return false, nil
-	}
-	b.loads++
-	if doc.usesPages {
-		if err := b.countAfter(ctx, bd); err != nil {
+	if bd.doc.usesPages && (bd.doc.pagesInContent || page) {
+		if err := b.setAfter(ctx, bd); err != nil {
 			return false, err
 		}
-		doc.pagesAfter = bd.after
 	}
-	bd.doc = doc
+	return bd.doc != nil, nil
+}
+
+// keepLoaded adds a document to the loaded documents, and drops the layout
+// of the least recently used one past maxLoadedDocuments.
+func (b *Book) keepLoaded(bd *bookDocument) {
 	b.loaded = append(b.loaded, bd)
 	if len(b.loaded) > maxLoadedDocuments {
 		b.loaded[0].doc = nil
 		b.loaded = b.loaded[1:]
 	}
-	return true, nil
+}
+
+// setAfter gives a loaded document that uses counter(pages) the number of
+// pages of the documents after it. A document that uses counter(pages) only
+// in its margin boxes counts its own pages first, because the parts after
+// it need its end (D55), and the number of pages does not change its
+// layout.
+func (b *Book) setAfter(ctx context.Context, bd *bookDocument) error {
+	if bd.after < 0 {
+		doc := bd.doc
+		if !doc.pagesInContent && bd.count < 0 {
+			if _, err := b.count(ctx, bd); err != nil {
+				return err
+			}
+			if bd.doc == nil {
+				return nil
+			}
+			doc = bd.doc
+		}
+		// The document stays out of the loaded documents while the book
+		// counts the documents after it, so that they do not drop its
+		// layout.
+		b.unload(bd)
+		bd.loading = true
+		err := b.countAfter(ctx, bd)
+		bd.loading = false
+		bd.doc = doc
+		b.keepLoaded(bd)
+		if err != nil {
+			return err
+		}
+	}
+	bd.doc.setPagesAfter(bd.after)
+	return nil
 }
 
 // countAfter sets the number of pages of the documents after bd. It counts
@@ -303,6 +393,14 @@ func (b *Book) countAfter(ctx context.Context, bd *bookDocument) error {
 	i := len(b.docs) - 1
 	for i >= 0 && b.docs[i] != bd {
 		i--
+	}
+	b.countAll(ctx, b.docs[i+1:])
+	// The parts after bd, in order, so that each one starts at a page
+	// (D55).
+	for j := i + 1; j < len(b.docs); j++ {
+		if err := b.fix(ctx, j); err != nil {
+			return err
+		}
 	}
 	after := 0
 	for _, next := range slices.Backward(b.docs[i+1:]) {
@@ -343,17 +441,23 @@ func (b *Book) touch(bd *bookDocument) {
 // time, because each one holds its layout.
 const maxCountWorkers = 8
 
-// countAll counts the pages of the documents whose count is not known, on
-// up to one goroutine for each CPU, before PageCount walks the documents
-// (D48). Each goroutine lays out a document with a font configuration of its
-// own, keeps its count and drops its layout. The count of a document does
-// not depend on the pages before it, as place assumes. A document that uses
-// counter(pages), or whose layout fails, keeps no count: the walk lays it
-// out in order, as before.
-func (b *Book) countAll(ctx context.Context) {
+// countAll counts the pages of the documents of docs whose count is not
+// known, on up to one goroutine for each CPU, before PageCount walks the
+// documents (D48). Each goroutine lays out a document with a font
+// configuration of its own, keeps its count and drops its layout. The count
+// of a document does not depend on the pages before it, as place assumes.
+// A document that uses counter(pages) in its content, or whose layout
+// fails, keeps no count: the walk lays it out in order, as before. A
+// document that uses counter(pages) only in its margin boxes keeps its
+// count, because the number of pages does not change its layout (D55).
+//
+// A part of a long document also keeps the end that its layout finds. Its
+// count is good when the probe row of the part before it starts a page,
+// which fix finds in order (D55).
+func (b *Book) countAll(ctx context.Context, docs []*bookDocument) {
 	var todo []*bookDocument
-	for _, bd := range b.docs {
-		if bd.count < 0 && !bd.failed && bd.doc == nil {
+	for _, bd := range docs {
+		if bd.count < 0 && !bd.failed && bd.doc == nil && !bd.loading {
 			todo = append(todo, bd)
 		}
 	}
@@ -361,9 +465,9 @@ func (b *Book) countAll(ctx context.Context) {
 	if workers < 2 {
 		return
 	}
-	counts := make([]int, len(todo))
+	counts := make([]counted, len(todo))
 	for i := range counts {
-		counts[i] = -1
+		counts[i].count = -1
 	}
 	var next atomic.Int64
 	var wg sync.WaitGroup
@@ -385,40 +489,100 @@ func (b *Book) countAll(ctx context.Context) {
 	}
 	wg.Wait()
 	for i, bd := range todo {
-		if counts[i] >= 0 {
-			bd.count = counts[i]
+		if c := counts[i]; c.count >= 0 {
+			bd.count = c.count
+			bd.probed, bd.probeOK, bd.probeRow = c.probed, c.ok, c.row
 		}
 	}
+}
+
+// counted is what countAlone finds of a document: its number of pages, or
+// -1, and for a part, whether its probe row starts a page and the row that
+// the next part starts at otherwise.
+type counted struct {
+	count  int
+	probed bool
+	ok     bool
+	row    int
 }
 
 // countAlone lays out a document with fc, and returns its number of pages,
-// or -1 when the walk of PageCount must lay it out: for counter(pages), an
-// error or a panic.
-func (b *Book) countAlone(ctx context.Context, bd *bookDocument, fc *FontConfiguration) (n int) {
+// or -1 when the walk of PageCount must lay it out: for counter(pages) in
+// its content, an error or a panic.
+func (b *Book) countAlone(ctx context.Context, bd *bookDocument, fc *FontConfiguration) (c counted) {
 	defer func() {
 		if recover() != nil {
-			n = -1
+			c = counted{count: -1}
 		}
 	}()
-	doc, err := b.buildWith(bd.path, 0, fc)
-	if err != nil || doc.usesPages {
-		return -1
+	c.count = -1
+	doc, err := b.buildWith(bd.path, 0, bd.part, fc)
+	if err != nil || doc.pagesInContent {
+		return c
 	}
-	n, err = doc.Count(ctx)
+	n, err := doc.Count(ctx)
 	if err != nil {
-		return -1
+		return c
 	}
-	return n
+	ok, row, err := doc.Probe(ctx)
+	if err != nil {
+		return c
+	}
+	return counted{count: n, probed: bd.part != nil, ok: ok, row: row}
 }
 
-// build reads a document of the source, computes its styles and builds its
+// fix makes sure that the part docs[i] starts at a page (D55). When the
+// probe row of the part before it does not start a page, the pages of that
+// part end before the page that holds its probe row, and fix puts the part
+// that Splitter.Recut gives in the place of docs[i]: it starts at the first
+// row of that page, and ends where docs[i] ends. fix lays out the part
+// before docs[i] when its end is not known.
+func (b *Book) fix(ctx context.Context, i int) error {
+	bd := b.docs[i]
+	if bd.part == nil || bd.starts || i == 0 {
+		return nil
+	}
+	prev := b.docs[i-1]
+	if prev.loading && !prev.probed {
+		// The part before waits for the count of the parts after it.
+		return nil
+	}
+	if !prev.probed {
+		if _, err := b.count(ctx, prev); err != nil {
+			return err
+		}
+	}
+	if !prev.probed || prev.probeOK {
+		bd.starts = true
+		return nil
+	}
+	next := b.src.Splitter.Recut(*prev.part, *bd.part, prev.probeRow)
+	b.unload(bd)
+	b.docs[i] = b.newPart(next, bd.source, true)
+	return nil
+}
+
+// partsTo returns the parts from docs[i] that come before the page of
+// index n of the long document of docs[i], from the page of docs[i], and
+// the part that is expected to hold that page.
+func (b *Book) partsTo(i, n int) []*bookDocument {
+	j := i
+	for pages := 0; j < len(b.docs) && b.docs[j].part != nil && b.docs[j].source == b.docs[i].source && pages <= n; j++ {
+		pages += max(b.docs[j].part.Pages, 1)
+	}
+	return b.docs[i:j]
+}
+
+// build reads a document of the book, computes its styles and builds its
 // boxes.
-func (b *Book) build(path string, before int) (doc *Document, err error) {
-	return b.buildWith(path, before, b.fc)
+func (b *Book) build(bd *bookDocument) (doc *Document, err error) {
+	return b.buildWith(bd.path, bd.before, bd.part, b.fc)
 }
 
-// buildWith is build, with the font configuration fc.
-func (b *Book) buildWith(path string, before int, fc *FontConfiguration) (doc *Document, err error) {
+// buildWith reads the document path, with before pages before it, as the
+// part p of a long document when p is not nil, and the font configuration
+// fc.
+func (b *Book) buildWith(path string, before int, p *Part, fc *FontConfiguration) (doc *Document, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			doc, err = nil, fmt.Errorf("%w: panic in %s: %v", ivy.ErrFormat, path, r)
@@ -462,6 +626,7 @@ func (b *Book) buildWith(path string, before int, fc *FontConfiguration) (doc *D
 		CounterStyle:    counterStyle,
 		Footnotes:       footnotes,
 		PagesBefore:     before,
+		Part:            p,
 	}), nil
 }
 
@@ -471,6 +636,13 @@ func (b *Book) skip(bd *bookDocument, err error) {
 	b.keep(bd, err)
 	bd.count = 0
 	bd.failed = true
+	b.ended(bd)
+}
+
+// ended sets the end of a part whose layout failed: the next part keeps the
+// start that Splitter.Split gave it.
+func (b *Book) ended(bd *bookDocument) {
+	bd.probed, bd.probeOK = true, true
 }
 
 // keep keeps the first error of a document that the book left out or cut.
@@ -500,7 +672,7 @@ func (b *Book) page(ctx context.Context, bd *bookDocument, i int) (*Box, error) 
 	if bd.count >= 0 && i >= bd.count {
 		return nil, ErrNoPage
 	}
-	ok, err := b.load(ctx, bd)
+	ok, err := b.load(ctx, bd, true)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +699,7 @@ func (b *Book) page(ctx context.Context, bd *bookDocument, i int) (*Box, error) 
 		// The document failed before at a later page. A new layout gives
 		// the pages before.
 		b.unload(bd)
-		if ok, err := b.load(ctx, bd); err != nil || !ok {
+		if ok, err := b.load(ctx, bd, true); err != nil || !ok {
 			return nil, cmpErr(err, ErrNoPage)
 		}
 		if box, err := bd.doc.Page(ctx, i); err == nil {
@@ -540,6 +712,7 @@ func (b *Book) page(ctx context.Context, bd *bookDocument, i int) (*Box, error) 
 	b.keep(bd, err)
 	bd.count = i
 	bd.failed = true
+	b.ended(bd)
 	return nil, ErrNoPage
 }
 
@@ -568,7 +741,10 @@ func (b *Book) count(ctx context.Context, bd *bookDocument) (int, error) {
 	if bd.count >= 0 {
 		return bd.count, nil
 	}
-	ok, err := b.load(ctx, bd)
+	if bd.loading {
+		return 0, fmt.Errorf("laying out %s: the document waits for its own count: %w", bd.path, ivy.ErrFormat)
+	}
+	ok, err := b.load(ctx, bd, false)
 	if err != nil {
 		return 0, err
 	}
@@ -579,6 +755,11 @@ func (b *Book) count(ctx context.Context, bd *bookDocument) (int, error) {
 	switch {
 	case err == nil:
 		bd.count = n
+		if bd.part != nil {
+			// The layout of the part is complete, so its end is known.
+			ok, row, err := bd.doc.Probe(ctx)
+			bd.probed, bd.probeOK, bd.probeRow = true, ok || err != nil, row
+		}
 		return n, nil
 	case isStop(err):
 		b.unload(bd)
@@ -587,7 +768,7 @@ func (b *Book) count(ctx context.Context, bd *bookDocument) (int, error) {
 	// The whole layout failed. The pages of the first pass that the
 	// document gives stay, until the first one that fails.
 	b.unload(bd)
-	if ok, err := b.load(ctx, bd); err != nil || !ok {
+	if ok, err := b.load(ctx, bd, false); err != nil || !ok {
 		return 0, err
 	}
 	n = 0
@@ -605,6 +786,7 @@ func (b *Book) count(ctx context.Context, bd *bookDocument) (int, error) {
 	b.keep(bd, err)
 	bd.count = n
 	bd.failed = true
+	b.ended(bd)
 	return n, nil
 }
 
