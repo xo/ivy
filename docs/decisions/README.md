@@ -67,3 +67,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D45 | [The backlog drops ivy.Cache, keeps JPEG XR, and waits on JPEG and SVM](D045-the-backlog-drops-ivy-cache-keeps-jpeg-xr-and-waits-on-jpeg-and-svm.md) | Decided |
 | D46 | [ivy fills small glyphs with the coverage of okage](D046-ivy-fills-small-glyphs-with-the-coverage-of-okage.md) | Decided. Amends D28 |
 | D47 | [A large page renders in bands on goroutines](D047-a-large-page-renders-in-bands-on-goroutines.md) | Decided |
+| D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided |

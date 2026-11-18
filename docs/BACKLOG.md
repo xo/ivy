@@ -290,9 +290,11 @@ time is for a page at 96 dpi.
 5. Compute the variations of the faces of a font chain once for each
    fontmap, in `FontConfiguration.chain` and `fontmap.ResolveFace`. Source:
    `internal/layout/text_fonts.go`.
-6. Lay out the documents of a book at the same time. The layout of a flow
-   of text is serial, so bands and `RenderPages` do not make the
-   `PageCount` of a large ebook faster (D47). Source: `internal/layout`.
+6. Lay out a book of one large document faster. D48 counts the documents
+   of a book at the same time, but a book of one document, such as
+   `gutenberg/txt/pg24264.txt` (1.7 s) or
+   `gutenberg/html/pg1342-images.html` (1.1 s), lays out its pages in
+   order on one goroutine. Source: `internal/layout`.
 
 ## Work for okage
 

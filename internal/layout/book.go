@@ -11,8 +11,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/svg"
@@ -88,6 +90,11 @@ type Book struct {
 	// recordings holds the pages that Render recorded, the most recent
 	// last.
 	recordings []*recording
+	// db is the font database of the program, and first the number of its
+	// first faces, from which countAll makes a font configuration for each
+	// goroutine.
+	db    *svg.FontDatabase
+	first int
 }
 
 // maxRecordings is the number of recorded pages that a book keeps.
@@ -137,10 +144,12 @@ func NewBook(src Source, opts BookOptions) *Book {
 		db, first = fontdb.Load(opts.FontFiles, opts.SystemFonts, lim, log)
 	}
 	b := &Book{
-		src:  src,
-		opts: opts,
-		lim:  lim,
-		log:  log,
+		src:   src,
+		opts:  opts,
+		lim:   lim,
+		log:   log,
+		db:    db,
+		first: first,
 		fc: NewFontConfiguration(db, FontConfigurationOptions{
 			Limits:     lim,
 			Logger:     opts.Logger,
@@ -170,6 +179,7 @@ func (b *Book) maxPages() int {
 func (b *Book) PageCount(ctx context.Context) (n int, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.countAll(ctx)
 	for _, bd := range b.docs {
 		b.place(bd, n)
 		count, err := b.count(ctx, bd)
@@ -307,9 +317,86 @@ func (b *Book) touch(bd *bookDocument) {
 	}
 }
 
+// maxCountWorkers bounds the documents that countAll lays out at the same
+// time, because each one holds its layout.
+const maxCountWorkers = 8
+
+// countAll counts the pages of the documents whose count is not known, on
+// up to one goroutine for each CPU, before PageCount walks the documents
+// (D48). Each goroutine lays out a document with a font configuration of its
+// own, keeps its count and drops its layout. The count of a document does
+// not depend on the pages before it, as place assumes. A document that uses
+// counter(pages), or whose layout fails, keeps no count: the walk lays it
+// out in order, as before.
+func (b *Book) countAll(ctx context.Context) {
+	var todo []*bookDocument
+	for _, bd := range b.docs {
+		if bd.count < 0 && !bd.failed && bd.doc == nil {
+			todo = append(todo, bd)
+		}
+	}
+	workers := min(runtime.GOMAXPROCS(0), maxCountWorkers, len(todo))
+	if workers < 2 {
+		return
+	}
+	counts := make([]int, len(todo))
+	for i := range counts {
+		counts[i] = -1
+	}
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			fc := NewFontConfiguration(b.db, FontConfigurationOptions{
+				Limits:     b.lim,
+				Logger:     b.opts.Logger,
+				FirstFaces: b.first,
+			})
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= len(todo) || ctx.Err() != nil {
+					return
+				}
+				counts[i] = b.countAlone(ctx, todo[i], fc)
+			}
+		})
+	}
+	wg.Wait()
+	for i, bd := range todo {
+		if counts[i] >= 0 {
+			bd.count = counts[i]
+		}
+	}
+}
+
+// countAlone lays out a document with fc, and returns its number of pages,
+// or -1 when the walk of PageCount must lay it out: for counter(pages), an
+// error or a panic.
+func (b *Book) countAlone(ctx context.Context, bd *bookDocument, fc *FontConfiguration) (n int) {
+	defer func() {
+		if recover() != nil {
+			n = -1
+		}
+	}()
+	doc, err := b.buildWith(bd.path, 0, fc)
+	if err != nil || doc.usesPages {
+		return -1
+	}
+	n, err = doc.Count(ctx)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // build reads a document of the source, computes its styles and builds its
 // boxes.
 func (b *Book) build(path string, before int) (doc *Document, err error) {
+	return b.buildWith(path, before, b.fc)
+}
+
+// buildWith is build, with the font configuration fc.
+func (b *Book) buildWith(path string, before int, fc *FontConfiguration) (doc *Document, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			doc, err = nil, fmt.Errorf("%w: panic in %s: %v", ivy.ErrFormat, path, r)
@@ -330,7 +417,7 @@ func (b *Book) build(path string, before int) (doc *Document, err error) {
 		// The presentational hints, such as the width of an image, are on,
 		// because many ebooks rely on them.
 		PresentationalHints: true,
-		FontConfig:          b.fc,
+		FontConfig:          fc,
 		CounterStyle:        counterStyle,
 		TargetCollector:     targetCollector,
 	})
@@ -348,7 +435,7 @@ func (b *Book) build(path string, before int) (doc *Document, err error) {
 		return nil, fmt.Errorf("%s has no box: %w", path, ivy.ErrFormat)
 	}
 	return NewDocument(h, root, styleFor, DocumentOptions{
-		FontConfig:      b.fc,
+		FontConfig:      fc,
 		TargetCollector: targetCollector,
 		CounterStyle:    counterStyle,
 		Footnotes:       footnotes,

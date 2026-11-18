@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -414,5 +415,45 @@ func TestRenderReplay(t *testing.T) {
 	}
 	if n := len(b.recordings); n != 2 {
 		t.Errorf("expected 2 recordings, one for each fraction of a pixel, got %d", n)
+	}
+}
+
+// TestPageCountParallel checks that the counts of the documents that
+// countAll lays out at the same time are those of the walk of PageCount on
+// one CPU, with a document that uses counter(pages) and one that fails
+// (D48).
+func TestPageCountParallel(t *testing.T) {
+	ctx := context.Background()
+	src := func() Source {
+		s := testBook(24, map[int]bool{7: true})
+		fsys := s.FS.(fstest.MapFS)
+		fsys["c3.xhtml"] = &fstest.MapFile{Data: []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><body>` +
+			strings.Repeat("<p>A long chapter.</p>", 40) + `</body></html>`)}
+		fsys["c9.xhtml"] = &fstest.MapFile{Data: []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><head><style>
+			@page { @bottom-center { content: counter(page) " of " counter(pages) } }</style></head>
+			<body><p>Chapter 9</p></body></html>`)}
+		return s
+	}
+	count := func(procs int) (int, []int) {
+		old := runtime.GOMAXPROCS(procs)
+		defer runtime.GOMAXPROCS(old)
+		b := NewBook(src(), BookOptions{})
+		n, err := b.PageCount(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		counts := make([]int, len(b.docs))
+		for i, bd := range b.docs {
+			counts[i] = bd.count
+		}
+		return n, counts
+	}
+	wantN, want := count(1)
+	gotN, got := count(8)
+	if gotN != wantN || !slices.Equal(got, want) {
+		t.Errorf("expected %d pages, %v, as on one CPU, got %d, %v", wantN, want, gotN, got)
+	}
+	if want[3] < 2 || want[7] != 0 {
+		t.Errorf("expected several pages for c3 and none for c7, got %v", want)
 	}
 }
