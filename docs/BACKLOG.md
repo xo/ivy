@@ -26,26 +26,25 @@ found these faults. Each item names a file of the corpus.
    whole pixels made the seam darker, but it stretched the images and failed
    the oracle test `image_inline_2`. Source: `internal/hayro/render`,
    2026-11-18.
-2. Draw the pictures in PICT of an Excel 97 workbook. Source: `msxls`.
-3. Find the last 3 pixels of drift of `libreoffice/odt/ooo96040-2.odt` by page
-   8, which move one bullet to page 9 and give 13 pages against 12.
-   LibreOffice rounds the ascent and the descent of a font to twips at each
-   size, so the lines of Liberation Sans at 10 points are 11.15 points, and
-   ivy takes 11.17 points from a ratio. Source: `odf`.
-4. Check whether an empty last line of a table cell can pass the bottom of a
+2. Find why ivy draws the frame with the picture and the caption "Figure 1.2"
+   on page 9 of `libreoffice/odt/ooo96040-2.odt` 19 pixels higher than
+   LibreOffice. It moves two bullets to page 10 and gives 13 pages against 12.
+   The lines now round the metrics of the font to twips, as LibreOffice does.
+   Source: `odf`.
+3. Check whether an empty last line of a table cell can pass the bottom of a
    page by its descent in Word or LibreOffice. `-ivy-page-overflow` (D52) does
    not apply to the lines of a table cell, a float, a flex or grid item, an
    inline block or a column, because their parents check the bottom of the
    page without the descent. If it can, the row check of `layout_table.go` and
    the parents of a table must subtract the descent too. Source:
    `internal/layout` and D52.
-5. Find why Excel in the Windows VM of the review prints
+4. Find why Excel in the Windows VM of the review prints
    `poi/xlsx/picture.xlsx`, `poi/xlsx/landscape-a4-tables.xlsx`,
    `poi/xls/landscape-a4-drawing.xls` and
    `poi/xls/landscape-a4-japanese.xls` on US Letter, and export them again.
    Word keeps A4. The review marks the four as faults of the reference.
    Source: `test/cmd/review/vm`.
-6. Find how Excel scales the printed height of a row for a default font
+5. Find how Excel scales the printed height of a row for a default font
    other than Calibri and Arial. With Calibri 11 and Arial 10, Excel prints a
    row at 0.968 of its height. With Century Gothic 9, Excel prints the rows
    of 21 points of `poi/xlsx/landscape-letter-budget.xlsx` at 17.52 points,
@@ -55,99 +54,101 @@ found these faults. Each item names a file of the corpus.
    Neither the digit widths nor the heights of the fonts explain the two
    ratios. A file in the VM with rows of known heights in a few default
    fonts can tell. Source: `internal/sheet`.
-7. Draw a picture that spans rows of a sheet without the marks at its sides
-   where the rows cut it, as the jellyfish of `poi/xls/drawings.xls` shows.
-   The inside of the picture has no seam. Each row draws its slice of the
-   picture 1 point into the next row, and the smoothed pixels of the left and
-   the right edges of the picture draw twice there. A strip of 2 points across
-   the edge of each row, without the sides, cuts the marks from about 46 to 17
-   grey levels. It doubles the time of a page of pictures, because each slice
-   draws the whole picture. Source: `internal/sheet` and the layout.
-8. Reserve the borders of a cell where a row of a table splits across pages,
+6. Reserve the borders of a cell where a row of a table splits across pages,
    as LibreOffice does. LibreOffice draws the top and the bottom border of the
    split cell on both pages. ivy collapses the borders and reserves nothing at
    the split, so on page 15 of `libreoffice/odt/landscape-a4-table.odt` ivy
    fits one line more, and the pages drift by up to 3 lines around pages 20 to
    25. Source: `internal/layout` (layout_table.go).
-9. Compute the defined name of the maximum of the data bar of E4 of
-   `poi/xlsx/landscape-letter-budget.xlsx`, SUM(tblIncome[Amount]). Excel
-   draws the bar at 62 percent, and ivy draws it full. Source: `xlsx`.
-10. Wrap the text on both sides of a picture with square wrapping that is in
-    the middle of the column, as Word does on page 6 of
-    `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
-    side. Source: `msdoc`.
-11. Draw the picture effects of a Word 97 document: washout, brightness,
-    contrast, grayscale and black and white (pages 4 and 5 of
-    `poi/doc/floating-pictures.doc`). Source: `internal/odraw`, which draws
-    the pictures of `msdoc`, `msppt` and `msxls`.
-12. Find why the pages of `poi/doc/floating-pictures.doc` drift from page 3: a
-    paragraph that Word puts at the top of page 4 is on page 3 in ivy. Source:
-    `msdoc` and the layout.
-13. Draw the line numbers of a section (sprmSNLnnMod) of
-    `libreoffice/doc/line-numbers.doc`. Source: `msdoc`.
-14. Wrap the text around a table that floats, and place a table or a frame
-    that floats from the margin or from the page vertically. `msdoc` places a
-    table that floats from its paragraph, and a frame only at the center or at
-    the right. Source: `msdoc`.
-15. Find why the number of the page in the frame of the footers of
-    `libreoffice/doc/line-numbers.doc` is 13 pixels lower than in Word.
-    Source: `msdoc`.
-16. Resolve a percent of `fo:font-size` or `style:font-size-asian` of a text
-    style against the size of its paragraph. `odtStyles.props` resolves a text
-    style alone, against 12 points. Source: `odf`.
-17. Leave the width of a border out of the content of a cell of `rtf`, as Word
-    does. Word draws a border on the line between the cells and keeps the
-    whole cell for the padding and the text. ivy takes half of each collapsed
-    border from the cell, so the narrow cells of
-    `libreoffice/rtf/landscape-a4-table.rtf` wrap "x 2" where Word does not.
-    Source: `rtf`.
-18. Draw the path gradient "shape" of DrawingML, and `msofillShadeShape` of
-    Office Drawing, along the outline of the shape. `internal/drawingml` draws
-    them along the box, as "rect". Source: `internal/drawingml`.
-19. Read the parameter of sigma in the high 16 bits of `fillShadeType`. The
-    default is 16384. ivy draws every sigma with the curve of the default.
-    Source: `internal/odraw`.
-20. Find why PowerPoint ends the path gradient of the background of page 4 of
-    `poi/ppt/backgrounds.ppt` at about 0.97 of its colors at the far edge, as
-    if the box were about 1 inch larger. Source: `msppt`.
-21. Draw the gradients "ellipsoid" and "square" of OpenDocument as an ellipse
-    and a square. `odf/internal/drawpage` gives them the paths "circle" and
-    "rect", and "circle" no longer stretches with the box. Source: `odf`.
-22. Read the thumbnail in WMF of `poi/pptx/grouping-issues.pptx`. It fails
-    with "bitmap DIB pixel buffer: malformed metafile" at byte 23824. Source:
-    `internal/gowemf`.
-23. Excel prints the header row of `poi/xls/landscape-a4-japanese.xls` taller
+7. Wrap the text on both sides of a picture with square wrapping that is in
+   the middle of the column, as Word does on page 6 of
+   `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
+   side. Source: `msdoc`.
+8. Draw the picture effects of a Word 97 document: washout, brightness,
+   contrast, grayscale and black and white (pages 4 and 5 of
+   `poi/doc/floating-pictures.doc`). Source: `internal/odraw`, which draws
+   the pictures of `msdoc`, `msppt` and `msxls`.
+9. Draw the line numbers of a section (sprmSNLnnMod) of
+   `libreoffice/doc/line-numbers.doc`. The numbers restart on each page and
+   depend on the breaks of the lines, so the layout must draw them. A
+   property of the layout, such as `-ivy-line-numbers`, can give the
+   distance, the step, the start and the restart. msdoc then reads
+   sprmSNLnnMod, sprmSDxaLnn, sprmSLnc and sprmSLnnMin. Word does not number
+   the lines of a table, a float or a header. Source: the layout and `msdoc`.
+10. Place a table or a frame of `msdoc` that floats from the margin or from
+    the page vertically, and a frame at a position other than the center or
+    the right. A table that floats beside the text now floats in CSS, with the
+    text around it. Source: `msdoc` and the layout.
+11. Put the extra space of a multiple line spacing of Word below the text of
+    the line. CSS puts half of it above the text. The text of
+    `libreoffice/doc/line-numbers.doc` at 1.5 lines is 4 to 6 pixels lower
+    than in Word, and so is the number of the page in its footer. Source: the
+    layout.
+12. Find how PowerPoint draws the path gradient "shape" of DrawingML.
+    PowerPoint draws the shading msofillShadeShape of the moon on page 3 of
+    `poi/ppt/defense-final.ppt` along its box, as the path "rect": its PDF
+    file holds the fill as an image of a rectangular gradient.
+    `internal/drawingml` draws both along the box. No file of the corpus has
+    `path="shape"`. Export a pptx with `path="shape"` on a star, an ellipse
+    and a moon with PowerPoint in the VM before ivy draws the path along the
+    outline. Source: `internal/drawingml`.
+13. Excel prints the header row of `poi/xls/landscape-a4-japanese.xls` taller
     than the height in the file, for its wrapped headers. Find whether Excel
     fits the height of a row without fUnsynced again when it opens a file.
     Source: `msxls` and `internal/sheet`.
-24. Align to the left a number whose format is text only, "@", as Excel does,
-    such as the postal codes of the sheet Customers1 of
-    `poi/xls/conditional-formatting-samples.xls`. Source: `internal/sheet`.
-25. Find why Excel breaks some sheets of
+14. Find why Excel breaks some sheets of
     `poi/xls/conditional-formatting-samples.xls` into other pages than ivy: a
     narrow band of columns on a page of its own (pages 16, 18 and 20), and a
     page that only shows the header (page 10). Source: `internal/sheet`.
-26. Find why the pages of the receipt pictures of
+15. Find why the pages of the receipt pictures of
     `poi/xls/basic-expense-template-2011.xls`, from page 45, start higher in
     ivy than in Excel. Source: `msxls` and `internal/sheet`.
-27. Read the theme of a workbook of Excel 2007 in the record THEME of a `.xls`
-    file. The charts and the conditional formats of `msxls` take the theme of
-    Office 2007. Compare a chart of Excel 97 without the records
-    ShapePropsStream with Excel. The corpus has none. Source: `msxls`.
-28. Draw the WordArt that bends its text, such as an arch, a wave or a circle
-    (the types 136 to 175 of MS-ODRAW 2.4.24). `internal/odraw` draws the text
-    of each WordArt straight, and each line fills its share of the box. It
-    also leaves out gtextAlign, gtextSpacing, fKern, fVertical, fSmallcaps and
-    the shadow of geometry text. No file of the corpus has WordArt. Source:
-    `internal/odraw` and D51.
-29. Set `odraw.Style.Fonts` in `msppt` and `msxls`, so that their WordArt
-    draws its text. Without the fonts, a WordArt shape draws the geometry of
-    its type, a rectangle with its fill. Source: `msppt` and `msxls`.
-30. Convert the adjust values of the other preset shapes of Office Drawing to
-    those of ECMA-376. `internal/odraw` converts those of the rounded
-    rectangle, the triangle, the parallelogram and the hexagon. The other
-    presets draw with the defaults of ECMA-376, whatever adjustValue says.
-    Source: `internal/odraw`.
+16. Compare the WordArt of `internal/odraw` with PowerPoint. No file of the
+    corpus has WordArt. `internal/odraw/warp.go` bends the text of the
+    triangles, the chevrons, the arches and the circles, the waves, inflate
+    and deflate, the fades, the slants and the cans of MS-ODRAW 2.4.24, with
+    fixed default adjust values. It does not read the adjust values of the
+    shape. It draws the rings, the buttons, the curves, the cascades, the stop
+    and the two mixes of inflate and deflate as plain text. It leaves out
+    fKern and gtextFShadow. A file with WordArt of each kind can give the size
+    of the text along an arch. Source: `internal/odraw`.
+17. Convert the adjust values of the presets of Office Drawing that
+    `internal/odraw/adjust.go` does not convert: the trapezoid, which Office
+    Drawing draws with its narrow side down, the arc, the block arc, the
+    circular arrow, the bent, curved and U-turn arrows, the ribbons and the
+    arrow callouts. Map the callouts of the types 178 to 181. The defaults of
+    the tips of the callouts 61, 62, 63 and 106 are not known, and they take
+    the defaults of ECMA-376. Source: `internal/odraw`.
+18. Leave out the space before a paragraph at the top of a page after a break
+    that is not forced, as Word does. On pages 2 and 3 of
+    `libreoffice/doc/line-numbers.doc`, Word leaves out the 6 and 12 points
+    before the first heading. The `margin-break: auto` of the layout only
+    works when the parent of the paragraph breaks the collapse of the margins,
+    which the TODO of `layout_block.go` says. The paragraphs of msdoc and docx
+    are in a div of their section. Source: the layout.
+19. Draw the border of characters (sprmCBrc) of a Word 97 document, such as
+    the word "border" on page 3 of `poi/doc/floating-pictures.doc`. Word makes
+    the line about 2 points taller for it. Source: `msdoc`.
+20. Make the running element of the headers and the footers of `docx` a flow
+    root, as `msdoc`, `rtf` and `odf` do. A footer aligned at the bottom moves
+    down by the space before its first paragraph. Source: `docx`.
+21. Find why page 2 of `libreoffice/doc/landscape-letter-form.doc` draws the
+    black bars of its table 1 pixel lower than Word. The header line of Arial
+    16 is now 18.4 points high, as in Word. Source: `msdoc`.
+22. Draw the lines, the shapes, the regions and the text of a QuickDraw
+    picture (PICT). `internal/pict` draws only the bitmaps of a picture and
+    its images of QuickTime, for the pictures of Office Drawing of `msxls`,
+    `msppt` and `msdoc`. No file of the corpus has a PICT picture. Source:
+    `internal/pict`, 2026-11-18.
+23. Compare a chart of Excel 97 without the records ShapePropsStream with
+    Excel. `msxls` reads the theme of the record THEME, and a workbook without
+    one takes the theme of Office 2007. The corpus has no such chart. Source:
+    `msxls`.
+24. Find why a chart that rows cut shows a light seam at some edges of its
+    rows, as on page 3 of `poi/xls/three-charts.xls`. A slice of a chart
+    reaches 1 point into the next row. A strip across the edge of the row, as
+    a picture has, gave more seams in the charts, and the cause is not known.
+    Source: `internal/sheet` and the layout.
 
 ## Left by the charts
 
@@ -202,16 +203,16 @@ The pages of Visio came on 2026-11-17 (D30).
 3. The layout of EMF+ DrawString, and its vertical format, are close to GDI+,
    not exact. Source: `internal/gowemf`.
 4. Read the headers, the footers, the lists, the pictures and the text boxes
-   of a file of Word 6 or Word 95. Source: `msdoc`.
-5. Draw what `msppt` does not draw yet: the WordArt text of the gtext
-   properties, the pictures in PICT and the pictures of a file that a
-   password protects, picture bullets, vertical text, autofit, notes,
-   comments, charts and OLE objects other than their pictures. Source:
-   `msppt`.
+   of a file of Word 6 or Word 95. Source: `msdoc`. The corpus has no file of
+   Word 6 or Word 95 with a header, and LibreOffice cannot write one. The FIB
+   of Word 6 has ccpHdd at 0x3C and fcPlcfhdd at 0xB0, and the PlcfHdd lists
+   only the stories that grpfIhdt of each section sets.
+5. Draw what `msppt` does not draw yet: the pictures of a file that a password
+   protects, picture bullets, vertical text, autofit, notes, comments, charts
+   and OLE objects other than their pictures. Source: `msppt`.
 6. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
    the test module. Source: `msdoc`, `msxls` and `msppt`.
-7. Draw the color scales, the data bars and the icon sets of the spreadsheets
-   of `odf` (calcext), and their annotations. Source: `odf`.
+7. Draw the annotations of the spreadsheets of `odf`. Source: `odf`.
 8. Draw the glow, the soft edge, the inner shadow and the reflection of
    DrawingML. Find which side of a line the thick line of `thickThin` and
    `thinThick` takes. Source: `internal/drawingml`. On 2026-11-18 no page that
@@ -277,19 +278,6 @@ The pages of Visio came on 2026-11-17 (D30).
 1. Check the previews of the maker notes of Olympus with a real ORF file.
    The tests build the files in memory. Source: `camera`, 2026-11-17.
 
-## Left by the use of okage v0.11.0
-
-ivy uses the parts of okage v0.11.0 that the decisions okage D53 to okage
-D59 added. These items are left.
-
-1. A radial shading with no extend whose circles do not nest, and a radial
-   shading of `ps` that extends only at its start and whose circles do not
-   nest, still use a texture in `pdf` and an image in `ps`. okage paints a
-   point with the largest circle that holds it, and then paints nothing when
-   that circle is past the end. PDF and PostScript paint it with the largest
-   circle that holds it in the domain. Item 1 of "Work for okage" asks for it.
-   Source: the decal gradients, 2026-11-18.
-
 ## Left by the speed of 2026-11-18
 
 The measurement of the speed of 2026-11-18 and D47 left these items. Each
@@ -311,21 +299,29 @@ time is for a page at 96 dpi.
    `drawImageWithAlphaMask`, which has no key for the cache. Find whether
    the mask of the image can have a key, or draw it without a group.
    Source: `internal/hayro/render` and `internal/display`.
-3. Lay out a book of one large document faster. D48 counts the documents
-   of a book at the same time, but a book of one document, such as
-   `gutenberg/txt/pg24264.txt` (1.7 s) or
-   `gutenberg/html/pg1342-images.html` (1.1 s), lays out its pages in
-   order on one goroutine. Source: `internal/layout`.
-4. Allocate less in the boxes and the selectors of a book. The cascade of
-   `idpf/epub/linear-algebra.epub` now allocates about 150 MB of the 2.7 GB of
-   its `PageCount`, down from about 600 MB of 3.1 GB. A style gives its
-   initial values, the values of its parent and the zero widths of its borders
-   without storing them. The elements with the same matches share their
-   cascaded styles. The layout makes the style of a pseudo-element when it
-   asks for it. Most of the rest comes from `newBox`, `Box.Copy`,
-   `splitInlineBox` and `shapeText` of the layout, and from
-   `addRelevantSelectors` and `newElementWrapper` of `cssselect2` in okage.
-   Source: `internal/layout`.
+3. Lay out a book of one large document faster. The speed work of 2026-11-18
+   made each line cheaper. The layout reads only the line breaks, and it reads
+   them only when the line has a width. A line of CJK text shapes about twice
+   the line instead of four times. The white space of a text box needs no
+   regular expression. For `gutenberg/txt/pg24264.txt`, `PageCount` went from
+   2.4 s to 1.4 s with one goroutine. For `gutenberg/html/pg1342-images.html`
+   it went from 1.4 s to 1.3 s. Half of the layout of pg1342 is still the
+   shaper of okage. Each line shapes the short text of upstream, about 1.8
+   times the line, and then shapes the line again. The layout can reuse the
+   first shaping for the line only when the shaper tells which glyphs are safe
+   to break (item 2 of "Work for okage"). Another way is to lay out the pages
+   of one document on several goroutines, which needs a decision. Source:
+   `internal/layout`.
+4. Allocate less in the boxes of a book. `PageCount` of
+   `idpf/epub/linear-algebra.epub` now allocates 2.3 GB, down from 2.5 GB, in
+   26.5 million objects instead of 31.8 million. 397,000 of its 524,000 text
+   boxes hold only white space, and `inlineInBlock` drops most of them later.
+   A box is 384 bytes, so these boxes take about 150 MB. The layout cannot
+   leave them out, because the collapsible spaces of `ProcessWhitespace` go
+   from one text box to the next. Most of the rest comes from okage:
+   `roxmltree`, `newElementWrapper` and `addRelevantSelectors` of
+   `cssselect2`, and the glyphs of `shaping.Output`. Source: `internal/layout`
+   and okage.
 5. Render each page of a long sheet without a second layout of its parts.
    `PageCount` lays out the parts on goroutines and drops their layouts (D48),
    so the pages after it lay out each part again, with its lead page and its
@@ -333,28 +329,39 @@ time is for a page at 96 dpi.
    `datasets/csv/world-cities.csv` went from 32.5 ms to 36.9 ms, and of
    `poi/xlsx/many-merges.xlsx` from 25.6 ms to 28.8 ms. Source:
    `internal/layout`.
-6. Find why each page of `poi/xls/basic-expense-template-2011.xls` takes about
-   675 ms. It makes `TestSheetParts` of the test module take about 157 s.
-   Source: `msxls` and `internal/sheet`.
+6. Make the clips of a sheet cheaper. Each clip of `OkageDevice.ClipPath`
+   makes a mask of the size of its band, and a clip in a clip clones the mask.
+   On the pages of `poi/xls/legal-portrait.xls` and
+   `poi/xls/landscape-a4-drawing.xls`, which take about 140 ms and 117 ms,
+   `ClipPath` is about a quarter of the time. In
+   `poi/xls/basic-expense-template-2011.xls`, `NewMask` and `Mask.Clone` make
+   about 80% of the bytes that the pages allocate. A rectangle under a
+   transform without a turn can clip without a mask, or the mask can cover
+   only the bounds of the clip. Source: `internal/display`. A picture that
+   rows cut has a clip for each row and for the strip of each row, so a page
+   of `poi/xlsx/picture.xlsx` takes about 12 percent more time with the
+   strips.
 
 ## Work for okage
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
 
-1. Give a radial gradient a mode that takes the largest t in 0..=1 that has a
-   circle with a radius of at least 0, for the radial shadings of PDF and
-   PostScript whose circles do not nest. Source: `pdf` and `ps`, 2026-11-18.
+1. Give `shaping.Output` the unsafe-to-break flags of HarfBuzz, so that the
+   layout can reuse the shaping of a text for a line that breaks in it, and
+   allocate the glyphs of `shaping.Output` less. Half of the layout of
+   `gutenberg/html/pg1342-images.html` is the shaper. Source:
+   `internal/layout`, 2026-11-18.
 
 ## Work for magic
 
 Each item is a request to magic (D8).
 
-1. Write the package of magic that tells these formats apart from the
-   containers that hold them: XPS and OpenXPS from zip, an encrypted Office
-   Open XML file from other Compound Files, AZW3 from MOBI, CBZ from zip, APK
-   and IPA from zip, and Krita and OpenRaster from zip. magic D64 decides that
-   a package of its own names them, as `cfb` does. `magic.Detect` keeps the
-   output of libmagic, which names an encrypted Office Open XML file "CDFV2
-   Encrypted", AZW3 "version 8" in the description, Krita and OpenRaster by a
-   MIME type in the description, APK and IPA by their MIME types when they
-   appear, and XPS, OpenXPS and CBZ as zip. Source: iv, and magic D64.
+1. Read the flags of the EXTH header of a Mobipocket book at offset 0x80 of
+   record 0 in `container`. magic v0.9.0 reads them at offset 0x80 of the MOBI
+   header, which comes 16 bytes later, after the header of PalmDOC. The test
+   books of magic write the flags there too. So `container.Detect` gives
+   `Unknown` for a real book with both forms, MOBI and KF8, such as
+   `mobi/testdata/book-both.mobi`, which calibre made. It must give AZW3.
+   `mobi` reads the flags at offset 128 of record 0, as calibre and
+   KindleUnpack do. When magic is fixed, delete the gap of `TestDetect` in
+   `mobi/detect_test.go`. Source: `mobi`, 2026-11-18.

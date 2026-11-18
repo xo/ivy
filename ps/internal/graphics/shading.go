@@ -672,7 +672,7 @@ func (m *Machine) shadingBounds(s *shading, toDevice Matrix, area [4]float64) [4
 }
 
 // shfill paints a shading over the clip, as shfill does. okage fills a
-// mesh, an axial shading and most radial shadings itself. shfill draws any
+// mesh, an axial shading and a radial shading itself. shfill draws any
 // other shading as an image. It fills a mesh through the outline of its
 // triangles, which gives the antialiasing at the free edges of the mesh.
 func (m *Machine) shfill(s *shading) error {
@@ -784,49 +784,47 @@ func (m *Machine) nativeShader(s *shading, toDevice Matrix, background bool) (ok
 }
 
 // gradientShader returns the gradient of okage of an axial or a radial
-// shading. A shading with no extend has the spread mode
+// shading. An axial shading with no extend has the spread mode
 // okage.SpreadModeDecal, which paints nothing past its ends (okage D55). Any
-// other has the spread mode okage.SpreadModePad, and an end with no extend
-// gets a transparent stop at the same place as its last color, so that the
-// gradient paints nothing past that end.
+// other axial shading has the spread mode okage.SpreadModePad, and an end
+// with no extend gets a transparent stop at the same place as its last
+// color, so that the gradient paints nothing past that end.
 //
-// gradientShader returns false for a pattern with a Background, and for
-// some radial shadings whose circles do not nest. PostScript paints a point
-// with the largest circle that holds it in the domain and its extends.
-// okage paints it with the largest circle that holds it. The two agree when
-// the circles nest, because then one circle holds the point, and when the
-// shading extends past its end circle.
+// A radial shading takes the two flags of its Extend. okage then paints a
+// point with the largest circle that holds it in the domain and its
+// extends, as PostScript does, whether the circles nest or not (okage D64).
+//
+// gradientShader returns false for a pattern with a Background, and for a
+// radial shading with a radius less than 0.
 func (m *Machine) gradientShader(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
 	if background && len(s.bg) >= s.space.n {
 		return nil, false
 	}
 	c := s.coords
-	if s.typ == 3 {
-		nested := math.Abs(c[5]-c[2])-math.Hypot(c[3]-c[0], c[4]-c[1]) > 1e-6
-		if !(c[2] >= 0 && c[5] >= 0) || !nested && !s.extend[1] {
-			return nil, false
-		}
+	if s.typ == 3 && !(c[2] >= 0 && c[5] >= 0) {
+		return nil, false
 	}
 	stops := m.functionStops(s, s.domain[0], s.domain[1])
 	gradientStops := make([]okage.GradientStop, 0, len(stops)+2)
-	if s.extend[1] && !s.extend[0] {
+	axial := s.typ == 2
+	if axial && s.extend[1] && !s.extend[0] {
 		gradientStops = append(gradientStops, okage.NewGradientStop(float32(stops[0].u), okage.Color{}))
 	}
 	for _, st := range stops {
 		gradientStops = append(gradientStops, okage.NewGradientStop(float32(st.u), okageColor(st.c)))
 	}
-	if s.extend[0] && !s.extend[1] {
+	if axial && s.extend[0] && !s.extend[1] {
 		gradientStops = append(gradientStops, okage.NewGradientStop(float32(stops[len(stops)-1].u), okage.Color{}))
+	}
+	pt := func(x, y float64) okage.Point { return okage.PointFromXY(float32(x), float32(y)) }
+	if !axial {
+		return okage.NewRadialGradientExtend(pt(c[0], c[1]), float32(c[2]), pt(c[3], c[4]), float32(c[5]), gradientStops, s.extend[0], s.extend[1], toTransform(toDevice))
 	}
 	spread := okage.SpreadModePad
 	if !s.extend[0] && !s.extend[1] {
 		spread = okage.SpreadModeDecal
 	}
-	pt := func(x, y float64) okage.Point { return okage.PointFromXY(float32(x), float32(y)) }
-	if s.typ == 2 {
-		return okage.NewLinearGradient(pt(c[0], c[1]), pt(c[2], c[3]), gradientStops, spread, toTransform(toDevice))
-	}
-	return okage.NewRadialGradient(pt(c[0], c[1]), float32(c[2]), pt(c[3], c[4]), float32(c[5]), gradientStops, spread, toTransform(toDevice))
+	return okage.NewLinearGradient(pt(c[0], c[1]), pt(c[2], c[3]), gradientStops, spread, toTransform(toDevice))
 }
 
 // meshGradient returns the MeshGradient of okage of a mesh, a shading of

@@ -494,8 +494,13 @@ a program needs one, the maintainers decide to export it.
 
 ## How iv uses the API
 
-iv finds the type of a file with magic, and keeps a registry of the `Format`
-of each package that it imports:
+iv finds the type of a file with magic. If magic names a zip file, a
+Compound File or a Mobipocket book, a program then asks the package
+`container` of magic for the format inside, such as XPS, CBZ or AZW3, as
+magic D65 says. The MIME type of that format finds the `Format` of ivy. An encrypted
+Office Open XML file has the MIME type `application/encrypted`, and only the
+key tells whether `docx`, `xlsx` or `pptx` opens it. iv keeps a registry of
+the `Format` of each package that it imports:
 
 ```go
 src := io.NewSectionReader(f, 0, size)

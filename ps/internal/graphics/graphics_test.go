@@ -191,6 +191,10 @@ func TestPaint(t *testing.T) {
 			map[[2]int]color.RGBA{{10, 50}: white, {50, 50}: {125, 0, 130, 255}, {90, 50}: blue}},
 		{"radial not nested extend end", "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 50 5 70 50 20] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [false true] >> shfill",
 			map[[2]int]color.RGBA{{10, 50}: white, {30, 50}: {204, 0, 51, 255}, {95, 50}: blue}},
+		{"radial not nested no extend", "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 50 5 70 50 20] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+			map[[2]int]color.RGBA{{20, 50}: white, {55, 50}: {160, 0, 95, 255}, {88, 50}: {7, 0, 248, 255}, {95, 50}: white}},
+		{"radial not nested extend start", "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 50 5 70 50 20] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [true false] >> shfill",
+			map[[2]int]color.RGBA{{20, 50}: red, {55, 50}: {160, 0, 95, 255}, {95, 50}: white}},
 		{"mesh edge", "<< /ShadingType 4 /ColorSpace /DeviceRGB /DataSource [0 0 0 1 0 0 0 50.5 0 1 0 0 0 0 100 1 0 0 1 50.5 100 1 0 0] >> shfill",
 			map[[2]int]color.RGBA{{40, 50}: red, {50, 50}: {255, 128, 128, 255}, {51, 50}: white}},
 		{"mesh function", `<< /ShadingType 4 /ColorSpace /DeviceRGB /Function << /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1]

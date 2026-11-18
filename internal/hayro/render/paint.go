@@ -221,7 +221,8 @@ func unit8(v float32) uint8 {
 // false when okage cannot make the gradient.
 //
 // Port: upstream makes a gradient of peniko in the same place of
-// Renderer::set_paint.
+// Renderer::set_paint. A radial gradient paints with the rule of PDF and
+// the flags of its Extend (okage D64), so that the circles need not nest.
 func nativeGradient(native *interpret.SVGGradient, t kurbo.Affine) (okage.Shader, bool) {
 	stops := make([]okage.GradientStop, 0, len(native.Stops))
 	for _, s := range native.Stops {
@@ -244,7 +245,7 @@ func nativeGradient(native *interpret.SVGGradient, t kurbo.Affine) (okage.Shader
 	case interpret.SVGGradientLinear:
 		return okage.NewLinearGradient(pt(k.Start), pt(k.End), stops, spread, toTransform(t))
 	case interpret.SVGGradientRadial:
-		return okage.NewRadialGradient(pt(k.StartCenter), k.StartRadius, pt(k.EndCenter), k.EndRadius, stops, spread, toTransform(t))
+		return okage.NewRadialGradientExtend(pt(k.StartCenter), k.StartRadius, pt(k.EndCenter), k.EndRadius, stops, k.Extend[0], k.Extend[1], toTransform(t))
 	}
 	return nil, false
 }

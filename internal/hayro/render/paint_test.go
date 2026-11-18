@@ -4,7 +4,8 @@
 // can be found in the LICENSE-APACHE and LICENSE-MIT files.
 
 // This file holds the tests of the shadings that okage fills itself, which
-// upstream does not have: a gradient with no extend, and a mesh.
+// upstream does not have: a gradient with no extend, a radial gradient
+// whose circles do not nest, and a mesh.
 
 package render
 
@@ -90,6 +91,44 @@ func TestAxialNoExtend(t *testing.T) {
 		{76, 50}: {255, 255, 255},
 		{90, 50}: {255, 255, 255},
 	})
+}
+
+// TestRadialNotNested fills the page with radial shadings whose circles do
+// not nest, from the circle at x = 30 with a radius of 5 to the circle at
+// x = 70 with a radius of 20. At x = 55 the largest circle is past the end
+// circle, so the point takes a smaller circle in the domain. Without an
+// extend at the end, nothing paints past x = 90.
+func TestRadialNotNested(t *testing.T) {
+	tests := []struct {
+		name   string
+		extend string
+		want   map[[2]uint32][3]uint8
+	}{
+		{"no extend", "", map[[2]uint32][3]uint8{
+			{20, 50}: {255, 255, 255},
+			{55, 50}: {160, 0, 95},
+			{88, 50}: {7, 0, 248},
+			{95, 50}: {255, 255, 255},
+		}},
+		{"extend start", "/Extend [true false]", map[[2]uint32][3]uint8{
+			{20, 50}: {255, 0, 0},
+			{55, 50}: {160, 0, 95},
+			{95, 50}: {255, 255, 255},
+		}},
+		{"extend end", "/Extend [false true]", map[[2]uint32][3]uint8{
+			{20, 50}: {255, 255, 255},
+			{55, 50}: {0, 0, 255},
+			{95, 50}: {0, 0, 255},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pix := renderPage(t, "/Sh sh", "<< /Shading << /Sh 6 0 R >> >>",
+				"<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [30 50 5 70 50 20] "+tt.extend+
+					" /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >>")
+			checkPixels(t, pix, tt.want)
+		})
+	}
 }
 
 // TestMeshFunction fills a square of two triangles whose function jumps

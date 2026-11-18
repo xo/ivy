@@ -35,8 +35,8 @@ type SVGGradient struct {
 	Transform kurbo.Affine
 	// Stops are the stops of the gradient, in sRGB.
 	Stops []SVGGradientStop
-	// Decal is true when the gradient paints nothing before its first stop
-	// and after its last stop.
+	// Decal is true when a linear gradient paints nothing before its first
+	// stop and after its last stop.
 	//
 	// Port: upstream has no such field. See AsSVGGradient.
 	Decal bool
@@ -71,6 +71,12 @@ type SVGGradientRadial struct {
 	EndCenter kurbo.Point
 	// EndRadius is the radius of the end circle.
 	EndRadius float32
+	// Extend holds the two flags of the key Extend of the shading. The
+	// first lets the gradient paint the circles before the start circle,
+	// and the second the circles after the end circle.
+	//
+	// Port: upstream has no such field. See AsSVGGradient.
+	Extend [2]bool
 }
 
 func (SVGGradientLinear) isSVGGradientKind() {}
@@ -88,10 +94,18 @@ type SVGGradientStop struct {
 // hayro-interpret src/gradient.rs. It approximates the shading with a
 // gradient like those of SVG, and returns false when no such gradient fits.
 //
-// Port: a shading with no extend at either end and no background gives a
-// gradient with Decal set, and no padding. okage paints nothing past the
-// ends of such a gradient (okage D55). Upstream pads the ends with a short
-// stretch of transparent stops.
+// Port: an axial shading with no extend at either end and no background
+// gives a gradient with Decal set, and no padding. okage paints nothing
+// past the ends of such a gradient (okage D55). Upstream pads the ends with
+// a short stretch of transparent stops.
+//
+// Port: a radial shading with no background gives the circles of its
+// Coords, with no padding, and the flags of its Extend. okage paints such a
+// gradient with the rule of PDF (okage D64), whether the circles nest or
+// not. Upstream pads the ends, and it returns false when the circles do not
+// nest, unless the shading extends past its end circle. A radial shading
+// with a background keeps the padding of upstream, and both of its flags
+// are true, because the padded stops hold the background.
 func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern, tolerance float32) (*SVGGradient, bool) {
 	bg := pattern.backgroundColor.Components()
 	var background *[4]float32
@@ -99,10 +113,18 @@ func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern
 		f := pattern.finish(bg)
 		background = &f
 	}
-	decal := background == nil && !s.extend[0] && !s.extend[1]
-	rng, ok := s.paddedRange(background != nil, decal)
-	if !ok {
-		return nil, false
+	radialExtend := s.params.radial && background == nil
+	decal := background == nil && !s.extend[0] && !s.extend[1] && !s.params.radial
+	rng := [2]float64{0, 1}
+	if radialExtend {
+		if r := s.params.r; !(r.X >= 0) || !(r.Y >= 0) {
+			return nil, false
+		}
+	} else {
+		var ok bool
+		if rng, ok = s.paddedRange(background != nil, decal); !ok {
+			return nil, false
+		}
 	}
 	stops := approximateGradientStops(
 		func(t float32) [4]float32 { return sampleFunction(&s.function, s.domain, pattern, t) },
@@ -110,8 +132,16 @@ func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern
 		tolerance,
 		pattern.run,
 	)
+	kind := s.gradientKind(rng)
+	if radial, ok := kind.(SVGGradientRadial); ok {
+		radial.Extend = [2]bool{true, true}
+		if radialExtend {
+			radial.Extend = s.extend
+		}
+		kind = radial
+	}
 	return &SVGGradient{
-		Kind:      s.gradientKind(rng),
+		Kind:      kind,
 		Transform: pattern.BaseTransform.Inverse(),
 		Stops:     padStops(stops, rng, background),
 		Decal:     decal,
