@@ -27,7 +27,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D5 | [A rendering is good enough for a quick review](D005-a-rendering-is-good-enough-for-a-quick-review.md) | Decided |
 | D6 | [Each decoder and each encoder is a package of its own](D006-each-decoder-and-each-encoder-is-a-package-of-its-own.md) | Decided |
 | D7 | [ivy reuses okage and magic, then copies permissive code](D007-ivy-reuses-okage-and-magic-then-copies-permissive-code.md) | Decided. Amended by D42 |
-| D8 | [okage draws, and magic identifies and decompresses](D008-okage-draws-and-magic-identifies-and-decompresses.md) | Decided |
+| D8 | [okage draws, and magic identifies and decompresses](D008-okage-draws-and-magic-identifies-and-decompresses.md) | Decided. Amended by D50 |
 | D9 | [ivy uses generics and the features of Go 1.27](D009-ivy-uses-generics-and-the-features-of-go-1-27.md) | Decided |
 | D10 | [The formats share four layers](D010-the-formats-share-four-layers.md) | Decided |
 | D11 | [The document API is a small document with capabilities](D011-the-document-api-is-a-small-document-with-capabilities.md) | Decided |
@@ -69,3 +69,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D47 | [A large page renders in bands on goroutines](D047-a-large-page-renders-in-bands-on-goroutines.md) | Decided |
 | D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided |
 | D49 | [A PDF document keeps its decoded images](D049-a-pdf-document-keeps-its-decoded-images.md) | Decided |
+| D50 | [ivy changes okage and magic itself](D050-ivy-changes-okage-and-magic-itself.md) | Decided. Amends D8 |

@@ -1,6 +1,6 @@
 # D8. okage draws, and magic identifies and decompresses
 
-Status: Decided.
+Status: Decided. Amended by D50.
 
 ivy decodes files. Two other `xo` repositories do work that ivy does not
 repeat.
@@ -27,5 +27,5 @@ repeat.
 | HUFF/CDIC | MOBI and AZW | |
 
 Until magic has a decoder, the format that needs it waits. The work that ivy
-needs from each repository is in [`docs/BACKLOG.md`](../BACKLOG.md). The
-section "Peer sessions" of `AGENTS.md` says how to ask for it.
+needs from each repository is in [`docs/BACKLOG.md`](../BACKLOG.md). D50
+says how ivy gets it.
