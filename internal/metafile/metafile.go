@@ -5,11 +5,14 @@
 // internal/gowemf (D24), and plays each record onto a display.Device. It
 // draws paths, fills, strokes, hatches, patterns, gradients, clips,
 // transforms, bitmaps and text. It draws the raster operations of GDI, which
-// combine a bitmap or a brush with the page, with blend modes. The text uses the fonts of the program, as
-// the layout of the ebooks does: the fonts of ivy.Config.Fonts, then the Go
-// fonts. A font of Office that the program does not have takes the font of
-// ivy.Config.Fonts with the same metrics, such as Carlito for Calibri
-// (D24).
+// combine a bitmap or a brush with the page, and the mix modes, which
+// combine a pen or a brush with the page, with blend modes. The text uses
+// the fonts of the program, as the layout of the ebooks does: the fonts of
+// ivy.Config.Fonts, then the Go fonts. A font of Office that the program
+// does not have takes the font of ivy.Config.Fonts with the same metrics,
+// such as Carlito for Calibri (D24). The shaper of okage shapes the text of
+// the complex scripts, such as Arabic and Devanagari, and the text with
+// combining marks.
 //
 // The format package emf opens a metafile as a document. The Office formats
 // draw a metafile that a document embeds with Picture.Draw.
@@ -298,7 +301,11 @@ func (p *Picture) Draw(ctx context.Context, d display.Device, dst okage.Rect) (e
 		ColorTransform: gowemf.NewColorTransform,
 		// ANSI text in DEFAULT_CHARSET takes the code page 1252, the code
 		// page of Windows in English
-		DefaultCharSet:     &ansi,
+		DefaultCharSet: &ansi,
+		// the custom caps and the arrows of EMF+ lines take the geometry
+		// that gowemf gives them. MS-EMFPLUS does not define it, and a
+		// review of a document needs the arrows of its lines (D5)
+		CustomLineCaps:     true,
 		MaxImagePixels:     uint64(p.lim.MaxPixels),
 		MaxMetafileDepth:   uint32(min(p.lim.MaxDepth, 8)),
 		MaxEmbeddedRecords: uint64(p.lim.MaxObjects),

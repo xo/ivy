@@ -27,8 +27,8 @@ const (
 //     GDI+.
 //   - The text is clipped to the rectangle, unless the format sets NoClip
 //     or the rectangle is empty.
-//
-// A vertical format is reported as not supported.
+//   - A vertical format turns the layout and the glyphs a quarter turn
+//     clockwise. The lines run down, and the next line is at the left.
 func (p *player) plusDrawString(c Command, v PlusText) error {
 	r := c.Source
 	tb, ok := backendAs[TextBackend](p.backend)
@@ -51,15 +51,26 @@ func (p *player) plusDrawString(c Command, v PlusText) error {
 		}
 		format = f
 	}
-	if format.Flags&plusStringVertical != 0 {
-		return p.unsupported(r, "EMF+ vertical DrawString")
-	}
 	if !finite(format.Tracking) || format.Tracking <= 0 {
 		format.Tracking = 1
 	}
 	m, err := p.plusMatrix(r)
 	if err != nil {
 		return err
+	}
+	box := v.Layout
+	// clipBox is the layout rectangle in the world space, for the clip.
+	clipBox, clipM := box, m
+	if format.Flags&plusStringVertical != 0 {
+		// a vertical format turns the layout a quarter turn clockwise: the
+		// lines run down, and the first line is at the right of the
+		// rectangle
+		turn := Matrix{M12: 1, M21: -1, Dx: box.X + box.Width, Dy: box.Y}
+		m = turn.Then(m)
+		box = Box{Width: box.Height, Height: box.Width}
+		if !m.Finite() {
+			return malformed(r.Offset, "non-finite EMF+ string layout")
+		}
 	}
 	obj, err := p.plusObjectAt(r, uint32(v.FontID))
 	if err != nil {
@@ -103,7 +114,6 @@ func (p *player) plusDrawString(c Command, v PlusText) error {
 	if !finite(lead) || !finite(trail) {
 		lead, trail = 0, 0
 	}
-	box := v.Layout
 	width := box.Width - lead - trail
 	wrap := box.Width > 0 && format.Flags&plusStringNoWrap == 0
 	lines := plusBreakLines(text, advances, width, wrap)
@@ -124,7 +134,7 @@ func (p *player) plusDrawString(c Command, v PlusText) error {
 	}
 	clip := p.plusCurrentClip()
 	if format.Flags&plusStringNoClip == 0 && box.Width > 0 && box.Height > 0 {
-		clip = append(clip, &ClipRegion{Op: ClipReplace, Area: boxPath(box, m), Rule: NonZero, depth: 1})
+		clip = append(clip, &ClipRegion{Op: ClipReplace, Area: boxPath(clipBox, clipM), Rule: NonZero, depth: 1})
 	}
 	for i, line := range lines {
 		if line.end <= line.start {

@@ -740,9 +740,20 @@ func (p *player) render(c Command, path Path, fill, stroke bool) error {
 		}
 	}
 	if stroke {
-		s, err := p.stroke(c.Source, m)
+		// ivy: a backend that reads its destination strokes with a mix mode
+		// that combines the pen with the destination, such as R2_XORPEN.
+		readsDst := raster && rop2ReadsDestination(p.dc.rop2)
+		s, err := p.stroke(c.Source, m, !readsDst)
 		if err != nil {
 			return err
+		}
+		if s != nil && readsDst {
+			if s.Gap != nil {
+				// the gaps of a styled pen in OPAQUE mode take the
+				// background color, which the operation must not combine
+				return p.unsupported(c.Source, fmt.Sprintf("ROP2 %d on a styled pen with an opaque background", p.dc.rop2))
+			}
+			return rb.DrawRaster(RasterDraw{Operation: rop2Raster(p.dc.rop2), Area: path, Pattern: &s.Paint, Stroke: s}, clip)
 		}
 		if s != nil {
 			return p.backend.StrokePath(path, *s, clip)
@@ -925,7 +936,10 @@ func (p *player) brushPaint(r Record, g *gdiBrush, m Matrix, applyROP2 bool) (*P
 // width in logical units, transformed with the world and page mapping: an
 // anisotropic mapping draws it as an ellipse, as Windows does in EMF and WMF
 // (ORACLES.md).
-func (p *player) stroke(r Record, m Matrix) (*Stroke, error) {
+//
+// ivy: applyROP2 applies the mix mode to the paint of the pen, as
+// brushPaint does.
+func (p *player) stroke(r Record, m Matrix, applyROP2 bool) (*Stroke, error) {
 	g := p.dc.pen.pen
 	if g == nil || g.null {
 		return nil, nil
@@ -944,8 +958,10 @@ func (p *player) stroke(r Record, m Matrix) (*Stroke, error) {
 	if err != nil || paint == nil {
 		return nil, err
 	}
-	if paint, err = p.rop2(r, paint); err != nil || paint == nil {
-		return nil, err
+	if applyROP2 {
+		if paint, err = p.rop2(r, paint); err != nil || paint == nil {
+			return nil, err
+		}
 	}
 	s := &Stroke{Paint: *paint, Cap: g.cap, Join: g.join, MiterLimit: p.dc.miterLimit, Transform: Identity(), PixelCenter: Point{p.base.M11 / 2, p.base.M22 / 2}}
 	switch g.style {

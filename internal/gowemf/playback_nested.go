@@ -281,5 +281,15 @@ func (n *nestedBackend) DrawRaster(r RasterDraw, clip Clip) error {
 		pt := n.paint(*r.Pattern)
 		r.Pattern = &pt
 	}
+	// ivy: the pen of a stroke with a mix mode (change 18), as StrokePath
+	// places it
+	if r.Stroke != nil {
+		s := *r.Stroke
+		s.Paint = n.paint(s.Paint)
+		s.Gap = nil
+		s.Transform = s.Transform.Then(linear(n.m))
+		s.PixelCenter = linear(n.m).Apply(s.PixelCenter)
+		r.Stroke = &s
+	}
 	return n.inner.(RasterBackend).DrawRaster(r, n.clip(clip))
 }

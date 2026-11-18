@@ -1202,22 +1202,29 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 	// frame of a metafile image can be outside it by a rounding error.
 	const eps = 1e-3
 	inside := src.X >= lo.X-eps && src.Y >= lo.Y-eps && src.X+src.Width <= hi.X+eps && src.Y+src.Height <= hi.Y+eps
+	// ivy: wrap holds the attributes of a bitmap whose pixels outside the
+	// image are not transparent. plusImageWrap draws them.
+	var wrap *PlusImageAttributes
 	if !inside {
 		// Pixels outside the image come from the attributes' wrap mode;
 		// only transparent clamping matches drawing the image alone. Without
 		// attributes, Windows GDI+ draws nothing outside the image, as with
 		// transparent clamping (ORACLES.md).
 		clamped := true
+		var attrs PlusImageAttributes
 		if v.AttributesID != 0xffffffff {
 			a, err := p.plusObjectAt(r, v.AttributesID)
 			if err != nil {
 				return err
 			}
-			attrs := a.value.(PlusImageAttributes)
+			attrs = a.value.(PlusImageAttributes)
 			clamped = attrs.WrapMode == 4 && argb(attrs.ClampColor).A == 0
 		}
 		if !clamped {
-			return p.unsupported(r, "EMF+ image source outside the image")
+			if meta != nil || attrs.WrapMode > 4 {
+				return p.unsupported(r, "EMF+ image source outside the image")
+			}
+			wrap = &attrs
 		}
 	}
 	var place Matrix
@@ -1257,6 +1264,11 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 	if p.plus.compositing == 1 && !isOpaque(im) {
 		return p.unsupported(r, "EMF+ SourceCopy compositing of an image with alpha")
 	}
+	if wrap != nil {
+		if done, err := p.plusImageWrap(r, im, place, src, *wrap); done || err != nil {
+			return err
+		}
+	}
 	draw := ImageDraw{Image: im, Transform: place, Opacity: 1, Smooth: p.plus.interpolation != 5}
 	o, size := Point{src.X, src.Y}, Point{src.Width, src.Height}
 	draw.Source = sourceRect(o, size, bounds)
@@ -1264,6 +1276,38 @@ func (p *player) plusImage(c Command, v PlusImageDraw) error {
 		return nil
 	}
 	return p.backend.DrawImage(draw, sourceClip(draw, o, size, p.plusCurrentClip()))
+}
+
+// ivy: plusImageWrap draws the part of the source rectangle src of a bitmap
+// that is outside the image im, with the wrap mode of the image attributes,
+// as GDI+ does. A tile mode repeats the image over the whole rectangle, and
+// it reports done. The clamp mode fills the part outside the image with the
+// clamp color, and the caller then draws the image.
+func (p *player) plusImageWrap(r Record, im image.Image, place Matrix, src Box, attrs PlusImageAttributes) (done bool, err error) {
+	quad := func(x0, y0, x1, y1 float64) Path {
+		return Path{Verbs: []PathVerb{PathMoveTo, PathLineTo, PathLineTo, PathLineTo, PathClose},
+			Points: []Point{place.Apply(Point{x0, y0}), place.Apply(Point{x1, y0}), place.Apply(Point{x1, y1}), place.Apply(Point{x0, y1})}}
+	}
+	area := quad(src.X, src.Y, src.X+src.Width, src.Y+src.Height)
+	clip := p.plusCurrentClip()
+	if attrs.WrapMode < 4 {
+		paint := Paint{Kind: PaintPattern, Pattern: im, PatternTransform: place, Wrap: WrapMode(attrs.WrapMode)}
+		return true, p.backend.FillPath(area, NonZero, paint, clip)
+	}
+	paint := Paint{Kind: PaintSolid, Color: argb(attrs.ClampColor)}
+	if err := p.plusComposite(r, &paint); err != nil {
+		return true, err
+	}
+	// the area less the part of the image in it, with the even-odd rule
+	b := im.Bounds()
+	x0, y0 := max(src.X, float64(b.Min.X)), max(src.Y, float64(b.Min.Y))
+	x1, y1 := min(src.X+src.Width, float64(b.Max.X)), min(src.Y+src.Height, float64(b.Max.Y))
+	if x0 < x1 && y0 < y1 {
+		inner := quad(x0, y0, x1, y1)
+		area.Verbs = append(area.Verbs, inner.Verbs...)
+		area.Points = append(area.Points, inner.Points...)
+	}
+	return false, p.backend.FillPath(area, EvenOdd, paint, clip)
 }
 
 // plusHatch draws an EMF+ hatch brush as GDI+ does: its 8x8 pattern of

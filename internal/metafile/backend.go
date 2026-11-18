@@ -30,7 +30,7 @@ type backend struct {
 	skipped   int
 	firstSkip string
 	// patterns holds the pixmaps of the images of the patterns.
-	patterns map[image.Image]*okage.Pixmap
+	patterns map[patternKey]*okage.Pixmap
 	// clipOpen reports a clip that clipped left on the device after a
 	// Save: clip, which clips everything when clipEmpty is set.
 	clipOpen, clipEmpty bool
@@ -176,15 +176,15 @@ func (b *backend) StrokePath(p gowemf.Path, s gowemf.Stroke, clip gowemf.Clip) e
 		return nil
 	}
 	b.clipped(clip, func() {
-		b.stroke(op, s, shader)
+		b.stroke(op, p, s, shader)
 	})
 	return nil
 }
 
-// stroke strokes p with the pen s. A hairline is one pixel of the device
-// wide. A geometric pen strokes in the space of the pen, which its
-// transform maps to the user space.
-func (b *backend) stroke(p *okage.Path, s gowemf.Stroke, shader okage.Shader) {
+// stroke strokes p with the pen s. gp is p as gowemf gave it. A hairline is
+// one pixel of the device wide. A geometric pen strokes in the space of the
+// pen, which its transform maps to the user space.
+func (b *backend) stroke(p *okage.Path, gp gowemf.Path, s gowemf.Stroke, shader okage.Shader) {
 	b.d.Save()
 	defer b.d.Restore()
 	// GDI draws a line through the centers of the pixels of its device
@@ -217,6 +217,10 @@ func (b *backend) stroke(p *okage.Path, s gowemf.Stroke, shader okage.Shader) {
 	}
 	if len(s.Compound) >= 2 && !s.Hairline {
 		b.compound(p, st, s.Compound, shader)
+		return
+	}
+	if s.EndCap != 0 && s.EndCap != s.Cap && !s.Hairline {
+		b.twoCaps(p, gp, st, s, shader)
 		return
 	}
 	if dashes := dashArray(s, unit); dashes != nil {
@@ -286,6 +290,153 @@ func (b *backend) compound(p *okage.Path, st okage.Stroke, bands []float64, shad
 		}
 		b.d.EndGroup()
 	}
+}
+
+// twoCaps strokes p, in the space of the pen, with a start cap and an end
+// cap that differ, as a pen of EMF+ can. gp is p in the user space. A stroke
+// of okage has one cap, so the backend strokes p without caps, and fills the
+// shape of the cap at each end of each open figure: a circle for a round
+// cap, and a square for a square cap. The shapes also cover the end of the
+// stroke. If the paint can be translucent, a knockout group holds the
+// stroke and the shapes, so that the paint covers each pixel once.
+func (b *backend) twoCaps(p *okage.Path, gp gowemf.Path, st okage.Stroke, s gowemf.Stroke, shader okage.Shader) {
+	toPen, ok := transform(s.Transform).Invert()
+	if !ok {
+		return
+	}
+	starts, ends := openEnds(gp)
+	group := s.Paint.Kind != gowemf.PaintSolid || s.Paint.Color.A != 255
+	if group {
+		b.d.BeginGroup(display.Group{Opacity: 1, Isolated: true, Knockout: true})
+	}
+	st.LineCap = okage.LineCapButt
+	b.d.StrokePath(p, st, shader)
+	if shape := capShapes(starts, s.Cap, toPen, st.Width/2); shape != nil {
+		b.d.FillPath(shape, okage.FillRuleWinding, shader)
+	}
+	if shape := capShapes(ends, s.EndCap, toPen, st.Width/2); shape != nil {
+		b.d.FillPath(shape, okage.FillRuleWinding, shader)
+	}
+	if group {
+		b.d.EndGroup()
+	}
+}
+
+// capEnd is the start or the end of an open figure: its point, and a
+// direction that points out of the figure along its first or last segment.
+type capEnd struct {
+	at, out gowemf.Point
+}
+
+// openEnds returns the starts and the ends of the open figures of p. A
+// figure without a segment of some length has no ends.
+func openEnds(p gowemf.Path) (starts, ends []capEnd) {
+	pts := p.Points
+	var start, cur gowemf.Point
+	var first, last capEnd
+	open := false
+	finish := func() {
+		if open {
+			starts, ends = append(starts, first), append(ends, last)
+		}
+		open = false
+	}
+	sub := func(a, b gowemf.Point) gowemf.Point { return gowemf.Point{X: a.X - b.X, Y: a.Y - b.Y} }
+loop:
+	for _, v := range p.Verbs {
+		switch v {
+		case gowemf.PathMoveTo:
+			if len(pts) < 1 {
+				break loop
+			}
+			finish()
+			start, cur, pts = pts[0], pts[0], pts[1:]
+		case gowemf.PathLineTo, gowemf.PathCubicTo:
+			n := 1
+			if v == gowemf.PathCubicTo {
+				n = 3
+			}
+			if len(pts) < n {
+				break loop
+			}
+			seg := pts[:n]
+			pts = pts[n:]
+			end := seg[n-1]
+			// the tangents at the two ends of the segment, past the control
+			// points at the same place as an end
+			var in, out gowemf.Point
+			for _, q := range seg {
+				if q != cur {
+					in = sub(q, cur)
+					break
+				}
+			}
+			for i := n - 2; i >= -1; i-- {
+				q := cur
+				if i >= 0 {
+					q = seg[i]
+				}
+				if q != end {
+					out = sub(end, q)
+					break
+				}
+			}
+			if in != (gowemf.Point{}) {
+				if !open {
+					first = capEnd{at: cur, out: gowemf.Point{X: -in.X, Y: -in.Y}}
+					open = true
+				}
+				last = capEnd{at: end, out: out}
+			}
+			cur = end
+		case gowemf.PathClose:
+			open = false
+			cur = start
+		}
+	}
+	finish()
+	return starts, ends
+}
+
+// capShapes returns the shapes of the cap c at the ends, in the space of
+// the pen, or nil for a flat cap. toPen maps the user space to the space of
+// the pen, and half is half the width of the pen.
+func capShapes(ends []capEnd, c gowemf.LineCap, toPen okage.Transform, half float32) *okage.Path {
+	if (c != gowemf.CapRound && c != gowemf.CapSquare) || len(ends) == 0 || !(half > 0) {
+		return nil
+	}
+	// the directions take the linear part of toPen only
+	dir := toPen
+	dir.TX, dir.TY = 0, 0
+	pb := okage.NewPathBuilder()
+	for _, e := range ends {
+		at := okage.PointFromXY(float32(e.at.X), float32(e.at.Y))
+		toPen.MapPoint(&at)
+		u := okage.PointFromXY(float32(e.out.X), float32(e.out.Y))
+		dir.MapPoint(&u)
+		l := float32(math.Hypot(float64(u.X), float64(u.Y)))
+		if !(l > 0) || math.IsInf(float64(l), 0) {
+			continue
+		}
+		ux, uy := u.X/l*half, u.Y/l*half
+		if c == gowemf.CapRound {
+			pb.PushCircle(at.X, at.Y, half)
+			continue
+		}
+		// the square has the end at its center, and its sides along the
+		// figure and across it
+		nx, ny := -uy, ux
+		pb.MoveTo(at.X-ux+nx, at.Y-uy+ny)
+		pb.LineTo(at.X+ux+nx, at.Y+uy+ny)
+		pb.LineTo(at.X+ux-nx, at.Y+uy-ny)
+		pb.LineTo(at.X-ux-nx, at.Y-uy-ny)
+		pb.Close()
+	}
+	out, ok := pb.Finish()
+	if !ok {
+		return nil
+	}
+	return out
 }
 
 // lineCap converts a line cap of gowemf.
@@ -429,6 +580,19 @@ func (b *backend) shader(p gowemf.Paint) okage.Shader {
 // hatch returns the shader of a hatch of GDI: an 8 by 8 tile of the pixels
 // of the device, with lines of the color over the background.
 func (b *backend) hatch(p gowemf.Paint) okage.Shader {
+	if p.Hatch > 5 {
+		return okage.SolidColor(rgba(p.Color))
+	}
+	pm, err := raster.Pixmap(hatchImage(p))
+	if err != nil {
+		return okage.SolidColor(rgba(p.Color))
+	}
+	return okage.NewPattern(pm.AsRef(), okage.SpreadModeRepeat, okage.FilterQualityNearest, 1, transform(p.PatternTransform))
+}
+
+// hatchImage returns the 8 by 8 tile of a hatch of GDI. A style past the six
+// of GDI gives a tile of the color.
+func hatchImage(p gowemf.Paint) *image.NRGBA {
 	img := image.NewNRGBA(image.Rect(0, 0, 8, 8))
 	if p.Background != nil {
 		for i := 0; i < len(img.Pix); i += 4 {
@@ -439,21 +603,21 @@ func (b *backend) hatch(p gowemf.Paint) okage.Shader {
 	vertical := p.Hatch == 1 || p.Hatch == 4
 	forward := p.Hatch == 2 || p.Hatch == 5
 	backward := p.Hatch == 3 || p.Hatch == 5
-	if p.Hatch > 5 {
-		return okage.SolidColor(rgba(p.Color))
-	}
 	for y := range 8 {
 		for x := range 8 {
-			if (horizontal && y == 7) || (vertical && x == 7) || (forward && x == y) || (backward && x+y == 7) {
+			if p.Hatch > 5 || (horizontal && y == 7) || (vertical && x == 7) || (forward && x == y) || (backward && x+y == 7) {
 				img.SetNRGBA(x, y, p.Color)
 			}
 		}
 	}
-	pm, err := raster.Pixmap(img)
-	if err != nil {
-		return okage.SolidColor(rgba(p.Color))
-	}
-	return okage.NewPattern(pm.AsRef(), okage.SpreadModeRepeat, okage.FilterQualityNearest, 1, transform(p.PatternTransform))
+	return img
+}
+
+// patternKey is the key of the cache of the pixmaps of the patterns: the
+// image and the wrap mode that made the pixmap.
+type patternKey struct {
+	img  image.Image
+	wrap gowemf.WrapMode
 }
 
 // pattern returns the shader of a pattern or a texture.
@@ -463,10 +627,11 @@ func (b *backend) pattern(p gowemf.Paint) okage.Shader {
 		return nil
 	}
 	clamp := p.Wrap == gowemf.WrapClamp
-	key := img
+	key := patternKey{img, p.Wrap}
 	pm := b.patterns[key]
 	if pm == nil || clamp {
-		if clamp {
+		switch p.Wrap {
+		case gowemf.WrapClamp:
 			// a clamped pattern paints nothing outside its tile, so the tile
 			// gets a transparent border, which the pad of okage repeats
 			bounds := img.Bounds()
@@ -477,6 +642,12 @@ func (b *backend) pattern(p gowemf.Paint) okage.Shader {
 				}
 			}
 			img = framed
+		case gowemf.WrapTileFlipX, gowemf.WrapTileFlipY:
+			// the reflection of okage mirrors in both directions, so a tile
+			// that mirrors in one direction repeats the tile and its mirror
+			if img = flipTile(img, p.Wrap == gowemf.WrapTileFlipX, b.pic.lim.MaxPixels); img == nil {
+				return nil
+			}
 		}
 		var err error
 		pm, err = raster.Pixmap(img)
@@ -485,7 +656,7 @@ func (b *backend) pattern(p gowemf.Paint) okage.Shader {
 		}
 		if !clamp {
 			if b.patterns == nil {
-				b.patterns = make(map[image.Image]*okage.Pixmap)
+				b.patterns = make(map[patternKey]*okage.Pixmap)
 			}
 			b.patterns[key] = pm
 		}
@@ -493,8 +664,7 @@ func (b *backend) pattern(p gowemf.Paint) okage.Shader {
 	t := transform(p.PatternTransform)
 	spread := okage.SpreadModeRepeat
 	switch p.Wrap {
-	case gowemf.WrapTileFlipX, gowemf.WrapTileFlipY, gowemf.WrapTileFlipXY:
-		// okage mirrors in both directions
+	case gowemf.WrapTileFlipXY:
 		spread = okage.SpreadModeReflect
 	case gowemf.WrapClamp:
 		spread = okage.SpreadModePad
@@ -502,6 +672,34 @@ func (b *backend) pattern(p gowemf.Paint) okage.Shader {
 	}
 	t = t.PreTranslate(float32(p.Pattern.Bounds().Min.X), float32(p.Pattern.Bounds().Min.Y))
 	return okage.NewPattern(pm.AsRef(), spread, okage.FilterQualityBilinear, 1, t)
+}
+
+// flipTile returns the tile of img and its mirror side by side, across when
+// x is set, and down when it is not. The tile starts at (0, 0). It returns
+// nil when the tile has more pixels than limit.
+func flipTile(img image.Image, x bool, limit int64) image.Image {
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	size := image.Rect(0, 0, w, 2*h)
+	if x {
+		size = image.Rect(0, 0, 2*w, h)
+	}
+	if int64(size.Dx())*int64(size.Dy()) > limit {
+		return nil
+	}
+	out := image.NewNRGBA(size)
+	for y := range h {
+		for i := range w {
+			c := color.NRGBAModel.Convert(img.At(bounds.Min.X+i, bounds.Min.Y+y)).(color.NRGBA)
+			out.SetNRGBA(i, y, c)
+			if x {
+				out.SetNRGBA(2*w-1-i, y, c)
+			} else {
+				out.SetNRGBA(i, 2*h-1-y, c)
+			}
+		}
+	}
+	return out
 }
 
 // linearGradient returns the shader of a linear gradient of EMF+.

@@ -85,11 +85,17 @@ func (op RasterOperation) UsesDestination() bool { return (op>>1^op)&0x55 != 0 }
 // is nil when Operation does not use the source; Pattern is the brush and is
 // nil when Operation does not use the pattern. Hatch patterns always carry a
 // Background.
+//
+// ivy: Stroke, when it is set, is the pen of a stroke with a mix mode
+// (ROP2) that reads the destination. The pixels of the operation are then
+// the pixels that the pen draws along Area, not the pixels inside Area.
+// Pattern is the paint of the pen, and Source is nil.
 type RasterDraw struct {
 	Operation RasterOperation
 	Area      Path
 	Source    *ImageDraw
 	Pattern   *Paint
+	Stroke    *Stroke
 }
 
 // RasterBackend is a Backend with a pixel destination it can read. Play passes

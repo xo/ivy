@@ -22,7 +22,7 @@ Each copied file has the same path as in upstream.
 
 Two files are files of ivy, not of upstream:
 `playback_plus_string.go` draws the EMF+ DrawString record (change 11),
-and `ivy_test.go` holds the tests of the changes 6 to 11 and 13 to 16.
+and `ivy_test.go` holds the tests of the changes 6 to 11 and 13 to 17.
 
 The copy leaves out these files of upstream:
 
@@ -109,17 +109,18 @@ Each change is marked in the code with a comment that starts with `ivy:`.
     - the inversion of a region, for the records WMF InvertRegion and
       EMR_INVERTRGN
     - a fill with a mix mode (ROP2) that combines the brush with the
-      destination, such as R2_MASKPEN or R2_XORPEN. A stroke with such a
-      mix mode is still reported.
+      destination, such as R2_MASKPEN or R2_XORPEN. Change 18 adds the
+      stroke.
 11. `playback_plus.go` draws the EMF+ DrawString record with
     `plusDrawString` of `playback_plus_string.go`. MS-EMFPLUS does not
     define the layout of GDI+, so the layout is close, not exact: lines
     break at line feeds and at spaces, the margins are fractions of the em,
-    and the tracking multiplies the advances. Upstream reports the record
-    as not supported.
+    and the tracking multiplies the advances. A vertical format turns the
+    layout a quarter turn clockwise. Upstream reports the record as not
+    supported.
 12. The tests of upstream that expect `ErrMalformed` for the cases of
-    changes 6 and 7, or that expect DrawString to be reported, expect the
-    behavior of ivy. Each such test has a comment that starts with `ivy:`.
+    changes 6 and 7, or that expect DrawString or the tiled source of
+    change 17 to be reported, expect the behavior of ivy. Each such test has a comment that starts with `ivy:`.
 13. `decode_emf.go` does not compare the field nRgnSize of the region data
     of an EMF record with the count of its rectangles. nRgnSize is the size
     of a buffer, which Windows lets be 0, and some writers make it larger,
@@ -136,3 +137,15 @@ Each change is marked in the code with a comment that starts with `ivy:`.
 16. `wmf.go` reads a WMF without a placeable header whose header gives a
     size 22 bytes larger than the data. A WMF picture of the store of
     Office Drawing counts the placeable header that the store removed.
+17. `playback_plus.go` draws the source rectangle of an EMF+ DrawImage of
+    a bitmap that is outside the bitmap, with the wrap mode of its image
+    attributes, as GDI+ does. A tile mode fills the rectangle with the
+    bitmap as a pattern. The clamp mode fills the part outside the bitmap
+    with the clamp color, and then draws the bitmap. Upstream reports the
+    record as not supported. A metafile image is still reported.
+18. `playback_records.go` passes a stroke with a mix mode (ROP2) that
+    combines the pen with the destination to a `RasterBackend`, in the
+    field `Stroke` of `RasterDraw`. `playback_nested.go` places the pen of
+    such a stroke in a nested metafile. A styled pen with an opaque
+    background is still reported, because its gaps take the background
+    color without the mix mode.

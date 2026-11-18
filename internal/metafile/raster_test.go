@@ -97,6 +97,22 @@ func TestRasterOperations(t *testing.T) {
 			e.Select(e.Brush(white, -1))
 			e.Record(20, uint32(7)).Rectangle(50, -1, 101, 101)
 		}, red, cyan},
+		// a stroke with R2_XORPEN inverts the page where the pen is white
+		{"R2_XORPEN stroke", func(e *fixture.EMF) {
+			e.Select(e.Pen(0, 50, white))
+			e.Record(20, uint32(7)).Polyline(75, -10, 75, 110)
+		}, red, cyan},
+		// a stroke with R2_MASKPEN keeps the page where the pen is white
+		{"R2_MASKPEN stroke", func(e *fixture.EMF) {
+			e.Select(e.Pen(0, 50, cyan))
+			e.Record(20, uint32(9)).Polyline(75, -10, 75, 110)
+		}, red, black},
+		// MERGECOPY with a hatch brush is the brush where the source is
+		// white
+		{"MERGECOPY hatch", func(e *fixture.EMF) {
+			e.Select(e.Brush(green, 0))
+			stretchDIBits(e, 0, 0, 100, 100, halves(), 0x00c000ca)
+		}, black, white},
 		// EMR_INVERTRGN inverts the page in the region
 		{"InvertRgn", func(e *fixture.EMF) {
 			region := []any{uint32(32), uint32(1), uint32(1), uint32(16), 50, 0, 100, 100, 50, 0, 100, 100}
@@ -112,6 +128,13 @@ func TestRasterOperations(t *testing.T) {
 			}
 			expect(t, pm, 25, 50, tt.left)
 			expect(t, pm, 75, 50, tt.right)
+			if tt.name == "MERGECOPY hatch" {
+				// the lines of the hatch are on each eighth row of the
+				// device
+				expect(t, pm, 75, 7, green)
+				expect(t, pm, 75, 55, green)
+				expect(t, pm, 75, 52, white)
+			}
 		})
 	}
 }

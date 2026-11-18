@@ -173,6 +173,9 @@ func TestPlayEMFPlusDrawString(t *testing.T) {
 		{"center", [][]byte{font, format(0, 1, 1), str(2, []float64{0, 0, 30, 30}, "AB")}, []line{{"AB", 10, 18}}},
 		{"far", [][]byte{font, format(0, 2, 2), str(2, []float64{0, 0, 30, 30}, "AB")}, []line{{"AB", 20, 28}}},
 		{"no wrap", [][]byte{font, format(plusStringNoWrap, 0, 0), str(2, []float64{0, 0, 5, 30}, "AB CD")}, []line{{"AB CD", 0, 8}}},
+		// a vertical format turns the layout: the origin (0, 8) of the line
+		// is 8 to the left of the right edge, at the top
+		{"vertical", [][]byte{font, format(plusStringVertical, 0, 0), str(2, []float64{0, 0, 30, 100}, "AB")}, []line{{"AB", 0, 8}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var skipped []string
@@ -196,6 +199,15 @@ func TestPlayEMFPlusDrawString(t *testing.T) {
 					t.Errorf("line %d: origin %v, want (%g, %g)", i, o, w.x, w.y)
 				}
 			}
+			if tt.name == "vertical" {
+				run := b.drawn[0]
+				o := run.Transform.Apply(run.Origins[0])
+				next := run.Transform.Apply(run.Origins[1])
+				// the scene adds half a pixel to each coordinate
+				if math.Abs(o.X-22.5) > 1e-6 || math.Abs(o.Y-0.5) > 1e-6 || !(next.Y > o.Y) || math.Abs(next.X-o.X) > 1e-6 {
+					t.Errorf("vertical: origins %v and %v in the world", o, next)
+				}
+			}
 		})
 	}
 }
@@ -211,6 +223,40 @@ func TestROP2Raster(t *testing.T) {
 		if got := rop2ReadsDestination(rop2); got != want {
 			t.Errorf("R2 %d reads the destination: %v", rop2, got)
 		}
+	}
+}
+
+// TestROP2Stroke checks change 18: a stroke with a mix mode that reads the
+// destination goes to a RasterBackend with its pen.
+func TestROP2Stroke(t *testing.T) {
+	play := func(style uint32) (*rasterRecorder, []string) {
+		t.Helper()
+		var skipped []string
+		b := &rasterRecorder{}
+		o := PlayOptions{Destination: Box{Width: 96, Height: 64}, Unsupported: func(u UnsupportedOperation) error {
+			skipped = append(skipped, u.Reason)
+			return nil
+		}}
+		data := emfScene(96, 64, 4, emfPen(1, style, 4, 0xffffff), emfSelect(1), emfSelect(0x80000005), emfValue(EMRSetROP2, 7), emfBox(EMRRectangle, 10, 10, 50, 50))
+		if _, err := Play(data, o, b); err != nil {
+			t.Fatal(err)
+		}
+		if b.bad != nil {
+			t.Fatal(b.bad)
+		}
+		return b, skipped
+	}
+	b, skipped := play(0)
+	if len(skipped) != 0 || len(b.strokes) != 0 || len(b.rasters) != 1 {
+		t.Fatalf("%v, %d strokes, %d rasters", skipped, len(b.strokes), len(b.rasters))
+	}
+	d := b.rasters[0].draw
+	if d.Stroke == nil || d.Operation != 0x5a || d.Pattern == nil || d.Pattern.Color != (color.NRGBA{255, 255, 255, 255}) || d.Stroke.Width != 4 {
+		t.Fatalf("raster %+v", d)
+	}
+	// the gaps of a dashed pen in OPAQUE mode keep the report
+	if b, skipped := play(1); len(skipped) != 1 || len(b.rasters) != 0 {
+		t.Fatalf("dashed: %v, %d rasters", skipped, len(b.rasters))
 	}
 }
 
@@ -284,5 +330,51 @@ func TestWMFShortFaceName(t *testing.T) {
 	}
 	if f := v.(Font); string(f.FaceName) != "Symbol\x00\x15" || f.CharSet != 2 {
 		t.Fatalf("%+v", f)
+	}
+}
+
+// TestPlusImageWrap checks change 17: the source rectangle of an EMF+
+// DrawImage that is outside the bitmap takes the wrap mode of its image
+// attributes.
+func TestPlusImageWrap(t *testing.T) {
+	img := plusObj(4, 5, argbImage(2, 2, 0xffff0000, 0xff00ff00, 0xff0000ff, 0xff000000))
+	draw := plusRec(PlusDrawImageRecord, 4, dwords(7, 2), fl(-1, 0, 4, 2), fl(10, 10, 40, 20))
+	for _, mode := range []WrapMode{WrapTile, WrapTileFlipX, WrapTileFlipY, WrapTileFlipXY} {
+		attrs := plusObj(7, 8, dwords(plusVersion, 0, uint32(mode), 0, 0, 0))
+		b, skipped := plusPlay(t, plusScene(96, 64, img, attrs, draw), PlayOptions{})
+		if len(skipped) != 0 || len(b.images) != 0 || len(b.fills) != 1 {
+			t.Fatalf("mode %d: %v, %d images, %d fills", mode, skipped, len(b.images), len(b.fills))
+		}
+		f := b.fills[0]
+		pt := f.paint.PatternTransform
+		if f.paint.Kind != PaintPattern || f.paint.Wrap != mode || pt.M11 != 10 || pt.M22 != 10 || pt.M12 != 0 || pt.M21 != 0 {
+			t.Fatalf("mode %d: paint %+v", mode, f.paint)
+		}
+		if !pointsNear(f.path.Points, pt.Apply(Point{-1, 0}), pt.Apply(Point{3, 0}), pt.Apply(Point{3, 2}), pt.Apply(Point{-1, 2})) {
+			t.Fatalf("mode %d: area %v", mode, f.path.Points)
+		}
+	}
+	// An opaque clamp color fills the area outside the image, and the image
+	// is drawn over it.
+	attrs := plusObj(7, 8, dwords(plusVersion, 0, 4, 0xff808080, 0, 0))
+	b, skipped := plusPlay(t, plusScene(96, 64, img, attrs, draw), PlayOptions{})
+	if len(skipped) != 0 || len(b.images) != 1 || len(b.fills) != 1 {
+		t.Fatalf("clamp: %v, %d images, %d fills", skipped, len(b.images), len(b.fills))
+	}
+	f := b.fills[0]
+	if f.paint.Kind != PaintSolid || f.paint.Color != (color.NRGBA{128, 128, 128, 255}) || f.rule != EvenOdd {
+		t.Fatalf("clamp: paint %+v, rule %v", f.paint, f.rule)
+	}
+	pt := b.images[0].draw.Transform
+	if !pointsNear(f.path.Points, pt.Apply(Point{-1, 0}), pt.Apply(Point{3, 0}), pt.Apply(Point{3, 2}), pt.Apply(Point{-1, 2}),
+		pt.Apply(Point{0, 0}), pt.Apply(Point{2, 0}), pt.Apply(Point{2, 2}), pt.Apply(Point{0, 2})) {
+		t.Fatalf("clamp: area %v", f.path.Points)
+	}
+	if b.images[0].draw.Source.Dx() != 2 {
+		t.Fatalf("clamp: image %+v", b.images[0].draw)
+	}
+	// A wrap mode out of range keeps the report.
+	if _, skipped := plusPlay(t, plusScene(96, 64, img, plusObj(7, 8, dwords(plusVersion, 0, 5, 0, 0, 0)), draw), PlayOptions{}); len(skipped) != 1 {
+		t.Fatalf("a wrap mode out of range: %v", skipped)
 	}
 }

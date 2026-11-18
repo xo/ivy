@@ -10,6 +10,7 @@ import (
 	"github.com/xo/okage"
 	"github.com/xo/okage/svg"
 	gofont "github.com/xo/okage/typesetting/font"
+	"github.com/xo/okage/typesetting/shaping"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
@@ -46,6 +47,11 @@ type realFace struct {
 	// underline and strike are the positions of the lines below and above
 	// the baseline, and thick is their thickness.
 	underline, strike, thick float32
+	// shapeFace is a face of its own for the shaper, which shapeMu guards
+	// with the shaper. It is nil if the face cannot be read again.
+	shapeMu   *sync.Mutex
+	shapeFace *gofont.Face
+	shaper    *shaping.HarfbuzzShaper
 }
 
 // fontSet chooses the faces of the fonts that the records of a picture ask
@@ -182,6 +188,9 @@ func load(db *svg.FontDatabase, id svg.FontID) (f *realFace) {
 		f.strike = 0.25
 	}
 	f.face = font.FromFace(face)
+	if sf, ok := db.NewFace(id, nil); ok {
+		f.shapeMu, f.shapeFace, f.shaper = new(sync.Mutex), sf, new(shaping.HarfbuzzShaper)
+	}
 	return f
 }
 
@@ -277,7 +286,12 @@ func (b *backend) MeasureText(run gowemf.TextRun) (gowemf.TextMetrics, error) {
 	if !ok {
 		return gowemf.TextMetrics{Advances: make([]float64, len(run.Text))}, nil
 	}
-	_, adv, _ := tf.glyphs(run)
+	adv := []float64(nil)
+	if shaped, ok := tf.shape(run); ok {
+		adv = shaped.advances
+	} else {
+		_, adv, _ = tf.glyphs(run)
+	}
 	return gowemf.TextMetrics{
 		Ascent:   float64(tf.ascent * tf.em),
 		Descent:  float64(tf.descent * tf.em),
@@ -301,12 +315,26 @@ func (b *backend) DrawText(run gowemf.TextRun, clip gowemf.Clip) error {
 		b.skip("glyph indexes of font " + run.Font.FaceName)
 		return nil
 	}
-	gids, _, draw := tf.glyphs(run)
-	glyphs := make([]display.Glyph, 0, len(gids))
-	for i, gid := range gids {
-		if draw[i] {
+	var glyphs []display.Glyph
+	if shaped, ok := tf.shape(run); ok {
+		// the glyphs of a cluster are placed from the origin of its first
+		// element
+		for i, cluster := range shaped.glyphs {
 			o := run.Origins[i]
-			glyphs = append(glyphs, display.Glyph{ID: gid, X: float32(o.X), Y: float32(o.Y)})
+			for _, g := range cluster {
+				g.X += float32(o.X)
+				g.Y += float32(o.Y)
+				glyphs = append(glyphs, g)
+			}
+		}
+	} else {
+		gids, _, draw := tf.glyphs(run)
+		glyphs = make([]display.Glyph, 0, len(gids))
+		for i, gid := range gids {
+			if draw[i] {
+				o := run.Origins[i]
+				glyphs = append(glyphs, display.Glyph{ID: gid, X: float32(o.X), Y: float32(o.Y)})
+			}
 		}
 	}
 	glyph := okage.TransformFromScale(tf.scaleX, 1)

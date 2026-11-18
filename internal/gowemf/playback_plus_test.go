@@ -697,9 +697,11 @@ func TestPlayEMFPlusImages(t *testing.T) {
 	if len(skipped) != 0 || b.images[0].draw.Source.Dx() != 2 {
 		t.Fatal("no attributes", skipped)
 	}
+	// ivy: a tiled source outside the image is drawn (change 17), and
+	// TestPlusImageWrap of ivy_test.go tests it.
 	tile := plusObj(7, 8, dwords(plusVersion, 0, 0, 0, 0, 0))
 	_, skipped = plusPlay(t, plusScene(96, 64, img, tile, plusRec(PlusDrawImageRecord, 4, dwords(7, 2), fl(0, 0, 4, 2), fl(10, 10, 20, 40))), PlayOptions{})
-	if len(skipped) != 1 || !strings.Contains(skipped[0], "outside") {
+	if len(skipped) != 0 {
 		t.Fatal("tiled", skipped)
 	}
 	clamp := plusObj(7, 8, dwords(plusVersion, 0, 4, 0x00ffffff, 0, 0))
