@@ -168,12 +168,6 @@ func (m styleMap[V]) set(k styleKey, v V) {
 	m.others[k] = v
 }
 
-// clear removes each key.
-func (m styleMap[V]) clear() {
-	clear(m.elements)
-	clear(m.others)
-}
-
 // newStyleKey makes the key of a style.
 func newStyleKey(owner StyleOwner, pseudo string) styleKey {
 	return styleKey{owner.ownerKey(), pseudo}
@@ -239,20 +233,26 @@ func newCascadedStyles() *cascadedStyles {
 // of an owner and a pseudo-element type, and adds an empty one first if
 // needed.
 func (c *cascadedStyles) setDefault(owner StyleOwner, pseudo string) map[string]cascadedValue {
-	key := newStyleKey(owner, pseudo)
-	style, ok := c.styles.get(key)
+	style, ok := c.styles.get(newStyleKey(owner, pseudo))
 	if !ok {
 		style = map[string]cascadedValue{}
-		c.styles.set(key, style)
-		if _, isElement := owner.(*Element); !isElement {
-			c.owners[key] = owner
-		}
-		c.order = append(c.order, key)
-		if pseudo != "" {
-			c.pseudos[key.owner] = append(c.pseudos[key.owner], key)
-		}
+		c.add(owner, pseudo, style)
 	}
 	return style
+}
+
+// add adds the cascaded style of an owner and a pseudo-element type, which
+// has none yet.
+func (c *cascadedStyles) add(owner StyleOwner, pseudo string, style map[string]cascadedValue) {
+	key := newStyleKey(owner, pseudo)
+	c.styles.set(key, style)
+	if _, isElement := owner.(*Element); !isElement {
+		c.owners[key] = owner
+	}
+	c.order = append(c.order, key)
+	if pseudo != "" {
+		c.pseudos[key.owner] = append(c.pseudos[key.owner], key)
+	}
 }
 
 // get returns the cascaded style of an owner and a pseudo-element type, or
@@ -270,9 +270,13 @@ func (c *cascadedStyles) owner(k styleKey) StyleOwner {
 	return c.owners[k]
 }
 
-// clear removes each cascaded style.
+// clear removes the cascaded styles of the elements and the order of the
+// keys.
+//
+// Port: upstream removes each cascaded style. clear keeps the cascaded
+// styles of the pseudo-elements of the elements, for StyleFor.pseudoStyle.
 func (c *cascadedStyles) clear() {
-	c.styles.clear()
+	clear(c.styles.elements)
 	clear(c.owners)
 	clear(c.pseudos)
 	c.order = nil
@@ -449,24 +453,29 @@ type StyleFor struct {
 	cascaded *cascadedStyles
 	computed styleMap[*Style]
 	sheets   []sheetOrigin
-	// pseudoOwners maps an element that shares the computed style of an
-	// earlier element to that element. The pseudo-elements of the two
-	// elements have the same styles.
-	pseudoOwners map[*Element]*Element
+	// styleOwners maps each computed style that the cascade makes for an
+	// element to that element. An element that shares the computed style
+	// of an earlier element shares the styles of its pseudo-elements too.
+	styleOwners map[*Style]*Element
 
 	// uses holds the features of the styles that need the whole layout
 	// before a page (D43).
 	uses wholeLayoutUses
+
+	// root and baseURL are the root element and the base URL of the
+	// document, for pseudoStyle.
+	root    *Element
+	baseURL string
 }
 
 // newStyleFor is StyleFor.__init__ in weasyprint/css/__init__.py.
 func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx *StyleContext, targetCollector *TargetCollector) (*StyleFor, error) {
 	sf := &StyleFor{
-		Context:      ctx,
-		cascaded:     newCascadedStyles(),
-		computed:     newStyleMap[*Style](),
-		sheets:       sheets,
-		pseudoOwners: map[*Element]*Element{},
+		Context:     ctx,
+		cascaded:    newCascadedStyles(),
+		computed:    newStyleMap[*Style](),
+		sheets:      sheets,
+		styleOwners: map[*Style]*Element{},
 	}
 	budget := ctx.budget
 	log := ctx.log
@@ -503,19 +512,31 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 	// same style. Upstream makes them again for each element. The rules of
 	// the user agent, such as ::marker and ::footnote-call, give each
 	// element six pseudo-elements, so they were most of the work of the
-	// cascade of a large table. shared holds the elements that share them,
-	// in tree order.
+	// cascade of a large table. sharedWork counts the styles that the
+	// elements share, as upstream makes them again. anchors holds the
+	// elements whose pseudo-elements can set an anchor, and shared holds
+	// the elements that share their styles, in tree order.
 	computedCache := map[string]*Style{}
 	cacheOwners := map[string]*Element{}
 	var shared []*Element
+	sharedWork := 0
+	anchors := map[*Element]bool{}
 	styleIDs := map[*Style]int{}
+	// cascadedCache holds the cascaded styles by the parts of key of their
+	// matches. keyStart and keyEnd of a match are the bounds of its part.
+	cascadedCache := map[string]map[string]cascadedValue{}
 	type sheetMatch struct {
-		sheet      int
-		match      cssselect2.Match[*rulePayload]
-		layerOrder float64
+		sheet            int
+		match            cssselect2.Match[*rulePayload]
+		layerOrder       float64
+		keyStart, keyEnd int
 	}
 	var matches []sheetMatch
-	var key []byte
+	// found holds the matches of one sheet. Matcher.AppendMatches reuses
+	// it, so the cascade does not allocate a slice for each element.
+	var found []cssselect2.Match[*rulePayload]
+	var key, cascadedKey []byte
+	var pseudos []string
 	elementIndex := 0
 	for element := range html.WrapperElement.IterSubtree() {
 		elementIndex++
@@ -542,7 +563,8 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 		matches = matches[:0]
 		for i, sheet := range sheets {
 			// Add declarations for matching elements.
-			for _, match := range sheet.sheet.Matcher.Match(element) {
+			found = sheet.sheet.Matcher.AppendMatches(found[:0], element)
+			for _, match := range found {
 				payload := match.Payload
 				layerOrder := math.Inf(1)
 				if payload.hasLayer {
@@ -550,6 +572,7 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 						layerOrder = float64(index)
 					}
 				}
+				keyStart := len(key)
 				key = append(key, '|')
 				key = strconv.AppendInt(key, int64(i), 10)
 				for _, n := range match.Specificity {
@@ -560,28 +583,65 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 				key = strconv.AppendInt(key, int64(payload.id), 10)
 				key = append(key, ' ')
 				key = strconv.AppendFloat(key, layerOrder, 'g', -1, 64)
-				matches = append(matches, sheetMatch{i, match, layerOrder})
+				matches = append(matches, sheetMatch{i, match, layerOrder, keyStart, len(key)})
 			}
 		}
 		cached, hit := computedCache[string(key)]
 		pseudo := false
+		pseudos = pseudos[:0]
 		for _, m := range matches {
-			sheet, match := sheets[m.sheet], m.match
-			specificity := match.Specificity
-			if sheet.hasSpecificity {
-				specificity = sheet.specificity
-			}
-			if !budget.spend(1 + len(match.Payload.declarations)) {
+			if !budget.spend(1 + len(m.match.Payload.declarations)) {
 				return nil, fmt.Errorf("%w: the cascade of the document needs too much work", ivy.ErrLimit)
 			}
-			if match.PseudoElement != "" {
+			p := m.match.PseudoElement
+			if p != "" {
 				pseudo = true
 			}
-			if hit {
-				continue
+			if !hit && !slices.Contains(pseudos, p) {
+				pseudos = append(pseudos, p)
 			}
-			style := sf.cascaded.setDefault(etreeElement, match.PseudoElement)
-			applyDeclarations(style, match.Payload.declarations, sheet.origin, m.layerOrder, specificity)
+		}
+		// Port: upstream adds the declarations of each match to the
+		// cascaded style of its pseudo-element, in the order of the
+		// matches. The port does the same for each pseudo-element in the
+		// order of its first match. The cascaded styles of the same
+		// matches are the same, so the elements share them through
+		// cascadedCache. The cascaded style of an element with
+		// declarations of its own is not shared.
+		if n := len(pseudos); n > 1 {
+			// Make room for the keys of the pseudo-elements at once.
+			sf.cascaded.pseudos[etreeElement] = make([]styleKey, 0, n)
+		}
+		for _, p := range pseudos {
+			var style map[string]cascadedValue
+			if p == "" && elementsDeclarations[etreeElement] {
+				style = sf.cascaded.setDefault(etreeElement, p)
+			} else {
+				cascadedKey = cascadedKey[:0]
+				for _, m := range matches {
+					if m.match.PseudoElement == p {
+						cascadedKey = append(cascadedKey, key[m.keyStart:m.keyEnd]...)
+					}
+				}
+				if same, ok := cascadedCache[string(cascadedKey)]; ok {
+					sf.cascaded.add(etreeElement, p, same)
+					continue
+				}
+				style = map[string]cascadedValue{}
+				cascadedCache[string(cascadedKey)] = style
+				sf.cascaded.add(etreeElement, p, style)
+			}
+			for _, m := range matches {
+				if m.match.PseudoElement != p {
+					continue
+				}
+				sheet, match := sheets[m.sheet], m.match
+				specificity := match.Specificity
+				if sheet.hasSpecificity {
+					specificity = sheet.specificity
+				}
+				applyDeclarations(style, match.Payload.declarations, sheet.origin, m.layerOrder, specificity)
+			}
 		}
 
 		// Store computed styles.
@@ -589,8 +649,11 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			// Equivalent computed style already exists, share it.
 			sf.computed.set(newStyleKey(etreeElement, ""), cached)
 			if pseudo {
-				sf.pseudoOwners[etreeElement] = cacheOwners[string(key)]
-				shared = append(shared, etreeElement)
+				owner := cacheOwners[string(key)]
+				sharedWork += len(sf.cascaded.pseudos[owner])
+				if anchors[owner] {
+					shared = append(shared, etreeElement)
+				}
 			}
 		} else {
 			// No equivalent computed style found, create it.
@@ -601,8 +664,15 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			if err := sf.SetComputedStyles(etreeElement, parentOwner, html.EtreeElement, "", html.BaseURL, targetCollector); err != nil {
 				return nil, err
 			}
-			computedCache[string(key)], _ = sf.computed.get(newStyleKey(etreeElement, ""))
+			style, _ := sf.computed.get(newStyleKey(etreeElement, ""))
+			computedCache[string(key)] = style
 			cacheOwners[string(key)] = etreeElement
+			sf.styleOwners[style] = etreeElement
+			for _, m := range matches {
+				if m.match.PseudoElement != "" && slices.ContainsFunc(m.match.Payload.declarations, isAnchor) {
+					anchors[etreeElement] = true
+				}
+			}
 		}
 	}
 
@@ -614,18 +684,36 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 
 	// Only iterate on pseudo-elements that have cascaded styles. (Others
 	// might as well not exist.)
+	//
+	// Port: the style of a pseudo-element of an element is made when Get
+	// asks for it, as the layout asks for few of them. The cascade reads
+	// only the anchor of the style, and the anchor is none when the
+	// cascaded style does not set it. So only the styles whose cascaded
+	// style sets an anchor are made now. The work of each style is spent
+	// now, as upstream makes each style now.
 	for _, k := range slices.Clone(sf.cascaded.order) {
 		if k.pseudo == "" {
 			continue
 		}
 		owner := sf.cascaded.owner(k)
+		if _, ok := owner.(*Element); ok {
+			if _, anchor := sf.cascaded.get(owner, k.pseudo)["anchor"]; !anchor {
+				if !budget.spend(1) {
+					return nil, fmt.Errorf("%w: the document has too many styles", ivy.ErrLimit)
+				}
+				continue
+			}
+		}
 		if err := sf.SetComputedStyles(owner, owner, html.EtreeElement, k.pseudo, html.BaseURL, targetCollector); err != nil {
 			return nil, err
 		}
 	}
-	for _, element := range shared {
-		if err := sf.sharePseudoStyles(element, targetCollector); err != nil {
-			return nil, err
+	if !budget.spend(sharedWork) {
+		return nil, fmt.Errorf("%w: the document has too many styles", ivy.ErrLimit)
+	}
+	if targetCollector != nil {
+		for _, element := range shared {
+			sf.sharePseudoStyles(element, targetCollector)
 		}
 	}
 
@@ -635,27 +723,43 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 
 	// Clear the cascaded styles, we do not need them anymore. Keep the
 	// dictionary, it is used later for page margins.
+	//
+	// Port: the cascaded styles of the pseudo-elements stay for Get.
 	sf.cascaded.clear()
+	sf.root, sf.baseURL = html.EtreeElement, html.BaseURL
 	return sf, nil
 }
 
-// sharePseudoStyles spends the work of the styles of the pseudo-elements
-// of an element that shares them, as SetComputedStyles would spend it, and
-// collects their anchors again, which logs that each one is defined twice.
-func (sf *StyleFor) sharePseudoStyles(element *Element, targetCollector *TargetCollector) error {
-	for _, k := range sf.cascaded.pseudos[sf.pseudoOwners[element]] {
-		if !sf.Context.budget.spend(1) {
-			return fmt.Errorf("%w: the document has too many styles", ivy.ErrLimit)
-		}
-		if targetCollector == nil {
-			continue
-		}
-		style, _ := sf.computed.get(k)
-		if anchor := style.Get("anchor"); truthy(anchor) {
-			targetCollector.CollectAnchor(str(anchor))
+// sharePseudoStyles collects again the anchors of the styles of the
+// pseudo-elements that an element shares, as SetComputedStyles collects
+// them for the element that made them. The target collector logs that
+// each one is defined twice. newStyleFor spends the work of these styles.
+func (sf *StyleFor) sharePseudoStyles(element *Element, targetCollector *TargetCollector) {
+	for _, k := range sf.cascaded.pseudos[sf.pseudoOwner(element)] {
+		// A style that is not made has no anchor.
+		if style, ok := sf.computed.get(k); ok {
+			if anchor := style.Get("anchor"); truthy(anchor) {
+				targetCollector.CollectAnchor(str(anchor))
+			}
 		}
 	}
-	return nil
+}
+
+// isAnchor reports whether a declaration sets anchor.
+func isAnchor(d Declaration) bool {
+	return d.Name == "anchor"
+}
+
+// pseudoOwner returns the element whose pseudo-elements give the styles of
+// the pseudo-elements of element: the element that made its computed
+// style.
+func (sf *StyleFor) pseudoOwner(element *Element) *Element {
+	if style, _ := sf.computed.get(newStyleKey(element, "")); style != nil {
+		if owner := sf.styleOwners[style]; owner != nil {
+			return owner
+		}
+	}
+	return element
 }
 
 // Get is StyleFor.__call__ in weasyprint/css/__init__.py. It returns the
@@ -663,12 +767,15 @@ func (sf *StyleFor) sharePseudoStyles(element *Element, targetCollector *TargetC
 // when there is none.
 func (sf *StyleFor) Get(owner StyleOwner, pseudoType string) *Style {
 	if e, ok := owner.(*Element); ok && pseudoType != "" {
-		if o := sf.pseudoOwners[e]; o != nil {
-			// The element shares the styles of the pseudo-elements of o.
-			owner = o
-		}
+		// The element shares the styles of the pseudo-elements of the
+		// element that made its computed style.
+		owner = sf.pseudoOwner(e)
 	}
-	style, _ := sf.computed.get(newStyleKey(owner, pseudoType))
+	key := newStyleKey(owner, pseudoType)
+	style, _ := sf.computed.get(key)
+	if style == nil {
+		style = sf.pseudoStyle(key)
+	}
 	if style == nil {
 		return nil
 	}
@@ -687,6 +794,28 @@ func (sf *StyleFor) Get(owner StyleOwner, pseudoType string) *Style {
 			}
 		}
 	}
+	return style
+}
+
+// pseudoStyle makes the style of a pseudo-element of an element that
+// newStyleFor did not make, as SetComputedStyles does, or returns nil when
+// the pseudo-element has no cascaded style.
+func (sf *StyleFor) pseudoStyle(key styleKey) *Style {
+	owner, ok := key.owner.(*Element)
+	if !ok || key.pseudo == "" {
+		return nil
+	}
+	cascaded, ok := sf.cascaded.styles.get(key)
+	if !ok {
+		return nil
+	}
+	parentStyle, _ := sf.computed.get(newStyleKey(owner, ""))
+	rootStyle, _ := sf.computed.get(newStyleKey(sf.root, ""))
+	if parentStyle == nil || rootStyle == nil {
+		return nil
+	}
+	style := newComputedStyle(parentStyle, cascaded, key.pseudo, rootStyle, sf.baseURL, sf.Context)
+	sf.computed.set(key, style)
 	return style
 }
 
@@ -718,10 +847,9 @@ func (sf *StyleFor) SetComputedStyles(element, parent StyleOwner, root *Element,
 		}
 	}
 
+	// Port: upstream gives an empty dict when the owner has no cascaded
+	// style. The port gives a nil map, which nothing writes.
 	cascaded := sf.cascaded.get(element, pseudoType)
-	if cascaded == nil {
-		cascaded = map[string]cascadedValue{}
-	}
 	computed := newComputedStyle(parentStyle, cascaded, pseudoType, rootStyle, baseURL, sf.Context)
 	sf.computed.set(newStyleKey(element, pseudoType), computed)
 	if targetCollector != nil {
@@ -2005,7 +2133,29 @@ type Style struct {
 	// BaseURL is the base URL of a computed style.
 	BaseURL string
 
-	kind      styleKind
+	kind styleKind
+	// cascadedSet holds the known properties of cascaded.
+	cascadedSet propertySet
+	// initialSpecified holds a bit for position and float when their
+	// specified value is their initial value, which missingComputed does
+	// not store in specified.
+	initialSpecified uint8
+	// copied is true for a copy. The layout sets the values of a copy,
+	// such as the values of the first line, after its copy.
+	copied bool
+	// inheritFrom is the style that gives the value of each fromParent
+	// property and each custom property of this computed style, or nil.
+	// The style does not store these values. A computed style has one when
+	// its cascaded style sets none of these properties and its parent is
+	// not a copy. inheritFrom is a computed style and not a copy, as the
+	// layout changes no inherited value of these styles.
+	//
+	// Port: upstream stores the value of the parent in each style that
+	// reads it. A style whose parent stores the value gives the value of
+	// its parent, as upstream does, and inheritFrom finds that parent in
+	// one step.
+	inheritFrom *Style
+
 	solving   map[string]bool
 	values    map[string]Value
 	specified map[string]Value
@@ -2043,13 +2193,28 @@ func (s *Style) Get(key string) Value {
 
 // Set is style[key] = value of upstream.
 func (s *Style) Set(key string, value Value) {
-	s.values[key] = value
+	s.store(key, value)
 	s.fontKeysSet = 0
 	s.fonts = nil
 }
 
+// store keeps the computed value of a property, and makes the map of the
+// values first if needed.
+//
+// Port: a style of upstream is a dict. The map of a style that holds no
+// value is nil, as most styles of the pseudo-elements hold none.
+func (s *Style) store(key string, value Value) {
+	if s.values == nil {
+		s.values = make(map[string]Value)
+	}
+	s.values[key] = value
+}
+
 // Has is key in style of upstream: it reports whether the value of a
 // property is already computed.
+//
+// Port: Has is false for a value that the style gives without storing it.
+// See propertyInfo.
 func (s *Style) Has(key string) bool {
 	_, ok := s.values[key]
 	return ok
@@ -2075,7 +2240,14 @@ func (s *Style) Specified(key string) Value {
 		// style itself.
 		return s.Get(key)
 	}
-	return s.specified[key]
+	if v, ok := s.specified[key]; ok {
+		return v
+	}
+	if info := propertyInfos[key]; info != nil && s.initialSpecified&info.specified != 0 {
+		// Port: missingComputed gave the initial value. See propertyInfo.
+		return info.initial
+	}
+	return nil
 }
 
 // AnonymousStyle is the cached property anonymous_style of Style in
@@ -2093,6 +2265,7 @@ func (s *Style) AnonymousStyle() *Style {
 func (s *Style) Copy() *Style {
 	c := *s
 	c.values = maps.Clone(s.values)
+	c.copied = true
 	c.anonymous = nil
 	c.solving = nil
 	c.fonts = nil
@@ -2115,7 +2288,7 @@ func (s *Style) missingInitial(key string) Value {
 		// Port: upstream raises KeyError.
 		return nil
 	}
-	s.values[key] = value
+	s.store(key, value)
 	return value
 }
 
@@ -2127,13 +2300,9 @@ func newAnonymousStyle(parentStyle *Style) *Style {
 		// border-*-style is none, so border-width computes to zero. Other
 		// than that, properties that would need computing are
 		// border-*-color, but they do not apply.
-		values: map[string]Value{
-			"border_top_width":    Int(0),
-			"border_bottom_width": Int(0),
-			"border_left_width":   Int(0),
-			"border_right_width":  Int(0),
-			"outline_width":       Int(0),
-		},
+		//
+		// Port: upstream stores the zero widths here. missingAnonymous
+		// gives them.
 		ParentStyle: parentStyle,
 		RootStyle:   parentStyle.RootStyle,
 		ctx:         parentStyle.ctx,
@@ -2142,18 +2311,30 @@ func newAnonymousStyle(parentStyle *Style) *Style {
 
 // missingAnonymous is AnonymousStyle.__missing__.
 func (s *Style) missingAnonymous(key string) Value {
+	// Port: see propertyInfo. The border widths and the width of the
+	// outline are 0, as newAnonymousStyle says. An anonymous style stores
+	// the values of its parent, as the layout reads the style of a text
+	// many times.
+	if info := propertyInfos[key]; info != nil {
+		switch {
+		case info.constant || info.specified != 0:
+			return info.initial
+		case info.zeroWidth:
+			return Int(0)
+		}
+	}
 	var value Value
 	switch {
 	case Inherited[key] || strings.HasPrefix(key, "__"):
 		value = s.ParentStyle.Get(key)
-		s.values[key] = value
+		s.store(key, value)
 	case key == "page":
 		// page is not inherited but taken from the ancestor if 'auto'.
 		value = s.ParentStyle.Get(key)
-		s.values[key] = value
+		s.store(key, value)
 	case strings.HasPrefix(key, "text_decoration_"):
 		value = textDecoration(key, InitialValues[key], s.ParentStyle.Get(key), false)
-		s.values[key] = value
+		s.store(key, value)
 	default:
 		var ok bool
 		value, ok = InitialValues[key]
@@ -2165,7 +2346,7 @@ func (s *Style) missingAnonymous(key string) Value {
 			value = computer(s, key, value)
 		}
 		// The value is the same as when computed.
-		s.values[key] = value
+		s.store(key, value)
 	}
 	return value
 }
@@ -2173,10 +2354,8 @@ func (s *Style) missingAnonymous(key string) Value {
 // newComputedStyle is ComputedStyle.__init__ in weasyprint/css/__init__.py,
 // the computed style used for the boxes that are not anonymous.
 func newComputedStyle(parentStyle *Style, cascaded map[string]cascadedValue, pseudoType string, rootStyle *Style, baseURL string, ctx *StyleContext) *Style {
-	return &Style{
+	s := &Style{
 		kind:          kindComputed,
-		values:        map[string]Value{},
-		specified:     map[string]Value{},
 		ParentStyle:   parentStyle,
 		cascaded:      cascaded,
 		IsRootElement: parentStyle == nil,
@@ -2185,10 +2364,173 @@ func newComputedStyle(parentStyle *Style, cascaded map[string]cascadedValue, pse
 		BaseURL:       baseURL,
 		ctx:           ctx,
 	}
+	inheritsAll := true
+	for key := range cascaded {
+		info := propertyInfos[key]
+		if info != nil {
+			s.cascadedSet.add(info.id)
+		}
+		if info != nil && info.fromParent || strings.HasPrefix(key, "__") {
+			inheritsAll = false
+		}
+	}
+	if parentStyle != nil && inheritsAll {
+		s.inheritFrom = parentStyle.inheritedFrom()
+	}
+	return s
+}
+
+// propertyInfo is what missingComputed and missingAnonymous need to know
+// of a known property before they compute its value.
+//
+// Port: upstream computes each value that a style reads and stores it in
+// the style. Most values of the styles of a book are initial values, values
+// of the parent, or zero widths. The port gives these values without
+// storing them, so most styles hold few values, and most styles of the
+// pseudo-elements hold none.
+type propertyInfo struct {
+	// id is the number of the property in a propertySet.
+	id int
+	// constant is true for a property whose computed value is its initial
+	// value when the cascade does not set it. Such a property is not
+	// inherited, its initial value is the same when computed, and
+	// missingComputed has no special case for it.
+	constant bool
+	// specified is the bit of initialSpecified for position and float,
+	// whose computed value is also their initial value when the cascade
+	// does not set them, or 0.
+	specified uint8
+	// fromParent is true for a property whose computed value is the value
+	// of the parent when the cascade does not set it: an inherited
+	// property, page, or a property of the text decorations.
+	fromParent bool
+	// zeroWidth is true for a width of a border, of the outline or of the
+	// rule of the columns, which computes to 0 when the cascade sets
+	// neither the width nor its style.
+	zeroWidth bool
+	// initial is the initial value of a constant property, of position and
+	// of float.
+	initial Value
+	// cascades holds the properties whose cascade changes the value of a
+	// constant, specified or zeroWidth property: the property, its logical
+	// properties, and the style of the line of a zeroWidth property and its
+	// logical properties.
+	cascades propertySet
+}
+
+// The bits of initialSpecified.
+const (
+	specifiedPosition uint8 = 1 << iota
+	specifiedFloat
+)
+
+// propertySet is a set of known properties, by their propertyInfo.id.
+type propertySet [4]uint64
+
+// add adds the property id to the set.
+func (p *propertySet) add(id int) {
+	p[id/64] |= 1 << (id % 64)
+}
+
+// intersects reports whether the two sets have a property in common.
+func (p *propertySet) intersects(o *propertySet) bool {
+	return p[0]&o[0] != 0 || p[1]&o[1] != 0 || p[2]&o[2] != 0 || p[3]&o[3] != 0
+}
+
+// propertyInfos holds the propertyInfo of each known property, by name.
+var propertyInfos map[string]*propertyInfo
+
+// newPropertyInfos returns the table of propertyInfos.
+func newPropertyInfos() map[string]*propertyInfo {
+	keys := slices.Sorted(maps.Keys(InitialValues))
+	if len(keys) > len(propertySet{})*64 {
+		// The fast paths need a bit for each property.
+		return map[string]*propertyInfo{}
+	}
+	m := make(map[string]*propertyInfo, len(keys))
+	for id, key := range keys {
+		m[key] = &propertyInfo{
+			id:         id,
+			fromParent: Inherited[key] || key == "page" || strings.HasPrefix(key, "text_decoration_"),
+		}
+	}
+	// cascade adds a property and its logical properties to set.
+	cascade := func(set *propertySet, key string) {
+		set.add(m[key].id)
+		if f, ok := physicalFunctions[key]; ok {
+			// TODO: use writing-mode and text-orientation, as
+			// missingComputed does.
+			for _, direction := range [...]string{"ltr", "rtl"} {
+				if l := m[f("ttb", direction)]; l != nil {
+					set.add(l.id)
+				}
+			}
+		}
+	}
+	for _, key := range keys {
+		info, value := m[key], InitialValues[key]
+		switch {
+		case checkMath(value):
+		case key == "position":
+			info.specified, info.initial = specifiedPosition, value
+		case key == "float":
+			info.specified, info.initial = specifiedFloat, value
+		case key == "border_top_width" || key == "border_right_width" ||
+			key == "border_bottom_width" || key == "border_left_width" ||
+			key == "outline_width" || key == "column_rule_width":
+			// computeBorderWidth gives 0 for the style none, which is the
+			// initial value of each style of a line.
+			info.zeroWidth = true
+			cascade(&info.cascades, strings.Replace(key, "width", "style", 1))
+		case !info.fromParent && !initialNotComputed[key] && key != "display":
+			info.constant, info.initial = true, value
+		}
+		cascade(&info.cascades, key)
+	}
+	return m
+}
+
+// inheritedFrom returns the style that gives the fromParent values of the
+// computed children of s that inherit all of them, or nil when they must
+// store them. A computed style that is not a copy keeps these values, as
+// the layout does not change them.
+func (s *Style) inheritedFrom() *Style {
+	switch {
+	case s == nil || s.copied || s.kind != kindComputed:
+		return nil
+	case s.inheritFrom != nil:
+		return s.inheritFrom
+	}
+	return s
 }
 
 // missingComputed is ComputedStyle.__missing__.
 func (s *Style) missingComputed(key string) Value {
+	// Port: see propertyInfo.
+	info := propertyInfos[key]
+	known := info != nil
+	switch {
+	case !known:
+		if s.inheritFrom != nil && strings.HasPrefix(key, "__") {
+			return s.inheritFrom.Get(key)
+		}
+	case s.inheritFrom != nil && info.fromParent:
+		return s.inheritFrom.Get(key)
+	case s.cascadedSet.intersects(&info.cascades):
+	case info.constant:
+		return info.initial
+	case info.zeroWidth:
+		return Int(0)
+	case info.specified != 0:
+		if key == "float" {
+			// Set specified value for position, as below.
+			s.Get("position")
+		}
+		// The layout reads them often, so they are stored.
+		s.initialSpecified |= info.specified
+		s.store(key, info.initial)
+		return info.initial
+	}
 	switch key {
 	case "float":
 		// Set specified value for position, needed for computed value.
@@ -2200,7 +2542,6 @@ func (s *Style) missingComputed(key string) Value {
 
 	parentStyle := s.ParentStyle
 	isCustom := strings.HasPrefix(key, "__")
-	_, known := InitialValues[key]
 	if !known && !isCustom {
 		// Port: upstream raises KeyError for an unknown property.
 		return nil
@@ -2243,7 +2584,7 @@ func (s *Style) missingComputed(key string) Value {
 		var solvedTokens []tinycss2.Node
 		tooLong := false
 		for _, token := range p.Tokens {
-			s.values[key] = nil // Mark property as invalid to avoid endless loops.
+			s.store(key, nil) // Mark property as invalid to avoid endless loops.
 			tokens, ok := resolveVar(s, token, parentStyle)
 			delete(s.values, key)
 			switch {
@@ -2274,14 +2615,14 @@ func (s *Style) missingComputed(key string) Value {
 			case Inherited[key] && parentStyle != nil:
 				// Values in parent_style are already computed.
 				value = parentStyle.Get(key)
-				s.values[key] = value
+				s.store(key, value)
 			case isCustom:
 				value = nil
 			default:
 				value = InitialValues[key]
 				if !initialNotComputed[key] {
 					// The value is the same as when computed.
-					s.values[key] = value
+					s.store(key, value)
 				}
 			}
 		}
@@ -2295,17 +2636,17 @@ func (s *Style) missingComputed(key string) Value {
 		}
 		if !initialNotComputed[key] {
 			// The value is the same as when computed.
-			s.values[key] = value
+			s.store(key, value)
 		}
 	} else if isStr(value, "inherit") {
 		// Values in parent_style are already computed.
 		value = parentStyle.Get(key)
-		s.values[key] = value
+		s.store(key, value)
 		// display depends on float, and float on position, call computer
 		// again.
 		if key == "display" || key == "float" {
 			value = computerFunctions[key](s, key, value)
-			s.values[key] = value
+			s.store(key, value)
 		}
 	}
 
@@ -2317,7 +2658,7 @@ func (s *Style) missingComputed(key string) Value {
 			value = computer(s, key, value)
 		}
 		_, cascaded := s.cascaded[key]
-		s.values[key] = textDecoration(key, value, parentStyle.Get(key), cascaded)
+		s.store(key, textDecoration(key, value, parentStyle.Get(key), cascaded))
 	case key == "page" && isStr(value, "auto"):
 		// The page property does not inherit. However, if the page value on
 		// an element is auto, then its used value is the value specified on
@@ -2333,6 +2674,9 @@ func (s *Style) missingComputed(key string) Value {
 	case key == "position" || key == "float" || key == "display":
 		// Save specified values to define computed values for these specific
 		// properties. See https://www.w3.org/TR/CSS21/visuren.html#dis-pos-flo.
+		if s.specified == nil {
+			s.specified = make(map[string]Value)
+		}
 		s.specified[key] = value
 	}
 
@@ -2350,7 +2694,7 @@ func (s *Style) missingComputed(key string) Value {
 		value = computer(s, key, value)
 	}
 
-	s.values[key] = value
+	s.store(key, value)
 	return value
 }
 
@@ -2432,13 +2776,13 @@ func (s *Style) solveMath(key string, value Value) Value {
 	if Inherited[key] && s.ParentStyle != nil {
 		// Values in parent_style are already computed.
 		value = s.ParentStyle.Get(key)
-		s.values[key] = value
+		s.store(key, value)
 		return value
 	}
 	value = InitialValues[key]
 	if !initialNotComputed[key] {
 		// The value is the same as when computed.
-		s.values[key] = value
+		s.store(key, value)
 	}
 	return value
 }

@@ -328,6 +328,9 @@ func init() {
 	registerComputer(computeTransform, "transform")
 	registerComputer(computeVerticalAlign, "vertical-align")
 	registerComputer(computeWordSpacing, "word-spacing")
+	// The table needs the physical properties and the size of the page of
+	// the init functions above.
+	propertyInfos = newPropertyInfos()
 }
 
 // computeBackgroundImage is background_image in
