@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"math"
 	"strconv"
 
 	"github.com/xo/ivy/internal/raster"
@@ -262,6 +263,8 @@ type floating struct {
 	// others around it.
 	wr     int
 	behind bool
+	// rot is the rotation of a picture, clockwise in degrees.
+	rot float64
 }
 
 // shapeProps holds the properties of a shape of Office Drawing that the
@@ -269,6 +272,7 @@ type floating struct {
 type shapeProps struct {
 	pib, relH, relV int
 	behind          bool
+	rot             float64
 }
 
 // readShapes reads the pictures of the shapes of the main document that
@@ -309,11 +313,18 @@ func (p *parser) readShapes() map[uint32]floating {
 		flags := u16(fspa, 20)
 		name := "media/" + strconv.Itoa(len(p.media)+1) + ext
 		p.media = append(p.media, media{name: name, data: data})
+		// a picture that turns between 45 and 135 degrees, or between 225
+		// and 315, has the box of its anchor turned by 90 degrees, as a
+		// shape has
+		if sp.rot >= 45 && sp.rot < 135 || sp.rot >= 225 && sp.rot < 315 {
+			left, top, w, h = left+(w-h)/2, top+(h-w)/2, h, w
+		}
 		f := floating{
 			pic:  &picture{name: name, width: float64(w) / 20, height: float64(h) / 20},
 			left: left, top: top,
 			bx: int(flags >> 1 & 3), by: int(flags >> 3 & 3), wr: int(flags >> 5 & 0xF),
 			behind: flags&0x4000 != 0 || sp.behind,
+			rot:    sp.rot,
 		}
 		// the origins of the shape, which Word 2000 and later write in the
 		// shape and not in the FSPA: the margin, the page, the column and
@@ -371,6 +382,9 @@ func (p *parser) walkShapes(b []byte, depth int, store *[][]byte, shapes map[uin
 				switch le.Uint16(body[6*k:]) & 0x3FFF {
 				case propPib:
 					sp.pib = int(v)
+				case propRotation:
+					rot := float64(int32(v)) / fixedOne
+					sp.rot = math.Mod(math.Mod(rot, 360)+360, 360)
 				case propPosRelH:
 					sp.relH = int(v)
 				case propPosRelV:

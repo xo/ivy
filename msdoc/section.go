@@ -3,7 +3,6 @@ package msdoc
 import (
 	"context"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,9 +36,6 @@ type docSection struct {
 	name    string
 	page    sectionPage
 	running [storyCount]string
-	// heights are the estimates of the heights of the headers and the
-	// footers, in points, by story.
-	heights [storyCount]float64
 }
 
 // docSections reads the sections of the document, with their pages and
@@ -59,7 +55,6 @@ func (p *parser) docSections(ctx context.Context, paper ivy.Paper) ([]docSection
 	// a story converts once, and the sections that share it share its
 	// running element
 	names := map[[2]uint32]string{}
-	heights := map[[2]uint32]float64{}
 	for i := range secs {
 		var b strings.Builder
 		for k, st := range stories[i] {
@@ -67,7 +62,7 @@ func (p *parser) docSections(ctx context.Context, paper ivy.Paper) ([]docSection
 				continue
 			}
 			if name, ok := names[st]; ok {
-				secs[i].running[k], secs[i].heights[k] = name, heights[st]
+				secs[i].running[k] = name
 				continue
 			}
 			paras, err := p.paragraphsIn(ctx, st[0], st[1])
@@ -80,9 +75,7 @@ func (p *parser) docSections(ctx context.Context, paper ivy.Paper) ([]docSection
 			}
 			name := "h" + strconv.Itoa(len(names)+1)
 			names[st] = name
-			pg := secs[i].page
-			heights[st] = p.storyHeight(paras, float64(pg.width-pg.left-pg.right)/20)
-			secs[i].running[k], secs[i].heights[k] = name, heights[st]
+			secs[i].running[k] = name
 			b.WriteString(`<div style="position: running(` + name + `)">`)
 			b.WriteString(p.body(paras, nil))
 			b.WriteString("</div>\n")
@@ -121,53 +114,6 @@ func (p *parser) headerStories(n int) [][storyCount][2]uint32 {
 	return out
 }
 
-// storyHeight returns an estimate of the height of the paragraphs of a
-// header or a footer, in points, on a column of width points: the lines of
-// each paragraph, with its text wrapped at half the size of its font for
-// each character, and its spacing. The rows of a table take the height of
-// their highest cell.
-func (p *parser) storyHeight(paras []paragraph, width float64) float64 {
-	h, cell, row := 0.0, 0.0, 0.0
-	for _, para := range paras {
-		size := 10.0
-		if para.mark.hps > 0 {
-			size = float64(para.mark.hps) / 2
-		}
-		chars := 0
-		for _, r := range para.runs {
-			if r.chp.hps > 0 {
-				size = max(size, float64(r.chp.hps)/2)
-			}
-			chars += len([]rune(r.text))
-			if r.pic != nil {
-				size = max(size, r.pic.height/1.15)
-			}
-		}
-		line := size * 1.15
-		switch {
-		case para.pap.lineExact > 0:
-			line = float64(para.pap.lineExact) / 20
-		case para.pap.lineMult > 0:
-			line *= para.pap.lineMult
-		}
-		lines := max(1, int(math.Ceil(float64(chars)*0.5*size/max(width, size))))
-		ph := float64(lines)*line + float64(para.pap.before+para.pap.after)/20
-		switch {
-		case !para.pap.inTable:
-			h += ph
-		case para.pap.ttp && para.end == 0x07:
-			h += max(row, cell)
-			row, cell = 0, 0
-		default:
-			cell += ph
-			if para.end == 0x07 {
-				row, cell = max(row, cell), 0
-			}
-		}
-	}
-	return h + max(row, cell)
-}
-
 // sectionCSS returns the rules of the pages of the sections.
 func (p *parser) sectionCSS(secs []docSection) string {
 	var b strings.Builder
@@ -183,17 +129,17 @@ func (p *parser) sectionCSS(secs []docSection) string {
 			return "element(" + s.running[k] + ")"
 		}
 		rules := func(header, footer int) string {
-			top := max(float64(pg.top)/20, float64(min(s.page.header, pg.top))/20+s.heights[header])
-			bottom := max(float64(pg.bottom)/20, float64(min(s.page.footer, pg.bottom))/20+s.heights[footer])
-			// the text keeps at least a fifth of the page
-			limit := float64(pg.height) / 20 * 0.4
-			top, bottom = min(top, max(float64(pg.top)/20, limit)), min(bottom, max(float64(pg.bottom)/20, limit))
-			return fmt.Sprintf("margin-top: %spt; margin-bottom: %spt; "+
-				"@top-center { content: %s; padding-top: %s; vertical-align: top; width: 100%%; text-align: left } "+
+			return fmt.Sprintf("@top-center { content: %s; padding-top: %s; vertical-align: top; width: 100%%; text-align: left } "+
 				"@bottom-center { content: %s; padding-bottom: %s; vertical-align: bottom; width: 100%%; text-align: left }",
-				num(top), num(bottom), box(header), pt(min(s.page.header, pg.top)), box(footer), pt(min(s.page.footer, pg.bottom)))
+				box(header), pt(min(s.page.header, pg.top)), box(footer), pt(min(s.page.footer, pg.bottom)))
 		}
-		fmt.Fprintf(&b, "@page %s { size: %s; margin: %s %s %s %s; %s }\n", s.name, pg.size(),
+		// Word puts the text of a page below its header, and above its
+		// footer: the top of the text is the larger of the top margin and
+		// the distance of the header from the top of the paper plus the
+		// height of the header, and the same holds for the footer at the
+		// bottom. The layout makes the margins of a page larger when its
+		// header or its footer needs it.
+		fmt.Fprintf(&b, "@page %s { size: %s; margin: %s %s %s %s; -ivy-margin-box-fit: grow; %s }\n", s.name, pg.size(),
 			pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), rules(storyOddHeader, storyOddFooter))
 		if p.facingPages() {
 			fmt.Fprintf(&b, "@page %s:left { %s }\n", s.name, rules(storyEvenHeader, storyEvenFooter))
@@ -220,6 +166,25 @@ func nameSections(secs []docSection, sl sectionList) {
 func sectionOf(secs []docSection, cp uint32) int {
 	i := sort.Search(len(secs), func(i int) bool { return secs[i].cp > cp })
 	return max(i-1, 0)
+}
+
+// defaultTab returns the distance between the default tab stops, in
+// twips: the dxaTab of the Dop, or half an inch (MS-DOC 2.7.2). A
+// document of Word 6 or Word 95 takes half an inch.
+func (p *parser) defaultTab() int {
+	dop := p.s.part(fcDop)
+	if v := int(u16(dop, 10)); !p.s.word6 && v >= 20 && v <= 31680 {
+		return v
+	}
+	return 720
+}
+
+// hangingTab reports whether the hanging indent of a paragraph is a tab
+// stop: the flag fNoTabForInd of the Copts60 of the Dop is not set
+// (MS-DOC 2.7.2).
+func (p *parser) hangingTab() bool {
+	dop := p.s.part(fcDop)
+	return p.s.word6 || len(dop) < 9 || dop[8]&1 == 0
 }
 
 // facingPages reports whether the even pages have headers and footers of

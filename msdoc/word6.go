@@ -25,8 +25,8 @@ const (
 // word6Sprms97 maps the codes of the modifiers of Word 6 that the package
 // reads to the codes of Word 97.
 var word6Sprms97 = map[byte]uint16{
-	2: sprmPIstd, 5: sprmPJc, 9: sprmPFPageBreak, 16: sprmPDxaRight, 17: sprmPDxaLeft,
-	19: sprmPDxaLeft1, 20: sprmPDyaLine, 21: sprmPDyaBefore, 22: sprmPDyaAfter,
+	2: sprmPIstd, 5: sprmPJc, 9: sprmPFPageBreak, 15: sprmPChgTabsPapx, 16: sprmPDxaRight, 17: sprmPDxaLeft,
+	19: sprmPDxaLeft1, 20: sprmPDyaLine, 21: sprmPDyaBefore, 22: sprmPDyaAfter, 23: sprmPChgTabs,
 	24: sprmPFInTable, 25: sprmPFTtp,
 	71: sprmCFData, 80: sprmCIstd, 85: sprmCFBold, 86: sprmCFItalic, 87: sprmCFStrike,
 	90: sprmCFSmallCaps, 91: sprmCFCaps, 92: sprmCFVanish, 93: sprmCRgFtc0, 94: sprmCKul,

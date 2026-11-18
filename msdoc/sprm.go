@@ -1,6 +1,9 @@
 package msdoc
 
-import "iter"
+import (
+	"iter"
+	"slices"
+)
 
 // This file reads the property modifiers of MS-DOC 2.6: a sprm and its
 // operand change one property of the characters, the paragraphs, the
@@ -51,6 +54,9 @@ const (
 	sprmPDyaBefore    = 0xA413
 	sprmPDyaAfter     = 0xA414
 	sprmPChgTabs      = 0xC615
+	sprmPChgTabsPapx  = 0xC60D
+	sprmPPc           = 0x261B
+	sprmPDxaAbs       = 0x8418
 	sprmTDefTable     = 0xD608
 	sprmSBkc          = 0x3009
 	sprmSFTitlePage   = 0x300A
@@ -208,6 +214,97 @@ type pap struct {
 	// ilfo is the LFO of the list of the paragraph, from 1, or 0, and ilvl
 	// its level in the list.
 	ilfo, ilvl int
+	// framed is set for a paragraph in a frame, which Word places at
+	// dxaAbs from the column, the margin or the page. A dxaAbs of
+	// dxaAbsCenter or dxaAbsRight centers it, or puts it at the right.
+	framed bool
+	dxaAbs int
+	// tabs holds the custom tab stops, in the order of their positions.
+	// A change makes a new slice, as the paragraphs share the slice of
+	// their style.
+	tabs []tabStop
+}
+
+// tabStop is a custom tab stop of a paragraph: its position from the left
+// edge of the column in twips, and its TBD (MS-DOC).
+type tabStop struct {
+	pos int
+	// jc is the alignment: 0 left, 1 center, 2 right, 3 decimal, 4 a bar,
+	// and 6 the stop of the number of a list. tlc is the leader.
+	jc, tlc byte
+}
+
+// The alignments of a tab stop that the package reads.
+const (
+	tabLeft    = 0
+	tabCenter  = 1
+	tabRight   = 2
+	tabDecimal = 3
+	tabList    = 6
+)
+
+// maxTabStops is the number of custom tab stops that Word keeps in a
+// paragraph.
+const maxTabStops = 64
+
+// applyTabs applies sprmPChgTabsPapx or sprmPChgTabs to the tab stops of
+// p: the stops to delete, then the stops to add (MS-DOC).
+// sprmPChgTabs deletes each stop within a distance of a position.
+func applyTabs(p *pap, s sprm) {
+	b := s.operand
+	if len(b) < 2 {
+		return
+	}
+	// the operand starts with its size, or 255 for a size of more than
+	// 255 bytes
+	b = b[1:]
+	read := func(i int) int {
+		if 2*i+2 > len(b) {
+			return 0
+		}
+		return int(int16(le.Uint16(b[2*i:])))
+	}
+	tabs := slices.Clone(p.tabs)
+	del := int(b[0])
+	b = b[1:]
+	if 2*del > len(b) {
+		return
+	}
+	ranged := s.op == sprmPChgTabs
+	for i := range del {
+		pos, d := read(i), 0
+		if ranged {
+			d = abs(read(del + i))
+		}
+		tabs = slices.DeleteFunc(tabs, func(t tabStop) bool { return abs(t.pos-pos) <= d })
+	}
+	skip := 2 * del
+	if ranged {
+		skip *= 2
+	}
+	if skip >= len(b) {
+		p.tabs = tabs
+		return
+	}
+	b = b[skip:]
+	add := int(b[0])
+	b = b[1:]
+	if 3*add > len(b) {
+		p.tabs = tabs
+		return
+	}
+	for i := range add {
+		pos, tbd := read(i), b[2*add+i]
+		t := tabStop{pos: pos, jc: tbd & 7, tlc: tbd >> 3 & 7}
+		k, found := slices.BinarySearchFunc(tabs, pos, func(t tabStop, pos int) int { return t.pos - pos })
+		switch {
+		case found:
+			tabs[k] = t
+		case len(tabs) < maxTabStops:
+			tabs = slices.Insert(tabs, k, t)
+		}
+	}
+	p.tabs = tabs
 }
 
 // The 16 colors of the ico of MS-DOC 2.9.119, as 0xRRGGBB.
@@ -350,6 +447,12 @@ func applyPap(p *pap, s sprm) {
 		p.ilfo = int(uint16(s.value()))
 	case sprmPIlvl:
 		p.ilvl = int(v)
+	case sprmPChgTabsPapx, sprmPChgTabs:
+		applyTabs(p, s)
+	case sprmPPc:
+		p.framed = true
+	case sprmPDxaAbs:
+		p.dxaAbs, p.framed = int(s.value()), true
 	}
 }
 

@@ -6,20 +6,26 @@
 // A Word document is a Compound File, which the package cfb of magic reads.
 // The package reads the File Information Block, the piece table and the text
 // of the main document, with the bold, the italic, the underline, the size,
-// the color and the font of each run, the alignment, the indents and the
-// spacing of each paragraph, and the headings of the style sheet. It
-// converts the text into HTML, with each table as an HTML table, for the
-// layout of ivy (D10). Each section has pages of its own size and margins,
-// with its headers and its footers. A section break starts a new page,
-// unless the next section is continuous on a page of the same size. The
-// tables have the borders, the shading and the merged cells of their rows,
-// the lists have their numbers and their bullets, and the pictures of the
-// stream Data and the pictures of Office Drawing that float on the page
-// show. The text boxes show with their text, and the rectangles, the
-// ellipses, the lines, the freeforms and the groups of Office Drawing show
-// as SVG images. A footnote goes at the foot of its page, and the
-// endnotes go at the end of the document. A run gives its East Asian font
-// after its font, and the language of its East Asian text.
+// the color and the font of each run, the alignment, the indents, the
+// spacing and the tab stops of each paragraph, and the headings of the
+// style sheet. It converts the text into HTML, with each table as an HTML
+// table, for the layout of ivy (D10). Each section has pages of its own
+// size and margins, with its headers and its footers. The layout makes the
+// margins of a page larger for a header or a footer that needs it. A
+// section break starts a new page, unless the next section is continuous
+// on a page of the same size. The tables have the borders, the shading and
+// the merged cells of their rows. A table that floats is at its position,
+// and the text does not wrap around it. The lists have their numbers and
+// their bullets, with the indents and the tab stops of their levels. A
+// frame at the center or at the right of the column puts its text there.
+// The pictures of the stream Data and the pictures of Office Drawing that
+// float on the page show. The text boxes show with their text, and the
+// rectangles, the ellipses, the lines, the freeforms and the groups of
+// Office Drawing show as SVG images. A line has its arrowheads, and the
+// text of a shape of a group shows on the image of the group. A footnote
+// goes at the foot of its page, and the endnotes go at the end of the
+// document. A run gives its East Asian font after its font, and the
+// language of its East Asian text.
 //
 // The package leaves out the comments, the WordArt, and the shapes of
 // Office Drawing whose geometry it does not know. The codes of the fields

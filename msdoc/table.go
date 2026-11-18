@@ -32,6 +32,9 @@ const (
 	sprmTSetBrc           = 0xD62F
 	sprmTCellPadding      = 0xD632
 	sprmTCellPaddingDflt  = 0xD634
+	sprmTPc               = 0x360D
+	sprmTDxaAbs           = 0x940E
+	sprmTDyaAbs           = 0x940F
 	sprmTDefTableMaxCells = 63
 )
 
@@ -231,7 +234,22 @@ type tap struct {
 	jc int
 	// header is set for a row that repeats at the top of each page.
 	header bool
+	// pcHorz and pcVert are what the position of a table that floats is
+	// from: the column, the margin or the page, and the margin, the page
+	// or the paragraph, from the TPc of sprmTPc. dxaAbs and dyaAbs are its
+	// position in twips, and floats is set for a table that floats.
+	pcHorz, pcVert int
+	dxaAbs, dyaAbs int
+	floats         bool
 }
+
+// The positions of a table that floats that the package reads.
+const (
+	pcHorzPage      = 2
+	pcVertParagraph = 2
+	dxaAbsCenter    = -4
+	dxaAbsRight     = -8
+)
 
 // cellRange returns the cells from first to lim of the row, within its
 // cells.
@@ -350,6 +368,13 @@ func applyTap(t *tap, s sprm) {
 		t.jc = int(s.value())
 	case sprmTTableHeader:
 		t.header = s.byteValue() != 0
+	case sprmTPc:
+		v := int(s.byteValue())
+		t.pcVert, t.pcHorz, t.floats = v>>4&3, v>>6&3, true
+	case sprmTDxaAbs:
+		t.dxaAbs, t.floats = int(s.value()), true
+	case sprmTDyaAbs:
+		t.dyaAbs, t.floats = int(s.value()), true
 	}
 }
 
@@ -360,7 +385,8 @@ func isTableSprm(op uint16) bool {
 	case sprmTDefTable, sprmTTableBorders80, sprmTTableBorders, sprmTSetBrc80, sprmTSetBrc,
 		sprmTDefTableShd80, sprmTDefTableShd, sprmTDefTableShd2nd, sprmTDefTableShd3rd,
 		sprmTVertMerge, sprmTVertAlign, sprmTCellPaddingDflt, sprmTCellPadding,
-		sprmTDxaGapHalf, sprmTDyaRowHeight, sprmTJc, sprmTJc90, sprmTTableHeader:
+		sprmTDxaGapHalf, sprmTDyaRowHeight, sprmTJc, sprmTJc90, sprmTTableHeader,
+		sprmTPc, sprmTDxaAbs, sprmTDyaAbs:
 		return true
 	}
 	return false
@@ -377,8 +403,10 @@ type tableRow struct {
 // rows make the columns of the table, so that each cell covers the columns
 // between its edges, as in Word, where each row has cells of its own. A
 // cell that the cells above cover becomes part of the cell where they
-// start.
-func writeTable(b *strings.Builder, rows []tableRow) {
+// start. A table that floats is a block at its position from the column,
+// and from the top of its paragraph, with left the left margin of the
+// page in twips. The text does not wrap around it.
+func writeTable(b *strings.Builder, rows []tableRow, left int) {
 	if len(rows) == 0 {
 		return
 	}
@@ -392,14 +420,33 @@ func writeTable(b *strings.Builder, rows []tableRow) {
 	var style []string
 	if len(edges) > 1 {
 		style = append(style, "table-layout: fixed", "width: "+pt(edges[len(edges)-1]-edges[0]))
-		switch first.jc {
+		jc, x := first.jc, edges[0]
+		if first.floats {
+			switch first.dxaAbs {
+			case dxaAbsCenter:
+				jc = 1
+			case dxaAbsRight:
+				jc = 2
+			default:
+				x += first.dxaAbs
+				if first.pcHorz == pcHorzPage {
+					x -= left
+				}
+			}
+			if first.pcVert == pcVertParagraph && first.dyaAbs > 0 && first.dyaAbs < 14400 {
+				// a block of the height of the position, which does not
+				// collapse with the spacing after the paragraph above
+				b.WriteString(`<div style="height: ` + pt(first.dyaAbs) + `"></div>`)
+			}
+		}
+		switch jc {
 		case 1:
 			style = append(style, "margin-left: auto", "margin-right: auto")
 		case 2:
 			style = append(style, "margin-left: auto", "margin-right: 0")
 		default:
-			if v := edges[0]; v != 0 && abs(v) < 14400 {
-				style = append(style, "margin-left: "+pt(v))
+			if x != 0 && abs(x) < 14400 {
+				style = append(style, "margin-left: "+pt(x))
 			}
 		}
 	}

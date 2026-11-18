@@ -396,30 +396,45 @@ func (p *parser) paraProps(fc uint32, pieceMods []byte) pap {
 	if r != nil {
 		istd, grpprl = r.istd, r.grpprl
 	}
-	var pp pap
+	var style pap
 	if st := p.styles.resolve(istd, p.lim.MaxDepth); st != nil && st.stk == stkParagraph {
-		pp = st.pap
+		style = st.pap
 	}
 	// the properties of a row come from its mark, not from a style
-	pp.istd, pp.tap = istd, nil
-	for s := range sprmsOf(p.s.word6, grpprl) {
-		if s.op == sprmPHugePapx {
-			// the modifiers that do not fit in the page are in the stream
-			// Data, with their size in 2 bytes (MS-DOC 2.9.103)
-			fc := int64(uint32(s.value()))
-			data := p.s.data
-			if fc >= 0 && fc+2 <= int64(len(data)) {
-				n := int64(le.Uint16(data[fc:]))
-				for h := range sprms(data[fc+2 : min(fc+2+n, int64(len(data)))]) {
-					applyPap(&pp, h)
+	style.istd, style.tap = istd, nil
+	pp := style
+	direct := func(pp *pap) {
+		for s := range sprmsOf(p.s.word6, grpprl) {
+			if s.op == sprmPHugePapx {
+				// the modifiers that do not fit in the page are in the
+				// stream Data, with their size in 2 bytes (MS-DOC 2.9.103)
+				fc := int64(uint32(s.value()))
+				data := p.s.data
+				if fc >= 0 && fc+2 <= int64(len(data)) {
+					n := int64(le.Uint16(data[fc:]))
+					for h := range sprms(data[fc+2 : min(fc+2+n, int64(len(data)))]) {
+						applyPap(pp, h)
+					}
 				}
+				continue
 			}
-			continue
+			applyPap(pp, s)
 		}
-		applyPap(&pp, s)
+		for s := range sprmsOf(p.s.word6, pieceMods) {
+			applyPap(pp, s)
+		}
 	}
-	for s := range sprmsOf(p.s.word6, pieceMods) {
-		applyPap(&pp, s)
+	direct(&pp)
+	// the level of a list gives its indents and its tab stops to its
+	// paragraphs, after the style and before the paragraph
+	if lvl := p.level(pp.ilfo, pp.ilvl); lvl != nil && len(lvl.papx) > 0 {
+		pp = style
+		for s := range sprms(lvl.papx) {
+			if s.op != sprmPIlfo && s.op != sprmPIlvl && !isTableSprm(s.op) {
+				applyPap(&pp, s)
+			}
+		}
+		direct(&pp)
 	}
 	return pp
 }

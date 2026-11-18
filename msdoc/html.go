@@ -5,6 +5,7 @@ import (
 	"html"
 	"iter"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -223,6 +224,8 @@ func (p *parser) css(pg page) string {
 html {
   font-family: %s;
   font-size: 10pt;
+  tab-size: %s;
+  -ivy-tab-stops: auto;
 }
 p, h1, h2, h3, h4, h5, h6 {
   margin: 0;
@@ -282,7 +285,7 @@ body {
     border-top: 0.5pt solid black;
   }
 }
-`, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family)
+`, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family, pt(p.defaultTab()))
 }
 
 // fontFamily returns the font family of CSS for the font ftc, then the
@@ -342,7 +345,7 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			rows = append(rows, tableRow{cells: cells})
 			cells = nil
 		}
-		writeTable(&b, rows)
+		writeTable(&b, rows, p.page.left)
 		rows = nil
 	}
 	for _, para := range paras {
@@ -387,13 +390,13 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		tag = "span"
 		style = append(style, "display: block", "white-space: pre-wrap")
 	}
-	// a text box goes before the paragraph of its anchor, and floats from
-	// there. A paragraph that holds only objects that float has the line
-	// of its mark, as in Word
+	// a text box, or a group with text boxes, goes before the paragraph of
+	// its anchor, and floats from there. A paragraph that holds only
+	// objects that float has the line of its mark, as in Word
 	empty := true
 	for _, r := range para.runs {
 		switch {
-		case r.drawn != nil && r.drawn.text:
+		case r.drawn != nil && r.drawn.block():
 			if !p.inline {
 				p.writeDrawn(b, r.drawn)
 			}
@@ -402,7 +405,18 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 			empty = false
 		}
 	}
-	switch para.pap.jc {
+	jc := para.pap.jc
+	if para.pap.framed && !para.pap.inTable {
+		// a frame at the center or at the right of the column holds its
+		// text there, which the alignment of the text gives
+		switch para.pap.dxaAbs {
+		case dxaAbsCenter:
+			jc = 1
+		case dxaAbsRight:
+			jc = 2
+		}
+	}
+	switch jc {
 	case 1:
 		style = append(style, "text-align: center")
 	case 2:
@@ -434,6 +448,10 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	case para.pap.lineExact > 0:
 		style = append(style, "line-height: "+pt(para.pap.lineExact))
 	}
+	marker, mc, numbered := p.marker(para.pap.ilfo, para.pap.ilvl, para.mark)
+	if v := p.tabStops(para.pap, numbered && strings.HasSuffix(marker, "\t")); v != "" {
+		style = append(style, "-ivy-tab-stops: "+v)
+	}
 	// the paragraph has the font of its mark, so that the strut of its
 	// lines is not taller than the lines of Word
 	if hps := para.mark.hps; hps > 0 {
@@ -450,8 +468,8 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		b.WriteString(` style="` + html.EscapeString(strings.Join(style, "; ")) + `"`)
 	}
 	b.WriteString(">")
-	if text, c, ok := p.marker(para.pap.ilfo, para.pap.ilvl, para.mark); ok {
-		p.writeMarker(b, text, c, para.pap.first)
+	if numbered {
+		p.writeRun(b, run{text: marker, chp: mc})
 	}
 	for _, r := range para.runs {
 		p.writeRun(b, r)
@@ -463,18 +481,53 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	b.WriteString("</" + tag + ">\n")
 }
 
-// writeMarker writes the number or the bullet of a paragraph of a list,
-// with the properties c. A hanging indent of first, negative, gives it the
-// width of the indent, so that the text after it starts at the indent, as
-// at the tab stop of Word.
-func (p *parser) writeMarker(b *strings.Builder, text string, c chp, first int) {
-	if first < 0 && strings.HasSuffix(text, "\t") {
-		b.WriteString(`<span style="display: inline-block; text-indent: 0; min-width: ` + pt(-first) + `">`)
-		p.writeRun(b, run{text: strings.TrimSuffix(text, "\t") + " ", chp: c})
-		b.WriteString("</span>")
-		return
+// tabLeaders maps the tlc of a tab stop to the text that fills the tab
+// (the TBD of MS-DOC).
+var tabLeaders = [8]string{1: ".", 2: "-", 3: "_", 4: "_", 5: "\\b7"}
+
+// tabStops returns the value of -ivy-tab-stops of a paragraph with the
+// properties pp, or "" for the default stops. The hanging indent is a stop
+// too, as in Word. A paragraph of a list whose number a tab follows has
+// the tab stop of the list instead, if its level gives one, as Word puts
+// the text after the number there.
+func (p *parser) tabStops(pp pap, numbered bool) string {
+	stops := make([]tabStop, 0, len(pp.tabs)+1)
+	listTab := false
+	for _, t := range pp.tabs {
+		switch t.jc {
+		case tabList:
+			listTab = true
+			t.jc = tabLeft
+		case tabLeft, tabCenter, tabRight, tabDecimal:
+		default:
+			// a bar is a line, not a stop
+			continue
+		}
+		if t.pos > 0 && t.pos < 31680 {
+			stops = append(stops, t)
+		}
 	}
-	p.writeRun(b, run{text: strings.ReplaceAll(text, "\t", " "), chp: c})
+	if pp.first < 0 && pp.left > 0 && pp.left < 31680 && p.hangingTab() && (!numbered || !listTab) {
+		k, found := slices.BinarySearchFunc(stops, pp.left, func(t tabStop, pos int) int { return t.pos - pos })
+		if !found {
+			stops = slices.Insert(stops, k, tabStop{pos: pp.left})
+		}
+	}
+	if len(stops) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, t := range stops {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(pt(t.pos))
+		b.WriteString([...]string{" left", " center", " right", " decimal"}[t.jc])
+		if l := tabLeaders[t.tlc]; l != "" {
+			b.WriteString(" '" + l + "'")
+		}
+	}
+	return b.String()
 }
 
 // writeRun writes a run of text in a span with its character properties,
@@ -485,7 +538,7 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 		p.writeFloating(b, r.float)
 		return
 	case r.drawn != nil:
-		if !r.drawn.text {
+		if !r.drawn.block() {
 			p.writeDrawn(b, r.drawn)
 		}
 		return
@@ -576,6 +629,9 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 // writeFloating writes a picture that floats on the page.
 func (p *parser) writeFloating(b *strings.Builder, f *floating) {
 	style := p.floatStyle(f, f.pic.width, f.pic.height)
+	if f.rot != 0 {
+		style = append(style, "transform: rotate("+num(f.rot)+"deg)")
+	}
 	b.WriteString(`<img src="` + html.EscapeString(f.pic.name) + `" alt="" style="` + strings.Join(style, "; ") + `"/>`)
 }
 

@@ -42,6 +42,9 @@ type listLevel struct {
 	text   []uint16
 	follow byte
 	chpx   []byte
+	// papx holds the modifiers of the paragraphs of the level, such as
+	// their indents and their tab stops.
+	papx []byte
 	// restart is set when the level starts again after a level above it.
 	restart bool
 }
@@ -120,10 +123,12 @@ func readLevel(table []byte, off int64) (listLevel, int64, bool) {
 		restart: lvlf[5]&0x08 == 0,
 	}
 	cbChpx, cbPapx := int64(lvlf[24]), int64(lvlf[25])
-	off += lvlfSize + cbPapx
-	if off+cbChpx+2 > int64(len(table)) {
+	off += lvlfSize
+	if off+cbPapx+cbChpx+2 > int64(len(table)) {
 		return listLevel{}, 0, false
 	}
+	lvl.papx = table[off : off+cbPapx]
+	off += cbPapx
 	lvl.chpx = table[off : off+cbChpx]
 	off += cbChpx
 	cch := int64(le.Uint16(table[off:]))
@@ -137,20 +142,39 @@ func readLevel(table []byte, off int64) (listLevel, int64, bool) {
 	return lvl, off + 2*cch, true
 }
 
+// list returns the list of the LFO ilfo, with a level ilvl, or nil.
+func (p *parser) list(ilfo, ilvl int) *list {
+	ls := p.lists
+	if ls == nil || ilfo < 1 || ilfo > len(ls.lfos) || ilvl < 0 || ilvl > 8 {
+		return nil
+	}
+	l, ok := ls.byID[ls.lfos[ilfo-1]]
+	if !ok || len(l.levels) == 0 {
+		return nil
+	}
+	return l
+}
+
+// level returns the level ilvl of the list of the LFO ilfo, or nil. A
+// level after the last level of the list is its last level.
+func (p *parser) level(ilfo, ilvl int) *listLevel {
+	l := p.list(ilfo, ilvl)
+	if l == nil {
+		return nil
+	}
+	return &l.levels[min(ilvl, len(l.levels)-1)]
+}
+
 // marker returns the number or the bullet of a paragraph of the list of the
 // LFO ilfo, at the level ilvl, and the properties of its characters over
 // base. It counts the paragraph in the list. It returns false for a
 // paragraph that shows no number.
 func (p *parser) marker(ilfo, ilvl int, base chp) (string, chp, bool) {
-	ls := p.lists
-	if ls == nil || ilfo < 1 || ilfo > len(ls.lfos) || ilvl < 0 || ilvl > 8 {
+	l := p.list(ilfo, ilvl)
+	if l == nil {
 		return "", chp{}, false
 	}
-	lsid := ls.lfos[ilfo-1]
-	l, ok := ls.byID[lsid]
-	if !ok || len(l.levels) == 0 {
-		return "", chp{}, false
-	}
+	ls, lsid := p.lists, l.lsid
 	ilvl = min(ilvl, len(l.levels)-1)
 	counts, started := ls.counters[lsid], ls.started[lsid]
 	if counts == nil {

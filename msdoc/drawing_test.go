@@ -210,6 +210,46 @@ func TestTextbox(t *testing.T) {
 	}
 }
 
+// TestGroupText checks that the text of a shape of a group shows on the
+// image of the group, at the place of the shape, and that a line draws the
+// arrowhead at its end.
+func TestGroupText(t *testing.T) {
+	p := drawingParser(t)
+	if _, err := p.drawnAt(t.Context(), 0, false); err != nil {
+		t.Fatal(err)
+	}
+	// the ellipse of the group holds the text of the text box, and the
+	// line has a triangle at its end
+	p.txbxs[0][1030] = p.txbxs[0][1027]
+	p.drawing[1028].props[propLineEnd] = 1
+	d, err := p.drawnAt(t.Context(), 1, false)
+	if err != nil || d == nil || len(d.texts) != 1 {
+		t.Fatalf("expected the group with one text, got %+v, %v", d, err)
+	}
+	var b strings.Builder
+	p.writeParagraph(&b, paragraph{runs: []run{{drawn: d}, {text: "After"}}})
+	html := b.String()
+	for _, want := range []string{
+		`<div style="position: absolute; left: -0.85pt; top: -0.85pt; width: 145.75pt; height: 73.75pt">`,
+		`display: block; width: 145.75pt; height: 73.75pt`,
+		`position: absolute; left: 72.88pt; top: 0.88pt; width: 72pt; height: 72pt`, "Box text</span></p>",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the html:\n%s", want, html)
+		}
+	}
+	if !strings.HasPrefix(html, "<div") || !strings.Contains(html, "</div><p>After</p>") {
+		t.Errorf("expected the group before the paragraph:\n%s", html)
+	}
+	if d, err = p.drawnAt(t.Context(), 3, false); err != nil || d == nil {
+		t.Fatalf("expected the line, got %v", err)
+	}
+	svg := string(p.media[len(p.media)-1].data)
+	if !strings.Contains(svg, `<path d="M144 0 L141 1.5 L141 -1.5 Z" fill="#000000"/></g>`) {
+		t.Errorf("expected the arrowhead at the end of the line:\n%s", svg)
+	}
+}
+
 // TestFullWidthFloat checks that an object that leaves less than half an
 // inch beside it puts the text below it, as Word does
 // (libreoffice/doc/landscape-letter-form.doc, whose text box spans the

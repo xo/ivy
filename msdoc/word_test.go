@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"image/color"
+	"slices"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestTableRows(t *testing.T) {
 	applyTap(first, sprm{op: sprmTDefTableShd80, operand: append([]byte{4}, u16s(0, 1<<10|1)...)})
 	applyTap(first, sprm{op: sprmTDxaGapHalf, operand: u16s(108)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}})
+	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}}, 0)
 	html := b.String()
 	for _, want := range []string{
 		`margin-left: -5.4pt`, `<col style="width: 144pt"/>`, `<col style="width: 216pt"/>`,
@@ -256,7 +257,7 @@ func TestExactRowHeight(t *testing.T) {
 	applyTap(exact, sprm{op: sprmTDyaRowHeight, operand: u16s(0xFEAC)}) // -340
 	applyTap(least, sprm{op: sprmTDyaRowHeight, operand: u16s(340)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}})
+	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}}, 0)
 	html := b.String()
 	if !strings.Contains(html, `<div style="display: flow-root; height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
 		t.Errorf("expected the cell of the exact row in a block of its height:\n%s", html)
@@ -320,5 +321,94 @@ func TestParagraphLines(t *testing.T) {
 	}
 	if css := p.css(letter); !strings.Contains(css, "body {\n  margin: 0;") {
 		t.Errorf("expected a body without the margin of HTML:\n%s", css)
+	}
+}
+
+// TestTabStops checks that a paragraph has the tab stops of its modifiers,
+// with the hanging indent as a stop, and that the text after the bullet of
+// a list goes to the tab stop of its level, as in
+// libreoffice/doc/landscape-letter-form.doc, where the paragraph has an
+// indent of 9.35 points and its level a stop at 18 points.
+func TestTabStops(t *testing.T) {
+	p := testParser(nil, nil)
+	var pp pap
+	// stops at 3 inches, centered, and at 6 inches, at the right with
+	// dots, then a stop at 1 inch, which the next modifier deletes
+	add := slices.Concat([]byte{13, 0, 3}, u16s(4320, 8640, 1440), []byte{tabCenter, tabRight | 1<<3, tabLeft})
+	applyPap(&pp, sprm{op: sprmPChgTabsPapx, operand: add})
+	applyPap(&pp, sprm{op: sprmPChgTabs, operand: append([]byte{6, 1}, append(u16s(1430, 20), 0)...)})
+	if got, exp := p.tabStops(pp, false), "216pt center, 432pt right '.'"; got != exp {
+		t.Errorf("expected the stops %q, got %q", exp, got)
+	}
+	// a hanging indent of 9.35 points, and the stop of a list at 18
+	// points
+	pp = pap{left: 187, first: -187}
+	if got, exp := p.tabStops(pp, true), "9.35pt left"; got != exp {
+		t.Errorf("expected the stop of the hanging indent %q, got %q", exp, got)
+	}
+	applyPap(&pp, sprm{op: sprmPChgTabs, operand: append(append([]byte{5, 0, 1}, u16s(360)...), tabList)})
+	if got, exp := p.tabStops(pp, true), "18pt left"; got != exp {
+		t.Errorf("expected the stop of the list %q, got %q", exp, got)
+	}
+	if got, exp := p.tabStops(pp, false), "9.35pt left, 18pt left"; got != exp {
+		t.Errorf("expected the stops of a paragraph without a number %q, got %q", exp, got)
+	}
+	if css := p.css(letter); !strings.Contains(css, "tab-size: 36pt;\n  -ivy-tab-stops: auto;") {
+		t.Errorf("expected the default stops of half an inch:\n%s", css)
+	}
+}
+
+// TestFloatingTable checks that a table that floats is at its position
+// from the margin, and from the top of its paragraph
+// (libreoffice/doc/legal-table.doc).
+func TestFloatingTable(t *testing.T) {
+	row := &tap{}
+	b := append(u16s(0), 1)
+	b = append(b, u16s(0xFF94, 2772)...)
+	binary.LittleEndian.PutUint16(b, uint16(len(b)-1))
+	for _, s := range []sprm{
+		{op: sprmTDefTable, operand: b},
+		{op: sprmTPc, operand: []byte{0x60}},
+		{op: sprmTDxaAbs, operand: u16s(0xF9DF)}, // -1569
+		{op: sprmTDyaAbs, operand: u16s(222)},
+	} {
+		applyTap(row, s)
+	}
+	var w strings.Builder
+	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, 2835)
+	html := w.String()
+	for _, want := range []string{`<div style="height: 11.1pt"></div>`, `margin-left: -83.85pt`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the table:\n%s", want, html)
+		}
+	}
+}
+
+// TestFrame checks that a paragraph in a frame at the right of the margin
+// puts its text at the right, as the number of the page of the footers of
+// libreoffice/doc/line-numbers.doc.
+func TestFrame(t *testing.T) {
+	p := testParser(nil, nil)
+	var pp pap
+	applyPap(&pp, sprm{op: sprmPDxaAbs, operand: u16s(0xFFF8)})
+	applyPap(&pp, sprm{op: sprmPPc, operand: []byte{0x60}})
+	var b strings.Builder
+	p.writeParagraph(&b, paragraph{pap: pp, runs: []run{{text: "2"}}})
+	if html := b.String(); !strings.Contains(html, "text-align: right") {
+		t.Errorf("expected the text of the frame at the right:\n%s", html)
+	}
+}
+
+// TestHeaderFit checks that the pages of a section grow their margins to
+// hold their headers and their footers.
+func TestHeaderFit(t *testing.T) {
+	p := testParser(nil, nil)
+	secs := []docSection{{name: "s1", page: sectionPage{page: letter, header: 720, footer: 720}}}
+	secs[0].running[storyOddHeader] = "h1"
+	css := p.sectionCSS(secs)
+	for _, want := range []string{"margin: 72pt 90pt 72pt 90pt; -ivy-margin-box-fit: grow;", "content: element(h1); padding-top: 36pt"} {
+		if !strings.Contains(css, want) {
+			t.Errorf("expected %q in the rules of the pages:\n%s", want, css)
+		}
 	}
 }

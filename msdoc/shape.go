@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -52,6 +53,12 @@ const (
 	propLineOpacity   = 0x01C1
 	propLineWidth     = 0x01CB
 	propLineDashing   = 0x01CE
+	propLineStart     = 0x01D0
+	propLineEnd       = 0x01D1
+	propLineStartW    = 0x01D2
+	propLineStartL    = 0x01D3
+	propLineEndW      = 0x01D4
+	propLineEndL      = 0x01D5
 	propLineBools     = 0x01FF
 	propPosH          = 0x038F
 	propPosV          = 0x0391
@@ -277,6 +284,22 @@ type drawn struct {
 	// top, 2 at the center and 3 at the right or the bottom, or 0 for
 	// its place.
 	posH, posV int
+	// texts holds the text boxes of the shapes of a group.
+	texts []groupText
+}
+
+// block reports whether the shape is a block of HTML: a text box, or a
+// group with text boxes.
+func (d *drawn) block() bool {
+	return d.text || len(d.texts) > 0
+}
+
+// groupText is a shape of a group that holds text: its box in the image of
+// the group, in points, its shape and its paragraphs.
+type groupText struct {
+	r     [4]float64
+	shape *odShape
+	paras []paragraph
 }
 
 // anchors returns the shapes of the main document, or of the headers when
@@ -414,7 +437,50 @@ func (p *parser) drawnAt(ctx context.Context, cp uint32, header bool) (*drawn, e
 	p.media = append(p.media, media{name: name, data: data})
 	d.pic = &picture{name: name, width: float64(w)/20 + 2*pad, height: float64(h)/20 + 2*pad}
 	d.left, d.top = d.left-int(pad*20), d.top-int(pad*20)
+	if s.flags&fspGroup != 0 {
+		if err := p.groupTexts(ctx, d, s, [4]float64{pad, pad, pad + float64(w)/20, pad + float64(h)/20}, k, 0); err != nil {
+			return nil, err
+		}
+	}
 	return d, nil
+}
+
+// groupTexts adds the shapes of the group g that hold text to d, with
+// their boxes from the box r of the group, as drawShape places them. k is
+// 0 for the main document and 1 for the headers.
+func (p *parser) groupTexts(ctx context.Context, d *drawn, g *odShape, r [4]float64, k, depth int) error {
+	gr := g.group
+	gw, gh := gr[2]-gr[0], gr[3]-gr[1]
+	if depth > maxShapeDepth || gw == 0 || gh == 0 {
+		return nil
+	}
+	sx, sy := (r[2]-r[0])/gw, (r[3]-r[1])/gh
+	for _, c := range g.children {
+		if !c.hasAnchor || len(d.texts) >= p.lim.MaxObjects {
+			continue
+		}
+		a := c.anchor
+		cr := [4]float64{r[0] + (a[0]-gr[0])*sx, r[1] + (a[1]-gr[1])*sy, r[0] + (a[2]-gr[0])*sx, r[1] + (a[3]-gr[1])*sy}
+		if c.flags&fspGroup != 0 {
+			if err := p.groupTexts(ctx, d, c, cr, k, depth+1); err != nil {
+				return err
+			}
+			continue
+		}
+		t, ok := p.txbxs[k][c.spid]
+		if !ok {
+			continue
+		}
+		paras, err := p.paragraphsIn(ctx, t[0], t[1])
+		if err != nil {
+			return err
+		}
+		for len(paras) > 1 && len(paras[len(paras)-1].runs) == 0 && !paras[len(paras)-1].pap.inTable {
+			paras = paras[:len(paras)-1]
+		}
+		d.texts = append(d.texts, groupText{r: cr, shape: c, paras: paras})
+	}
+	return nil
 }
 
 // writeDrawn writes a shape that floats on the page: a text box as a block
@@ -453,17 +519,29 @@ func (p *parser) writeDrawn(b *strings.Builder, d *drawn) {
 		}
 	}
 	style := p.floatStyle(&f, w, h)
+	if !d.text && len(d.texts) > 0 {
+		// the text boxes of a group are on the image of the group
+		if !slices.Contains(style, "position: absolute") {
+			style = append(style, "position: relative")
+		}
+		b.WriteString(`<div style="` + attr(strings.Join(style, "; ")) + `">`)
+		b.WriteString(`<img src="` + attr(f.pic.name) + `" alt="" style="display: block; width: ` + num(w) + `pt; height: ` + num(h) + `pt"/>`)
+		for _, t := range d.texts {
+			box := fmt.Sprintf("position: absolute; left: %spt; top: %spt; width: %spt; height: %spt; ",
+				num(t.r[0]), num(t.r[1]), num(t.r[2]-t.r[0]), num(t.r[3]-t.r[1]))
+			b.WriteString(`<div style="` + attr(box+strings.Join(textInsets(t.shape), "; ")) + `">`)
+			b.WriteString(p.body(t.paras, nil))
+			b.WriteString("</div>")
+		}
+		b.WriteString("</div>")
+		return
+	}
 	if !d.text {
 		b.WriteString(`<img src="` + attr(f.pic.name) + `" alt="" style="` + strings.Join(style, "; ") + `"/>`)
 		return
 	}
 	s := d.shape
-	inset := func(id uint16, def uint32) string {
-		return num(float64(int32(s.prop(id, def))) / emusPerPoint)
-	}
-	style = append(style, "box-sizing: border-box", "overflow: visible",
-		"padding: "+inset(propTextTop, 45720)+"pt "+inset(propTextRight, 91440)+"pt "+
-			inset(propTextBottom, 45720)+"pt "+inset(propTextLeft, 91440)+"pt")
+	style = append(style, textInsets(s)...)
 	if s.flag(propFillBools, 4, true) && float64(s.prop(propFillOpacity, fixedOne)) > 0 {
 		if c, ok := odColor(s.prop(propFillColor, 0xFFFFFF)); ok {
 			style = append(style, "background-color: "+c)
@@ -484,6 +562,17 @@ func (p *parser) writeDrawn(b *strings.Builder, d *drawn) {
 	b.WriteString(`<div style="` + attr(strings.Join(style, "; ")) + `">`)
 	b.WriteString(p.body(d.paras, nil))
 	b.WriteString("</div>")
+}
+
+// textInsets returns the style of the box of the text of the shape s: the
+// insets of its text as the padding of a box that holds them.
+func textInsets(s *odShape) []string {
+	inset := func(id uint16, def uint32) string {
+		return num(float64(int32(s.prop(id, def))) / emusPerPoint)
+	}
+	return []string{"box-sizing: border-box", "overflow: visible",
+		"padding: " + inset(propTextTop, 45720) + "pt " + inset(propTextRight, 91440) + "pt " +
+			inset(propTextBottom, 45720) + "pt " + inset(propTextLeft, 91440) + "pt"}
 }
 
 // attr returns s escaped for an attribute.
@@ -566,6 +655,7 @@ func drawShape(b *strings.Builder, s *odShape, r [4]float64, depth int, lw *floa
 		}
 	}
 	stroke := "none"
+	var ends strings.Builder
 	if s.flag(propLineBools, 3, true) {
 		if c, ok := odColor(s.prop(propLineColor, 0)); ok {
 			width := min(max(float64(s.prop(propLineWidth, defaultLineWidth))/emusPerPoint, 0.25), 72)
@@ -574,6 +664,10 @@ func drawShape(b *strings.Builder, s *odShape, r [4]float64, depth int, lw *floa
 			stroke = c + `" stroke-width="` + num(width)
 			if dash != "" {
 				stroke += `" stroke-dasharray="` + dash
+			}
+			if s.typ == shapeTypeLine || s.typ == shapeTypeConnect {
+				*lw = max(*lw, arrowhead(&ends, s, true, [2]float64{0, 0}, [2]float64{w, h}, width, c))
+				*lw = max(*lw, arrowhead(&ends, s, false, [2]float64{w, h}, [2]float64{0, 0}, width, c))
 			}
 		}
 	}
@@ -596,7 +690,54 @@ func drawShape(b *strings.Builder, s *odShape, r [4]float64, depth int, lw *floa
 		tr = append(tr, "translate("+num(w/2)+" "+num(h/2)+") scale("+num(fx)+" "+num(fy)+") translate("+num(-w/2)+" "+num(-h/2)+")")
 	}
 	fmt.Fprintf(b, `<path transform="%s" d="%s" fill="%s" stroke="%s"/>`, strings.Join(tr, " "), geom, fill, stroke)
+	if ends.Len() > 0 {
+		fmt.Fprintf(b, `<g transform="%s">%s</g>`, strings.Join(tr, " "), ends.String())
+	}
 	return true
+}
+
+// arrowhead writes the SVG element of the arrowhead of the start of the
+// line of the shape s, or of its end, at the point tip of a line that
+// comes from the point from, with the width of the line lw and its color c
+// (MS-ODRAW 2.4.10). Its width and its length are 2, 3 or 5 times the
+// width of the line, as in the package drawingml. It returns the width of
+// the arrowhead, or 0 for an end without an arrowhead.
+func arrowhead(b *strings.Builder, s *odShape, start bool, tip, from [2]float64, lw float64, c string) float64 {
+	var typ, wid, length uint16 = propLineEnd, propLineEndW, propLineEndL
+	if start {
+		typ, wid, length = propLineStart, propLineStartW, propLineStartL
+	}
+	kind := s.prop(typ, 0)
+	if kind < 1 || kind > 5 {
+		return 0
+	}
+	factor := [...]float64{2, 3, 5}
+	w := max(lw, 0.75)
+	aw, al := w*factor[min(s.prop(wid, 1), 2)], w*factor[min(s.prop(length, 1), 2)]
+	dx, dy := tip[0]-from[0], tip[1]-from[1]
+	d := math.Hypot(dx, dy)
+	if d == 0 {
+		return 0
+	}
+	ux, uy := dx/d, dy/d
+	// at returns the point at the distance along back from the tip, and
+	// across to the left
+	at := func(along, across float64) string {
+		return num(tip[0]-ux*along-uy*across) + " " + num(tip[1]-uy*along+ux*across)
+	}
+	switch kind {
+	case 1:
+		fmt.Fprintf(b, `<path d="M%s L%s L%s Z" fill="%s"/>`, at(0, 0), at(al, aw/2), at(al, -aw/2), c)
+	case 2:
+		fmt.Fprintf(b, `<path d="M%s L%s L%s L%s Z" fill="%s"/>`, at(0, 0), at(al, aw/2), at(al*0.6, 0), at(al, -aw/2), c)
+	case 3:
+		fmt.Fprintf(b, `<path d="M%s L%s L%s L%s Z" fill="%s"/>`, at(-al/2, 0), at(0, aw/2), at(al/2, 0), at(0, -aw/2), c)
+	case 4:
+		fmt.Fprintf(b, `<ellipse cx="%s" cy="%s" rx="%s" ry="%s" fill="%s"/>`, num(tip[0]), num(tip[1]), num(al/2), num(aw/2), c)
+	case 5:
+		fmt.Fprintf(b, `<path d="M%s L%s L%s" fill="none" stroke="%s" stroke-width="%s"/>`, at(al, aw/2), at(0, 0), at(al, -aw/2), c, num(w))
+	}
+	return max(aw, al)
 }
 
 // dashes returns the dashes of a line of the width w for the lineDashing
