@@ -25,7 +25,7 @@ const odtDocumentName = "index.xhtml"
 // odtStyleSheet is the style sheet of the texts. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // master page after this style sheet.
-const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17 }
+const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17; -ivy-page-overflow: descent }
 body { margin: 0; counter-reset: note }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; margin-break: discard }
 table { border-collapse: collapse; border-spacing: 0; margin-break: discard }

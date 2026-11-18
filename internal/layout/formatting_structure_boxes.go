@@ -337,6 +337,13 @@ type boxExtra struct {
 	// tab is the stop of the text box of a tab. See Box.isTab.
 	tab tabStop
 
+	// pageOverflow is the descent of the last line of a page when that
+	// line passes the bottom of the page, by -ivy-page-overflow. The
+	// layout sets it on the line and on each block that ends with it, and
+	// a parent subtracts it from the bottom of the block when it checks
+	// the bottom of the page. See lineboxLayout.
+	pageOverflow float64
+
 	// Advancements is the advancements of a grid container. Upstream has a
 	// TODO to move it into the context of the rendering.
 	Advancements map[any]any

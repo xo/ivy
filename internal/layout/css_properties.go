@@ -296,6 +296,7 @@ var InitialValues = map[string]Value{
 	// The properties that ivy adds, with the prefix -ivy-.
 	"margin_box_fit": String("none"),
 	"static_top":     String("auto"),
+	"page_overflow":  String("none"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -354,6 +355,7 @@ var Inherited = map[string]bool{
 	"list_style_type":         true,
 	"orphans":                 true,
 	"overflow_wrap":           true,
+	"page_overflow":           true,
 	"quotes":                  true,
 	"tab_size":                true,
 	"tab_stops":               true,

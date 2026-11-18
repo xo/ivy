@@ -10,6 +10,9 @@
 //     the top of its block container on the page.
 //   - -ivy-text-autospace adds a space between ideographs and Latin
 //     letters or digits, see text_autospace.go.
+//   - -ivy-page-overflow lets the last line of a page, when it has no
+//     text, pass the bottom of the page by up to its descent, see
+//     lineboxLayout (D52).
 
 package layout
 
@@ -23,6 +26,7 @@ var ivyProperties = map[string]bool{
 	"margin-box-fit": true,
 	"static-top":     true,
 	"text-autospace": true,
+	"page-overflow":  true,
 }
 
 // validateMarginBoxFit validates -ivy-margin-box-fit: 'none' or 'grow'.
@@ -37,4 +41,13 @@ var validateMarginBoxFit = singleKeyword(func(keyword string) bool {
 // that anchors it.
 var validateStaticTop = singleKeyword(func(keyword string) bool {
 	return keyword == "auto" || keyword == "block"
+})
+
+// validatePageOverflow validates -ivy-page-overflow: 'none' or 'descent'.
+// With 'descent', the last line of a page can pass the bottom of the page
+// by up to its descent when it has no text, as the line of an empty
+// paragraph or of a paragraph of spaces, see lineDescent. Word keeps such
+// a line on the page (D52). The property is inherited.
+var validatePageOverflow = singleKeyword(func(keyword string) bool {
+	return keyword == "none" || keyword == "descent"
 })

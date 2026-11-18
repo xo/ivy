@@ -13,8 +13,16 @@ so the pages of ivy drift from the pages of Word. The maintainers asked on
 The maintainers decided:
 
 1. The layout gets a property of its own, in `css_ivy.go`, that lets the
-   last line of a page pass the bottom of the page by up to its descent.
+   last line of a page pass the bottom of the page by up to its descent,
+   when the line has no text: an empty paragraph, or a paragraph of spaces.
    The property is off by default.
 2. `docx`, `msdoc`, `odf` and `rtf` turn the property on for their
    documents. HTML, EPUB and the other formats of the web keep the rule of
    WeasyPrint.
+
+The first build let every last line pass by its descent. Word moves a line
+of text that passes the bottom by less than its descent: the heading
+"Annemarie and Keith" on page 1 of `poi/docx/illustrative-cases.docx`, and a
+line on page 2 of `poi/docx/drawing.docx`. So `drawing.docx` had 21 pages in
+place of 20. On 2026-11-18 the maintainers limited the rule to lines without
+text, and both documents then break their pages as Word does.

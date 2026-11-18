@@ -341,6 +341,7 @@ func init() {
 	property("margin-box-fit", validateMarginBoxFit)
 	property("static-top", validateStaticTop)
 	property("text-autospace", validateTextAutospace)
+	property("page-overflow", validatePageOverflow)
 	property("hyphens", validateHyphens, optUnstable)
 	property("hyphenate-character", validateHyphenateCharacter, optUnstable)
 	property("hyphenate-limit-zone", validateHyphenateLimitZone, optUnstable)

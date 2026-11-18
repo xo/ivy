@@ -13,6 +13,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 )
 
 // blockResult is the result of the layouts of this file, with the list of
@@ -450,7 +451,11 @@ func breakLine(lc *layoutContext, box, line *Box, newChildren *[]*Box, needed in
 // lineboxLayout is _linebox_layout in weasyprint/layout/block.py: the
 // layout of the line box child of box. It returns (abort, stop,
 // resume_at, position_y, new_footnotes, max_lines).
-func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildren *[]*Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins []float64, bottomSpace, positionY float64, skip skipStack, firstLetterStyle, firstLineStyle *Style, drawBottomDecoration bool, maxLines int) (abort, stop bool, resumeAt skipStack, endPositionY float64, newFootnotes []*Box, endMaxLines int) {
+//
+// Port: upstream has no -ivy-page-overflow. pageOverflow is true when box
+// can pass the bottom of the page by the descent of its last line, see
+// layoutContext.pageOverflowBox.
+func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildren *[]*Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins []float64, bottomSpace, positionY float64, skip skipStack, firstLetterStyle, firstLineStyle *Style, drawBottomDecoration bool, maxLines int, pageOverflow bool) (abort, stop bool, resumeAt skipStack, endPositionY float64, newFootnotes []*Box, endMaxLines int) {
 	// Port: upstream asserts that the line box has no siblings before the
 	// layout.
 
@@ -497,11 +502,32 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 			offsetY = box.BorderBottomWidth + box.PaddingBottom
 		}
 
+		// Port: upstream has no -ivy-page-overflow. With 'descent', a line
+		// without text fits when it passes the bottom of the page by up to
+		// its descent, as the line of an empty paragraph of Word does
+		// (D52). A line that passes the bottom records its descent, and
+		// the parents subtract it in their own checks, see
+		// blockInFlowLayout.
+		descentOverflow := pageOverflow && isStr(box.Style.Get("page_overflow"), "descent")
+		descent := -1.0
+		overflowsPage := func(positionY float64) bool {
+			if !lc.overflowsPage(bottomSpace, positionY) {
+				return false
+			}
+			if !descentOverflow {
+				return true
+			}
+			if descent < 0 {
+				descent = lineDescent(box, line)
+			}
+			return lc.overflowsPage(bottomSpace, positionY-descent)
+		}
+
 		// Allow overflow if the first line of the page is higher than the
 		// page itself so that we put *something* on this page and can
 		// advance in the context.
 		overflow := (len(*newChildren) > 0 || !pageIsEmpty) &&
-			lc.overflowsPage(bottomSpace, newPositionY+offsetY)
+			overflowsPage(newPositionY+offsetY)
 		if overflow {
 			// If we couldn’t break the line before but can break now, first
 			// try to report footnotes and see if we don’t overflow.
@@ -547,7 +573,7 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 				footnotes = footnotes[:len(footnotes)-1]
 				lc.reportFootnote(footnote)
 				reportedFootnotes++
-				if !lc.overflowsPage(bottomSpace, newPositionY+offsetY) {
+				if !overflowsPage(newPositionY + offsetY) {
 					stop = true
 					overflow = false
 					broke = true
@@ -598,7 +624,7 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 				overflow := lc.layoutFootnote(footnote)
 				newFootnotes = append(newFootnotes, footnote)
 				overflow = overflow || len(lc.reportedFootnotes) > 0 ||
-					lc.overflowsPage(bottomSpace, newPositionY+offsetY)
+					overflowsPage(newPositionY+offsetY)
 				if overflow {
 					lc.reportFootnote(footnote)
 					// If we've put other content on this page, then we may
@@ -638,6 +664,12 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 			}
 		}
 
+		if descentOverflow && lc.overflowsPage(bottomSpace, newPositionY+offsetY) {
+			if descent < 0 {
+				descent = lineDescent(box, line)
+			}
+			line.ownExtra().pageOverflow = descent
+		}
 		*newChildren = append(*newChildren, line)
 		positionY = newPositionY
 		skip = resumeAt
@@ -648,6 +680,47 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 	}
 
 	return abort, stop, resumeAt, positionY, newFootnotes, maxLines
+}
+
+// lineDescent returns the descent of a line box of box for
+// -ivy-page-overflow, or 0 when the line has text. A line has text when
+// it or one of its inline boxes holds a text box with a character that is
+// not a space. Word keeps only such an empty line, as the line of an empty
+// paragraph or of a paragraph of spaces, when it passes the bottom of the
+// page by its descent (D52). The descent is the distance from the baseline
+// of the line to the lowest bottom of its fonts, and at most to the
+// bottom of the line. The fonts are the font of box, for the strut of the
+// line, and the fonts of the text boxes of the line and of its inline
+// boxes. The text in an inline block or in another atomic box does not
+// count.
+func lineDescent(box, line *Box) float64 {
+	// The strut is measured with line-height: normal, which gives the
+	// height of the font and its baseline, without the leading.
+	style := box.Style.Copy()
+	style.Set("line_height", String("normal"))
+	height, baseline := strut(style)
+	descent := height - baseline
+	lineBaseline := line.PositionY + line.Baseline
+	hasText := false
+	var walk func(*Box)
+	walk = func(b *Box) {
+		for _, child := range b.Children {
+			switch child.Kind {
+			case KindText:
+				if strings.TrimSpace(child.Text) != "" {
+					hasText = true
+				}
+				descent = max(descent, child.PositionY+child.Height-lineBaseline)
+			case KindInline:
+				walk(child)
+			}
+		}
+	}
+	walk(line)
+	if hasText {
+		return 0
+	}
+	return max(0, min(descent, line.PositionY+line.Height-lineBaseline))
 }
 
 // inFlowResult is the tuple that _in_flow_layout returns: (abort, stop,
@@ -664,7 +737,11 @@ type inFlowResult struct {
 
 // blockInFlowLayout is _in_flow_layout in weasyprint/layout/block.py: the
 // layout of an in-flow child of box that is not a line box.
-func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newChildren *[]*Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins *[]float64, bottomSpace, positionY float64, skip skipStack, firstLetterStyle, firstLineStyle *Style, discard bool, next nextPage, maxLines int) inFlowResult {
+//
+// Port: upstream has no -ivy-page-overflow. pageOverflow is true when box
+// can pass the bottom of the page by the descent of its last line. The
+// child then can too, see layoutContext.pageOverflowBox.
+func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newChildren *[]*Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins *[]float64, bottomSpace, positionY float64, skip skipStack, firstLetterStyle, firstLineStyle *Style, discard bool, next nextPage, maxLines int, pageOverflow bool) inFlowResult {
 	if adjoiningMargins == nil {
 		adjoiningMargins = &[]float64{}
 	}
@@ -743,6 +820,9 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 	}
 
 	childPositionX, childPositionY := child.PositionX, child.PositionY
+	if pageOverflow {
+		lc.pageOverflowBox = child
+	}
 	layout := blockLevelLayoutShared(lc, child, bottomSpace, skip, box,
 		pageIsEmptyWithNoChildren, absoluteBoxes, fixedBoxes, adjoiningMargins,
 		firstLetterStyle, firstLineStyle, discard, maxLines)
@@ -752,9 +832,14 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 	// Check that child doesn’t overflow and set next position_y.
 	if newChild != nil {
 		if !layout.collapsingThrough {
+			// Port: upstream has no -ivy-page-overflow. The checks
+			// subtract the descent of a last line that passes the bottom
+			// of the page, see lineboxLayout.
+			childOverflow := newChild.extra().pageOverflow
+
 			// Find content position and check that it doesn’t overflow.
 			newContentPositionY := newChild.ContentBoxY() + newChild.Height
-			contentPageOverflow := lc.overflowsPage(bottomSpace, newContentPositionY)
+			contentPageOverflow := lc.overflowsPage(bottomSpace, newContentPositionY-childOverflow)
 
 			// Update bottom space to include new child bottom spacing and
 			// check that it doesn’t overflow.
@@ -763,7 +848,7 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 				bottomSpace += newChild.MarginBottom
 			}
 			newPositionY := newChild.BorderBoxY() + newChild.BorderHeight()
-			borderPageOverflow := lc.overflowsPage(bottomSpace, newPositionY)
+			borderPageOverflow := lc.overflowsPage(bottomSpace, newPositionY-childOverflow)
 
 			canBreak := !pageIsEmptyWithNoChildren && !box.IsMonolithic()
 			switch {
@@ -778,6 +863,9 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 				// them.
 				removePlaceholders(lc, []*Box{newChild}, absoluteBoxes, fixedBoxes)
 				child.PositionX, child.PositionY = childPositionX, childPositionY
+				if pageOverflow {
+					lc.pageOverflowBox = child
+				}
 				layout = blockLevelLayoutShared(lc, child, bottomSpace, skip, box,
 					pageIsEmptyWithNoChildren, absoluteBoxes, fixedBoxes,
 					adjoiningMargins, firstLetterStyle, firstLineStyle, discard, maxLines)
@@ -899,6 +987,10 @@ func blockContainerLayout(lc *layoutContext, box *Box, bottomSpace float64, skip
 func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins *[]float64, firstLetterStyle, firstLineStyle *Style, discard bool, maxLines int) blockResult {
 	lc.enter()
 	defer lc.leave()
+	// Port: upstream has no -ivy-page-overflow. See
+	// layoutContext.pageOverflowBox.
+	pageOverflow := lc.pageOverflowBox == box && !lc.inColumn
+	lc.pageOverflowBox = nil
 	// Port: upstream asserts that box is a BlockContainerBox.
 	if absoluteBoxes == nil {
 		absoluteBoxes = &[]*Box{}
@@ -1028,7 +1120,7 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 			abort, stop, resumeAt, positionY, newFootnotes, maxLines = lineboxLayout(
 				lc, box, index, child, &newChildren, pageIsEmpty, absoluteBoxes,
 				fixedBoxes, *adjoiningMargins, bottomSpace, positionY, skip,
-				firstLetterStyle, firstLineStyle, drawBottomDecoration, maxLines)
+				firstLetterStyle, firstLineStyle, drawBottomDecoration, maxLines, pageOverflow)
 			drawBottomDecoration = drawBottomDecoration || resumeAt == nil
 			adjoiningMargins = &[]float64{}
 			firstLetterStyle, firstLineStyle = nil, nil
@@ -1038,7 +1130,7 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 			result := blockInFlowLayout(lc, box, index, child, &newChildren,
 				pageIsEmpty, absoluteBoxes, fixedBoxes, adjoiningMargins,
 				bottomSpace, positionY, skip, firstLetterStyle, firstLineStyle,
-				discard, next, maxLines)
+				discard, next, maxLines, pageOverflow)
 			abort, stop, resumeAt = result.abort, result.stop, result.resumeAt
 			positionY, adjoiningMargins, next = result.positionY, result.adjoiningMargins, result.nextPage
 			newMaxLines := result.maxLines
@@ -1160,6 +1252,16 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 
 	newBox := box.CopyWithChildren(newChildren)
 	newBox.RemoveDecoration(!isStart, boxIsFragmented && !discard)
+
+	// Port: upstream has no -ivy-page-overflow. The box passes the bottom
+	// of the page by the descent of its last line, see lineboxLayout.
+	lastOverflow := 0.0
+	if lastInFlowChild != nil {
+		lastOverflow = lastInFlowChild.extra().pageOverflow
+	}
+	if lastOverflow > 0 || newBox.ext != nil {
+		newBox.ownExtra().pageOverflow = lastOverflow
+	}
 
 	if newBox.Height == Auto {
 		newBox.Height = max(0, positionY-newBox.ContentBoxY())

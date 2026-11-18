@@ -23,7 +23,7 @@ const documentName = "index.xhtml"
 // styleSheet is the style sheet of the format. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // section after this style sheet.
-const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15 }
+const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15; -ivy-page-overflow: descent }
 body { margin: 0; counter-reset: note }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; tab-size: 36pt }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed }

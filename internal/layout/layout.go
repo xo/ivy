@@ -929,6 +929,15 @@ type layoutContext struct {
 	// of the line that the layout places, from which the tab stops of
 	// -ivy-tab-stops are measured. Upstream has no tab stops.
 	tabOrigin float64
+
+	// pageOverflowBox is the box whose layout starts next, when it can
+	// pass the bottom of the page by the descent of its last line, by
+	// -ivy-page-overflow. Upstream has no such property. Only the root box
+	// and the in-flow children of such a box can, because only
+	// blockInFlowLayout checks the bottom of the page with that descent.
+	// The lines of a table cell, a float or a flex item keep the rule of
+	// upstream.
+	pageOverflowBox *Box
 }
 
 // newLayoutContext is LayoutContext.__init__ in

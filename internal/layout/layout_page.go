@@ -1175,6 +1175,9 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			}
 		}
 	}
+	// Port: upstream has no -ivy-page-overflow. The root box can pass the
+	// bottom of the page by the descent of its last line.
+	lc.pageOverflowBox = rootBox
 	result := blockLevelLayout(lc, rootBox, 0, pageData.resumeAt, initialContainingBlock,
 		pageIsEmpty, &positionedBoxes, &positionedBoxes, adjoiningMargins,
 		nil, nil, false, noMaxLines)
@@ -1201,6 +1204,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 		}
 		parent.Children = nil
 		parent.ForceFragmentation = true
+		lc.pageOverflowBox = initialRootBox
 		result = blockLevelLayout(lc, initialRootBox, 0, initialResumeAt, initialContainingBlock,
 			true, &positionedBoxes, &positionedBoxes, adjoiningMargins,
 			nil, nil, false, noMaxLines)
