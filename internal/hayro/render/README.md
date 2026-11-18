@@ -15,17 +15,18 @@ of hayro. The crate is under Apache-2.0 or MIT. `LICENSE-APACHE` and
 
 | Upstream file | Lines | Go file | Lines |
 | --- | ---: | --- | ---: |
-| `src/lib.rs` | 420 | `lib.go` | 326 |
+| `src/lib.rs` | 420 | `lib.go` | 342 |
 | `src/clip.rs` | 29 | `clip.go` | 43 |
 | `src/glyph.rs` | 330 | `glyph.go` | 233 |
 | `src/glyph_cache.rs` | 182 | not ported, see below | |
-| `src/image.rs` | 812 | `image.go` | 364 |
+| `src/image.rs` | 812 | `image.go` | 419 |
 | `src/mask.rs` | 117 | `mask.go` | 65 |
 | `src/paint.rs` | 144 | `paint.go` | 161 |
 | `src/path.rs` | 207 | `path.go` | 216 |
 | `src/tiling.rs` | 121 | `tiling.go` | 182 |
 | none | | `convert.go`: the geometry of kurbo as the geometry of okage | 98 |
 | none | | `port_test.go`: the tests of the port | 205 |
+| none | | `image_cache_test.go`: the tests of the images in the cache of the decoded images | 211 |
 
 ## How the port draws
 
@@ -82,6 +83,11 @@ mark like this:
 9. A paint of a pattern in a space without an inverse draws nothing.
 10. The display device draws every group as isolated, and a knockout group
     as a group that is not knockout. Upstream ignores both flags.
+11. The pixels of RGBA that the port makes from a decoded image, resized to
+    the size of the drawing, stay in the cache of the decoded images of
+    interpret, with the key of the image and the size. Each band of a page
+    (D47) draws the same image at the same size, so the port makes the
+    pixels once. Upstream makes them at each draw.
 
 ## The guards of D18
 

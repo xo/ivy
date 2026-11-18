@@ -26,14 +26,17 @@ type cacheEntry struct {
 // shadings. It is safe for concurrent use.
 //
 // Port: upstream shares the map through an Arc. Go shares the pointer.
+// The cache also keeps the decoded images, which upstream does not keep.
 type Cache struct {
 	mu sync.Mutex
 	m  map[Key128]cacheEntry
+
+	images *imageCache
 }
 
 // newCache is Cache::new in hayro-interpret src/cache.rs.
 func newCache() *Cache {
-	return &Cache{m: make(map[Key128]cacheEntry)}
+	return &Cache{m: make(map[Key128]cacheEntry), images: newImageCache()}
 }
 
 // getOrInsertWith is Cache::get_or_insert_with in hayro-interpret

@@ -23,6 +23,7 @@ type imageXObject struct {
 	height           uint32
 	colorSpace       ColorSpace
 	hasColorSpace    bool
+	namedColorSpace  bool
 	cache            *Cache
 	interpolate      bool
 	kind             imageKind
@@ -36,11 +37,17 @@ type imageEnv struct {
 	warningSink WarningSinkFn
 	decoders    *syntax.ImageDecoders
 	limits      ivy.Limits
+	cancel      func() bool
 }
 
 // imageEnvOf returns the environment of the images of the settings.
 func imageEnvOf(settings *InterpreterSettings) imageEnv {
-	return imageEnv{warningSink: settings.WarningSink, decoders: settings.Decoders, limits: settings.Limits.WithDefaults()}
+	return imageEnv{
+		warningSink: settings.WarningSink,
+		decoders:    settings.Decoders,
+		limits:      settings.Limits.WithDefaults(),
+		cancel:      settings.Cancel,
+	}
 }
 
 // warn sends a warning to the sink.
@@ -108,6 +115,7 @@ func newImageXObjectInner(stream syntax.Stream, resolveCS func(syntax.Name) (Col
 			// space of an image XObject (#1311).
 			if name, isName := syntax.ObjectIntoName(csObj); !x.hasColorSpace && isName && resolveCS != nil {
 				x.colorSpace, x.hasColorSpace = resolveCS(name)
+				x.namedColorSpace = true
 			}
 		}
 	}
@@ -183,7 +191,16 @@ func (x *imageXObject) decodedMask(targetDimension [2]uint32) (decodedMask, bool
 	if !x.kind.isMask() {
 		return decodedMask{}, false
 	}
-	return decodeMask(x, targetDimension)
+	key, ok := x.decodedCacheKey(targetDimension)
+	if !ok {
+		return decodeMask(x, targetDimension)
+	}
+	v, ok := x.cache.images.get(key, x.env.imageBudget(), func() (any, int64, bool) {
+		m, ok := decodeMask(x, targetDimension)
+		return m, int64(len(m.luma.Data)), ok
+	}, func() bool { return !x.env.canceled() })
+	m, isMask := v.(decodedMask)
+	return m, ok && isMask
 }
 
 // decodedImage is ImageXObject::decoded_image in hayro-interpret
@@ -192,7 +209,16 @@ func (x *imageXObject) decodedImage(targetDimension [2]uint32) (decodedImage, bo
 	if x.kind.isMask() {
 		return decodedImage{}, false
 	}
-	return decodeImage(x, targetDimension)
+	key, ok := x.decodedCacheKey(targetDimension)
+	if !ok {
+		return decodeImage(x, targetDimension)
+	}
+	v, ok := x.cache.images.get(key, x.env.imageBudget(), func() (any, int64, bool) {
+		img, ok := decodeImage(x, targetDimension)
+		return img, imageDataSize(img.image) + lumaSize(img.alpha), ok
+	}, func() bool { return !x.env.canceled() })
+	img, isImage := v.(decodedImage)
+	return img, ok && isImage
 }
 
 // hasMask is ImageXObject::has_mask in hayro-interpret

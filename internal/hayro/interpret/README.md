@@ -20,7 +20,7 @@ Rust file are in the Go test file of the same name.
 | Upstream file | Lines | Go file | Lines |
 | --- | ---: | --- | ---: |
 | `src/lib.rs` | 64 | `lib.go` | 23 |
-| `src/cache.rs` | 192 | `cache.go` | 142 |
+| `src/cache.rs` | 192 | `cache.go` | 145 |
 | `src/canvas.rs` | 114 | `canvas.go` | 144 |
 | `src/color/mod.rs` | 694 | `color_mod.go`, `color_mod_test.go` | 713, 73 |
 | `src/color/cal_gray.rs` | 74 | `color_cal_gray.go` | 84 |
@@ -60,7 +60,7 @@ Rust file are in the Go test file of the same name.
 | `src/util.rs` | 183 | `util.go` | 336 |
 | `src/x_object/mod.rs` | 74 | `x_object_mod.go` | 66 |
 | `src/x_object/form.rs` | 133 | `x_object_form.go` | 125 |
-| `src/x_object/image.rs` | 243 | `x_object_image.go` | 209 |
+| `src/x_object/image.rs` | 243 | `x_object_image.go` | 235 |
 | `src/x_object/soft_mask.rs` | 166 | `x_object_soft_mask.go` | 175 |
 | `src/x_object/decode/mod.rs` | 386 | `x_object_decode_mod.go` | 365 |
 | `src/x_object/decode/image.rs` | 310 | `x_object_decode_image.go` | 320 |
@@ -69,6 +69,7 @@ Rust file are in the Go test file of the same name.
 | `assets/*` | | `assets/`, byte for byte | |
 | none | | `decoders.go`: the hooks of JBIG2 and JPX, see below | 145 |
 | none | | `thumbnail.go`: `NewRasterImage`, the image of a stream that no page draws, such as a thumbnail | 25 |
+| none | | `image_cache.go`, `image_cache_test.go`: the cache of the decoded images, see below | 229, 161 |
 | none | | `port_test.go`: the tests of the port and the fuzz test | 458 |
 
 `util.go` also holds the helpers that give Go the arithmetic of Rust, such
@@ -196,6 +197,18 @@ Each guard is marked with `Port:` in the code.
 6. The decoded data of an image is copied before the port changes it,
    because it can be the bytes of the file itself.
 7. `TilingPattern.Interpret` returns false where upstream returns `None`.
+8. The `Cache` of a document keeps the decoded images, which upstream
+   decodes again at each draw. A page renders in bands (D47), so each band
+   decoded each image. The key of a decoded image is the object of its
+   stream, its kind, and the size that the device needs if the image or its
+   mask uses JPX. The cache keeps at most a quarter of `MaxMemory` and
+   removes the images that were used least recently. Two calls that miss
+   on the same image at the same time decode it once. The cache does not
+   keep an inline image, an image with a transfer function, an image whose
+   color space is a name of the resources, an image larger than the
+   budget, or an image of an interpretation that `Cancel` stopped.
+   `InterpreterCache.DerivedImage` keeps the pixels that a renderer makes
+   from a decoded image in the same budget.
 
 ## What the port leaves out
 

@@ -68,3 +68,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D46 | [ivy fills small glyphs with the coverage of okage](D046-ivy-fills-small-glyphs-with-the-coverage-of-okage.md) | Decided. Amends D28 |
 | D47 | [A large page renders in bands on goroutines](D047-a-large-page-renders-in-bands-on-goroutines.md) | Decided |
 | D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided |
+| D49 | [A PDF document keeps its decoded images](D049-a-pdf-document-keeps-its-decoded-images.md) | Decided |

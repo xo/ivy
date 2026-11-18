@@ -35,14 +35,28 @@ const maxCachedOutlines = 1 << 16
 // threshold, the hinting and the cache of glyph bitmaps are left out. ivy
 // does not hint (D19), the port resizes images with golang.org/x/image/draw,
 // and okage always anti-aliases.
+//
+// Port: imageBudget is the number of bytes that the cache of the decoded
+// images keeps, which the limits of the interpreter set. cancel is the
+// Cancel function of the interpreter.
 type globalState struct {
 	cache                   *RenderCache
 	forceImageInterpolation bool
+	imageBudget             int64
+	cancel                  func() bool
 }
 
 // newGlobalState is GlobalState::new in hayro src/lib.rs.
 func newGlobalState(cache *RenderCache, settings *RenderSettings) *globalState {
 	return &globalState{cache: cache, forceImageInterpolation: settings.ForceImageInterpolation}
+}
+
+// keepImages reports whether the cache of the decoded images can keep the
+// pixels that the render makes. A decoder that the render stops can return
+// a part of an image, so the cache does not keep the pixels of a render
+// that stopped.
+func (g *globalState) keepImages() bool {
+	return g.cancel == nil || !g.cancel()
 }
 
 // renderer is Renderer in hayro src/lib.rs. It implements the Device of
@@ -250,6 +264,8 @@ func RenderInto(page *syntax.Page, cache *RenderCache, interpreterSettings inter
 	target := kurbo.NewRect(0, 0, float64(width), float64(height))
 	state := interpret.NewContext(transform, target, cache.InterpreterCache, page.XRef(), interpreterSettings)
 	global := newGlobalState(cache, renderSettings)
+	global.imageBudget = interpret.ImageBudget(interpreterSettings.Limits)
+	global.cancel = interpreterSettings.Cancel
 	device := newRenderer(dev, float64(width), float64(height), global)
 	cropBox := interpret.RectToKurbo(page.IntersectedCropBox())
 	a, b, c, d := transform[0], transform[1], transform[2], transform[3]

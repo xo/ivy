@@ -55,12 +55,18 @@ type solidColorImage struct {
 	interpolate bool
 }
 
-// renderImageData is RenderImageData in hayro src/image.rs. One of its
-// fields is set.
+// renderImageData is RenderImageData in hayro src/image.rs. One of rgb,
+// luma and solid is set.
+//
+// Port: key is the key of the decoded image in the cache of the
+// interpreter, when cached is true. The renderer keeps the pixels that it
+// draws for the image in the same cache.
 type renderImageData struct {
-	rgb   *interpret.RGBData
-	luma  *interpret.LumaData
-	solid *solidColorImage
+	rgb    *interpret.RGBData
+	luma   *interpret.LumaData
+	solid  *solidColorImage
+	key    interpret.Key128
+	cached bool
 }
 
 // newRenderImageData is the From implementation of RenderImageData for
@@ -126,7 +132,7 @@ func (r *renderer) drawImageWithAlphaMask(data renderImageData, alpha interpret.
 		width:       alpha.Width,
 		height:      alpha.Height,
 		interpolate: alpha.Interpolate,
-	}}
+	}, key: data.key, cached: data.cached}
 	r.dev.BeginGroup(display.Group{
 		Opacity:  1,
 		Isolated: true,
@@ -180,27 +186,19 @@ func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t 
 	if alpha != nil && len(alpha.Data) < n {
 		return
 	}
-	var rgba *image.RGBA
-	if data.solid != nil {
-		if alpha == nil {
-			return
-		}
-		rgba = alphaImage(alpha.Data[:n], imgWidth, imgHeight)
-	} else {
-		rgba = premultipliedImage(data, alpha, imgWidth, imgHeight)
-		if rgba == nil {
-			return
-		}
+	if data.solid != nil && alpha == nil {
+		return
+	}
+	rgba := r.imagePixels(data, alpha, newWidth, newHeight)
+	if rgba == nil {
+		return
 	}
 	additional := kurbo.IdentityAffine
-	if needsResize && (newWidth != imgWidth || newHeight != imgHeight) {
-		resized := image.NewRGBA(image.Rect(0, 0, int(newWidth), int(newHeight)))
-		resampling.Scale(resized, resized.Rect, rgba, rgba.Rect, xdraw.Src, nil)
+	if newWidth != imgWidth || newHeight != imgHeight {
 		additional = kurbo.AffineScaleNonUniform(
 			float64(imgWidth)/float64(newWidth),
 			float64(imgHeight)/float64(newHeight),
 		)
-		rgba = resized
 	}
 	// Pad the images of glyphs of Type 3 with transparent pixels, so that
 	// the sampling of the edges does not make them look bold.
@@ -223,6 +221,60 @@ func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t 
 		return
 	}
 	r.dev.DrawImage(rgba, toTransform(additional), opts)
+}
+
+// imagePixels returns the pixels of the image with the alpha channel, as an
+// image of RGBA, premultiplied, of newWidth by newHeight pixels. It returns
+// nil when the data is shorter than the size. The caller must not change
+// the pixels.
+//
+// Port: upstream builds and resizes the pixels at each draw. The port keeps
+// them in the cache of the decoded images, because each band of a page
+// draws the same image at the same size (D47).
+func (r *renderer) imagePixels(data renderImageData, alpha *interpret.LumaData, newWidth, newHeight uint32) *image.RGBA {
+	if !data.cached || r.global.cache == nil {
+		return buildImagePixels(data, alpha, newWidth, newHeight)
+	}
+	var solid, hasAlpha uint64
+	if data.solid != nil {
+		solid = 1
+	}
+	if alpha != nil {
+		hasAlpha = 1
+	}
+	params := []uint64{solid, hasAlpha, uint64(newWidth), uint64(newHeight)}
+	v, ok := r.global.cache.InterpreterCache.DerivedImage(data.key, params, r.global.imageBudget, func() (any, int64, bool) {
+		rgba := buildImagePixels(data, alpha, newWidth, newHeight)
+		if rgba == nil {
+			return nil, 0, false
+		}
+		return rgba, int64(len(rgba.Pix)), true
+	}, r.global.keepImages)
+	rgba, isRGBA := v.(*image.RGBA)
+	if !ok || !isRGBA {
+		return nil
+	}
+	return rgba
+}
+
+// buildImagePixels builds the pixels of imagePixels.
+func buildImagePixels(data renderImageData, alpha *interpret.LumaData, newWidth, newHeight uint32) *image.RGBA {
+	imgWidth, imgHeight := data.width(), data.height()
+	var rgba *image.RGBA
+	if data.solid != nil {
+		rgba = alphaImage(alpha.Data[:int(imgWidth)*int(imgHeight)], imgWidth, imgHeight)
+	} else {
+		rgba = premultipliedImage(data, alpha, imgWidth, imgHeight)
+		if rgba == nil {
+			return nil
+		}
+	}
+	if newWidth == imgWidth && newHeight == imgHeight {
+		return rgba
+	}
+	resized := image.NewRGBA(image.Rect(0, 0, int(newWidth), int(newHeight)))
+	resampling.Scale(resized, resized.Rect, rgba, rgba.Rect, xdraw.Src, nil)
+	return resized
 }
 
 // resizedSide returns the side of an image of side pixels at the scale,
@@ -318,13 +370,14 @@ func (r *renderer) drawPDFImage(img interpret.Image, props interpret.ImageDrawPr
 	case *interpret.StencilImage:
 		im.WithStencil(func(stencil interpret.LumaData, paint interpret.Paint) {
 			transform := transform.Mul(kurbo.AffineScaleNonUniform(float64(stencil.ScaleFactors[0]), float64(stencil.ScaleFactors[1])))
+			key, cached := im.DecodedKey(target)
 			if c, ok := paint.(interpret.Color); ok {
 				r.drawImage(renderImageData{solid: &solidColorImage{
 					shader:      colorShader(c),
 					width:       stencil.Width,
 					height:      stencil.Height,
 					interpolate: stencil.Interpolate,
-				}}, &stencil, transform)
+				}, key: key, cached: cached}, &stencil, transform)
 				return
 			}
 			stencilRect := kurbo.NewRect(0, 0, float64(stencil.Width), float64(stencil.Height))
@@ -341,13 +394,15 @@ func (r *renderer) drawPDFImage(img interpret.Image, props interpret.ImageDrawPr
 				width:       stencil.Width,
 				height:      stencil.Height,
 				interpolate: stencil.Interpolate,
-			}}, &stencil, transform)
+			}, key: key, cached: cached}, &stencil, transform)
 		}, target)
 	case *interpret.RasterImage:
 		im.WithRGBA(func(data interpret.ImageData, alpha *interpret.LumaData) {
 			sf := data.ScaleFactors()
 			transform := transform.Mul(kurbo.AffineScaleNonUniform(float64(sf[0]), float64(sf[1])))
-			r.drawImage(newRenderImageData(data), alpha, transform)
+			rd := newRenderImageData(data)
+			rd.key, rd.cached = im.DecodedKey(target)
+			r.drawImage(rd, alpha, transform)
 		}, target)
 	}
 }
