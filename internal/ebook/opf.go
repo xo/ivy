@@ -42,7 +42,7 @@ type Metadata struct {
 	Creators []string
 	Subjects []string
 	Language string
-	// Publisher is the publisher, which ivy.Info does not hold.
+	// Publisher is the publisher.
 	Publisher string
 	// Date is the date of the publication, as the file writes it.
 	Date string
@@ -270,17 +270,25 @@ func (p *Package) Covers() []string {
 	return names
 }
 
-// Info returns the metadata as an ivy.Info.
+// Info returns the metadata as an ivy.Info. The identifier of the info is
+// the unique identifier of the package, or else its first identifier.
 func (p *Package) Info() ivy.Info {
 	m := p.Metadata
+	// identifier is the unique identifier, or else the first identifier
+	var identifier string
+	if len(m.Identifiers) != 0 {
+		identifier = m.Identifiers[0]
+	}
 	return ivy.Info{
-		Title:    m.Title,
-		Authors:  slices.Clone(m.Creators),
-		Subject:  strings.Join(m.Subjects, ", "),
-		Language: m.Language,
-		Created:  ParseDate(m.Date),
-		Modified: ParseDate(m.Modified),
-		Producer: m.Generator,
+		Title:      m.Title,
+		Authors:    slices.Clone(m.Creators),
+		Subject:    strings.Join(m.Subjects, ", "),
+		Language:   m.Language,
+		Created:    ParseDate(m.Date),
+		Modified:   ParseDate(m.Modified),
+		Producer:   m.Generator,
+		Publisher:  m.Publisher,
+		Identifier: identifier,
 	}
 }
 

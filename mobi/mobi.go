@@ -235,10 +235,11 @@ func (d *Document) config() ivy.Config {
 
 // Describe satisfies the ivy.Describer interface. It reads the EXTH
 // records: the title, the authors, the subjects, the language, the date of
-// the publication, the date of the last change and the program that made
-// the book. A book without a title in its EXTH records takes its full name,
-// or the name of its database. A book without a language takes the language
-// of its locale. ivy.Info holds no field for the publisher.
+// the publication, the date of the last change, the program that made the
+// book, the publisher of record 101, and the ISBN of record 104 or else the
+// ASIN of record 113 as the identifier. A book without a title in its EXTH
+// records takes its full name, or the name of its database. A book without
+// a language takes the language of its locale.
 func (d *Document) Describe(ctx context.Context) (info ivy.Info, err error) {
 	if err := ctx.Err(); err != nil {
 		return ivy.Info{}, fmt.Errorf("describing mobi: %w", err)

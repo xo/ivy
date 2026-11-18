@@ -95,7 +95,9 @@ func TestCalibre(t *testing.T) {
 				t.Fatal(err)
 			}
 			if info.Title != "Sample Book" || !slices.Equal(info.Authors, []string{"Ann Author"}) || info.Language != "de" ||
-				info.Created.Year() != 2020 || !strings.HasPrefix(info.Producer, "kindlegen (Linux) ") {
+				info.Created.Year() != 2020 || !strings.HasPrefix(info.Producer, "kindlegen (Linux) ") ||
+				// calibre writes the UUID of the book in record 113
+				len(info.Identifier) != 36 {
 				t.Errorf("expected the metadata of the book, got: %+v", info)
 			}
 			got := previews(t, d)
@@ -212,6 +214,9 @@ func TestMOBI(t *testing.T) {
 			exthNumber(exthCover, 1),
 			exthNumber(exthThumbnail, 1),
 			exthNumber(exthCreator, 2),
+			exthText(exthPublisher, "A Press"),
+			exthText(exthASIN, "B000000000"),
+			exthText(exthISBN, "9780000000000"),
 		},
 	}.build()
 	d, err := Open(t.Context(), bytes.NewReader(buf))
@@ -223,15 +228,18 @@ func TestMOBI(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := ivy.Info{
-		Title:    "Full Name",
-		Authors:  []string{"Ann", "Bob"},
-		Subject:  "Tests, Books",
-		Language: "en-US",
-		Modified: time.Date(2021, 1, 2, 0, 0, 0, 0, time.UTC),
-		Producer: "Mobipocket Creator",
+		Title:      "Full Name",
+		Authors:    []string{"Ann", "Bob"},
+		Subject:    "Tests, Books",
+		Language:   "en-US",
+		Modified:   time.Date(2021, 1, 2, 0, 0, 0, 0, time.UTC),
+		Producer:   "Mobipocket Creator",
+		Publisher:  "A Press",
+		Identifier: "9780000000000",
 	}
 	if info.Title != want.Title || !slices.Equal(info.Authors, want.Authors) || info.Subject != want.Subject ||
-		info.Language != want.Language || !info.Modified.Equal(want.Modified) || info.Producer != want.Producer {
+		info.Language != want.Language || !info.Modified.Equal(want.Modified) || info.Producer != want.Producer ||
+		info.Publisher != want.Publisher || info.Identifier != want.Identifier {
 		t.Errorf("expected %+v, got: %+v", want, info)
 	}
 	got := previews(t, d)
@@ -268,6 +276,32 @@ func TestMOBI(t *testing.T) {
 	again, err := d.source()
 	if err != nil || again.FS != src.FS {
 		t.Errorf("expected the same source, got: %v", err)
+	}
+}
+
+func TestIdentifier(t *testing.T) {
+	for name, tt := range map[string]struct {
+		exth []exthRecord
+		want string
+	}{
+		"isbn": {[]exthRecord{exthText(exthISBN, " 9780000000000 "), exthText(exthASIN, "B000000000")}, "9780000000000"},
+		"asin": {[]exthRecord{exthText(exthISBN, " "), exthText(exthASIN, "B000000000")}, "B000000000"},
+		"none": {nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			buf := testBook{text: []byte("<p>A</p>"), exth: tt.exth, fullName: "Name"}.build()
+			d, err := Open(t.Context(), bytes.NewReader(buf))
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := d.Describe(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Identifier != tt.want || info.Publisher != "" {
+				t.Errorf("expected the identifier %q and no publisher, got: %q %q", tt.want, info.Identifier, info.Publisher)
+			}
+		})
 	}
 }
 

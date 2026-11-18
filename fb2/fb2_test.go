@@ -45,7 +45,8 @@ func book(encoding string) string {
 <coverpage><image l:href="#cover.png"/></coverpage>
 <lang>ru</lang>
 </title-info>
-<document-info><program-used>FictionBook Editor 2.6</program-used></document-info>
+<document-info><program-used>FictionBook Editor 2.6</program-used><id>doc-1</id></document-info>
+<publish-info><book-name>Война и мир</book-name><publisher>Русский вестник</publisher><isbn>978-0-00-000000-0</isbn></publish-info>
 </description>
 <body>
 <title><p>Война и мир</p><p>Том 1</p></title>
@@ -132,11 +133,13 @@ func TestOpen(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := ivy.Info{
-				Title:    "Война и мир",
-				Authors:  []string{"Лев Николаевич Толстой", "anon"},
-				Language: "ru",
-				Created:  time.Date(1869, 1, 1, 0, 0, 0, 0, time.UTC),
-				Producer: "FictionBook Editor 2.6",
+				Title:      "Война и мир",
+				Authors:    []string{"Лев Николаевич Толстой", "anon"},
+				Language:   "ru",
+				Created:    time.Date(1869, 1, 1, 0, 0, 0, 0, time.UTC),
+				Producer:   "FictionBook Editor 2.6",
+				Publisher:  "Русский вестник",
+				Identifier: "978-0-00-000000-0",
 			}
 			if !equalInfo(info, want) {
 				t.Errorf("expected %+v, got: %+v", want, info)
@@ -159,7 +162,30 @@ func TestOpen(t *testing.T) {
 func equalInfo(a, b ivy.Info) bool {
 	return a.Title == b.Title && strings.Join(a.Authors, "|") == strings.Join(b.Authors, "|") &&
 		a.Subject == b.Subject && a.Language == b.Language && a.Created.Equal(b.Created) &&
-		a.Modified.Equal(b.Modified) && a.Producer == b.Producer
+		a.Modified.Equal(b.Modified) && a.Producer == b.Producer && a.Publisher == b.Publisher &&
+		a.Identifier == b.Identifier
+}
+
+func TestDocumentID(t *testing.T) {
+	const fb2 = `<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">
+<description>
+<title-info><book-title>Book</book-title></title-info>
+<document-info><id> 0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0 </id></document-info>
+<publish-info><isbn> </isbn></publish-info>
+</description>
+<body><section><p>Text</p></section></body>
+</FictionBook>`
+	d, err := Open(t.Context(), strings.NewReader(fb2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := d.Describe(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Identifier != "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0" || info.Publisher != "" {
+		t.Errorf("expected the id of the document-info and no publisher, got: %q %q", info.Identifier, info.Publisher)
+	}
 }
 
 func TestSource(t *testing.T) {

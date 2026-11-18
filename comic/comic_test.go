@@ -161,6 +161,9 @@ func TestDescribe(t *testing.T) {
 	<Writer>Ann Writer, Bob Writer</Writer>
 	<Year>2024</Year><Month>5</Month>
 	<LanguageISO>en</LanguageISO>
+	<Publisher>Ivy Comics</Publisher>
+	<Imprint>An Imprint</Imprint>
+	<GTIN>9780000000000</GTIN>
 </ComicInfo>`
 	entries := append(pages(), fixture.Entry{Name: "ComicInfo.xml", Data: []byte("\xef\xbb\xbf" + info)})
 	// the entry of pages() is in a folder, and the first one wins
@@ -183,12 +186,15 @@ func TestDescribe(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := ivy.Info{
-				Title:    "Ivy 3",
-				Authors:  []string{"Ann Writer", "Bob Writer"},
-				Language: "en",
-				Created:  time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
+				Title:      "Ivy 3",
+				Authors:    []string{"Ann Writer", "Bob Writer"},
+				Language:   "en",
+				Created:    time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
+				Publisher:  "Ivy Comics",
+				Identifier: "9780000000000",
 			}
-			if got.Title != want.Title || !slices.Equal(got.Authors, want.Authors) || got.Language != want.Language || !got.Created.Equal(want.Created) {
+			if got.Title != want.Title || !slices.Equal(got.Authors, want.Authors) || got.Language != want.Language || !got.Created.Equal(want.Created) ||
+				got.Publisher != want.Publisher || got.Identifier != want.Identifier {
 				t.Errorf("expected %+v, got: %+v", want, got)
 			}
 		})
@@ -201,8 +207,8 @@ func TestDescribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := d.Describe(t.Context()); err != nil || got.Title != "Alone" {
-		t.Errorf("expected the title Alone, got: %+v %v", got, err)
+	if got, err := d.Describe(t.Context()); err != nil || got.Title != "Alone" || got.Publisher != "" || got.Identifier != "" {
+		t.Errorf("expected the title Alone without a publisher, got: %+v %v", got, err)
 	}
 	d, err = Open(t.Context(), bytes.NewReader(fixture.Zip(fixture.Entry{Name: "1.png", Data: fixture.PNG(4, 4, color.White)})))
 	if err != nil {

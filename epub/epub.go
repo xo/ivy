@@ -334,9 +334,10 @@ func (d *Document) pageImage(name string) (string, bool) {
 
 // Describe satisfies the ivy.Describer interface. It reads the metadata of
 // the package: the title, the authors, the subjects, the language, the date
-// of the publication, the date of the last change and the program that made
-// the file. If the package has no title, it reads the title of the NCX file.
-// ivy.Info holds no field for the publisher and the identifier.
+// of the publication, the date of the last change, the program that made the
+// file, the publisher and the identifier. The identifier is the one that the
+// package names as its unique identifier, or else the first one. If the
+// package has no title, it reads the title of the NCX file.
 func (d *Document) Describe(ctx context.Context) (info ivy.Info, err error) {
 	if err := ctx.Err(); err != nil {
 		return ivy.Info{}, fmt.Errorf("describing epub: %w", err)

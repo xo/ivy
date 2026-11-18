@@ -218,9 +218,10 @@ func isComicInfo(name string) bool {
 }
 
 // Describe satisfies the ivy.Describer interface. It reads the title, the
-// writers, the language and the date of the comic from its ComicInfo.xml. A
-// comic without one has no facts. The title is the field Title, or the
-// fields Series and Number.
+// writers, the language, the date, the publisher and the GTIN of the comic
+// from its ComicInfo.xml. A comic without one has no facts. The title is the
+// field Title, or the fields Series and Number. The GTIN is the field of
+// ComicInfo 2.1 for an ISBN, an EAN or a UPC, and it is the identifier.
 func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
 	if err := ctx.Err(); err != nil {
 		return ivy.Info{}, fmt.Errorf("describing comic: %w", err)
@@ -253,6 +254,8 @@ func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
 		}
 	}
 	info.Language = zipdoc.ChildText(root, "LanguageISO")
+	info.Publisher = zipdoc.ChildText(root, "Publisher")
+	info.Identifier = zipdoc.ChildText(root, "GTIN")
 	if year, err := strconv.Atoi(zipdoc.ChildText(root, "Year")); err == nil && year > 0 && year < 10000 {
 		month, err := strconv.Atoi(zipdoc.ChildText(root, "Month"))
 		if err != nil || month < 1 || month > 12 {

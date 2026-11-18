@@ -143,15 +143,18 @@ func TestParseOPF3(t *testing.T) {
 	}
 	info := p.Info()
 	want := ivy.Info{
-		Title:    "The Main Title",
-		Authors:  []string{"Ann Author", "Bo Author"},
-		Subject:  "Fiction, Sea",
-		Language: "en-US",
-		Created:  time.Date(2020, 5, 12, 0, 0, 0, 0, time.UTC),
-		Modified: time.Date(2021, 1, 2, 3, 4, 5, 0, time.UTC),
+		Title:      "The Main Title",
+		Authors:    []string{"Ann Author", "Bo Author"},
+		Subject:    "Fiction, Sea",
+		Language:   "en-US",
+		Created:    time.Date(2020, 5, 12, 0, 0, 0, 0, time.UTC),
+		Modified:   time.Date(2021, 1, 2, 3, 4, 5, 0, time.UTC),
+		Publisher:  "A Press",
+		Identifier: "urn:uuid:12345678-1234-1234-1234-123456789abc",
 	}
 	if info.Title != want.Title || !slices.Equal(info.Authors, want.Authors) || info.Subject != want.Subject ||
-		info.Language != want.Language || !info.Created.Equal(want.Created) || !info.Modified.Equal(want.Modified) {
+		info.Language != want.Language || !info.Created.Equal(want.Created) || !info.Modified.Equal(want.Modified) ||
+		info.Publisher != want.Publisher || info.Identifier != want.Identifier {
 		t.Errorf("expected %+v, got: %+v", want, info)
 	}
 }
@@ -200,6 +203,36 @@ func TestParseOPF2(t *testing.T) {
 		if _, err := ParseOPF([]byte(bad), ".", ivy.Limits{}); !errors.Is(err, ivy.ErrFormat) {
 			t.Errorf("%q: expected ivy.ErrFormat, got: %v", bad, err)
 		}
+	}
+}
+
+func TestInfoIdentifier(t *testing.T) {
+	for name, tt := range map[string]struct {
+		uid, want string
+	}{
+		"unique": {"b", "urn:isbn:9780000000002"},
+		"first":  {"none", "urn:isbn:9780000000001"},
+		"absent": {"", "urn:isbn:9780000000001"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			opf := `<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="` + tt.uid + `">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="a">urn:isbn:9780000000001</dc:identifier>
+    <dc:identifier id="b">urn:isbn:9780000000002</dc:identifier>
+    <dc:publisher> A
+      Press </dc:publisher>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>`
+			p, err := ParseOPF([]byte(opf), ".", ivy.Limits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info := p.Info(); info.Identifier != tt.want || info.Publisher != "A Press" {
+				t.Errorf("expected %q and the publisher, got: %q %q", tt.want, info.Identifier, info.Publisher)
+			}
+		})
 	}
 }
 

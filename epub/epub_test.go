@@ -200,7 +200,8 @@ func TestEPUB3(t *testing.T) {
 	if info.Title != "A Book of Tests" || !slices.Equal(info.Authors, []string{"Ann Author"}) ||
 		info.Language != "en" || info.Subject != "Testing" ||
 		!info.Created.Equal(time.Date(2020, 5, 12, 0, 0, 0, 0, time.UTC)) ||
-		!info.Modified.Equal(time.Date(2021, 1, 2, 3, 4, 5, 0, time.UTC)) {
+		!info.Modified.Equal(time.Date(2021, 1, 2, 3, 4, 5, 0, time.UTC)) ||
+		info.Publisher != "A Press" || info.Identifier != uuid {
 		t.Errorf("expected the metadata, got: %+v", info)
 	}
 
@@ -300,7 +301,8 @@ func TestEPUB2(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if info.Title != "Title & From NCX" || !slices.Equal(info.Authors, []string{"Bo Author"}) {
+			if info.Title != "Title & From NCX" || !slices.Equal(info.Authors, []string{"Bo Author"}) ||
+				info.Publisher != "" || info.Identifier != "book-2" {
 				t.Errorf("expected the title of the NCX file, got: %+v", info)
 			}
 			src, err := d.source()

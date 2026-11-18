@@ -118,4 +118,10 @@ type Info struct {
 	Modified time.Time
 	// Producer is the program or the device that made the document.
 	Producer string
+	// Publisher is the publisher of the document, such as the publisher of
+	// a book.
+	Publisher string
+	// Identifier is an identifier of the document that its file gives, such
+	// as an ISBN, a UUID or an ASIN, as the file writes it.
+	Identifier string
 }

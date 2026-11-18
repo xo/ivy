@@ -28,8 +28,11 @@ const (
 // MobileRead wiki lists them.
 const (
 	exthAuthor      = 100
+	exthPublisher   = 101
+	exthISBN        = 104
 	exthSubject     = 105
 	exthPublished   = 106
+	exthASIN        = 113
 	exthBoundary    = 121
 	exthCover       = 201
 	exthThumbnail   = 202
@@ -282,13 +285,18 @@ func (h *header) decode(buf []byte) string {
 // info returns the metadata of the header.
 func (h *header) info(db *database) ivy.Info {
 	info := ivy.Info{
-		Title:    h.exthString(exthTitle),
-		Authors:  h.exthStrings(exthAuthor),
-		Subject:  strings.Join(h.exthStrings(exthSubject), ", "),
-		Language: h.exthString(exthLanguage),
-		Created:  ebook.ParseDate(h.exthString(exthPublished)),
-		Modified: ebook.ParseDate(h.exthString(exthUpdated)),
-		Producer: h.producer(),
+		Title:      h.exthString(exthTitle),
+		Authors:    h.exthStrings(exthAuthor),
+		Subject:    strings.Join(h.exthStrings(exthSubject), ", "),
+		Language:   h.exthString(exthLanguage),
+		Created:    ebook.ParseDate(h.exthString(exthPublished)),
+		Modified:   ebook.ParseDate(h.exthString(exthUpdated)),
+		Producer:   h.producer(),
+		Publisher:  h.exthString(exthPublisher),
+		Identifier: h.exthString(exthISBN),
+	}
+	if info.Identifier == "" {
+		info.Identifier = h.exthString(exthASIN)
 	}
 	if info.Title == "" {
 		info.Title = strings.TrimSpace(h.decode(h.fullName))

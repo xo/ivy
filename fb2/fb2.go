@@ -199,8 +199,10 @@ func readZip(src ivy.Source, lim ivy.Limits) ([]byte, error) {
 	return archive.Read(archive.Find(files[0]))
 }
 
-// describe reads the description of the book.
+// describe reads the description of the book. The identifier is the ISBN of
+// the publish-info, or else the id of the document-info.
 func (d *Document) describe(desc roxmltree.Node) {
+	var id string
 	for n := range desc.Children() {
 		switch name(n) {
 		case "title-info":
@@ -229,11 +231,26 @@ func (d *Document) describe(desc roxmltree.Node) {
 			}
 		case "document-info":
 			for c := range n.Children() {
-				if name(c) == "program-used" {
+				switch name(c) {
+				case "program-used":
 					d.info.Producer = text(c)
+				case "id":
+					id = text(c)
+				}
+			}
+		case "publish-info":
+			for c := range n.Children() {
+				switch name(c) {
+				case "publisher":
+					d.info.Publisher = text(c)
+				case "isbn":
+					d.info.Identifier = text(c)
 				}
 			}
 		}
+	}
+	if d.info.Identifier == "" {
+		d.info.Identifier = id
 	}
 }
 
@@ -289,8 +306,8 @@ func (d *Document) config() ivy.Config {
 	return d.fonts.Config(d.lim, d.log)
 }
 
-// Describe satisfies the ivy.Describer interface. It reads the title-info
-// and the document-info of the description. The date of the title-info is
+// Describe satisfies the ivy.Describer interface. It reads the title-info,
+// the document-info and the publish-info of the description. The date of the title-info is
 // the creation date. ivy.Info has no field for the annotation, so the
 // annotation is the start of the XHTML document instead.
 func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {

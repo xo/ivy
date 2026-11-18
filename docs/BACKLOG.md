@@ -80,15 +80,13 @@ These items carry out the decisions that ask for code.
 
 1. Join the lines of a paragraph of a text file, and keep the breaks of the
    lines that start with a space or a tab (D34). Source: `text`.
-2. Add `Publisher` and `Identifier` to `ivy.Info`, and fill them in `epub`,
-   `mobi` and `comic` (D35). Source: the package `ivy`.
-3. Add `csv.WithSeparator` (D36). Source: `csv`.
-4. Open an indirect DjVu document with `djvu.WithDir` (D38). Source: `djvu`.
-5. Give `ErrLimit` in `pdf.Open` for a file larger than `Limits.MaxMemory`
+2. Add `csv.WithSeparator` (D36). Source: `csv`.
+3. Open an indirect DjVu document with `djvu.WithDir` (D38). Source: `djvu`.
+4. Give `ErrLimit` in `pdf.Open` for a file larger than `Limits.MaxMemory`
    (D39). Source: `pdf`.
-6. Delete the `TestMain` of `msppt` and `msxls` that sets
+5. Delete the `TestMain` of `msppt` and `msxls` that sets
    `-test.fuzzminimizetime` (D41). Source: `msppt` and `msxls`.
-7. Lay out the whole document before a page when it uses `counter(pages)`, a
+6. Lay out the whole document before a page when it uses `counter(pages)`, a
    target counter or a box with `position: fixed`, and all the documents of
    a book when one uses `counter(pages)` (D43). Source: `internal/layout`.
 
