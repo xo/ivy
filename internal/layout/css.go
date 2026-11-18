@@ -2170,6 +2170,8 @@ type Style struct {
 	// not change once computed, except through Set and Delete.
 	fontKeys    [2]string
 	fontKeysSet uint8
+	// flow caches the flags of flowFlags. Set and Delete clear it.
+	flow uint8
 	// fonts is the fontmap of the style for the shaping, or nil. Set and
 	// Delete clear it.
 	fonts *styleFonts
@@ -2195,6 +2197,7 @@ func (s *Style) Get(key string) Value {
 func (s *Style) Set(key string, value Value) {
 	s.store(key, value)
 	s.fontKeysSet = 0
+	s.flow = 0
 	s.fonts = nil
 }
 
@@ -2224,6 +2227,7 @@ func (s *Style) Has(key string) bool {
 func (s *Style) Delete(key string) {
 	delete(s.values, key)
 	s.fontKeysSet = 0
+	s.flow = 0
 	s.fonts = nil
 }
 
@@ -2269,6 +2273,7 @@ func (s *Style) Copy() *Style {
 	c.anonymous = nil
 	c.solving = nil
 	c.fonts = nil
+	c.flow = 0
 	if s.kind == kindComputed {
 		c.specified = maps.Clone(s.specified)
 	}

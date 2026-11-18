@@ -25,21 +25,123 @@
 package layout
 
 import (
-	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-// The regular expressions of weasyprint/formatting_structure/text.py.
-var (
-	// lineFeedRE is LINE_FEED_RE.
-	lineFeedRE = regexp.MustCompile("\r\n?")
-	// tabRE is TAB_RE.
-	tabRE = regexp.MustCompile("[\t ]*\n[\t ]*")
-	// spaceRE is SPACE_RE.
-	spaceRE = regexp.MustCompile("[\t ]+")
-)
+// The functions below replace the regular expressions of
+// weasyprint/formatting_structure/text.py.
+//
+// Port: upstream calls re.sub with LINE_FEED_RE, TAB_RE and SPACE_RE for
+// each text box. The functions give the same texts without a regular
+// expression, and return the text itself when nothing changes.
+
+// isBlank reports whether c is a space or a tab, [\t ] of the regular
+// expressions.
+func isBlank(c byte) bool {
+	return c == ' ' || c == '\t'
+}
+
+// normalizeLineFeeds is LINE_FEED_RE.sub('\n', text): it replaces "\r\n"
+// and "\r" with "\n".
+func normalizeLineFeeds(text string) string {
+	if strings.IndexByte(text, '\r') < 0 {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c != '\r' {
+			b.WriteByte(c)
+			continue
+		}
+		b.WriteByte('\n')
+		if i+1 < len(text) && text[i+1] == '\n' {
+			i++
+		}
+	}
+	return b.String()
+}
+
+// trimLineFeedBlanks is TAB_RE.sub('\n', text): it removes the spaces and
+// the tabs before and after each line feed.
+func trimLineFeedBlanks(text string) string {
+	if strings.IndexByte(text, '\n') < 0 {
+		return text
+	}
+	var b strings.Builder
+	changed := false
+	for i := 0; i < len(text); {
+		if !isBlank(text[i]) {
+			if changed {
+				b.WriteByte(text[i])
+			}
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(text) && isBlank(text[j]) {
+			j++
+		}
+		switch {
+		case i > 0 && text[i-1] == '\n' || j < len(text) && text[j] == '\n':
+			if !changed {
+				changed = true
+				b.Grow(len(text))
+				b.WriteString(text[:i])
+			}
+		case changed:
+			b.WriteString(text[i:j])
+		}
+		i = j
+	}
+	if !changed {
+		return text
+	}
+	return b.String()
+}
+
+// collapseSpaces is SPACE_RE.sub(' ', text): it replaces each run of spaces
+// and tabs with one space. With lineFeeds, a run also has the line feeds.
+//
+// collapseSpaces(text, true) is the text of TAB_RE.sub('\n', text), then of
+// the line feeds replaced by spaces, then of SPACE_RE.sub(' ', text): each
+// space or tab next to a line feed goes, each line feed becomes a space,
+// and the spaces of a run become one space.
+func collapseSpaces(text string, lineFeeds bool) string {
+	var b strings.Builder
+	changed := false
+	isSpace := func(c byte) bool {
+		return isBlank(c) || lineFeeds && c == '\n'
+	}
+	for i := 0; i < len(text); {
+		if !isSpace(text[i]) {
+			if changed {
+				b.WriteByte(text[i])
+			}
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(text) && isSpace(text[j]) {
+			j++
+		}
+		if !changed && (j-i > 1 || text[i] != ' ') {
+			changed = true
+			b.Grow(len(text))
+			b.WriteString(text[:i])
+		}
+		if changed {
+			b.WriteByte(' ')
+		}
+		i = j
+	}
+	if !changed {
+		return text
+	}
+	return b.String()
+}
 
 // transform is transform in weasyprint/formatting_structure/text.py. It
 // applies a value of text-transform to a text.

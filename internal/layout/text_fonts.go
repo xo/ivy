@@ -33,6 +33,7 @@ import (
 	"github.com/xo/okage/typesetting/font"
 	ot "github.com/xo/okage/typesetting/font/opentype"
 	"github.com/xo/okage/typesetting/language"
+	"github.com/xo/okage/typesetting/segmenter"
 	"github.com/xo/okage/typesetting/shaping"
 	"github.com/xo/okage/webfont"
 
@@ -115,11 +116,16 @@ type FontConfiguration struct {
 	// their texts.
 	shaped      map[shapeKey]*shapedText
 	shapedBytes int
-	// shapeClusters, shapeFound and shapeIndex are the buffers of
-	// shapeText, which it reuses for each text.
+	// shapeRunes, shapeClusters, shapeFound and shapeIndex are the buffers
+	// of shapeText, which it reuses for each text.
+	shapeRunes    []rune
 	shapeClusters []textCluster
 	shapeFound    []bool
-	shapeIndex    []int
+	shapeIndex    []int32
+	// breakRunes and breaker are the buffer and the segmenter of
+	// lineBreaks, which it reuses for each text.
+	breakRunes []rune
+	breaker    segmenter.Segmenter
 
 	// strutLayouts is the cache strut_layouts of upstream.
 	strutLayouts map[string][2]float64

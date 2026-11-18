@@ -362,11 +362,12 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 
 		children = append(children, childBoxes...)
 		if text := childElement.Tail; text != "" {
-			textBox := anonymousTextFrom(box, text)
+			// Port: upstream makes the text box before it checks the last
+			// child. The port does not make a box that it drops.
 			if len(children) > 0 && children[len(children)-1].Kind == KindText {
-				children[len(children)-1].Text += textBox.Text
+				children[len(children)-1].Text += text
 			} else {
-				children = append(children, textBox)
+				children = append(children, anonymousTextFrom(box, text))
 			}
 		}
 	}

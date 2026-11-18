@@ -958,6 +958,7 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 func styleDict(style *Style) *Style {
 	d := style.Copy()
 	d.values = make(map[string]Value, len(style.cascaded))
+	d.flow = 0
 	for key := range style.cascaded {
 		d.values[key] = style.Get(key)
 	}
@@ -971,6 +972,7 @@ func mergeStyleDict(d, other *Style) {
 		d.values = map[string]Value{}
 	}
 	maps.Copy(d.values, other.values)
+	d.flow = 0
 }
 
 // blockContainerLayout is block_container_layout in

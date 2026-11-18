@@ -63,9 +63,12 @@ type shapeKey struct {
 }
 
 // shapedText is a text shaped with the fonts of a style, in units of em.
+//
+// The indexes are of 32 bits, which hold maxShapedRunes runes of 4 bytes
+// each, so that a shaped text takes less memory.
 type shapedText struct {
 	// runeToByte maps the index of each rune, and the end, to its byte.
-	runeToByte []int
+	runeToByte []int32
 	// clusters are the clusters of the text, in logical order.
 	clusters []textCluster
 	// runs are the runs of one face, in logical order.
@@ -88,7 +91,7 @@ type shapedRun struct {
 // visual order of the glyphs of a run from right to left.
 type shapedGlyph struct {
 	id      uint32
-	cluster int // the index of the cluster in shapedText.clusters
+	cluster int32 // the index of the cluster in shapedText.clusters
 	advance float64
 	xOffset float64
 	yOffset float64
@@ -97,12 +100,12 @@ type shapedGlyph struct {
 // textCluster is a cluster of the text: the characters that the shaper
 // draws together.
 type textCluster struct {
-	start, end int // bytes
-	runeStart  int
+	start, end int32 // bytes
+	runeStart  int32
 	r          rune // the first rune
+	run        int32
 	advance    float64
 	inkTop     float64
-	run        int
 }
 
 // LogAttr is a PangoLogAttr: the log attributes of Pango that the port
@@ -162,17 +165,14 @@ func (fc *FontConfiguration) shape(text string, style *Style) *shapedText {
 
 // shapeText shapes a text.
 func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *shapedText) {
-	runes := []rune(text)
-	if len(runes) > maxShapedRunes {
-		runes = runes[:maxShapedRunes]
-	}
-	s = &shapedText{runeToByte: make([]int, len(runes)+1)}
+	runes := textRunes(&fc.shapeRunes, text, maxShapedRunes)
+	s = &shapedText{runeToByte: make([]int32, len(runes)+1)}
 	offset := 0
 	for i, r := range runes {
-		s.runeToByte[i] = offset
+		s.runeToByte[i] = int32(offset)
 		offset += utf8.RuneLen(r)
 	}
-	s.runeToByte[len(runes)] = offset
+	s.runeToByte[len(runes)] = int32(offset)
 
 	m, faces := fc.styleFontmap(style)
 	primary, primaryID := m.primary()
@@ -181,9 +181,10 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		// metrics say.
 		s.ascent, s.descent = 0.9, 0.3
 		s.runs = []shapedRun{{ascent: s.ascent, descent: s.descent}}
+		s.clusters = make([]textCluster, 0, len(runes))
 		for i, r := range runes {
 			s.clusters = append(s.clusters, textCluster{
-				start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: i, r: r,
+				start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r,
 				advance: zeroWidth(r, 0.5), inkTop: 0.5,
 			})
 		}
@@ -202,7 +203,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			s.runs = []shapedRun{{ascent: s.ascent, descent: s.descent}}
 			for i, r := range runes {
 				s.clusters = append(s.clusters, textCluster{
-					start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: i, r: r,
+					start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r,
 					advance: zeroWidth(r, 0.5), inkTop: 0.5,
 				})
 			}
@@ -227,6 +228,9 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	// and found tells which runes start a cluster.
 	byRune := scratch(&fc.shapeClusters, len(runes))
 	found := scratch(&fc.shapeFound, len(runes))
+	// glyphs holds the glyphs of all the runs, so that the runs share one
+	// allocation.
+	glyphs := make([]shapedGlyph, 0, len(runes))
 	// The bidirectional algorithm of go-text reads one paragraph, so each
 	// paragraph is split on its own.
 	for start := 0; start < len(runes); {
@@ -256,8 +260,11 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			out := fc.shaper.Shape(item)
 			ascent, descent := faceExtents(item.Face)
 			run := shapedRun{id: id, hasID: true, ascent: ascent, descent: descent}
-			run.glyphs = make([]shapedGlyph, 0, len(out.Glyphs))
-			runIndex := len(s.runs)
+			if cap(glyphs)-len(glyphs) < len(out.Glyphs) {
+				glyphs = make([]shapedGlyph, 0, max(len(out.Glyphs), len(runes)-input.RunStart))
+			}
+			first := len(glyphs)
+			runIndex := int32(len(s.runs))
 			for _, g := range out.Glyphs {
 				ci := g.TextIndex()
 				if ci < 0 || ci >= len(runes) {
@@ -267,7 +274,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 				if !found[ci] {
 					end := min(ci+max(g.RunesCount(), 1), len(runes))
 					*c = textCluster{
-						start: s.runeToByte[ci], end: s.runeToByte[end], runeStart: ci, r: runes[ci],
+						start: s.runeToByte[ci], end: s.runeToByte[end], runeStart: int32(ci), r: runes[ci],
 						run: runIndex,
 					}
 					found[ci] = true
@@ -275,14 +282,15 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 				advance := float64(g.Advance) / 64 / upem
 				c.advance += advance
 				c.inkTop = max(c.inkTop, float64(g.YBearing+g.YOffset)/64/upem)
-				run.glyphs = append(run.glyphs, shapedGlyph{
+				glyphs = append(glyphs, shapedGlyph{
 					id:      uint32(g.GlyphID),
-					cluster: ci, // the first rune until the clusters are sorted
+					cluster: int32(ci), // the first rune until the clusters are sorted
 					advance: advance,
 					xOffset: float64(g.XOffset) / 64 / upem,
 					yOffset: float64(g.YOffset) / 64 / upem,
 				})
 			}
+			run.glyphs = glyphs[first:len(glyphs):len(glyphs)]
 			s.runs = append(s.runs, run)
 		}
 	}
@@ -305,7 +313,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			if len(s.runs) == 0 {
 				s.runs = append(s.runs, shapedRun{id: primaryID, hasID: true, ascent: s.ascent, descent: s.descent})
 			}
-			byRune[i] = textCluster{start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: i, r: r}
+			byRune[i] = textCluster{start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r}
 			found[i] = true
 			count++
 		}
@@ -316,7 +324,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	for i := range byRune {
 		if found[i] {
 			c := &byRune[i]
-			index[i] = len(s.clusters)
+			index[i] = int32(len(s.clusters))
 			c.advance = zeroWidth(c.r, c.advance)
 			s.clusters = append(s.clusters, *c)
 		}
@@ -347,6 +355,24 @@ func scratch[T any](buf *[]T, n int) []T {
 	s := (*buf)[:n]
 	clear(s)
 	return s
+}
+
+// textRunes returns the first runes of a text, at most limit of them, in
+// the buffer *buf. It keeps the buffer for the next text when the buffer
+// holds at most maxScratch runes. An invalid byte is U+FFFD, as []rune(text)
+// makes it.
+func textRunes(buf *[]rune, text string, limit int) []rune {
+	runes := (*buf)[:0]
+	for _, r := range text {
+		if len(runes) == limit {
+			break
+		}
+		runes = append(runes, r)
+	}
+	if cap(runes) <= maxScratch {
+		*buf = runes
+	}
+	return runes
 }
 
 // styleFonts is the fontmap of a style, with the faces of the characters
@@ -590,9 +616,12 @@ func (l *TextLayout) shapedText() *shapedText {
 // LogAttrs returns the log attributes of the text of the layout, one for
 // each rune and one for the end, as pango_layout_get_log_attrs_readonly
 // gives them.
+//
+// Port: only IsLineBreak is set. The layout reads no other attribute, and
+// getLogAttrs gives the words.
 func (l *TextLayout) LogAttrs() []LogAttr {
 	if l.attrs == nil {
-		l.attrs = logAttrs(l.Text)
+		l.attrs = l.fc.lineBreaks(l.Text)
 	}
 	return l.attrs
 }
@@ -622,24 +651,37 @@ type TextLine struct {
 	wrapped bool
 }
 
+// textSpacing is the letter spacing and the word spacing of a layout, in
+// pixels. The word spacing has the justification spacing when the layout
+// justifies.
+type textSpacing struct {
+	letter, word float64
+}
+
+// spacing returns the spacing of the layout. A line reads it once, and not
+// for each cluster.
+func (l *TextLayout) spacing() textSpacing {
+	var sp textSpacing
+	if letterSpacing := l.Style.Get("letter_spacing"); !isStr(letterSpacing, "normal") {
+		sp.letter = num(letterSpacing)
+	}
+	sp.word = num(l.Style.Get("word_spacing"))
+	if l.justify {
+		// Justification is needed when drawing text but is useless
+		// during layout, when it can be ignored.
+		sp.word += l.JustificationSpacing
+	}
+	return sp
+}
+
 // clusterSpacing returns the spacing after the cluster i: the letter
 // spacing, the word spacing after a space, and the space of
 // -ivy-text-autospace.
-func (l *TextLayout) clusterSpacing(i int) float64 {
-	c := &l.shapedText().clusters[i]
-	var spacing float64
-	letterSpacing := l.Style.Get("letter_spacing")
-	if !isStr(letterSpacing, "normal") {
-		spacing = num(letterSpacing)
-	}
+func (l *TextLayout) clusterSpacing(i int, sp textSpacing) float64 {
+	c := &l.shaped.clusters[i]
+	spacing := sp.letter
 	if c.r == ' ' || c.r == ' ' {
-		wordSpacing := num(l.Style.Get("word_spacing"))
-		if l.justify {
-			// Justification is needed when drawing text but is useless
-			// during layout, when it can be ignored.
-			wordSpacing += l.JustificationSpacing
-		}
-		spacing += wordSpacing
+		spacing += sp.word
 	}
 	if l.autospaceAfter(i) {
 		// Port: upstream has no text-autospace.
@@ -650,13 +692,13 @@ func (l *TextLayout) clusterSpacing(i int) float64 {
 
 // advance returns the advance of the cluster i at the position x of the
 // line.
-func (l *TextLayout) advance(i int, x float64) float64 {
-	c := &l.shapedText().clusters[i]
+func (l *TextLayout) advance(i int, x float64, sp textSpacing) float64 {
+	c := &l.shaped.clusters[i]
 	if c.r == '\t' && l.tabWidth > 0 {
 		next := (math.Floor(x/l.tabWidth+1e-9) + 1) * l.tabWidth
 		return next - x
 	}
-	return c.advance*l.fontSize + l.clusterSpacing(i)
+	return c.advance*l.fontSize + l.clusterSpacing(i, sp)
 }
 
 // FirstLine is Layout.get_first_line in weasyprint/text/line_break.py. It
@@ -669,11 +711,17 @@ func (l *TextLayout) advance(i int, x float64) float64 {
 // fits, the line breaks at the first opportunity after the width.
 func (l *TextLayout) FirstLine() (*TextLine, int, bool) {
 	s := l.shapedText()
-	attrs := l.LogAttrs()
 	limit := int64(-1)
 	if l.width >= 0 {
 		limit = l.width
 	}
+	// The opportunities to break matter only for a line with a width that
+	// does not break at each character.
+	var attrs []LogAttr
+	if limit >= 0 && !l.wrapChar {
+		attrs = l.LogAttrs()
+	}
+	sp := l.spacing()
 	line := &TextLine{layout: l, first: 0, last: 0}
 	if isStr(l.Style.Get("direction"), "rtl") {
 		line.ResolvedDirection = 1
@@ -689,26 +737,26 @@ loop:
 	for i := range s.clusters {
 		c := &s.clusters[i]
 		if isParagraphSeparator(c.r) {
-			end, next, hasNext = i, c.end, true
+			end, next, hasNext = i, int(c.end), true
 			if c.r == '\r' && i+1 < len(s.clusters) && s.clusters[i+1].r == '\n' {
-				next = s.clusters[i+1].end
+				next = int(s.clusters[i+1].end)
 			}
 			break
 		}
-		canBreak := i > 0 && (l.wrapChar || c.runeStart < len(attrs) && attrs[c.runeStart].IsLineBreak)
+		canBreak := i > 0 && (l.wrapChar || int(c.runeStart) < len(attrs) && attrs[c.runeStart].IsLineBreak)
 		if canBreak {
 			if overflow {
 				// The line is too long and cannot break before: it breaks
 				// at the first opportunity after the width.
-				end, next, hasNext = i, c.start, true
+				end, next, hasNext = i, int(c.start), true
 				line.wrapped = true
 				break
 			}
 			lastBreak = i
 		}
-		x += l.advance(i, x)
+		x += l.advance(i, x, sp)
 		if isForcedBreak(c.r) {
-			end, next, hasNext = i+1, c.end, true
+			end, next, hasNext = i+1, int(c.end), true
 			break
 		}
 		// Port: Pango sums advances in whole units of Pango, and truncates
@@ -717,11 +765,11 @@ loop:
 		if limit >= 0 && !overflow && !isWhite(c.r) && int64(math.Floor(x*pangoScale)) > limit {
 			switch {
 			case l.wrapChar && i > 0:
-				end, next, hasNext = i, c.start, true
+				end, next, hasNext = i, int(c.start), true
 				line.wrapped = true
 				break loop
 			case lastBreak > 0:
-				end, next, hasNext = lastBreak, s.clusters[lastBreak].start, true
+				end, next, hasNext = lastBreak, int(s.clusters[lastBreak].start), true
 				line.wrapped = true
 				break loop
 			}
@@ -737,17 +785,24 @@ loop:
 	}
 	line.last = end
 	if end < len(s.clusters) {
-		line.Length = s.clusters[end].start
+		line.Length = int(s.clusters[end].start)
 	} else {
 		line.Length = len(l.Text)
 	}
-	l.measureLine(line)
+	l.measureLineWith(line, sp)
 	return line, next, hasNext
 }
 
 // measureLine sets the extents of a line.
 func (l *TextLayout) measureLine(line *TextLine) {
-	s := l.shapedText()
+	l.shapedText()
+	l.measureLineWith(line, l.spacing())
+}
+
+// measureLineWith sets the extents of a line, with the spacing of the
+// layout. The layout has its shaped text.
+func (l *TextLayout) measureLineWith(line *TextLine, sp textSpacing) {
+	s := l.shaped
 	x := 0.0
 	ascent, descent := 0.0, 0.0
 	// Port: Pango gives a width of 0 to the final space of a line that it
@@ -757,7 +812,7 @@ func (l *TextLayout) measureLine(line *TextLine) {
 	for i := line.first; i < line.last; i++ {
 		c := &s.clusters[i]
 		if !zeroLast || i != line.last-1 {
-			x += l.advance(i, x)
+			x += l.advance(i, x, sp)
 		}
 		run := s.runs[c.run]
 		ascent = max(ascent, run.ascent)
@@ -767,10 +822,7 @@ func (l *TextLayout) measureLine(line *TextLine) {
 	if line.last > line.first {
 		// Port: Pango puts the letter spacing between the characters, and
 		// not after the last one. lineSize adds it, as upstream does.
-		letterSpacing := l.Style.Get("letter_spacing")
-		if !isStr(letterSpacing, "normal") {
-			x -= num(letterSpacing)
-		}
+		x -= sp.letter
 	} else {
 		ascent, descent = s.ascent, s.descent
 	}
@@ -813,6 +865,7 @@ type Glyph struct {
 func (line *TextLine) GlyphRuns() []GlyphRun {
 	l := line.layout
 	s := l.shapedText()
+	sp := l.spacing()
 	order := make([]int, len(s.runs))
 	for i := range order {
 		order[i] = i
@@ -827,26 +880,27 @@ func (line *TextLine) GlyphRuns() []GlyphRun {
 		gr := GlyphRun{Font: run.id, HasFont: run.hasID, Size: l.fontSize}
 		lastCluster := -1
 		for _, g := range run.glyphs {
-			if g.cluster < line.first || g.cluster >= line.last {
+			gc := int(g.cluster)
+			if gc < line.first || gc >= line.last {
 				continue
 			}
-			c := &s.clusters[g.cluster]
-			if g.cluster != lastCluster && lastCluster >= 0 {
-				x += l.clusterSpacing(lastCluster)
+			c := &s.clusters[gc]
+			if gc != lastCluster && lastCluster >= 0 {
+				x += l.clusterSpacing(lastCluster, sp)
 			}
 			advance := g.advance * l.fontSize
 			if c.r == '\t' {
-				advance = l.advance(g.cluster, x)
+				advance = l.advance(gc, x, sp)
 			}
 			gr.Glyphs = append(gr.Glyphs, Glyph{
 				ID: g.id, X: x + g.xOffset*l.fontSize, Y: -g.yOffset * l.fontSize,
-				Advance: advance, Cluster: c.start,
+				Advance: advance, Cluster: int(c.start),
 			})
 			x += advance
-			lastCluster = g.cluster
+			lastCluster = gc
 		}
 		if lastCluster >= 0 {
-			x += l.clusterSpacing(lastCluster)
+			x += l.clusterSpacing(lastCluster, sp)
 		}
 		if len(gr.Glyphs) > 0 {
 			runs = append(runs, gr)
@@ -872,14 +926,7 @@ func logAttrs(text string) []LogAttr {
 	}
 	var seg segmenter.Segmenter
 	seg.Init(runes)
-	lines := seg.LineIterator()
-	for lines.Next() {
-		line := lines.Line()
-		if end := line.Offset + len(line.Text); end > 0 && end < len(runes) {
-			attrs[end].IsLineBreak = true
-		}
-	}
-	tailorSpaceBreaks(runes, attrs)
+	setLineBreaks(&seg, runes, attrs)
 	words := seg.WordIterator()
 	for words.Next() {
 		word := words.Word()
@@ -890,6 +937,38 @@ func logAttrs(text string) []LogAttr {
 		attrs[end].IsWordBoundary = true
 	}
 	return attrs
+}
+
+// lineBreaks returns the log attributes of a text with only IsLineBreak
+// set, as logAttrs sets it. It reuses the buffers of the configuration.
+func (fc *FontConfiguration) lineBreaks(text string) []LogAttr {
+	runes := textRunes(&fc.breakRunes, text, -1)
+	attrs := make([]LogAttr, len(runes)+1)
+	if len(runes) == 0 {
+		return attrs
+	}
+	seg := &fc.breaker
+	if len(runes) > maxScratch {
+		// The segmenter keeps its buffers, so a long text gets a segmenter
+		// of its own.
+		seg = new(segmenter.Segmenter)
+	}
+	seg.Init(runes)
+	setLineBreaks(seg, runes, attrs)
+	return attrs
+}
+
+// setLineBreaks sets IsLineBreak in the attributes of the runes that seg
+// holds.
+func setLineBreaks(seg *segmenter.Segmenter, runes []rune, attrs []LogAttr) {
+	lines := seg.LineIterator()
+	for lines.Next() {
+		line := lines.Line()
+		if end := line.Offset + len(line.Text); end > 0 && end < len(runes) {
+			attrs[end].IsLineBreak = true
+		}
+	}
+	tailorSpaceBreaks(runes, attrs)
 }
 
 // tailorSpaceBreaks allows a break after a space and before a closing
@@ -1076,6 +1155,7 @@ func SplitFirstLine(text string, style *Style, maxWidth *float64, justificationS
 		// Try to use a small amount of text to avoid the whole layout. We
 		// need at least one line, and one possible line break point on the
 		// second line.
+		wideText := ""
 		if fontSize*ratio > *maxWidth {
 			// Trying to find minimum or very small size, let's naively
 			// split on spaces and keep one word + one letter.
@@ -1091,28 +1171,39 @@ func SplitFirstLine(text string, style *Style, maxWidth *float64, justificationS
 			if n < float64(len(text)) {
 				shortText = runeSlice(text, 0, int(n))
 			}
+			wideText = shortWideText(shortText, *maxWidth/fontSize)
 		}
-		layout = CreateLayout(shortText, style, maxWidth, justificationSpacing)
-		firstLine, resumeIndex, hasResume = layout.FirstLine()
-		if !hasResume && shortText != text {
-			// The small amount of text fits in one line, give up and use
-			// the whole text.
-			shortText = text
-			layout.SetText(text, false)
-			firstLine, resumeIndex, hasResume = layout.FirstLine()
+		draft := false
+		if wideText != "" {
+			layout, firstLine, resumeIndex, draft = wideDraft(wideText, style, *maxWidth, justificationSpacing)
+		}
+		if draft {
+			// The text of the wide characters has the first line and the
+			// next line break point, which the step checks below.
+			shortText, text, hasResume = wideText, wideText, true
 		} else {
-			// If the second line of the short text can break, we have the
-			// next line break point required for step #3 in it, drop the
-			// end of the text.
-			firstLineText := shortText
-			if hasResume {
-				firstLineText = shortText[:min(resumeIndex, len(shortText))]
-			}
-			if firstLineText != shortText {
-				start, end := runeLen(firstLineText)+1, runeLen(shortText)
-				textEndLogAttrs := sliceAttrs(layout.LogAttrs(), start, end)
-				if _, ok := getNextBreakPoint(textEndLogAttrs); ok {
-					text = shortText
+			layout = CreateLayout(shortText, style, maxWidth, justificationSpacing)
+			firstLine, resumeIndex, hasResume = layout.FirstLine()
+			if !hasResume && shortText != text {
+				// The small amount of text fits in one line, give up and use
+				// the whole text.
+				shortText = text
+				layout.SetText(text, false)
+				firstLine, resumeIndex, hasResume = layout.FirstLine()
+			} else {
+				// If the second line of the short text can break, we have the
+				// next line break point required for step #3 in it, drop the
+				// end of the text.
+				firstLineText := shortText
+				if hasResume {
+					firstLineText = shortText[:min(resumeIndex, len(shortText))]
+				}
+				if firstLineText != shortText {
+					start, end := runeLen(firstLineText)+1, runeLen(shortText)
+					textEndLogAttrs := sliceAttrs(layout.LogAttrs(), start, end)
+					if _, ok := getNextBreakPoint(textEndLogAttrs); ok {
+						text = shortText
+					}
 				}
 			}
 		}
@@ -1309,6 +1400,95 @@ func SplitFirstLine(text string, style *Style, maxWidth *float64, justificationS
 	}
 
 	return firstLineMetrics(firstLine, text, layout, resumeIndex, hasResume, spaceCollapse, style, hyphenated, hyphenateCharacter)
+}
+
+// The advances, in em, that shortWideText expects at least of the
+// characters, and the runes that it keeps after the first line.
+const (
+	wideIdeographAdvance = 0.9
+	wideKanaAdvance      = 0.75
+	widePunctAdvance     = 0.5
+	wideNarrowAdvance    = 0.25
+	wideTextMargin       = 24
+	wideBreakMargin      = 12
+)
+
+// minAdvance returns the advance, in em, that shortWideText expects at
+// least of a character: 0.9 for an ideograph and a syllable of Hangul, 0.75
+// for kana, 0.5 for the punctuation and the forms of CJK, and 0.25, the
+// ratio of split_first_line, for the others.
+func minAdvance(r rune) float64 {
+	switch {
+	case r < 0x3000:
+		return wideNarrowAdvance
+	case r >= 0x3400 && r <= 0x4dbf, r >= 0x4e00 && r <= 0x9fff, r >= 0xac00 && r <= 0xd7a3,
+		r >= 0xf900 && r <= 0xfaff, r >= 0x20000 && r <= 0x3ffff:
+		return wideIdeographAdvance
+	case r >= 0x3041 && r <= 0x30ff && r != 0x30a0 && r != 0x30fb:
+		return wideKanaAdvance
+	case r <= 0x303f, r >= 0xff01 && r <= 0xff60, r >= 0xffe0 && r <= 0xffe6:
+		return widePunctAdvance
+	}
+	return wideNarrowAdvance
+}
+
+// shortWideText returns the start of the short text of split_first_line
+// that holds the first line, when the characters of the text are wide. width
+// is the width of the line, in em. It returns "" when the text is not
+// shorter, or when the text has a soft hyphen or a line feed.
+//
+// Port: upstream lays out as many characters as a line holds when each
+// character is a quarter of an em wide. A line of ideographs then lays out
+// four times the characters of the line. The port first tries the
+// characters that the line holds with the advances of minAdvance, and
+// wideTextMargin more. wideDraft keeps this text only when the layout of
+// the short text of upstream gives the same results.
+func shortWideText(text string, width float64) string {
+	if strings.Contains(text, "\u00ad") {
+		// The hyphenation reads the soft hyphens of the whole short text.
+		return ""
+	}
+	sum, after := 0.0, 0
+	for i, r := range text {
+		if r == '\n' {
+			// The layout keeps the text up to the line feed, which is in
+			// the short text of upstream too.
+			return ""
+		}
+		if sum <= width {
+			sum += minAdvance(r)
+			continue
+		}
+		if after++; after > wideTextMargin {
+			return text[:i]
+		}
+	}
+	return ""
+}
+
+// wideDraft is the draft layout of step #1 of SplitFirstLine with the text
+// of shortWideText. ok is false when the text does not have the first line
+// and, wideBreakMargin runes before its end, the next line break point.
+// Then SplitFirstLine lays out the short text of upstream.
+//
+// The first line must fit in the width. Then each step of SplitFirstLine
+// reads the same characters of this text as of the short text of upstream,
+// and the results are the same.
+func wideDraft(text string, style *Style, maxWidth, justificationSpacing float64) (layout *TextLayout, line *TextLine, resume int, ok bool) {
+	layout = CreateLayout(text, style, &maxWidth, justificationSpacing)
+	line, resume, hasResume := layout.FirstLine()
+	if !hasResume || resume >= len(text) {
+		return nil, nil, 0, false
+	}
+	if width, _ := lineSize(line, style); width > maxWidth {
+		return nil, nil, 0, false
+	}
+	start, end := runeLen(text[:resume])+1, runeLen(text)
+	point, found := getNextBreakPoint(sliceAttrs(layout.LogAttrs(), start, end))
+	if !found || start+point > end-wideBreakMargin {
+		return nil, nil, 0, false
+	}
+	return layout, line, resume, true
 }
 
 // sliceAttrs returns attrs[start:end] of Python, with the bounds clamped.

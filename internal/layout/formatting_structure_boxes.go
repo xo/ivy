@@ -1104,33 +1104,74 @@ func positionFunction(position Value) string {
 	return ""
 }
 
+// The flags of flowFlags.
+const (
+	flowKnown    uint8 = 1 << iota // the other flags are set
+	flowFloated                    // float is left, right, inline-start or inline-end
+	flowFootnote                   // float is footnote
+	flowNote                       // position is note()
+	flowAbsolute                   // position is absolute or fixed
+	flowRunning                    // position is running()
+)
+
+// flowFlags returns the flags that float and position of a style give to
+// the predicates of the boxes, such as IsFloated.
+//
+// Port: upstream reads float and position for each call. The style keeps
+// the flags, which the layout reads many times for each box.
+func flowFlags(s *Style) uint8 {
+	if s.flow != 0 {
+		return s.flow
+	}
+	flags := flowKnown
+	float := s.Get("float")
+	if isStrIn(float, "left", "right", "inline-start", "inline-end") {
+		flags |= flowFloated
+	}
+	if isStr(float, "footnote") {
+		flags |= flowFootnote
+	}
+	position := s.Get("position")
+	switch positionFunction(position) {
+	case "note()":
+		flags |= flowNote
+	case "running()":
+		flags |= flowRunning
+	}
+	if isStrIn(position, "absolute", "fixed") {
+		flags |= flowAbsolute
+	}
+	s.flow = flags
+	return flags
+}
+
 // IsFloated is is_floated: it reports whether the box is floated.
 func (b *Box) IsFloated() bool {
 	if b.notFloated {
 		return false
 	}
-	return isStrIn(b.Style.Get("float"), "left", "right", "inline-start", "inline-end")
+	return flowFlags(b.Style)&flowFloated != 0
 }
 
 // IsFootnote is is_footnote: it reports whether the box is a footnote.
 func (b *Box) IsFootnote() bool {
-	return isStr(b.Style.Get("float"), "footnote")
+	return flowFlags(b.Style)&flowFootnote != 0
 }
 
 // IsNote is is_note: it reports whether the box is a note.
 func (b *Box) IsNote() bool {
-	return positionFunction(b.Style.Get("position")) == "note()"
+	return flowFlags(b.Style)&flowNote != 0
 }
 
 // IsAbsolutelyPositioned is is_absolutely_positioned: it reports whether
 // the box is in the absolute positioning scheme.
 func (b *Box) IsAbsolutelyPositioned() bool {
-	return isStrIn(b.Style.Get("position"), "absolute", "fixed")
+	return flowFlags(b.Style)&flowAbsolute != 0
 }
 
 // IsRunning is is_running: it reports whether the box is a running element.
 func (b *Box) IsRunning() bool {
-	return positionFunction(b.Style.Get("position")) == "running()"
+	return flowFlags(b.Style)&flowRunning != 0
 }
 
 // IsInNormalFlow is is_in_normal_flow: it reports whether the box is in the
@@ -1443,27 +1484,31 @@ func (b *Box) processTextWhitespace(followingCollapsibleSpace bool) bool {
 	}
 
 	// Normalize line feeds
-	text = lineFeedRE.ReplaceAllString(text, "\n")
+	text = normalizeLineFeeds(text)
 
 	whiteSpace := b.Style.Get("white_space")
 	newLineCollapse := isStrIn(whiteSpace, "normal", "nowrap")
 	spaceCollapse := isStrIn(whiteSpace, "normal", "nowrap", "pre-line")
 
-	if spaceCollapse {
+	switch {
+	case newLineCollapse:
 		// \r characters were removed/converted earlier.
-		text = tabRE.ReplaceAllString(text, "\n")
-	}
-
-	if newLineCollapse {
+		//
 		// TODO: this should be language-specific.
 		// Could also replace with a zero width space character (U+200B),
 		// or no character.
 		// CSS3: https://www.w3.org/TR/css-text-3/#overflow-wrap
-		text = strings.ReplaceAll(text, "\n", " ")
+		//
+		// Port: upstream removes the spaces around the line feeds, replaces
+		// the line feeds with spaces and collapses the spaces, each in a
+		// pass of its own. collapseSpaces does the three in one pass.
+		text = collapseSpaces(text, true)
+	case spaceCollapse:
+		// \r characters were removed/converted earlier.
+		text = collapseSpaces(trimLineFeedBlanks(text), false)
 	}
 
 	if spaceCollapse {
-		text = spaceRE.ReplaceAllString(text, " ")
 		previousText := text
 		if followingCollapsibleSpace && strings.HasPrefix(text, " ") {
 			text = text[1:]
