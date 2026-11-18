@@ -49,6 +49,35 @@ type BookOptions struct {
 	// SystemFonts adds the fonts of the system to the default fonts. It is
 	// ignored when Fonts is set.
 	SystemFonts bool
+	// FontConfig is a font configuration that the book shares with other
+	// books, or nil for a configuration of its own. The books that share a
+	// configuration take turns: each one holds the lock of the
+	// configuration while it lays out or draws a page (D54). Fonts,
+	// FontFiles and SystemFonts are ignored when FontConfig is set.
+	//
+	// If a book draws an object that draws another book, such as a slide
+	// in a document, the two books must not share a configuration. The
+	// lock is not reentrant, so the inner book would wait for ever.
+	FontConfig *FontConfiguration
+}
+
+// NewFontConfiguration returns a font configuration of the fonts and the
+// limits of o, which books can share with FontConfig.
+func (o BookOptions) NewFontConfiguration() *FontConfiguration {
+	lim := o.Limits.WithDefaults()
+	db, first := o.Fonts, 0
+	if db == nil {
+		log := o.Logger
+		if log == nil {
+			log = slog.New(slog.DiscardHandler)
+		}
+		db, first = fontdb.Load(o.FontFiles, o.SystemFonts, lim, log)
+	}
+	return NewFontConfiguration(db, FontConfigurationOptions{
+		Limits:     lim,
+		Logger:     o.Logger,
+		FirstFaces: first,
+	})
 }
 
 // Book is a paged document over the documents of a Source. It lays out the
@@ -68,11 +97,13 @@ type BookOptions struct {
 // book with one bad chapter still opens. If no document gives a page, the
 // book returns the first error.
 //
-// A Book and its pages are safe for concurrent use. One mutex serializes the
-// layout and the drawing, because the styles and the fonts are not safe for
-// concurrent use.
+// A Book and its pages are safe for concurrent use. The mutex of its font
+// configuration serializes the layout and the drawing, because the styles
+// and the fonts are not safe for concurrent use. The books that share a
+// configuration share its mutex (D54).
 type Book struct {
-	mu   sync.Mutex
+	// mu is the mutex of fc.
+	mu   *sync.Mutex
 	src  Source
 	opts BookOptions
 	lim  ivy.Limits
@@ -90,11 +121,6 @@ type Book struct {
 	// recordings holds the pages that Render recorded, the most recent
 	// last.
 	recordings []*recording
-	// db is the font database of the program, and first the number of its
-	// first faces, from which countAll makes a font configuration for each
-	// goroutine.
-	db    *svg.FontDatabase
-	first int
 }
 
 // maxRecordings is the number of recorded pages that a book keeps.
@@ -105,9 +131,10 @@ const maxRecordings = 4
 // that RenderImage draws replay one recording, each moved by a whole number
 // of pixels (D47).
 type recording struct {
-	box  *Box
-	t    okage.Transform
-	list *display.List
+	box   *Box
+	t     okage.Transform
+	scale float64
+	list  *display.List
 	// err is nil or the *ivy.PartialError of the drawing.
 	err error
 }
@@ -139,22 +166,17 @@ func NewBook(src Source, opts BookOptions) *Book {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	db, first := opts.Fonts, 0
-	if db == nil {
-		db, first = fontdb.Load(opts.FontFiles, opts.SystemFonts, lim, log)
+	fc := opts.FontConfig
+	if fc == nil {
+		fc = opts.NewFontConfiguration()
 	}
 	b := &Book{
-		src:   src,
-		opts:  opts,
-		lim:   lim,
-		log:   log,
-		db:    db,
-		first: first,
-		fc: NewFontConfiguration(db, FontConfigurationOptions{
-			Limits:     lim,
-			Logger:     opts.Logger,
-			FirstFaces: first,
-		}),
+		mu:   &fc.mu,
+		src:  src,
+		opts: opts,
+		lim:  lim,
+		log:  log,
+		fc:   fc,
 	}
 	docs := src.Documents
 	// The documents are bounded as the pages are: each one has a page at
@@ -347,10 +369,10 @@ func (b *Book) countAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
-			fc := NewFontConfiguration(b.db, FontConfigurationOptions{
+			fc := NewFontConfiguration(b.fc.prog, FontConfigurationOptions{
 				Limits:     b.lim,
 				Logger:     b.opts.Logger,
-				FirstFaces: b.first,
+				FirstFaces: b.fc.first,
 			})
 			for {
 				i := int(next.Add(1)) - 1
@@ -617,7 +639,7 @@ func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transf
 	}
 	at := t
 	at.TX, at.TY = t.TX-x, t.TY-y
-	rec, err := p.record(ctx, at)
+	rec, err := p.record(ctx, at, 1)
 	if err != nil {
 		return err
 	}
@@ -628,24 +650,26 @@ func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transf
 	return rec.err
 }
 
-// record returns the recording of the page at t, and draws it when the
-// book does not hold it. It returns an error that is not an
-// *ivy.PartialError when the drawing failed.
-func (p *bookPage) record(ctx context.Context, t okage.Transform) (*recording, error) {
+// record returns the recording of the page at t and scale, as drawLocked
+// takes them, and draws it when the book does not hold it. When the drawing
+// failed, it returns an error that is not an *ivy.PartialError, with the
+// recording of the commands before the error, which the book does not keep.
+func (p *bookPage) record(ctx context.Context, t okage.Transform, scale float64) (*recording, error) {
 	b := p.book
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, rec := range b.recordings {
-		if rec.box == p.box && rec.t == t {
+		if rec.box == p.box && rec.t == t && rec.scale == scale {
 			return rec, nil
 		}
 	}
 	list := display.NewRecording()
-	err := p.drawLocked(ctx, list, t, 1)
+	err := p.drawLocked(ctx, list, t, scale)
+	rec := &recording{box: p.box, t: t, scale: scale, list: list, err: err}
 	if _, ok := errors.AsType[*ivy.PartialError](err); err != nil && !ok {
-		return nil, err
+		rec.err = nil
+		return rec, err
 	}
-	rec := &recording{box: p.box, t: t, list: list, err: err}
 	if len(b.recordings) >= maxRecordings {
 		b.recordings = slices.Delete(b.recordings, 0, len(b.recordings)-maxRecordings+1)
 	}
@@ -665,25 +689,34 @@ func (p *bookPage) record(ctx context.Context, t okage.Transform) (*recording, e
 // and restores the state of dev. It returns an *ivy.PartialError when it
 // drew the page in part, and an error that wraps ivy.ErrPageRange past the
 // last page.
+//
+// Draw records the page once for t and scale, and replays the recording
+// onto dev without the lock of the book. So the bands of a page that draw
+// the same book share the recording, as Render does (D47), and the books
+// that share a font configuration hold its lock only to record (D54). The
+// commands are the same as those of a drawing onto dev.
 func (b *Book) Draw(ctx context.Context, n int, dev display.Device, t okage.Transform, scale float64) error {
 	page, err := b.Page(ctx, n)
 	if err != nil {
 		return err
 	}
-	return page.(*bookPage).draw(ctx, dev, t, scale)
-}
-
-// draw draws the page onto dev, as Book.Draw does.
-func (p *bookPage) draw(ctx context.Context, dev display.Device, t okage.Transform, scale float64) (err error) {
+	p := page.(*bookPage)
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
 	}
-	p.book.mu.Lock()
-	defer p.book.mu.Unlock()
-	return p.drawLocked(ctx, dev, t, scale)
+	if !(scale > 0) || math.IsInf(scale, 0) {
+		scale = 1
+	}
+	rec, err := p.record(ctx, t, scale)
+	rec.list.Replay(dev)
+	if err != nil {
+		return err
+	}
+	return rec.err
 }
 
-// drawLocked is draw, with the lock of the book held.
+// drawLocked draws the page onto dev, as Book.Draw does, without a
+// recording. The lock of the book must be held.
 func (p *bookPage) drawLocked(ctx context.Context, dev display.Device, t okage.Transform, scale float64) (err error) {
 	defer func() {
 		if r := recover(); r != nil {

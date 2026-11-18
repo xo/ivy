@@ -389,7 +389,10 @@ func TestRenderReplay(t *testing.T) {
 	want := make([][]byte, len(transforms))
 	for i, tr := range transforms {
 		pm := pixmap()
-		if err := p.draw(ctx, display.NewOkage(pm, okage.IdentityTransform()), tr, 1); err != nil {
+		b.mu.Lock()
+		err := p.drawLocked(ctx, display.NewOkage(pm, okage.IdentityTransform()), tr, 1)
+		b.mu.Unlock()
+		if err != nil {
 			t.Fatal(err)
 		}
 		want[i] = pm.Data()
@@ -455,5 +458,71 @@ func TestPageCountParallel(t *testing.T) {
 	}
 	if want[3] < 2 || want[7] != 0 {
 		t.Errorf("expected several pages for c3 and none for c7, got %v", want)
+	}
+}
+
+// TestBookSharedFonts checks that books that share a font configuration
+// share its lock (D54), that Draw replays one recording for the calls of
+// the bands of a page, and that books that draw at the same time give the
+// pixels of books with configurations of their own.
+func TestBookSharedFonts(t *testing.T) {
+	ctx := context.Background()
+	opts := BookOptions{}
+	fc := opts.NewFontConfiguration()
+	shared := BookOptions{FontConfig: fc}
+	source := func(i int) Source {
+		body := fmt.Sprintf(`<p style="font: %dpx %s">Shared fonts %d</p>`, 10+i%4, []string{"serif", "sans-serif", "monospace"}[i%3], i)
+		return Source{
+			FS:          fstest.MapFS{"a.html": &fstest.MapFile{Data: []byte(body)}},
+			Documents:   []string{"a.html"},
+			StyleSheets: []string{bookStyle},
+		}
+	}
+	const n = 12
+	books := make([]*Book, n)
+	for i := range books {
+		books[i] = NewBook(source(i), shared)
+		if books[i].fc != fc || books[i].mu != &fc.mu {
+			t.Fatalf("book %d does not share the configuration and its lock", i)
+		}
+	}
+	draw := func(b *Book, ty float32) []byte {
+		pm, ok := okage.NewPixmap(100, 40)
+		if !ok {
+			t.Error("making a pixmap")
+			return nil
+		}
+		pm.Fill(okage.ColorWhite)
+		if err := b.Draw(ctx, 0, display.NewOkage(pm, okage.TransformFromTranslate(0, ty)), okage.IdentityTransform(), 1); err != nil {
+			t.Error(err)
+		}
+		return pm.Data()
+	}
+	// two bands of each page, as RenderImage cuts them
+	bands := []float32{0, -40}
+	want := make([][]byte, n*len(bands))
+	for i := range n {
+		alone := NewBook(source(i), opts)
+		for j, ty := range bands {
+			want[i*len(bands)+j] = draw(alone, ty)
+		}
+	}
+	got := make([][]byte, len(want))
+	var wg sync.WaitGroup
+	for k := range got {
+		wg.Go(func() {
+			got[k] = draw(books[k/len(bands)], bands[k%len(bands)])
+		})
+	}
+	wg.Wait()
+	for k := range got {
+		if !slices.Equal(got[k], want[k]) {
+			t.Errorf("book %d, band %d: expected the pixels of a book with fonts of its own", k/len(bands), k%len(bands))
+		}
+	}
+	for i, b := range books {
+		if len(b.recordings) != 1 {
+			t.Errorf("book %d: expected 1 recording for the bands, got %d", i, len(b.recordings))
+		}
 	}
 }

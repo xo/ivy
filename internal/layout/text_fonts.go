@@ -26,6 +26,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/xo/okage/svg"
 	"github.com/xo/okage/tinycss2"
@@ -50,7 +51,18 @@ import (
 // rules load their fonts into it, and the units of the fonts measure them.
 //
 // It is not safe for concurrent use, as the styles that use it are not.
+// Several books can share one configuration, such as the text bodies of a
+// slide (D54). These books lock mu for each access to the configuration.
+//
+// Port: upstream has no mu and no prog. It lays out one document at a time,
+// and makes no configuration from another one.
 type FontConfiguration struct {
+	// mu is the lock of the books that use the configuration. A book holds
+	// it while it lays out or draws its pages.
+	mu sync.Mutex
+	// prog is the database of the program, which db copies. A book makes
+	// the configurations of its goroutines from it (D48).
+	prog *svg.FontDatabase
 	// db holds the faces. It is a copy of the database of the program, so
 	// that the fonts of a document do not go into the database of another
 	// one.
@@ -185,6 +197,7 @@ func NewFontConfiguration(db *svg.FontDatabase, opts FontConfigurationOptions) *
 		log = newLogger(opts.Logger)
 	}
 	return &FontConfiguration{
+		prog:         db,
 		db:           db.Clone(),
 		limits:       opts.Limits.WithDefaults(),
 		log:          log,

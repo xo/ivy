@@ -27,10 +27,17 @@ import (
 // The text of a scene goes through the layout of D10, which lays out each
 // text body as a small document of HTML and CSS of the size of its box. So
 // the text has the line breaks, the shaping and the fonts of the ebooks,
-// with ivy.Config.Fonts and the substitutes of internal/font (D24).
+// with ivy.Config.Fonts and the substitutes of internal/font (D24). The
+// text bodies of a scene share one font configuration, so that the fonts
+// are parsed once for the scene and not once for each text body (D54). The
+// books of the text bodies take turns on its lock, also when two renders
+// draw the scene at the same time.
 type Scene struct {
 	cfg ivy.Config
 	ops []sceneOp
+	// fontsOnce makes fonts on the first layout of a text body.
+	fontsOnce sync.Once
+	fonts     *layout.FontConfiguration
 }
 
 // sceneOp is one drawing operation of a scene.
@@ -125,7 +132,7 @@ func (s *Scene) AddHTML(doc string, w, h float64, m okage.Transform) {
 	if !(w > 0 && h > 0) || math.IsInf(w, 0) || math.IsInf(h, 0) {
 		return
 	}
-	b := &htmlBlock{doc: doc, cfg: s.cfg}
+	b := &htmlBlock{doc: doc, scene: s}
 	s.ops = append(s.ops, func(c *Canvas) error {
 		// the device takes the transform of the page, and the book renders
 		// at the pixels of a unit of the scene
@@ -139,10 +146,10 @@ func (s *Scene) AddHTML(doc string, w, h float64, m okage.Transform) {
 // htmlBlock is a document of HTML of a scene, with the book that lays it
 // out.
 type htmlBlock struct {
-	doc  string
-	cfg  ivy.Config
-	once sync.Once
-	b    *layout.Book
+	doc   string
+	scene *Scene
+	once  sync.Once
+	b     *layout.Book
 }
 
 // htmlName is the name of the document of a block in its file system.
@@ -156,14 +163,26 @@ func (b *htmlBlock) book() *layout.Book {
 		b.b = layout.NewBook(layout.Source{
 			FS:        htmlFS(b.doc),
 			Documents: []string{htmlName},
-		}, layout.BookOptions{
-			Limits:      b.cfg.Limits,
-			Logger:      b.cfg.Logger,
-			FontFiles:   b.cfg.Fonts,
-			SystemFonts: b.cfg.SystemFonts,
-		})
+		}, b.scene.bookOptions())
 	})
 	return b.b
+}
+
+// bookOptions returns the options of the books of the text bodies of the
+// scene, with the font configuration that they share. It makes the
+// configuration on the first call.
+func (s *Scene) bookOptions() layout.BookOptions {
+	opts := layout.BookOptions{
+		Limits:      s.cfg.Limits,
+		Logger:      s.cfg.Logger,
+		FontFiles:   s.cfg.Fonts,
+		SystemFonts: s.cfg.SystemFonts,
+	}
+	s.fontsOnce.Do(func() {
+		s.fonts = opts.NewFontConfiguration()
+	})
+	opts.FontConfig = s.fonts
+	return opts
 }
 
 // htmlFS is a file system that holds one document of HTML, at htmlName.
