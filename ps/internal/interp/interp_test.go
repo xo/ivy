@@ -187,6 +187,15 @@ func TestOperators(t *testing.T) {
 		{"(a) (r) file", "/undefinedfilename"},
 		// misc
 		{"languagelevel", "3"},
+		// the idioms of the procsets of Adobe Illustrator
+		{"systemdict /languagelevel get 2 ge", "true"},
+		{"currentsystemparams /MaxPatternCache get 0 gt", "true"},
+		{"/Generic /Category findresource /Category get /Generic eq", "true"},
+		{"/CSA /Generic /Category findresource dup length dict copy /Category defineresource pop " +
+			"/x 5 /CSA defineresource pop /x /CSA findresource " +
+			"/x /CSA /Category findresource begin ResourceStatus end", "5 1 0 true"},
+		{"/y /CSA /Generic /Category findresource dup length dict copy /Category defineresource begin ResourceStatus end", "false"},
+		{"{currentfile 0 (EOD) /SubFileDecode filter flushfile} exec\n<?xml version=\"1.0\"?> {[ EOD 7", "7"},
 	}
 	for _, tt := range tests {
 		got, err := run(t, tt.program)

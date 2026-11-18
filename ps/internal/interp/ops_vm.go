@@ -112,10 +112,11 @@ func (in *Interp) opsMisc() {
 		in.Push(Int(0))
 		return nil
 	})
-	in.Define("languagelevel", func(in *Interp) error {
-		in.Push(Int(3))
-		return nil
-	})
+	// languagelevel is an integer in systemdict, as in Ghostscript, so that
+	// "systemdict /languagelevel get" gives the level. Adobe Illustrator
+	// compares that value with 2. A name of an integer pushes the integer,
+	// as the operator of PLRM does.
+	in.SystemDict.PutName("languagelevel", Int(3))
 	// the clocks count the operators that the program ran, one millisecond
 	// for each thousand, and not the time: a program that seeds rand with
 	// them, such as vasarely.ps, draws the same page on each run
@@ -161,6 +162,39 @@ func (in *Interp) opsMisc() {
 	in.userParams.PutName("MaxOpStack", Int(in.maxOStack))
 	in.userParams.PutName("MaxDictStack", Int(in.maxDStack))
 	in.userParams.PutName("MaxExecStack", Int(in.maxEStack))
+	// The other parameters of PLRM appendix C hold sizes of caches that the
+	// interpreter does not keep. A program reads them, such as Adobe
+	// Illustrator, which copies MaxPatternCache into MaxPatternItem.
+	for _, p := range []struct {
+		d     *Dict
+		name  string
+		value int
+	}{
+		{in.userParams, "MaxFontItem", 12500},
+		{in.userParams, "MinFontCompress", 100},
+		{in.userParams, "MaxUPathItem", 0},
+		{in.userParams, "MaxFormItem", 100000},
+		{in.userParams, "MaxPatternItem", 20000},
+		{in.userParams, "MaxScreenItem", 48000},
+		{in.userParams, "VMReclaim", 0},
+		{in.userParams, "VMThreshold", 8000000},
+		{in.systemParams, "MaxFontCache", 400000},
+		{in.systemParams, "CurFontCache", 0},
+		{in.systemParams, "MaxOutlineCache", 65000},
+		{in.systemParams, "CurOutlineCache", 0},
+		{in.systemParams, "MaxUPathCache", 0},
+		{in.systemParams, "CurUPathCache", 0},
+		{in.systemParams, "MaxFormCache", 100000},
+		{in.systemParams, "CurFormCache", 0},
+		{in.systemParams, "MaxPatternCache", 100000},
+		{in.systemParams, "CurPatternCache", 0},
+		{in.systemParams, "MaxScreenStorage", 84000},
+		{in.systemParams, "MaxDisplayList", 0},
+		{in.systemParams, "CurDisplayList", 0},
+	} {
+		p.d.PutName(p.name, Int(p.value))
+	}
+	in.userParams.PutName("AccurateScreens", Bool(false))
 	in.Define("setdevparams", func(in *Interp) error {
 		if len(in.os) < 2 {
 			return errUnderflow
@@ -303,6 +337,11 @@ func (in *Interp) opsResource() {
 			}
 			inst = v
 		}
+		// A new category names itself in its implementation, so that the
+		// procedures of the implementation act on it (PLRM 3.9.2).
+		if cat.NameVal() == "Category" && k.typ == TName && inst.typ == TDict {
+			inst.Dict().PutName("Category", k)
+		}
 		if !in.Category(cat.NameVal()).Put(k, inst) {
 			return errTypecheck
 		}
@@ -404,4 +443,58 @@ func (in *Interp) opsResource() {
 		}
 		return nil
 	})
+	in.implementations()
+}
+
+// implementations makes the implementation of each category, an instance of
+// the category Category (PLRM 3.9.2). Adobe Illustrator copies the
+// implementation of Generic to make categories of its own, and calls the
+// procedure ResourceStatus of an implementation. Each procedure of an
+// implementation is the operator of the same name: it reads the name of its
+// category from the key Category of the dictionary stack, where the caller
+// put the implementation with begin.
+func (in *Interp) implementations() {
+	procs := [...][2]string{
+		{"DefineResource", "defineresource"},
+		{"UndefineResource", "undefineresource"},
+		{"FindResource", "findresource"},
+		{"ResourceStatus", "resourcestatus"},
+		{"ResourceForAll", "resourceforall"},
+	}
+	var ops [len(procs)]Object
+	for i, p := range procs {
+		o, ok := in.SystemDict.GetName(p[1])
+		if !ok || o.typ != TOperator {
+			continue
+		}
+		fn := o.ref.(*Operator).Fn
+		ops[i] = OpObj(&Operator{Name: p[0], Fn: func(in *Interp) error {
+			cat, ok := in.Lookup("Category")
+			if !ok || cat.typ != TName {
+				return errUndefined
+			}
+			n := len(in.os)
+			in.Push(cat)
+			err := fn(in)
+			if err != nil && len(in.os) == n+1 {
+				// The operator failed before it took its operands.
+				in.os = in.os[:n]
+			}
+			return err
+		}})
+	}
+	old := in.SetGlobal(true)
+	defer in.SetGlobal(old)
+	impls := in.Category("Category")
+	for _, c := range categories {
+		d := in.newDict(len(procs) + 2)
+		d.PutName("Category", NameObj(c))
+		d.PutName("InstanceType", NameObj("dicttype"))
+		for i, p := range procs {
+			if ops[i].typ == TOperator {
+				d.PutName(p[0], ops[i])
+			}
+		}
+		impls.PutName(c, DictObj(d))
+	}
 }

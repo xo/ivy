@@ -268,12 +268,32 @@ func (in *Interp) opsFile() {
 		in.Push(Int(-1))
 		return nil
 	})
-	for _, name := range []string{"flushfile", "resetfile"} {
-		in.Define(name, func(in *Interp) error {
-			_, err := in.popFile()
+	// flushfile reads an input file up to its end and discards the data
+	// (PLRM 8.2). Adobe Illustrator skips its XMP metadata so, through a
+	// SubFileDecode filter of currentfile.
+	in.Define("flushfile", func(in *Interp) error {
+		f, err := in.popFile()
+		if err != nil || f.write {
 			return err
-		})
-	}
+		}
+		for n := 0; ; n++ {
+			if _, err := f.ReadByte(); err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return ioError(err)
+			}
+			if n&0xffff == 0xffff && in.ctx != nil {
+				if err := in.ctx.Err(); err != nil {
+					return err
+				}
+			}
+		}
+	})
+	in.Define("resetfile", func(in *Interp) error {
+		_, err := in.popFile()
+		return err
+	})
 	in.Define("flush", func(*Interp) error { return nil })
 	in.Define("status", func(in *Interp) error {
 		o, err := in.Pop()
