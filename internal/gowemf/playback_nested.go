@@ -163,6 +163,7 @@ func (p *player) playEmbedded(r Record, m *embeddedMetafile, place Matrix, clip 
 		backend: &nestedBackend{inner: p.backend, m: place, inv: inv, outer: clip, nodes: map[*ClipRegion]*ClipRegion{}}}
 	err := child.start(m.header)
 	if err == nil {
+		child.glyphText = findGlyphText(m.data, m.header, o.Stream) // ivy: change 19
 		_, err = Stream(m.data, o.Stream, child.play)
 	}
 	var pe *ParseError

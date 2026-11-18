@@ -20,9 +20,10 @@ Each copied file has the same path as in upstream.
 | `internal/bidi` | the bidirectional algorithm of Unicode, for the text, and its tests |
 | `internal/raster` | a small rasterizer that only the tests of the playback use |
 
-Two files are files of ivy, not of upstream:
+Three files are files of ivy, not of upstream:
 `playback_plus_string.go` draws the EMF+ DrawString record (change 11),
-and `ivy_test.go` holds the tests of the changes 6 to 11 and 13 to 17.
+`playback_glyph_text.go` finds the text of glyph indexes (change 19), and
+`ivy_test.go` holds the tests of the changes 6 to 11, 13 to 17 and 19.
 
 The copy leaves out these files of upstream:
 
@@ -149,3 +150,22 @@ Each change is marked in the code with a comment that starts with `ivy:`.
     such a stroke in a nested metafile. A styled pen with an opaque
     background is still reported, because its gaps take the background
     color without the mix mode.
+19. `playback_glyph_text.go` finds the text of a record that names its
+    glyphs by index, and the player draws that text in place of the
+    indexes (ivy D53). The indexes belong to the font that the metafile
+    names, and the backend draws with another font. Two records give the
+    text:
+    - An EMF text record just before or after an EMR_EXTTEXTOUTW or an
+      EMR_SMALLTEXTOUT with ETO_GLYPH_INDEX. It must have the same
+      reference point, the same font and the same advances. Only the
+      records that set the text color, the background color and the
+      background mode can come between the two.
+    - The Unicode text records of the GDI fallback of an EMF+
+      DrawDriverString with glyph indexes, in an EMF+ Dual file. The
+      comment of the record holds no other drawing record.
+
+    The text must have one character for each glyph, in a script that
+    needs no shaping, from left to right. Otherwise the indexes stay.
+    `playback.go` and `playback_nested.go` find the text before the
+    playback, and `playback_text.go` and `playback_plus_text.go` use it.
+    The spacing of the record does not change.

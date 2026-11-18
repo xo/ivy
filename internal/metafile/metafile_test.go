@@ -281,6 +281,55 @@ func TestText(t *testing.T) {
 	expect(t, pm, 50, 5, color.NRGBA{255, 255, 255, 255})
 }
 
+// TestGlyphText checks that glyph indexes draw the text of another record in
+// the font of ivy (D53). The indexes belong to Arial, which the program does
+// not have.
+func TestGlyphText(t *testing.T) {
+	glyphs := func(e *fixture.EMF) *fixture.EMF {
+		// EMR_EXTTEXTOUTW with ETO_GLYPH_INDEX, at the reference point of
+		// fixture.EMF.Text
+		return e.Record(84, 0, 0, -1, -1, uint32(1), float32(1), float32(1),
+			10, 10, uint32(2), uint32(76), uint32(0x10), 0, 0, -1, -1, uint32(0), uint16(43), uint16(44))
+	}
+	dark := func(pm *okage.Pixmap) int {
+		var n int
+		for y := 15; y < 60; y++ {
+			for x := 10; x < 30; x++ {
+				if pixel(pm, x, y).R < 64 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	e := fixture.NewEMF(100, 100)
+	e.Select(e.Font(-60, 400, false, "Arial"))
+	e.Transparent()
+	// the text in white, which does not show, and then its glyphs in black
+	e.TextColor(color.NRGBA{255, 255, 255, 255})
+	e.Text(10, 10, "HI")
+	e.TextColor(black)
+	pm, err := render(t, glyphs(e).Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := dark(pm); n < 50 {
+		t.Errorf("glyphs with their text: %d dark pixels, want 50 or more", n)
+	}
+	// without the text, the indexes of Arial are not drawn
+	e = fixture.NewEMF(100, 100)
+	e.Select(e.Font(-60, 400, false, "Arial"))
+	e.Transparent()
+	e.TextColor(black)
+	pm, err = render(t, glyphs(e).Bytes())
+	if _, ok := errors.AsType[*ivy.PartialError](err); !ok {
+		t.Errorf("glyphs alone: %v, want a partial error", err)
+	}
+	if n := dark(pm); n != 0 {
+		t.Errorf("glyphs alone: %d dark pixels, want 0", n)
+	}
+}
+
 func TestWMF(t *testing.T) {
 	for _, placeable := range []bool{true, false} {
 		w := fixture.NewWMF(200, 200, placeable)

@@ -99,6 +99,13 @@ func (p *player) plusDriverString(c Command, v PlusDriverString) error {
 	for i := range run.Text {
 		run.Text[i] = uint16(v.Glyphs.At(i))
 	}
+	// ivy: glyph indexes draw the text of the GDI fallback of the record
+	// (change 19)
+	if run.Glyphs {
+		if units, ok := p.textOfGlyphs(r.Offset, nil, n, false); ok {
+			run.Text, run.Glyphs = units, false
+		}
+	}
 	metrics, err := tb.MeasureText(run)
 	if err != nil {
 		return err

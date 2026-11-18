@@ -308,7 +308,16 @@ func (p *player) textString(c Command, v Text, wide bool) error {
 	}
 	// ETO_RTLREADING and TA_RTLREADING select right-to-left reading order
 	// (MS-EMF 2.1.11, MS-WMF 2.1.2.3).
-	levels := textLevels(text, glyphs, v.Options&0x80 != 0 || p.dc.textAlign&0x100 != 0)
+	rtl := v.Options&0x80 != 0 || p.dc.textAlign&0x100 != 0
+	// ivy: glyph indexes draw the text that another record gives for them
+	// (change 19). indexed keeps the spacing of the indexes.
+	indexed := glyphs
+	if glyphs {
+		if units, ok := p.textOfGlyphs(r.Offset, f, len(text), rtl); ok {
+			text, glyphs = units, false
+		}
+	}
+	levels := textLevels(text, glyphs, rtl)
 	updateCP := p.dc.textAlign&1 != 0
 	ref := v.Reference
 	if updateCP {
@@ -376,7 +385,7 @@ func (p *player) textString(c Command, v Text, wide bool) error {
 		}
 		extra := round(float64(p.dc.charExtra) * ts.scale.X)
 		var perBreak, remainder float64
-		if p.dc.breakCount > 0 && !glyphs {
+		if p.dc.breakCount > 0 && !indexed {
 			total := round(float64(p.dc.breakExtra) * ts.scale.X)
 			perBreak = math.Trunc(total / float64(p.dc.breakCount))
 			remainder = total - perBreak*float64(p.dc.breakCount)
@@ -386,7 +395,7 @@ func (p *player) textString(c Command, v Text, wide bool) error {
 				return fmt.Errorf("gowemf: text backend returned a non-finite advance")
 			}
 			advances[i] = a + extra
-			if !glyphs && text[i] == ' ' && (perBreak != 0 || remainder != 0) {
+			if !indexed && text[i] == ' ' && (perBreak != 0 || remainder != 0) {
 				advances[i] += perBreak
 				if remainder >= 1 {
 					advances[i]++

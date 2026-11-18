@@ -320,6 +320,7 @@ func Play(data []byte, options PlayOptions, backend Backend) (Header, error) {
 	if err := p.start(h); err != nil {
 		return Header{}, err
 	}
+	p.glyphText = findGlyphText(data, h, options.Stream) // ivy: change 19
 	return Stream(data, options.Stream, p.play)
 }
 
@@ -346,6 +347,9 @@ type player struct {
 	plusSaved   []plusSaved
 	plusObjects [64]plusObject
 	plusDPI     Point
+	// ivy: glyphText is the text of the records that name their glyphs by
+	// index, by the offset of the record (change 19).
+	glyphText map[int]glyphText
 }
 
 func (p *player) start(h Header) error {

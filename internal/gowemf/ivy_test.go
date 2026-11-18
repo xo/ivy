@@ -378,3 +378,85 @@ func TestPlusImageWrap(t *testing.T) {
 		t.Fatalf("a wrap mode out of range: %v", skipped)
 	}
 }
+
+// TestPlayGlyphText checks change 19: glyph indexes draw the text that
+// another record gives for the same glyphs. They draw as indexes when no
+// record gives that text exactly.
+func TestPlayGlyphText(t *testing.T) {
+	font := emfFont(1, -20, 0, 0, 0, "Arial")
+	idx := string([]rune{36, 79})
+	dx := []int32{11, 9}
+	glyph := emfText(1, 10, 20, 0x10, nil, idx, nil, dx)
+	gdi := func(records ...[]byte) []TextRun {
+		t.Helper()
+		return playText(t, emfScene(96, 64, 2, append([][]byte{font, emfSelect(1)}, records...)...), PlayOptions{}).drawn
+	}
+	text := func(run TextRun) string { return string(utf16.Decode(run.Text)) }
+	// a text record before or after the indexes, with only the colors and
+	// the background mode between them
+	for _, c := range []struct {
+		name    string
+		records [][]byte
+		i       int
+		want    string
+	}{
+		{"before", [][]byte{emfText(1, 10, 20, 0, nil, "Ab", nil, dx), emfValue(EMRSetTextColor, 0xff), glyph}, 1, "Ab"},
+		{"after", [][]byte{glyph, emfValue(EMRSetBkMode, 1), emfText(1, 10, 20, 0, nil, "Ab", nil, nil)}, 0, "Ab"},
+		{"code page", [][]byte{emfText(1, 10, 20, 0, nil, "", []byte{'A', 0x80}, nil), glyph}, 1, "A€"},
+	} {
+		drawn := gdi(c.records...)
+		if len(drawn) != 2 {
+			t.Fatalf("%s: %+v", c.name, drawn)
+		}
+		// the advances and the spacing stay those of the indexes
+		if run := drawn[c.i]; run.Glyphs || text(run) != c.want || run.Advances[0] != 11 || run.Origins[1].X != 11 {
+			t.Errorf("%s: %+v", c.name, run)
+		}
+	}
+	// the indexes stay when no record gives their text exactly
+	for name, records := range map[string][][]byte{
+		"alone":           {glyph},
+		"other place":     {emfText(1, 10, 21, 0, nil, "Ab", nil, nil), glyph},
+		"other advances":  {emfText(1, 10, 20, 0, nil, "Ab", nil, []int32{11, 8}), glyph},
+		"other count":     {emfText(1, 10, 20, 0, nil, "Abc", nil, nil), glyph},
+		"font selected":   {emfText(1, 10, 20, 0, nil, "Ab", nil, nil), emfSelect(1), glyph},
+		"record between":  {emfText(1, 10, 20, 0, nil, "Ab", nil, nil), emfPoint(EMRMoveToEx, 0, 0), glyph},
+		"right to left":   {emfText(1, 10, 20, 0x80, nil, "Ab", nil, nil), emfText(1, 10, 20, 0x90, nil, idx, nil, nil)},
+		"combining mark":  {emfText(1, 10, 20, 0, nil, "é", nil, nil), glyph},
+		"shaped script":   {emfText(1, 10, 20, 0, nil, "कि", nil, nil), glyph},
+		"two glyph texts": {emfText(1, 10, 20, 0x10, nil, idx, nil, dx), glyph},
+	} {
+		drawn := gdi(records...)
+		if last := drawn[len(drawn)-1]; !last.Glyphs || last.Text[0] != 36 {
+			t.Errorf("%s: %+v", name, drawn)
+		}
+	}
+
+	// in an EMF+ Dual file, the GDI fallback of a DrawDriverString with
+	// glyph indexes gives its text
+	plus := func(dual bool, records ...[]byte) []TextRun {
+		t.Helper()
+		all := [][]byte{plusComment(plusHeaderDPI(dual, 96, 120)), plusComment(plusFontObj(1, 16, 2, 0, "Arial"))}
+		all = append(all, records...)
+		all = append(all, plusComment(plusRec(PlusEndOfFileRecord, 0)))
+		return playText(t, emfScene(96, 64, 2, all...), PlayOptions{}).drawn
+	}
+	driver := driverString(1, 0xff000000, 0, []uint16{36, 79}, []float64{10, 20, 21, 20}, nil)
+	fallback := [][]byte{font, emfSelect(1), emfText(1, 10, 20, 0, nil, "A", nil, nil), emfText(1, 21, 20, 0, nil, "b", nil, nil)}
+	drawn := plus(true, append([][]byte{plusComment(driver)}, fallback...)...)
+	if len(drawn) != 1 || drawn[0].Glyphs || text(drawn[0]) != "Ab" || !pointsNear(drawn[0].Origins, Point{10, 20}, Point{21, 20}) {
+		t.Errorf("EMF+ fallback: %+v", drawn)
+	}
+	for name, records := range map[string][][]byte{
+		"EMF+ Only":        append([][]byte{plusComment(driver)}, fallback...),
+		"no fallback":      {plusComment(driver)},
+		"indexes fallback": {plusComment(driver), font, emfSelect(1), glyph},
+		"shorter fallback": {plusComment(driver), font, emfSelect(1), emfText(1, 10, 20, 0, nil, "A", nil, nil)},
+		"two drawings":     append([][]byte{plusComment(fillRect(0xff000000, 0, 0, 1, 1), driver)}, fallback...),
+	} {
+		drawn := plus(name != "EMF+ Only", records...)
+		if len(drawn) != 1 || !drawn[0].Glyphs || drawn[0].Text[0] != 36 {
+			t.Errorf("%s: %+v", name, drawn)
+		}
+	}
+}
