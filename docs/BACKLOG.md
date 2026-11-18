@@ -354,14 +354,4 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
 
 ## Work for magic
 
-Each item is a request to magic (D8).
-
-1. Read the flags of the EXTH header of a Mobipocket book at offset 0x80 of
-   record 0 in `container`. magic v0.9.0 reads them at offset 0x80 of the MOBI
-   header, which comes 16 bytes later, after the header of PalmDOC. The test
-   books of magic write the flags there too. So `container.Detect` gives
-   `Unknown` for a real book with both forms, MOBI and KF8, such as
-   `mobi/testdata/book-both.mobi`, which calibre made. It must give AZW3.
-   `mobi` reads the flags at offset 128 of record 0, as calibre and
-   KindleUnpack do. When magic is fixed, delete the gap of `TestDetect` in
-   `mobi/detect_test.go`. Source: `mobi`, 2026-11-18.
+Each item is a request to magic (D8). No item is open on 2026-11-19.
