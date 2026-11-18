@@ -224,9 +224,22 @@ func blendMode(b okage.BlendMode) okage.BlendMode {
 
 // List records the commands that it receives, and replays them onto another
 // device. Its String lists the commands, one on each line, for the tests.
+//
+// A List records the content of a soft mask when it receives the group of
+// the mask, as a list of its own. A list does not call back into the code
+// that recorded it, so goroutines can replay one list onto devices of their
+// own at the same time.
 type List struct {
 	cmds []func(Device)
 	ops  []string
+	// quiet leaves out the names of the commands, which only String reads.
+	quiet bool
+}
+
+// NewRecording returns a list that keeps the commands without their names,
+// for a page that a program replays: its String is empty.
+func NewRecording() *List {
+	return &List{quiet: true}
 }
 
 // The interfaces that a List implements.
@@ -236,9 +249,12 @@ var (
 	_ StrokeAdjuster = (*List)(nil)
 )
 
-// record keeps one command.
-func (l *List) record(op string, cmd func(Device)) {
-	l.ops = append(l.ops, op)
+// record keeps one command, and the name that op gives, unless the list is
+// quiet.
+func (l *List) record(op func() string, cmd func(Device)) {
+	if !l.quiet {
+		l.ops = append(l.ops, op())
+	}
 	l.cmds = append(l.cmds, cmd)
 }
 
@@ -256,82 +272,93 @@ func (l *List) String() string {
 
 // Save satisfies the Device interface.
 func (l *List) Save() {
-	l.record("save", func(d Device) { d.Save() })
+	l.record(func() string { return "save" }, func(d Device) { d.Save() })
 }
 
 // Restore satisfies the Device interface.
 func (l *List) Restore() {
-	l.record("restore", func(d Device) { d.Restore() })
+	l.record(func() string { return "restore" }, func(d Device) { d.Restore() })
 }
 
 // Concat satisfies the Device interface.
 func (l *List) Concat(t okage.Transform) {
-	l.record(fmt.Sprintf("concat %v", t), func(d Device) { d.Concat(t) })
+	l.record(func() string { return fmt.Sprintf("concat %v", t) }, func(d Device) { d.Concat(t) })
 }
 
 // FillPath satisfies the Device interface.
 func (l *List) FillPath(p *okage.Path, rule okage.FillRule, shader okage.Shader) {
-	l.record(fmt.Sprintf("fill %v %v", bounds(p), rule), func(d Device) { d.FillPath(p, rule, shader) })
+	l.record(func() string { return fmt.Sprintf("fill %v %v", bounds(p), rule) }, func(d Device) { d.FillPath(p, rule, shader) })
 }
 
 // StrokePath satisfies the Device interface.
 func (l *List) StrokePath(p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
-	l.record(fmt.Sprintf("stroke %v %g", bounds(p), stroke.Width), func(d Device) { d.StrokePath(p, stroke, shader) })
+	l.record(func() string { return fmt.Sprintf("stroke %v %g", bounds(p), stroke.Width) }, func(d Device) { d.StrokePath(p, stroke, shader) })
 }
 
 // StrokeAdjusted satisfies the StrokeAdjuster interface. The replay calls
 // StrokeAdjusted of this package with the device of the replay.
 func (l *List) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
-	l.record(fmt.Sprintf("stroke adjusted %v %g", bounds(p), stroke.Width),
+	l.record(func() string { return fmt.Sprintf("stroke adjusted %v %g", bounds(p), stroke.Width) },
 		func(d Device) { StrokeAdjusted(d, p, stroke, shader) })
 }
 
 // ClipPath satisfies the Device interface.
 func (l *List) ClipPath(p *okage.Path, rule okage.FillRule) {
-	l.record(fmt.Sprintf("clip %v %v", bounds(p), rule), func(d Device) { d.ClipPath(p, rule) })
+	l.record(func() string { return fmt.Sprintf("clip %v %v", bounds(p), rule) }, func(d Device) { d.ClipPath(p, rule) })
 }
 
 // DrawImage satisfies the Device interface.
 func (l *List) DrawImage(img image.Image, t okage.Transform, opts ImageOptions) {
-	l.record(fmt.Sprintf("image %v %v %g", img.Bounds().Size(), t, opts.Opacity),
+	l.record(func() string { return fmt.Sprintf("image %v %v %g", img.Bounds().Size(), t, opts.Opacity) },
 		func(d Device) { d.DrawImage(img, t, opts) })
 }
 
 // FillMask satisfies the Device interface.
 func (l *List) FillMask(mask *image.Alpha, t okage.Transform, opts ImageOptions, shader okage.Shader) {
-	l.record(fmt.Sprintf("mask %v %v %g", mask.Bounds().Size(), t, opts.Opacity),
+	l.record(func() string { return fmt.Sprintf("mask %v %v %g", mask.Bounds().Size(), t, opts.Opacity) },
 		func(d Device) { d.FillMask(mask, t, opts, shader) })
 }
 
 // FillGlyphs satisfies the Device interface.
 func (l *List) FillGlyphs(run GlyphRun, shader okage.Shader) {
-	l.record(fmt.Sprintf("glyphs %d %g", len(run.Glyphs), run.Size), func(d Device) { d.FillGlyphs(run, shader) })
+	l.record(func() string { return fmt.Sprintf("glyphs %d %g", len(run.Glyphs), run.Size) }, func(d Device) { d.FillGlyphs(run, shader) })
 }
 
 // FillText satisfies the TextFiller interface. The replay calls FillText
 // of this package with the device of the replay.
 func (l *List) FillText(p *okage.Path, rule okage.FillRule, shader okage.Shader) {
-	l.record(fmt.Sprintf("fill text %v %v", bounds(p), rule), func(d Device) { FillText(d, p, rule, shader) })
+	l.record(func() string { return fmt.Sprintf("fill text %v %v", bounds(p), rule) }, func(d Device) { FillText(d, p, rule, shader) })
 }
 
-// BeginGroup satisfies the Device interface.
+// BeginGroup satisfies the Device interface. It records the content of the
+// soft mask of g at once, into a list of its own, which the replay draws.
 func (l *List) BeginGroup(g Group) {
-	op := fmt.Sprintf("group %g %v", g.Opacity, blendMode(g.Blend))
-	if g.Isolated {
-		op += " isolated"
+	if g.Mask != nil && g.Mask.Content != nil {
+		sub := &List{quiet: l.quiet}
+		g.Mask.Content(sub)
+		mask := *g.Mask
+		mask.Content = sub.Replay
+		g.Mask = &mask
 	}
-	if g.Knockout {
-		op += " knockout"
-	}
-	if g.Mask != nil {
-		op += " mask " + g.Mask.Type.String()
+	op := func() string {
+		op := fmt.Sprintf("group %g %v", g.Opacity, blendMode(g.Blend))
+		if g.Isolated {
+			op += " isolated"
+		}
+		if g.Knockout {
+			op += " knockout"
+		}
+		if g.Mask != nil {
+			op += " mask " + g.Mask.Type.String()
+		}
+		return op
 	}
 	l.record(op, func(d Device) { d.BeginGroup(g) })
 }
 
 // EndGroup satisfies the Device interface.
 func (l *List) EndGroup() {
-	l.record("end group", func(d Device) { d.EndGroup() })
+	l.record(func() string { return "end group" }, func(d Device) { d.EndGroup() })
 }
 
 // bounds returns the bounds of p, rounded, for the list of commands.

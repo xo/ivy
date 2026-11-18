@@ -85,6 +85,24 @@ type Book struct {
 	loads int
 	// err is the first error of a document that the book left out.
 	err error
+	// recordings holds the pages that Render recorded, the most recent
+	// last.
+	recordings []*recording
+}
+
+// maxRecordings is the number of recorded pages that a book keeps.
+const maxRecordings = 4
+
+// recording is a page that bookPage.Render drew into a list of commands, at
+// a transform whose translation is less than a pixel. The bands of a page
+// that RenderImage draws replay one recording, each moved by a whole number
+// of pixels (D47).
+type recording struct {
+	box  *Box
+	t    okage.Transform
+	list *display.List
+	// err is nil or the *ivy.PartialError of the drawing.
+	err error
 }
 
 // bookDocument is a document of a book.
@@ -499,8 +517,53 @@ func (p *bookPage) Size() (float32, float32) {
 
 // Render satisfies the ivy.Page interface. It returns an *ivy.PartialError
 // when it drew the page in part.
+//
+// Render records the page once into a list of commands, at t without the
+// whole pixels of its translation, and replays the list onto dst moved by
+// those pixels. The calls of Render for the bands of one page share the
+// recording, and replay it at the same time without the lock of the book
+// (D47). The commands are the same as those of a drawing at t.
 func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
-	return p.draw(ctx, display.NewOkage(dst, okage.IdentityTransform()), t, 1)
+	x, y := float32(math.Floor(float64(t.TX))), float32(math.Floor(float64(t.TY)))
+	if math.IsInf(float64(x), 0) || math.IsNaN(float64(x)) || math.IsInf(float64(y), 0) || math.IsNaN(float64(y)) {
+		x, y = 0, 0
+	}
+	at := t
+	at.TX, at.TY = t.TX-x, t.TY-y
+	rec, err := p.record(ctx, at)
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
+	}
+	rec.list.Replay(display.NewOkage(dst, okage.TransformFromTranslate(x, y)))
+	return rec.err
+}
+
+// record returns the recording of the page at t, and draws it when the
+// book does not hold it. It returns an error that is not an
+// *ivy.PartialError when the drawing failed.
+func (p *bookPage) record(ctx context.Context, t okage.Transform) (*recording, error) {
+	b := p.book
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, rec := range b.recordings {
+		if rec.box == p.box && rec.t == t {
+			return rec, nil
+		}
+	}
+	list := display.NewRecording()
+	err := p.drawLocked(ctx, list, t, 1)
+	if _, ok := errors.AsType[*ivy.PartialError](err); err != nil && !ok {
+		return nil, err
+	}
+	rec := &recording{box: p.box, t: t, list: list, err: err}
+	if len(b.recordings) >= maxRecordings {
+		b.recordings = slices.Delete(b.recordings, 0, len(b.recordings)-maxRecordings+1)
+	}
+	b.recordings = append(b.recordings, rec)
+	return rec, nil
 }
 
 // Draw draws page n of the book, from 0, onto dev. t maps the points of the
@@ -530,6 +593,11 @@ func (p *bookPage) draw(ctx context.Context, dev display.Device, t okage.Transfo
 	}
 	p.book.mu.Lock()
 	defer p.book.mu.Unlock()
+	return p.drawLocked(ctx, dev, t, scale)
+}
+
+// drawLocked is draw, with the lock of the book held.
+func (p *bookPage) drawLocked(ctx context.Context, dev display.Device, t okage.Transform, scale float64) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = &ivy.PartialError{Err: fmt.Errorf("rendering page %d: panic: %v: %w", p.n+1, r, ivy.ErrFormat)}

@@ -153,10 +153,16 @@ func (d *OkageDevice) paint(shader okage.Shader, shape bool) okage.Paint {
 // opacity of 1. The object draws onto the pixmap of the innermost group,
 // and onto the alpha of that group when the group has one. In a knockout
 // group, bounds gives the pixels that the object can cover, and the object
-// replaces the earlier objects of the group there.
+// replaces the earlier objects of the group there. An object whose bounds
+// are outside the bounds of the clip draws nothing, and draw skips it, so
+// that a band of a page pays only for the objects of the band.
 func (d *OkageDevice) draw(bounds func() image.Rectangle, paint func(dst *okage.Pixmap, shape bool)) {
+	b := bounds()
+	if !b.Overlaps(d.state.bounds) {
+		return
+	}
 	if i := d.top(); i >= 0 && d.groups[i].g.Knockout {
-		d.knockout(&d.groups[i], bounds(), paint)
+		d.knockout(&d.groups[i], b, paint)
 		return
 	}
 	paint(d.dst, false)
@@ -207,20 +213,30 @@ func (d *OkageDevice) strokePath(p *okage.Path, stroke okage.Stroke, shader okag
 }
 
 // ClipPath satisfies the Device interface. An empty path clips everything.
+// A clip inside a clip clones the mask of the state, and only the first clip
+// makes a new mask. A clip outside the bounds of the clip of the state makes
+// no mask: its bounds are empty, and each object then draws nothing.
 func (d *OkageDevice) ClipPath(p *okage.Path, rule okage.FillRule) {
-	clip, ok := okage.NewMask(d.dst.Width(), d.dst.Height())
-	if !ok {
+	bounds := d.state.bounds.Intersect(d.pathBounds(p))
+	if bounds.Empty() {
+		d.state.bounds = image.Rectangle{}
 		return
 	}
-	d.state.bounds = d.state.bounds.Intersect(d.pathBounds(p))
-	if p != nil {
-		if d.state.clip == nil {
-			clip.FillPath(p, rule, !d.aliased, d.state.t)
-		} else {
-			clip = d.state.clip.Clone()
-			clip.IntersectPath(p, rule, !d.aliased, d.state.t)
+	var clip *okage.Mask
+	if p != nil && d.state.clip != nil {
+		clip = d.state.clip.Clone()
+		clip.IntersectPath(p, rule, !d.aliased, d.state.t)
+	} else {
+		m, ok := okage.NewMask(d.dst.Width(), d.dst.Height())
+		if !ok {
+			return
 		}
+		if p != nil {
+			m.FillPath(p, rule, !d.aliased, d.state.t)
+		}
+		clip = m
 	}
+	d.state.bounds = bounds
 	d.state.clip = clip
 }
 
@@ -310,7 +326,7 @@ func quality(opts ImageOptions) okage.FilterQuality {
 // DrawImage satisfies the Device interface. The shape of an image in a
 // knockout group is its alpha.
 func (d *OkageDevice) DrawImage(img image.Image, t okage.Transform, opts ImageOptions) {
-	if img == nil {
+	if img == nil || !d.imageBounds(img.Bounds().Size(), t).Overlaps(d.state.bounds) {
 		return
 	}
 	pm := d.pixmap(img)
@@ -333,7 +349,7 @@ func (d *OkageDevice) DrawImage(img image.Image, t okage.Transform, opts ImageOp
 // for a solid color. For another shader, it draws the stencil into a mask of
 // the size of the target, and fills the target through it.
 func (d *OkageDevice) FillMask(mask *image.Alpha, t okage.Transform, opts ImageOptions, shader okage.Shader) {
-	if mask == nil || shader == nil || mask.Rect.Empty() {
+	if mask == nil || shader == nil || mask.Rect.Empty() || !d.imageBounds(mask.Rect.Size(), t).Overlaps(d.state.bounds) {
 		return
 	}
 	pp := okage.DefaultPixmapPaint()
@@ -420,6 +436,9 @@ func intersect(a, b *okage.Mask) *okage.Mask {
 // FillGlyphs satisfies the Device interface. It fills a run of small
 // glyphs with the finer coverage, as FillText does.
 func (d *OkageDevice) FillGlyphs(run GlyphRun, shader okage.Shader) {
+	if !d.glyphBounds(run).Overlaps(d.state.bounds) {
+		return
+	}
 	p := run.Path()
 	if p == nil || shader == nil {
 		return
@@ -431,6 +450,32 @@ func (d *OkageDevice) FillGlyphs(run GlyphRun, shader okage.Shader) {
 		coverage = okage.Coverage8x8
 	}
 	d.fillPath(p, okage.FillRuleWinding, shader, coverage)
+}
+
+// glyphEms is the margin of glyphBounds, in ems: more than the reach of the
+// outline of a glyph from its origin.
+const glyphEms = 8
+
+// glyphBounds returns the pixels that the glyphs of run can cover, from the
+// origins of its glyphs and a margin of glyphEms ems, without the outlines.
+func (d *OkageDevice) glyphBounds(run GlyphRun) image.Rectangle {
+	if len(run.Glyphs) == 0 {
+		return image.Rectangle{}
+	}
+	t := run.Transform
+	scale := math.Sqrt(float64(t.SX*t.SX + t.KX*t.KX + t.KY*t.KY + t.SY*t.SY))
+	pad := float64(glyphEms)*scale*math.Abs(float64(run.Size)) + math.Abs(float64(t.TX)) + math.Abs(float64(t.TY))
+	minX, minY := run.Glyphs[0].X, run.Glyphs[0].Y
+	maxX, maxY := minX, minY
+	for _, g := range run.Glyphs[1:] {
+		minX, maxX = min(minX, g.X), max(maxX, g.X)
+		minY, maxY = min(minY, g.Y), max(maxY, g.Y)
+	}
+	r, ok := okage.RectFromLTRB(minX-float32(pad), minY-float32(pad), maxX+float32(pad), maxY+float32(pad))
+	if !ok || !(pad < 1<<20) {
+		return d.state.bounds
+	}
+	return d.rectBounds(r, d.state.t, 2)
 }
 
 // FillText satisfies the TextFiller interface. When the outlines are at most
@@ -506,7 +551,7 @@ func (d *OkageDevice) BeginGroup(g Group) {
 	if g.Mask != nil && !gr.bounds.Empty() {
 		gr.mask = d.softMask(g.Mask, gr.bounds)
 	}
-	if d.needsLayer(g) {
+	if d.needsLayer(g) && !gr.bounds.Empty() {
 		gr.layer = d.layer()
 	}
 	if gr.layer != nil && g.Knockout && !g.Isolated {

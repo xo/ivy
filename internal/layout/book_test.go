@@ -343,3 +343,76 @@ func TestBookPageCounter(t *testing.T) {
 		t.Errorf("page 2 after the count: got the number %q, want 3", got)
 	}
 }
+
+// TestRenderReplay checks that Render, which records a page once and
+// replays the recording, gives the pixels of a drawing of the page at the
+// same transform, also when goroutines render the bands of the page at the
+// same time (D47).
+func TestRenderReplay(t *testing.T) {
+	ctx := context.Background()
+	style := `@page { size: 300px 400px; margin: 20px } body { margin: 0; font-size: 14px }
+	.box { border: 2px solid #c33; padding: 6px; background: linear-gradient(#fff, #9cf) }
+	.faded { opacity: .5; background: #3a6 } .masked { mask-image: linear-gradient(black, transparent) }`
+	body := `<html xmlns="http://www.w3.org/1999/xhtml"><body>
+	<p class="box">A paragraph in a box with a gradient.</p>
+	<p class="faded">A paragraph at half opacity.</p>
+	<p class="masked" style="background: #c60">A paragraph under a mask.</p>
+	<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60"><circle cx="30" cy="30" r="25" fill="#36c"/><rect x="60" y="10" width="50" height="40" fill="#e90"/></svg>
+	<p>` + strings.Repeat("Text that fills the page. ", 30) + `</p>
+	</body></html>`
+	src := Source{
+		FS:          fstest.MapFS{"c.xhtml": &fstest.MapFile{Data: []byte(body)}},
+		Documents:   []string{"c.xhtml"},
+		StyleSheets: []string{style},
+	}
+	b := NewBook(src, BookOptions{})
+	page, err := b.Page(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := page.(*bookPage)
+	const scale = 96.0 / 72
+	// the bands of 128 rows of a page of 400 by 533 pixels, as RenderImage
+	// cuts them, and a transform with a fraction of a pixel
+	transforms := []okage.Transform{okage.TransformFromRow(scale, 0, 0, scale, 0.25, -0.5)}
+	for y := 0; y < 533; y += 128 {
+		transforms = append(transforms, okage.TransformFromRow(scale, 0, 0, scale, 0, -float32(y)))
+	}
+	pixmap := func() *okage.Pixmap {
+		pm, ok := okage.NewPixmap(400, 160)
+		if !ok {
+			t.Fatal("making a pixmap")
+		}
+		return pm
+	}
+	want := make([][]byte, len(transforms))
+	for i, tr := range transforms {
+		pm := pixmap()
+		if err := p.draw(ctx, display.NewOkage(pm, okage.IdentityTransform()), tr, 1); err != nil {
+			t.Fatal(err)
+		}
+		want[i] = pm.Data()
+	}
+	got := make([][]byte, len(transforms))
+	errs := make([]error, len(transforms))
+	var wg sync.WaitGroup
+	for i, tr := range transforms {
+		wg.Go(func() {
+			pm := pixmap()
+			errs[i] = p.Render(ctx, pm, tr)
+			got[i] = pm.Data()
+		})
+	}
+	wg.Wait()
+	for i := range transforms {
+		if errs[i] != nil {
+			t.Fatalf("transform %d: %v", i, errs[i])
+		}
+		if !slices.Equal(got[i], want[i]) {
+			t.Errorf("transform %d: expected the pixels of the drawing at the same transform", i)
+		}
+	}
+	if n := len(b.recordings); n != 2 {
+		t.Errorf("expected 2 recordings, one for each fraction of a pixel, got %d", n)
+	}
+}

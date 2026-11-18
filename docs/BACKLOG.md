@@ -239,6 +239,35 @@ D59 added. These items are left.
    shading with an extend at both ends is also still an image, and okage
    can fill it with `SpreadModePad`. Source: the decal gradients, 2026-11-18.
 
+## Left by the speed of 2026-11-18
+
+The measurement of the speed of 2026-11-18 and D47 left these items. Each
+time is for a page at 96 dpi.
+
+1. Lay out the first page of a large sheet without the styles of the whole
+   sheet. `datasets/csv/world-cities.csv` needs 4 s and
+   `poi/xlsx/many-merges.xlsx` 2.8 s before the first page, because the
+   cascade runs on each cell of the one HTML document of the sheet. Most
+   cells have a style attribute, so the cache of the styles does not share
+   them. Source: `internal/sheet` and `internal/layout`.
+2. Make the Box of the layout smaller. Box has 96 fields. `newBox` and
+   `Box.Copy` allocate 1.7 GB for `idpf/epub/linear-algebra.epub`, and the
+   collection of the garbage takes 30 to 40 percent of the time of its
+   `PageCount`. Source: `internal/layout`.
+3. Keep the decoded images of a PDF document between the renders. Each
+   render decodes each image again, and `pdfjs/pdf/a1-plans.pdf` spends
+   about 1.7 s on it. Source: `internal/hayro/render`.
+4. Composite a group only on the area that its objects drew, not on the
+   bounds of its clip. Most of the time of
+   `pdfjs/pdf/transparency-blend-modes.pdf` is the composite of its groups.
+   Source: `internal/display`.
+5. Compute the variations of the faces of a font chain once for each
+   fontmap, in `FontConfiguration.chain` and `fontmap.ResolveFace`. Source:
+   `internal/layout/text_fonts.go`.
+6. Lay out the documents of a book at the same time. The layout of a flow
+   of text is serial, so bands and `RenderPages` do not make the
+   `PageCount` of a large ebook faster (D47). Source: `internal/layout`.
+
 ## Work for okage
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.

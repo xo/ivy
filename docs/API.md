@@ -212,8 +212,15 @@ func Pages(ctx context.Context, p Pager) iter.Seq2[Page, error]
 func BestPreview(ctx context.Context, d Document, want image.Point) (image.Image, error)
 
 // RenderImage renders p at dpi dots per inch over bg, and returns the image.
-// A nil bg leaves the background transparent (D11).
+// A nil bg leaves the background transparent (D11). A large page renders in
+// bands of rows on up to 8 goroutines, and its pixels do not depend on the
+// number of CPUs (D47).
 func RenderImage(ctx context.Context, p Page, dpi float32, bg color.Color) (image.Image, error)
+
+// RenderPages renders the pages of p whose numbers are in pages, as
+// RenderImage does, several at the same time, and yields the images in the
+// order of pages (D47).
+func RenderPages(ctx context.Context, p Pager, pages []int, dpi float32, bg color.Color) iter.Seq2[image.Image, error]
 ```
 
 ### The configuration
