@@ -449,6 +449,10 @@ type StyleFor struct {
 	cascaded *cascadedStyles
 	computed styleMap[*Style]
 	sheets   []sheetOrigin
+	// pseudoOwners maps an element that shares the computed style of an
+	// earlier element to that element. The pseudo-elements of the two
+	// elements have the same styles.
+	pseudoOwners map[*Element]*Element
 
 	// uses holds the features of the styles that need the whole layout
 	// before a page (D43).
@@ -458,10 +462,11 @@ type StyleFor struct {
 // newStyleFor is StyleFor.__init__ in weasyprint/css/__init__.py.
 func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx *StyleContext, targetCollector *TargetCollector) (*StyleFor, error) {
 	sf := &StyleFor{
-		Context:  ctx,
-		cascaded: newCascadedStyles(),
-		computed: newStyleMap[*Style](),
-		sheets:   sheets,
+		Context:      ctx,
+		cascaded:     newCascadedStyles(),
+		computed:     newStyleMap[*Style](),
+		sheets:       sheets,
+		pseudoOwners: map[*Element]*Element{},
 	}
 	budget := ctx.budget
 	log := ctx.log
@@ -489,9 +494,20 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 	// it has declarations of its own, and each match. styleIDs numbers the
 	// parent styles. When the key is in the cache, the cascaded style of
 	// the element is not made, because nothing reads it. Its declarations
-	// are the declarations of the element that made the cached style. The
-	// cascade of its pseudo-elements is made as upstream does.
+	// are the declarations of the element that made the cached style.
+	//
+	// Port: the pseudo-elements of an element whose key is in the cache
+	// share the computed styles of the pseudo-elements of the element that
+	// made the cached style. The key holds each match, so the
+	// pseudo-elements have the same declarations, and their parent is the
+	// same style. Upstream makes them again for each element. The rules of
+	// the user agent, such as ::marker and ::footnote-call, give each
+	// element six pseudo-elements, so they were most of the work of the
+	// cascade of a large table. shared holds the elements that share them,
+	// in tree order.
 	computedCache := map[string]*Style{}
+	cacheOwners := map[string]*Element{}
+	var shared []*Element
 	styleIDs := map[*Style]int{}
 	type sheetMatch struct {
 		sheet      int
@@ -548,6 +564,7 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			}
 		}
 		cached, hit := computedCache[string(key)]
+		pseudo := false
 		for _, m := range matches {
 			sheet, match := sheets[m.sheet], m.match
 			specificity := match.Specificity
@@ -557,7 +574,10 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			if !budget.spend(1 + len(match.Payload.declarations)) {
 				return nil, fmt.Errorf("%w: the cascade of the document needs too much work", ivy.ErrLimit)
 			}
-			if hit && match.PseudoElement == "" {
+			if match.PseudoElement != "" {
+				pseudo = true
+			}
+			if hit {
 				continue
 			}
 			style := sf.cascaded.setDefault(etreeElement, match.PseudoElement)
@@ -568,6 +588,10 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 		if hit {
 			// Equivalent computed style already exists, share it.
 			sf.computed.set(newStyleKey(etreeElement, ""), cached)
+			if pseudo {
+				sf.pseudoOwners[etreeElement] = cacheOwners[string(key)]
+				shared = append(shared, etreeElement)
+			}
 		} else {
 			// No equivalent computed style found, create it.
 			var parentOwner StyleOwner
@@ -578,6 +602,7 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 				return nil, err
 			}
 			computedCache[string(key)], _ = sf.computed.get(newStyleKey(etreeElement, ""))
+			cacheOwners[string(key)] = etreeElement
 		}
 	}
 
@@ -598,6 +623,11 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			return nil, err
 		}
 	}
+	for _, element := range shared {
+		if err := sf.sharePseudoStyles(element, targetCollector); err != nil {
+			return nil, err
+		}
+	}
 
 	// Port: find the features that need the whole layout before the
 	// cascaded styles go (D43).
@@ -609,10 +639,35 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 	return sf, nil
 }
 
+// sharePseudoStyles spends the work of the styles of the pseudo-elements
+// of an element that shares them, as SetComputedStyles would spend it, and
+// collects their anchors again, which logs that each one is defined twice.
+func (sf *StyleFor) sharePseudoStyles(element *Element, targetCollector *TargetCollector) error {
+	for _, k := range sf.cascaded.pseudos[sf.pseudoOwners[element]] {
+		if !sf.Context.budget.spend(1) {
+			return fmt.Errorf("%w: the document has too many styles", ivy.ErrLimit)
+		}
+		if targetCollector == nil {
+			continue
+		}
+		style, _ := sf.computed.get(k)
+		if anchor := style.Get("anchor"); truthy(anchor) {
+			targetCollector.CollectAnchor(str(anchor))
+		}
+	}
+	return nil
+}
+
 // Get is StyleFor.__call__ in weasyprint/css/__init__.py. It returns the
 // computed style of an owner and a pseudo-element type, "" for None, or nil
 // when there is none.
 func (sf *StyleFor) Get(owner StyleOwner, pseudoType string) *Style {
+	if e, ok := owner.(*Element); ok && pseudoType != "" {
+		if o := sf.pseudoOwners[e]; o != nil {
+			// The element shares the styles of the pseudo-elements of o.
+			owner = o
+		}
+	}
 	style, _ := sf.computed.get(newStyleKey(owner, pseudoType))
 	if style == nil {
 		return nil

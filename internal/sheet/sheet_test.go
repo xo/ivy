@@ -72,7 +72,8 @@ func TestSourceHTML(t *testing.T) {
 		// the rows of the merged cell keep their own heights
 		`<tr><td class="c" colspan="3" rowspan="2">merged text</td></tr><tr></tr>`,
 		`td.s1{font-family:"Calibri", sans-serif;font-size:11pt;font-weight:bold;background-color:#ddebf7;border-bottom:0.75pt solid #000000;text-align:center;}`,
-		`<td class="c">alpha</td><td class="n c">1.50</td><td></td>`,
+		// the empty cell at the end of a row is left out
+		`<td class="c">alpha</td><td class="n c">1.50</td></tr>`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the document:\n%s", want, doc)

@@ -1130,7 +1130,11 @@ func (w *writer) cellStyle(row *Row, cell *Cell, c int) int {
 // stops at its limit.
 func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []bool, skipTitles bool) bool {
 	b := &w.body
+	// empty counts the empty cells that the row has not written yet. gap
+	// is set when a merged cell of an earlier row is among their columns.
+	// wrote is set when the row wrote a cell.
 	empty := 0
+	gap, wrote := false, false
 	flush := func() bool {
 		if empty == 0 {
 			return true
@@ -1143,7 +1147,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		} else {
 			b.WriteString(`<td colspan="` + strconv.Itoa(empty) + `"></td>`)
 		}
-		empty = 0
+		empty, gap = 0, false
 		return true
 	}
 	for k := 0; k < len(band); k++ {
@@ -1153,6 +1157,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		colspan, rowspan := 1, 1
 		if m != nil {
 			if m.started || k != m.lo {
+				gap = gap || empty > 0
 				continue
 			}
 			m.started = true
@@ -1188,6 +1193,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		if !w.spend(1) {
 			return false
 		}
+		wrote = true
 		if style != 0 {
 			w.used[style] = true
 		}
@@ -1299,6 +1305,12 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		}
 		b.WriteString("</td>")
 		k += colspan - 1
+	}
+	if empty > 0 && wrote && !gap && !w.style(0).visible() {
+		// The empty cells at the end of a row draw nothing, so the row
+		// leaves them out, which saves their styles and their boxes. They
+		// still count, so that the sheet stops at the same cell.
+		return w.spend(1)
 	}
 	return flush()
 }
