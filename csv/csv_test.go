@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
@@ -54,21 +55,21 @@ func TestParse(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		in   []byte
-		sep  byte
+		sep  string
 		want [][]string
 	}{
-		{"comma", []byte("a,b,c\n1,2,3\n"), ',', [][]string{{"a", "b", "c"}, {"1", "2", "3"}}},
-		{"semicolon", []byte("a;b\n1,5;2,5\n"), ';', [][]string{{"a", "b"}, {"1,5", "2,5"}}},
-		{"tab", []byte("a\tb, c\r\n1\t2\r\n"), '\t', [][]string{{"a", "b, c"}, {"1", "2"}}},
-		{"pipe", []byte("a|b|c\nd|e|f"), '|', [][]string{{"a", "b", "c"}, {"d", "e", "f"}}},
-		{"quotes", []byte("\"a,b\",\"say \"\"hi\"\"\",\"two\nlines\"\nx,y\"z,\n"), ',', [][]string{{"a,b", `say "hi"`, "two\nlines"}, {"x", `y"z`, ""}}},
-		{"one column", []byte("a\nb\n"), ',', [][]string{{"a"}, {"b"}}},
-		{"bom", []byte("\xef\xbb\xbfa,b\n"), ',', [][]string{{"a", "b"}}},
-		{"utf-16le", utf16Bytes("é,ü\n1,2\n", false, true), ',', [][]string{{"é", "ü"}, {"1", "2"}}},
-		{"utf-16be", utf16Bytes("é;ü\n1;2\n", true, true), ';', [][]string{{"é", "ü"}, {"1", "2"}}},
-		{"utf-16 without a bom", utf16Bytes("ab,cd\n", false, false), ',', [][]string{{"ab", "cd"}}},
-		{"windows-1252", []byte("caf\xe9,\x80 5\n"), ',', [][]string{{"café", "€ 5"}}},
-		{"empty", nil, ',', nil},
+		{"comma", []byte("a,b,c\n1,2,3\n"), ",", [][]string{{"a", "b", "c"}, {"1", "2", "3"}}},
+		{"semicolon", []byte("a;b\n1,5;2,5\n"), ";", [][]string{{"a", "b"}, {"1,5", "2,5"}}},
+		{"tab", []byte("a\tb, c\r\n1\t2\r\n"), "\t", [][]string{{"a", "b, c"}, {"1", "2"}}},
+		{"pipe", []byte("a|b|c\nd|e|f"), "|", [][]string{{"a", "b", "c"}, {"d", "e", "f"}}},
+		{"quotes", []byte("\"a,b\",\"say \"\"hi\"\"\",\"two\nlines\"\nx,y\"z,\n"), ",", [][]string{{"a,b", `say "hi"`, "two\nlines"}, {"x", `y"z`, ""}}},
+		{"one column", []byte("a\nb\n"), ",", [][]string{{"a"}, {"b"}}},
+		{"bom", []byte("\xef\xbb\xbfa,b\n"), ",", [][]string{{"a", "b"}}},
+		{"utf-16le", utf16Bytes("é,ü\n1,2\n", false, true), ",", [][]string{{"é", "ü"}, {"1", "2"}}},
+		{"utf-16be", utf16Bytes("é;ü\n1;2\n", true, true), ";", [][]string{{"é", "ü"}, {"1", "2"}}},
+		{"utf-16 without a bom", utf16Bytes("ab,cd\n", false, false), ",", [][]string{{"ab", "cd"}}},
+		{"windows-1252", []byte("caf\xe9,\x80 5\n"), ",", [][]string{{"café", "€ 5"}}},
+		{"empty", nil, ",", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := open(t, tt.in, ivy.Config{})
@@ -79,6 +80,55 @@ func TestParse(t *testing.T) {
 				t.Errorf("expected %q, got: %q", tt.want, d.rows)
 			}
 		})
+	}
+}
+
+func TestSeparator(t *testing.T) {
+	// The fields of the file split on commas, but the program gives a
+	// semicolon.
+	buf := []byte("a;b,c\n1;2,3\n")
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithSeparator(';'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{{"a", "b,c"}, {"1", "2,3"}}; !slices.EqualFunc(d.rows, want, slices.Equal) {
+		t.Errorf("expected %q, got: %q", want, d.rows)
+	}
+	if d := open(t, buf, ivy.Config{}); d.sep != "," {
+		t.Errorf("expected the separator \",\" without the option, got: %q", d.sep)
+	}
+	d, err = Open(t.Context(), bytes.NewReader([]byte("a¦\"b¦c\"¦d\n1¦2¦3")), WithSeparator('¦'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{{"a", "b¦c", "d"}, {"1", "2", "3"}}; !slices.EqualFunc(d.rows, want, slices.Equal) {
+		t.Errorf("expected %q, got: %q", want, d.rows)
+	}
+	for _, r := range []rune{'"', '\n', '\r', utf8.RuneError, -1, 0x110000} {
+		if _, err := Open(t.Context(), bytes.NewReader(buf), WithSeparator(r)); !errors.Is(err, ivy.ErrUnsupported) {
+			t.Errorf("expected ErrUnsupported for the separator %q, got: %v", r, err)
+		}
+	}
+}
+
+func TestDates(t *testing.T) {
+	d := open(t, []byte("date,when\n2024-01-02,1/2/24\n03.04.2025,Jan 5\n"), ivy.Config{})
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := fs.ReadFile(src.FS, src.Documents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{">2024-01-02</td>", ">1/2/24</td>", ">03.04.2025</td>", ">Jan 5</td>"} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("expected %q in the table:\n%s", want, doc)
+		}
+	}
+	// a date is text, not a number on the right
+	if strings.Contains(string(doc), `<td class="n`) {
+		t.Errorf("expected no cell of a number:\n%s", doc)
 	}
 }
 
@@ -226,13 +276,15 @@ func TestPaper(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
-	f.Add([]byte("a,b,c\n1,2,3\n"))
-	f.Add([]byte("\"a\"\"b\";c\r\n\"open"))
-	f.Add(utf16Bytes("x\ty\n", false, true))
-	f.Add([]byte("caf\xe9|\x80\n"))
-	f.Fuzz(func(t *testing.T, buf []byte) {
+	f.Add([]byte("a,b,c\n1,2,3\n"), rune(0))
+	f.Add([]byte("\"a\"\"b\";c\r\n\"open"), rune(0))
+	f.Add(utf16Bytes("x\ty\n", false, true), rune(0))
+	f.Add([]byte("caf\xe9|\x80\n"), rune(0))
+	f.Add([]byte("a;b,c\n1;2,3\n"), ';')
+	f.Add([]byte("a¦\"b¦c\"¦d\n1¦2¦3"), '¦')
+	f.Fuzz(func(t *testing.T, buf []byte, sep rune) {
 		cfg := ivy.Config{Limits: ivy.Limits{MaxObjects: 1 << 12, MaxMemory: 1 << 20}}
-		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), WithSeparator(sep))
 		if err != nil {
 			return
 		}

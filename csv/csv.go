@@ -10,11 +10,16 @@
 // row is as high as Excel prints a row of 15 points.
 //
 // The package finds the separator in the first records: the one that
-// gives the same number of fields, more than one, to the most records. It
-// reads the quotes of RFC 4180, and a quote in a field without quotes as
+// gives the same number of fields, more than one, to the most records.
+// WithSeparator gives the separator instead (D36). The package reads the
+// quotes of RFC 4180, and a quote in a field without quotes as
 // text. It reads UTF-8 with or without a byte order mark, UTF-16 with a
 // byte order mark or with the zero bytes of ASCII text, and windows-1252
 // for any other text that is not valid UTF-8.
+//
+// Each cell shows its field as the file writes it. The package does not
+// guess dates, because a wrong guess changes the data that a person
+// reviews (D36).
 //
 // A file reads at most Limits.MaxMemory bytes and Limits.MaxObjects
 // fields. A file with more fields shows the fields up to the limit, and a
@@ -53,12 +58,23 @@ type Option func(*options)
 
 type options struct {
 	cfg ivy.Config
+	sep rune
 }
 
 // WithConfig sets the configuration that every format shares.
 func WithConfig(cfg ivy.Config) Option {
 	return func(o *options) {
 		o.cfg = cfg
+	}
+}
+
+// WithSeparator sets the separator of the fields, such as ';'. Without
+// it, or with the zero rune, the package finds the separator in the first
+// records. A quote, a line break or a rune that is not valid makes Open
+// return an error that wraps ivy.ErrUnsupported.
+func WithSeparator(r rune) Option {
+	return func(o *options) {
+		o.sep = r
 	}
 }
 
@@ -70,8 +86,8 @@ type Document struct {
 	rows [][]string
 	// truncated is set when the file holds more fields than the limit.
 	truncated bool
-	// sep is the separator of the fields.
-	sep byte
+	// sep is the separator of the fields, in UTF-8.
+	sep string
 
 	mu     sync.Mutex
 	src    *layout.Source
@@ -94,6 +110,9 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("opening csv: %w", err)
 	}
+	if o.sep != 0 && !validSeparator(o.sep) {
+		return nil, fmt.Errorf("csv separator %q: %w", o.sep, ivy.ErrUnsupported)
+	}
 	defer ebook.Recover("opening csv", &err)
 	lim := o.cfg.Limits.WithDefaults()
 	size := src.Size()
@@ -114,7 +133,11 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 		return nil, fmt.Errorf("csv with a zero byte: %w", ivy.ErrFormat)
 	}
 	d = &Document{cfg: o.cfg, lim: lim}
-	d.sep = detect(text)
+	if o.sep != 0 {
+		d.sep = string(o.sep)
+	} else {
+		d.sep = string(detect(text))
+	}
 	d.rows, d.truncated, err = parse(ctx, text, d.sep, lim.MaxObjects)
 	if err != nil {
 		return nil, err
@@ -171,7 +194,7 @@ func detect(text string) byte {
 	}
 	best, bestScore := byte(','), 0
 	for _, sep := range separators {
-		rows, _, _ := parse(context.Background(), text, sep, sampleRecords*256)
+		rows, _, _ := parse(context.Background(), text, string(sep), sampleRecords*256)
 		if len(rows) > sampleRecords {
 			rows = rows[:sampleRecords]
 		}
@@ -191,10 +214,20 @@ func detect(text string) byte {
 	return best
 }
 
+// validSeparator reports whether r can separate the fields: a valid rune
+// that is not a quote or a line break.
+func validSeparator(r rune) bool {
+	switch r {
+	case 0, '"', '\r', '\n', utf8.RuneError:
+		return false
+	}
+	return utf8.ValidRune(r)
+}
+
 // parse splits text into records of fields separated by sep, with the
-// quotes of RFC 4180. It reads at most maxFields fields, and reports
-// whether the text holds more.
-func parse(ctx context.Context, text string, sep byte, maxFields int) ([][]string, bool, error) {
+// quotes of RFC 4180. sep is not empty. It reads at most maxFields fields,
+// and reports whether the text holds more.
+func parse(ctx context.Context, text, sep string, maxFields int) ([][]string, bool, error) {
 	var rows [][]string
 	var row []string
 	var field strings.Builder
@@ -232,8 +265,9 @@ func parse(ctx context.Context, text string, sep byte, maxFields int) ([][]strin
 		switch {
 		case c == '"' && !started:
 			inQuotes, quoted, started = true, true, true
-		case c == sep:
+		case c == sep[0] && (len(sep) == 1 || strings.HasPrefix(text[i:], sep)):
 			endField()
+			i += len(sep) - 1
 		case c == '\r' || c == '\n':
 			if c == '\r' && i+1 < len(text) && text[i+1] == '\n' {
 				i++
