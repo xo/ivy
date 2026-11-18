@@ -241,6 +241,68 @@ func TestBookDraw(t *testing.T) {
 	}
 }
 
+// bookMarginText returns the text of the margin box @top-center of page n
+// of a book.
+func bookMarginText(t *testing.T, b *Book, n int) string {
+	t.Helper()
+	p, err := b.Page(context.Background(), n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for _, child := range p.(*bookPage).box.Children {
+		if child.AtKeyword == "@top-center" {
+			child.Descendants(func(d *Box) bool {
+				if d.Kind == KindText {
+					text += d.Text
+				}
+				return true
+			})
+		}
+	}
+	return text
+}
+
+// TestBookPagesCounter checks that counter(pages) counts the pages of the
+// whole book (D43).
+func TestBookPagesCounter(t *testing.T) {
+	src := testBook(3, nil)
+	src.FS.(fstest.MapFS)["c0.xhtml"] = &fstest.MapFile{Data: []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><body>` +
+		`<p>One</p><p style="break-before: page">Two</p></body></html>`)}
+	src.StyleSheets = append(src.StyleSheets, `@page { @top-center { content: counter(page) "/" counter(pages) } }`)
+	b := NewBook(src, BookOptions{})
+	if got := bookMarginText(t, b, 0); got != "1/4" {
+		t.Errorf("page 1: got %q, want 1/4", got)
+	}
+	if b.loads != 3 {
+		t.Errorf("page 1 loaded %d documents, want 3", b.loads)
+	}
+	for _, n := range []int{3, 1, 2} {
+		if got, want := bookMarginText(t, b, n), fmt.Sprintf("%d/4", n+1); got != want {
+			t.Errorf("page %d: got %q, want %q", n+1, got, want)
+		}
+	}
+	if n, err := b.PageCount(context.Background()); err != nil || n != 4 {
+		t.Fatalf("got %d pages and %v, want 4", n, err)
+	}
+
+	// Only the last document uses counter(pages): the first page stays
+	// lazy.
+	src = testBook(3, nil)
+	src.FS.(fstest.MapFS)["c2.xhtml"] = &fstest.MapFile{Data: []byte(`<html xmlns="http://www.w3.org/1999/xhtml">` +
+		`<head><style>@page { @top-center { content: counter(pages) } }</style></head><body><p>Three</p></body></html>`)}
+	b = NewBook(src, BookOptions{})
+	if got := bookMarginText(t, b, 0); got != "" {
+		t.Errorf("page 1: got %q, want no text", got)
+	}
+	if b.loads != 1 {
+		t.Errorf("page 1 loaded %d documents, want 1", b.loads)
+	}
+	if got := bookMarginText(t, b, 2); got != "3" {
+		t.Errorf("page 3: got %q, want 3", got)
+	}
+}
+
 // TestBookPageCounter checks that the counter page goes on across the
 // documents of a book, in any order of the calls.
 func TestBookPageCounter(t *testing.T) {

@@ -448,12 +448,26 @@ styles from `GetAllComputedStyles`, the `FontConfiguration`, the
 
 The whole layout runs the loop of upstream: when a page needs
 `counter(pages)` or a target counter of a later page, the document is laid
-out again, at most 8 times. A page that `Page` returns before the whole
-layout is a page of the first pass. It does not show the fixed boxes of
-the later pages, and a `target-counter()` to a later page can be missing.
-When the page, the pages before it, or its margin boxes need the number of
-pages, `Page` lays out the whole document first. After `Count` or `All`,
-`Page` returns the pages of the whole layout.
+out again, at most 8 times.
+
+`Page` lays out the whole document before it returns a page when the
+styles use `counter(pages)`, a target counter (`target-counter()`,
+`target-counters()` or `target-text()`) or `position: fixed` (D43). These
+features need the later pages: the number of pages, the page of a later
+target, and the fixed boxes of the later pages, which each page repeats.
+`Page` also lays out the whole document when the first pass changes the
+content of the page or of a page before it, such as for `counter(page)` in
+the content of an element. Another document keeps the lazy layout, so its
+first page comes fast. After `Count` or `All`, `Page` returns the pages of
+the whole layout. The limits of `ivy.Limits` and the context apply to the
+whole layout as they apply to `Count`.
+
+The cascade finds these features when it computes the styles
+(`findWholeLayoutUses`). It reads the properties `content`, `string-set`,
+`bookmark-label` and `position` of each cascaded style, and the
+declarations of the `@page` rules. A declaration of an element that the
+cascade overrides does not count. A value with `var()` counts the features
+of the tokens of all the custom properties of the document.
 
 Upstream changes the pages of its list in place when it adds the margin
 boxes. The port adds them to copies of the page box and of the box of the
@@ -529,13 +543,16 @@ out the whole book.
    style sheets, `BuildFormattingStructure` and `NewDocument`. The
    documents share one `FontConfiguration`.
 2. The layout is lazy. `Page(ctx, n)` lays out only the documents and the
-   pages up to page `n`. A document that needs `counter(pages)` is laid out
-   whole, as `Document.Page` does.
+   pages up to page `n`. A document that needs the whole layout is laid
+   out whole, as `Document.Page` does.
 3. The pages are numbered across the book. `counter(page)` goes on across
    the documents: `DocumentOptions.PagesBefore` gives each document the
    number of pages before it. `counter(pages)` is the number of pages of
-   each document, because the number of pages of the book is known only
-   after the layout of the whole book.
+   the whole book (D43). When the book loads a document that uses
+   `counter(pages)`, it first counts the pages of all the documents after
+   it, from the last one. So a page of that document comes after the
+   layout of the whole book. A book whose documents do not use
+   `counter(pages)` stays lazy.
 4. The book keeps the layout of at most 4 documents, the most recently
    used. A document that it drops is laid out again when a page of it is
    asked for. The pages that a program holds stay valid.
@@ -1059,7 +1076,14 @@ Python, the command line and the PDF file.
 
 `book_test.go` checks that `Page(n)` of a book of 50 documents reads only
 the documents up to page `n`, that two pages draw at the same time, that a
-canceled context stops the book, and that a bad document is left out.
+canceled context stops the book, that a bad document is left out, and
+that `counter(pages)` counts the pages of the whole book.
+
+`layout_page_test.go` checks the whole layout of D43: `counter(pages)` and
+a target counter of a later page are right on the first page, the fixed
+box of the last page shows on the first page, and a document without
+these features lays out only the first pages for `Page(0)`.
+`TestWholeLayoutUses` checks the features that the cascade finds.
 
 `FuzzCascade` parses a document and a style sheet, computes each property of
 each element, pseudo-element and page, and renders the counters. Then it
@@ -1079,11 +1103,10 @@ return an `*ivy.PartialError` that wraps `ivy.ErrLimit` or `ivy.ErrFormat`. Run 
    as upstream lays it out again. A long text without the short text of
    upstream, such as a text of `white-space: pre-wrap` with a large width,
    costs time in the square of its length.
-3. The fixed boxes of the later pages, and the target counters of the later
-   pages, are missing from a page that `Document.Page` returns before the
-   whole layout. A program that needs them calls `Count` first.
-4. `counter(pages)` is the number of pages of each document of a `Book`,
-   not of the whole book.
-5. A gradient without `extend`, such as a repeating gradient, paints its
+3. A `Book` takes the number of pages of a document to be the same
+   whatever the number of its first page. A document whose page numbers
+   change the breaks of its pages, such as with a long `counter(page)` in
+   its content, can get a wrong count.
+4. A gradient without `extend`, such as a repeating gradient, paints its
    first and its last colors past its domain. okage has no spread mode that
    paints nothing.

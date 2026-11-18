@@ -366,6 +366,10 @@ type StyleFor struct {
 	cascaded *cascadedStyles
 	computed map[styleKey]*Style
 	sheets   []sheetOrigin
+
+	// uses holds the features of the styles that need the whole layout
+	// before a page (D43).
+	uses wholeLayoutUses
 }
 
 // newStyleFor is StyleFor.__init__ in weasyprint/css/__init__.py.
@@ -468,6 +472,10 @@ func newStyleFor(html *HTML, sheets []sheetOrigin, presentationalHints bool, ctx
 			return nil, err
 		}
 	}
+
+	// Port: find the features that need the whole layout before the
+	// cascaded styles go (D43).
+	sf.uses = findWholeLayoutUses(sf.cascaded, sf.sheets)
 
 	// Clear the cascaded styles, we do not need them anymore. Keep the
 	// dictionary, it is used later for page margins.

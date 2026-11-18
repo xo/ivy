@@ -2337,6 +2337,124 @@ func TestDocumentLazyPagesCounter(t *testing.T) {
 	}
 }
 
+// pageLongStyled is a document of 50 pages of one div each, with the style
+// sheet css, and the HTML last in the last div.
+func pageLongStyled(css, last string) string {
+	return `<style>
+        @page { size: 100px; margin: 20px }
+        body { margin: 0 }
+        div { height: 60px }
+        ` + css + `
+      </style><div id="first"></div>` + strings.Repeat("<div></div>", 48) +
+		`<div id="end">` + last + `</div>`
+}
+
+// TestDocumentWholePagesCounter checks that Page(0) of a document whose
+// content uses counter(pages) lays out the whole document, and gives the
+// number of pages (D43).
+func TestDocumentWholePagesCounter(t *testing.T) {
+	d := pageDocument(t, pageLongStyled(`#first::before { content: counter(pages) }`, ""))
+	page, err := d.Page(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.complete || len(d.pages) != 50 {
+		t.Errorf("Page(0) laid out %d pages, complete %t, want the whole document", len(d.pages), d.complete)
+	}
+	if got := pageTexts(page); got != "50" {
+		t.Errorf("page 1 text %q, want 50", got)
+	}
+}
+
+// TestDocumentWholeTargetCounter checks that a target-counter() of an early
+// page gives the page of a later target (D43).
+func TestDocumentWholeTargetCounter(t *testing.T) {
+	d := pageDocument(t, pageLongStyled(
+		`#first::before { content: target-counter('#end', page) }`, ""))
+	page, err := d.Page(context.Background(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageTexts(page); got != "50" {
+		t.Errorf("page 1 text %q, want 50", got)
+	}
+}
+
+// TestDocumentWholeFixed checks that a fixed box of the last page shows on
+// the first page, as WeasyPrint repeats a fixed box on each page (D43).
+func TestDocumentWholeFixed(t *testing.T) {
+	d := pageDocument(t, pageLongStyled(`p { position: fixed; top: 5px; margin: 0 }`, "<p>x</p>"))
+	for _, i := range []int{0, 49} {
+		page, err := d.Page(context.Background(), i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The fixed box of the last page is a placeholder there.
+		var texts []*Box
+		page.descendants(true, func(b *Box) bool {
+			if b.Kind == KindText {
+				texts = append(texts, b)
+			}
+			return true
+		})
+		if len(texts) != 1 || texts[0].Text != "x" {
+			t.Errorf("page %d has %d texts, want the text x of the fixed box", i+1, len(texts))
+			continue
+		}
+		pageEqual(t, "fixed y", texts[0].PositionY, 25)
+	}
+}
+
+// TestDocumentLazyWithoutWhole checks that a document that uses none of
+// the features of D43 keeps the lazy layout.
+func TestDocumentLazyWithoutWhole(t *testing.T) {
+	d := pageDocument(t, pageLongStyled(
+		`#first::before { content: "a" } span { position: fixed } p { position: absolute }`,
+		"<p>x</p>"))
+	if d.whole {
+		t.Error("the document needs the whole layout")
+	}
+	if _, err := d.Page(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(d.pages); n > 2 || d.complete {
+		t.Errorf("Page(0) laid out %d pages, complete %t", n, d.complete)
+	}
+}
+
+// TestWholeLayoutUses checks the features of the styles that need the
+// whole layout (D43).
+func TestWholeLayoutUses(t *testing.T) {
+	for _, c := range []struct {
+		css  string
+		want wholeLayoutUses
+	}{
+		{``, wholeLayoutUses{}},
+		{`p { position: fixed }`, wholeLayoutUses{fixed: true}},
+		{`span { position: fixed }`, wholeLayoutUses{}},
+		{`p { position: fixed } p { position: static }`, wholeLayoutUses{}},
+		{`p { position: absolute; table-layout: fixed }`, wholeLayoutUses{}},
+		{`@page { @bottom-center { content: counter(page) "/" counter(pages) } }`, wholeLayoutUses{pages: true}},
+		{`p::after { content: counters(pages, ".") }`, wholeLayoutUses{pages: true}},
+		{`p::after { content: counter(page) counter(Pages) }`, wholeLayoutUses{}},
+		{`p { bookmark-label: counter(pages) }`, wholeLayoutUses{pages: true}},
+		{`p { string-set: title "a" counter(pages) }`, wholeLayoutUses{pages: true}},
+		{`p::before { content: target-counter('#a', page) }`, wholeLayoutUses{targets: true}},
+		{`p::before { content: target-counters('#a', page, ".") }`, wholeLayoutUses{targets: true}},
+		{`p::before { content: target-text('#a') }`, wholeLayoutUses{targets: true}},
+		{`:root { --x: counter(pages) } p::after { content: var(--x) }`, wholeLayoutUses{pages: true}},
+		{`:root { --x: counter(pages) } @page { @top-center { content: var(--x) } }`, wholeLayoutUses{pages: true}},
+		{`:root { --x: counter(pages) } p::after { content: "a" }`, wholeLayoutUses{}},
+		{`:root { --p: fixed } p { position: var(--p) }`, wholeLayoutUses{fixed: true}},
+		{`:root { --p: absolute } p { position: var(--p) }`, wholeLayoutUses{}},
+	} {
+		p := parseBase(t, `<style>`+c.css+`</style><p>a</p>`, testBaseURL, nil)
+		if got := p.styleFor.uses; got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.css, got, c.want)
+		}
+	}
+}
+
 // TestDocumentCancel checks that a cancelled context stops the layout with
 // its error.
 func TestDocumentCancel(t *testing.T) {

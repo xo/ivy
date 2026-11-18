@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"slices"
 	"sync"
 
 	"github.com/xo/okage"
@@ -55,8 +56,11 @@ type BookOptions struct {
 //
 // The layout is lazy: Page(n) lays out only the documents and the pages up to
 // page n. Each document is one document of upstream. counter(page) goes on
-// across the documents. counter(pages) is the number of pages of the
-// document, and it lays out the whole document that uses it.
+// across the documents, and counter(pages) is the number of pages of the
+// whole book (D43). When a document uses counter(pages), the book lays out
+// the documents after it before it gives a page of that document. The book
+// takes the number of pages of a document to be the same whatever the
+// number of its first page.
 //
 // A document that cannot be read or laid out is logged and left out, so a
 // book with one bad chapter still opens. If no document gives a page, the
@@ -97,6 +101,9 @@ type bookDocument struct {
 	// before is the number of pages of the documents before it, which
 	// the counter page of the document starts from.
 	before int
+	// after is the number of pages of the documents after it, which the
+	// counter pages adds, or -1 when it is not known yet.
+	after int
 }
 
 // NewBook returns the book of the documents of src. It reads no document
@@ -130,7 +137,7 @@ func NewBook(src Source, opts BookOptions) *Book {
 		docs = docs[:n]
 	}
 	for _, path := range docs {
-		b.docs = append(b.docs, &bookDocument{path: path, count: -1})
+		b.docs = append(b.docs, &bookDocument{path: path, count: -1, after: -1})
 	}
 	return b
 }
@@ -203,7 +210,10 @@ func (b *Book) Page(ctx context.Context, n int) (ivy.Page, error) {
 
 // load reads, styles and builds a document, and keeps it among the loaded
 // documents. It returns false for a document that cannot be read, which the
-// book leaves out with 0 pages. It returns the error of ctx.
+// book leaves out with 0 pages. When the document uses counter(pages), it
+// counts the pages of the documents after it first. It returns the error of
+// ctx, and an error that wraps ivy.ErrLimit when the book has too many
+// pages.
 func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
 	if bd.doc != nil {
 		b.touch(bd)
@@ -218,6 +228,12 @@ func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
 		return false, nil
 	}
 	b.loads++
+	if doc.usesPages {
+		if err := b.countAfter(ctx, bd); err != nil {
+			return false, err
+		}
+		doc.pagesAfter = bd.after
+	}
 	bd.doc = doc
 	b.loaded = append(b.loaded, bd)
 	if len(b.loaded) > maxLoadedDocuments {
@@ -225,6 +241,32 @@ func (b *Book) load(ctx context.Context, bd *bookDocument) (bool, error) {
 		b.loaded = b.loaded[1:]
 	}
 	return true, nil
+}
+
+// countAfter sets the number of pages of the documents after bd. It counts
+// them from the last one, so that a document after bd that uses
+// counter(pages) finds the counts of the documents after it.
+func (b *Book) countAfter(ctx context.Context, bd *bookDocument) error {
+	if bd.after >= 0 {
+		return nil
+	}
+	i := len(b.docs) - 1
+	for i >= 0 && b.docs[i] != bd {
+		i--
+	}
+	after := 0
+	for _, next := range slices.Backward(b.docs[i+1:]) {
+		n, err := b.count(ctx, next)
+		if err != nil {
+			return err
+		}
+		after += n
+		if after > b.maxPages() {
+			return fmt.Errorf("book of more than %d pages: %w", b.maxPages(), ivy.ErrLimit)
+		}
+	}
+	bd.after = after
+	return nil
 }
 
 // place sets the number of pages before a document. A loaded document

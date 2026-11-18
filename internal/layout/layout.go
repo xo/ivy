@@ -30,6 +30,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/xo/okage/tinycss2"
+
 	"github.com/xo/ivy"
 )
 
@@ -215,12 +217,12 @@ type DocumentOptions struct {
 // Count and All lay out the whole document, with the loop of upstream that
 // lays out the document again for the counters of the pages.
 //
-// A page that Page returns before the whole document is laid out is the
-// page of the first pass of that loop. It does not show the fixed boxes of
-// the later pages, and a target-counter() to a later page can be missing.
-// When the page or its margin boxes need the number of pages, Page lays out
-// the whole document first. After Count or All, Page returns the pages of
-// the whole layout.
+// When the styles use counter(pages), a target counter (target-counter(),
+// target-counters() or target-text()) or position: fixed, Page lays out the
+// whole document before it returns a page (D43). The cascade finds these
+// features in the styles that NewDocument takes. Page also lays out the whole document when the first pass of the
+// loop changes the content of the page or of a page before it. Else, Page
+// returns a page of the first pass, and the first page comes fast.
 //
 // A Document is not safe for concurrent use.
 //
@@ -261,8 +263,17 @@ type Document struct {
 	// again.
 	err error
 
-	// pagesBefore is DocumentOptions.PagesBefore.
+	// pagesBefore is DocumentOptions.PagesBefore. pagesAfter is the
+	// number of pages after the document, such as the pages of the
+	// documents after it in a Book. The counter pages is the sum of
+	// pagesBefore, the pages of the document and pagesAfter.
 	pagesBefore int
+	pagesAfter  int
+
+	// whole is set when the styles need the whole layout before a page.
+	whole bool
+	// usesPages is set when the styles use the counter pages.
+	usesPages bool
 }
 
 // NewDocument returns the layout of a document: the HTML document, the box
@@ -286,17 +297,20 @@ func NewDocument(html *HTML, root *Box, styleFor *StyleFor, opts DocumentOptions
 		maxPages:    max(1, limits.MaxObjects/16),
 		finished:    map[int]*Box{},
 		pagesBefore: max(opts.PagesBefore, 0),
+		whole:       styleFor.uses.any(),
+		usesPages:   styleFor.uses.pages,
 	}
 	return d
 }
 
 // Page returns the page box of the page of index i, from 0, with its margin
-// boxes. It lays out the pages up to i first. It returns an error that
-// wraps ErrNoPage when the document has fewer pages, an error that wraps
-// ivy.ErrLimit when the document is past a limit, the error of ctx when ctx
-// is done, and an error that wraps ivy.ErrFormat for a panic. After an
-// error other than ErrNoPage, the document gives the same error again,
-// because its layout stopped in the middle of a page.
+// boxes. It lays out the pages up to i first, or the whole document when
+// the styles need it. It returns an error that wraps ErrNoPage when the
+// document has fewer pages, an error that wraps ivy.ErrLimit when the
+// document is past a limit, the error of ctx when ctx is done, and an error
+// that wraps ivy.ErrFormat for a panic. After an error other than
+// ErrNoPage, the document gives the same error again, because its layout
+// stopped in the middle of a page.
 //
 // Port: a panic becomes an error that wraps ivy.ErrFormat.
 func (d *Document) Page(ctx context.Context, i int) (page *Box, err error) {
@@ -366,18 +380,16 @@ func (d *Document) run(ctx context.Context, f func()) (err error) {
 // page returns the finished page of index i, or nil when the document has
 // fewer pages. It lays out the pages that it needs.
 func (d *Document) page(i int) *Box {
-	if !d.complete {
-		if d.loop == 0 {
-			for d.iter == nil && d.loop == 0 && !d.complete {
-				d.startLoop()
-			}
-			for !d.complete && d.loop == 0 && len(d.pages) <= i {
-				d.step()
-			}
+	if !d.complete && !d.whole && d.loop == 0 {
+		for d.iter == nil && d.loop == 0 && !d.complete {
+			d.startLoop()
 		}
-		if !d.complete && (d.loop > 0 || d.needsWholeDocument(i)) {
-			d.completeLayout()
+		for !d.complete && d.loop == 0 && len(d.pages) <= i {
+			d.step()
 		}
+	}
+	if !d.complete && (d.whole || d.loop > 0 || d.needsWholeDocument(i)) {
+		d.completeLayout()
 	}
 	if i >= len(d.pages) {
 		return nil
@@ -448,7 +460,10 @@ func (d *Document) step() {
 	reloop := false
 	for _, pageData := range lc.pageMaker {
 		// Update pages.
-		pageData.counterValues["pages"] = []int{d.actualTotalPages}
+		// Port: the counter pages also counts the pages before and after
+		// the document, such as the pages of the other documents of a
+		// Book.
+		pageData.counterValues["pages"] = []int{d.pagesBefore + d.actualTotalPages + d.pagesAfter}
 		if pageData.contentChanged {
 			reloop = true
 		} else if pageData.pagesWanted {
@@ -471,55 +486,215 @@ func (d *Document) step() {
 }
 
 // needsWholeDocument reports whether the page of index i of the first pass
-// needs the number of pages: the page or one of the pages before it wants
-// the counter pages, or the margin boxes of the page show it.
+// needs another pass: the page or one of the pages before it wants the
+// counter pages, or its content changed with the counters of the pages.
 //
 // Port: upstream always lays out the whole document.
 func (d *Document) needsWholeDocument(i int) bool {
-	lc := d.lc
-	for _, pageData := range lc.pageMaker[:min(i+2, len(lc.pageMaker))] {
+	for _, pageData := range d.lc.pageMaker[:min(i+2, len(d.lc.pageMaker))] {
 		if pageData.contentChanged || pageData.pagesWanted {
 			return true
 		}
 	}
-	if i >= len(d.pages) {
-		return false
-	}
-	pageType := d.pages[i].PageType
-	for _, atKeyword := range marginAtKeywords {
-		if style := lc.styleFor.Get(pageType, atKeyword); style != nil && contentHasCounter(style.Get("content"), "pages") {
-			return true
-		}
-	}
 	return false
 }
 
-// marginAtKeywords are the at-keywords of the margin boxes.
-var marginAtKeywords = []string{
-	"@top-left-corner", "@top-left", "@top-center", "@top-right",
-	"@top-right-corner", "@bottom-left-corner", "@bottom-left",
-	"@bottom-center", "@bottom-right", "@bottom-right-corner",
-	"@left-top", "@left-middle", "@left-bottom",
-	"@right-top", "@right-middle", "@right-bottom",
+// wholeLayoutUses holds the features of the styles of a document that need
+// the whole layout before a page (D43).
+//
+// Port: upstream always lays out the whole document.
+type wholeLayoutUses struct {
+	// pages is set when the styles use counter(pages) or counters(pages).
+	pages bool
+	// targets is set when the styles use target-counter(),
+	// target-counters() or target-text().
+	targets bool
+	// fixed is set when the styles give an element position: fixed.
+	fixed bool
 }
 
-// contentHasCounter reports whether a computed value of content uses the
-// counter name with counter() or counters().
-func contentHasCounter(content Value, name string) bool {
-	items, ok := content.(Tuple)
-	if !ok {
-		return false
+// any reports whether the styles use a feature that needs the whole
+// layout.
+func (u wholeLayoutUses) any() bool {
+	return u.pages || u.targets || u.fixed
+}
+
+// add adds the features of v to u.
+func (u *wholeLayoutUses) add(v wholeLayoutUses) {
+	u.pages = u.pages || v.pages
+	u.targets = u.targets || v.targets
+	u.fixed = u.fixed || v.fixed
+}
+
+// forProperty keeps the features that the property name can use: fixed for
+// position, and the counters for the others.
+func (u wholeLayoutUses) forProperty(name string) wholeLayoutUses {
+	if name == "position" {
+		return wholeLayoutUses{fixed: u.fixed}
 	}
+	return wholeLayoutUses{pages: u.pages, targets: u.targets}
+}
+
+// wholeLayoutProperties are the properties whose values can need the whole
+// layout.
+var wholeLayoutProperties = [...]string{"content", "string_set", "bookmark_label", "position"}
+
+// findWholeLayoutUses finds the features that need the whole layout in the
+// cascaded styles of the elements and the pseudo-elements, and in the
+// declarations of the @page rules and their margin rules. It reads four
+// properties of each cascaded style, so it costs little next to the
+// cascade. A declaration of an element that the cascade overrides does not
+// count, but each declaration of the @page rules counts.
+//
+// A value with var() waits for the computed values. Its features are the
+// features of its tokens and of the tokens of all the custom properties of
+// the document, so it can count a feature that its computed value does not
+// use.
+//
+// Port: upstream always lays out the whole document.
+func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLayoutUses {
+	var uses wholeLayoutUses
+	// pending holds the values with var(), and pendingNames the names of
+	// their properties.
+	var pending []*Pending
+	var pendingNames []string
+	look := func(name string, value Value) {
+		if p, ok := value.(*Pending); ok {
+			pending = append(pending, p)
+			pendingNames = append(pendingNames, name)
+			return
+		}
+		uses.add(valueUses(name, value))
+	}
+	for _, k := range cascaded.order {
+		style := cascaded.styles[k]
+		for _, name := range wholeLayoutProperties {
+			if cv, ok := style[name]; ok {
+				look(name, cv.value)
+			}
+		}
+	}
+	for _, sheet := range sheets {
+		for _, rule := range *sheet.sheet.PageRules {
+			for _, d := range rule.Declarations {
+				if slices.Contains(wholeLayoutProperties[:], d.Name) {
+					look(d.Name, d.Value)
+				}
+			}
+		}
+	}
+	if len(pending) == 0 {
+		return uses
+	}
+
+	// The custom properties, whose names start with "__", give the tokens
+	// of var().
+	var custom wholeLayoutUses
+	customUses := func(name string, value Value) {
+		if !strings.HasPrefix(name, "__") {
+			return
+		}
+		switch v := value.(type) {
+		case Tokens:
+			custom.add(tokenUses(v))
+		case *Pending:
+			custom.add(tokenUses(v.Tokens))
+		}
+	}
+	for _, k := range cascaded.order {
+		for name, cv := range cascaded.styles[k] {
+			customUses(name, cv.value)
+		}
+	}
+	for _, sheet := range sheets {
+		for _, rule := range *sheet.sheet.PageRules {
+			for _, d := range rule.Declarations {
+				customUses(d.Name, d.Value)
+			}
+		}
+	}
+	for i, p := range pending {
+		v := tokenUses(p.Tokens)
+		if slices.ContainsFunc(p.Tokens, checkVar) {
+			v.add(custom)
+		}
+		uses.add(v.forProperty(pendingNames[i]))
+	}
+	return uses
+}
+
+// valueUses returns the features that a validated value of the property
+// name uses.
+func valueUses(name string, value Value) wholeLayoutUses {
+	var u wholeLayoutUses
+	switch name {
+	case "position":
+		u.fixed = isStr(value, "fixed")
+	case "content", "bookmark_label":
+		u = contentListUses(value)
+	case "string_set":
+		items, _ := value.(Tuple)
+		for _, item := range items {
+			if pair, ok := item.(Tuple); ok && len(pair) == 2 {
+				u.add(contentListUses(pair[1]))
+			}
+		}
+	}
+	return u
+}
+
+// contentListUses returns the features that a content list uses.
+func contentListUses(value Value) wholeLayoutUses {
+	var u wholeLayoutUses
+	items, _ := value.(Tuple)
 	for _, item := range items {
 		pair, ok := item.(Tuple)
-		if !ok || len(pair) != 2 || !isStrIn(pair[0], "counter()", "counters()") {
+		if !ok || len(pair) != 2 {
 			continue
 		}
-		if args, ok := pair[1].(Tuple); ok && len(args) > 0 && isStr(args[0], name) {
-			return true
+		switch str(pair[0]) {
+		case "counter()", "counters()":
+			if args, ok := pair[1].(Tuple); ok && len(args) > 0 && isStr(args[0], "pages") {
+				u.pages = true
+			}
+		case "target-counter()", "target-counters()", "target-text()":
+			u.targets = true
 		}
 	}
-	return false
+	return u
+}
+
+// tokenUses returns the features that a list of tokens can use: a function
+// counter() or counters() of the counter pages, a function target-counter(),
+// target-counters() or target-text(), and the keyword fixed.
+func tokenUses(tokens []tinycss2.Node) wholeLayoutUses {
+	var u wholeLayoutUses
+	for _, token := range tokens {
+		switch t := token.(type) {
+		case *tinycss2.IdentToken:
+			u.fixed = u.fixed || t.LowerValue == "fixed"
+		case *tinycss2.FunctionBlock:
+			switch t.LowerName {
+			case "counter", "counters":
+				for _, arg := range t.Arguments {
+					if ident, ok := arg.(*tinycss2.IdentToken); ok {
+						u.pages = u.pages || ident.Value == "pages"
+						break
+					}
+				}
+			case "target-counter", "target-counters", "target-text":
+				u.targets = true
+			}
+			u.add(tokenUses(t.Arguments))
+		case *tinycss2.ParenthesesBlock:
+			u.add(tokenUses(t.Content))
+		case *tinycss2.SquareBracketsBlock:
+			u.add(tokenUses(t.Content))
+		case *tinycss2.CurlyBracketsBlock:
+			u.add(tokenUses(t.Content))
+		}
+	}
+	return u
 }
 
 // finish returns the page of index i of the current pages with its margin
