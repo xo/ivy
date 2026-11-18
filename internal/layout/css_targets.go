@@ -185,8 +185,8 @@ func (tc *TargetCollector) StoreTarget(anchorName string, targetCounterValues ma
 		item.TargetBox = targetBox
 		// Store the counter_values in the target_box like
 		// compute_content_list does.
-		if targetBox.CachedCounterValues == nil {
-			targetBox.CachedCounterValues = copyCounterValues(targetCounterValues)
+		if targetBox.extra().CachedCounterValues == nil {
+			targetBox.ownExtra().CachedCounterValues = copyCounterValues(targetCounterValues)
 		}
 	}
 }
@@ -201,8 +201,8 @@ func (tc *TargetCollector) StoreTarget(anchorName string, targetCounterValues ma
 func (tc *TargetCollector) CollectMissingCounters(parentBox *Box, cssToken string, parseAgainFunction func(map[string][]int), missingCounters []string, missingTargetCounters map[string][]string) {
 	// No need to add empty miss-lists.
 	if len(missingCounters) > 0 || len(missingTargetCounters) > 0 {
-		if parentBox.MissingLink == nil {
-			parentBox.MissingLink = parentBox
+		if parentBox.extra().MissingLink == nil {
+			parentBox.ownExtra().MissingLink = parentBox
 		}
 		key := CounterKey{parentBox, cssToken}
 		if _, ok := tc.Counters[key]; !ok {

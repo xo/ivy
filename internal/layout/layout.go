@@ -774,7 +774,7 @@ func (d *Document) collect(i int) {
 
 	d.pages[i].Descendants(func(child *Box) bool {
 		// Only one bookmark per original box
-		if child.BookmarkLabel != "" {
+		if child.extra().BookmarkLabel != "" {
 			checklist := &d.watch[2]
 			if strings.HasSuffix(child.ElementTag, "::before") {
 				checklist = &d.watch[0]
@@ -782,18 +782,18 @@ func (d *Document) collect(i int) {
 				checklist = &d.watch[1]
 			}
 			if slices.Contains(*checklist, child.Element) {
-				child.BookmarkLabel = ""
+				child.ownExtra().BookmarkLabel = ""
 			} else {
 				*checklist = append(*checklist, child.Element)
 			}
 		}
 
-		if child.MissingLink != nil {
+		if child.extra().MissingLink != nil {
 			tc := lc.targetCollector
 			for _, key := range tc.counterOrder {
 				item := tc.Counters[key]
-				if child.MissingLink == key.Box && key.CSSToken != "content" {
-					if key.CSSToken == "bookmark-label" && child.BookmarkLabel == "" {
+				if child.extra().MissingLink == key.Box && key.CSSToken != "content" {
+					if key.CSSToken == "bookmark-label" && child.extra().BookmarkLabel == "" {
 						// don't refill it!
 						continue
 					}
@@ -801,13 +801,13 @@ func (d *Document) collect(i int) {
 					// string_set is a pointer, but the bookmark_label is
 					// just a string: copy it
 					if key.CSSToken == "bookmark-label" {
-						child.BookmarkLabel = key.Box.BookmarkLabel
+						child.ownExtra().BookmarkLabel = key.Box.extra().BookmarkLabel
 					}
 				}
 			}
 		}
 		// Collect the string_sets in the LayoutContext
-		for _, entry := range child.StringSet {
+		for _, entry := range child.extra().StringSet {
 			pages := lc.stringSet[entry.Name]
 			if pages == nil {
 				pages = map[int][]string{}
@@ -833,7 +833,7 @@ func cloneCounterScopes(scopes []map[string]bool) []map[string]bool {
 func layoutFixedBoxes(lc *layoutContext, pages []*Box, containingPage *Box) []*Box {
 	var result []*Box
 	for _, page := range pages {
-		for _, box := range page.fixedBoxes {
+		for _, box := range page.extra().fixedBoxes {
 			// As replaced boxes are never copied during layout, ensure that
 			// we have different boxes (with a possibly different layout)
 			// for each pages.
@@ -1221,12 +1221,12 @@ func (lc *layoutContext) addRunningElement(box *Box) {
 			}
 		}
 		box.Style.Set("anchor", String(fmt.Sprintf("note-%d", index)))
-		if box.NoteCall != nil {
-			box.NoteCall.Style.Set("anchor", String(fmt.Sprintf("call-%d", index)))
-			box.NoteCall.Link = GetLink(lc.log, fmt.Sprintf("#note-%d", index), box.Style.BaseURL)
+		if box.extra().NoteCall != nil {
+			box.extra().NoteCall.Style.Set("anchor", String(fmt.Sprintf("call-%d", index)))
+			box.extra().NoteCall.ownExtra().Link = GetLink(lc.log, fmt.Sprintf("#note-%d", index), box.Style.BaseURL)
 		}
-		if box.NoteCallback != nil {
-			box.NoteCallback.Link = GetLink(lc.log, fmt.Sprintf("#call-%d", index), box.Style.BaseURL)
+		if box.extra().NoteCallback != nil {
+			box.extra().NoteCallback.ownExtra().Link = GetLink(lc.log, fmt.Sprintf("#call-%d", index), box.Style.BaseURL)
 		}
 	}
 	if !slices.Contains(lc.renderedNotes, box) {
@@ -1320,7 +1320,7 @@ func (lc *layoutContext) updateFootnoteArea() bool {
 		return false
 	}
 	footnoteArea := createAnonymousBoxes(lc.builder, area.DeepCopy())
-	footnoteArea = blockLevelLayout(lc, footnoteArea, math.Inf(-1), nil, area.Page,
+	footnoteArea = blockLevelLayout(lc, footnoteArea, math.Inf(-1), nil, area.extra().Page,
 		true, nil, nil, nil, nil, nil, false, noMaxLines).box
 	if footnoteArea == nil {
 		// Port: the layout of the area always gives a box upstream.

@@ -105,11 +105,11 @@ func layoutBoxBackgrounds(page, box *Box, getImageFromURI func(url string, orien
 	// This is for the border image, not the background, but this is a
 	// convenient place to get the image.
 	if source, ok := style.Get("border_image_source").(Tuple); ok && len(source) == 2 && !isStr(source[0], "none") {
-		box.BorderImage = imageOf(source, getImageFromURI, nil)
+		box.ownExtra().BorderImage = imageOf(source, getImageFromURI, nil)
 	}
 
 	if source, ok := style.Get("mask_border_source").(Tuple); ok && len(source) == 2 && !isStr(source[0], "none") {
-		box.MaskBorderImage = imageOf(source, getImageFromURI, nil)
+		box.ownExtra().MaskBorderImage = imageOf(source, getImageFromURI, nil)
 	}
 
 	var images []Image
@@ -348,7 +348,7 @@ func layoutBackgrounds(page *Box, getImageFromURI func(url string, orientation V
 	if len(page.Children) == 0 || page.Children[0].Kind == KindMargin {
 		// Port: upstream asserts that the first child of the page is the
 		// box of the root element.
-		page.CanvasBackground = nil
+		page.ownExtra().CanvasBackground = nil
 		return
 	}
 	rootBox := page.Children[0]
@@ -363,7 +363,7 @@ func layoutBackgrounds(page *Box, getImageFromURI func(url string, orientation V
 	}
 
 	if chosenBox.Background == nil {
-		page.CanvasBackground = nil
+		page.ownExtra().CanvasBackground = nil
 		return
 	}
 	paintingArea := boxRectangle(page, "border-box")
@@ -376,7 +376,7 @@ func layoutBackgrounds(page *Box, getImageFromURI func(url string, orientation V
 		layer.PaintingArea = paintingArea
 		canvas.Layers[i] = layer
 	}
-	page.CanvasBackground = &canvas
+	page.ownExtra().CanvasBackground = &canvas
 	page.Background = originalBackground
 	chosenBox.Background = nil
 }

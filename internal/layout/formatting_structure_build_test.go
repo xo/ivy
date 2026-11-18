@@ -436,15 +436,15 @@ func TestColumnStyle(t *testing.T) {
       </table>
     `)
 	_, table := tableOf(t, html)
-	if len(table.ColumnGroups) != 1 {
-		t.Fatalf("%d column groups", len(table.ColumnGroups))
+	if len(table.table().ColumnGroups) != 1 {
+		t.Fatalf("%d column groups", len(table.table().ColumnGroups))
 	}
-	colgroup := table.ColumnGroups[0]
+	colgroup := table.table().ColumnGroups[0]
 	widths := make(Tuple, 0, len(colgroup.Children))
 	gridX := make([]string, 0, len(colgroup.Children))
 	for _, col := range colgroup.Children {
 		widths = append(widths, col.Style.Get("width"))
-		gridX = append(gridX, strconv.Itoa(col.GridX))
+		gridX = append(gridX, strconv.Itoa(col.table().GridX))
 	}
 	ten := Dimension{10, "px"}
 	if want := (Tuple{ten, ten, ten, String("auto"), String("auto")}); !Equal(widths, want) {
@@ -473,13 +473,13 @@ func TestNestedGridX(t *testing.T) {
       </table>
     `)
 	_, table := tableOf(t, html)
-	grid := make([]string, 0, len(table.ColumnGroups))
-	for _, colgroup := range table.ColumnGroups {
+	grid := make([]string, 0, len(table.table().ColumnGroups))
+	for _, colgroup := range table.table().ColumnGroups {
 		cols := make([]string, 0, len(colgroup.Children))
 		for _, col := range colgroup.Children {
-			cols = append(cols, strconv.Itoa(col.GridX))
+			cols = append(cols, strconv.Itoa(col.table().GridX))
 		}
-		grid = append(grid, fmt.Sprintf("(%d, [%s])", colgroup.GridX, strings.Join(cols, ", ")))
+		grid = append(grid, fmt.Sprintf("(%d, [%s])", colgroup.table().GridX, strings.Join(cols, ", ")))
 	}
 	if got := strings.Join(grid, ", "); got != "(0, [0, 1]), (2, [2, 3]), (4, [4, 5, 6]), (7, [7])" {
 		t.Errorf("grid: %s", got)
@@ -536,9 +536,9 @@ func TestColspanRowspan(t *testing.T) {
     `)
 	_, table := tableOf(t, html)
 	group := table.Children[0]
-	gridX := func(c *Box) int { return c.GridX }
-	colspan := func(c *Box) int { return c.Colspan }
-	rowspan := func(c *Box) int { return c.Rowspan }
+	gridX := func(c *Box) int { return c.table().GridX }
+	colspan := func(c *Box) int { return c.table().Colspan }
+	rowspan := func(c *Box) int { return c.table().Rowspan }
 	for _, c := range []struct {
 		field func(*Box) int
 		want  string

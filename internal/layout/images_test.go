@@ -402,12 +402,12 @@ func TestReplacedBoxes(t *testing.T) {
                     ('embed', 'InlineReplaced', '<replaced>'),
                     ('{http://www.w3.org/2000/svg}svg', 'InlineReplaced', '<replaced>')])])])]`)
 	line := html.Children[0].Children[0].Children[1].Children[0]
-	if _, ok := line.Children[0].Replacement.(*SVGImage); !ok {
-		t.Errorf("object: %T", line.Children[0].Replacement)
+	if _, ok := line.Children[0].extra().Replacement.(*SVGImage); !ok {
+		t.Errorf("object: %T", line.Children[0].extra().Replacement)
 	}
-	inline, ok := line.Children[3].Replacement.(*SVGImage)
+	inline, ok := line.Children[3].extra().Replacement.(*SVGImage)
 	if !ok {
-		t.Fatalf("svg: %T", line.Children[3].Replacement)
+		t.Fatalf("svg: %T", line.Children[3].extra().Replacement)
 	}
 	if size := inline.GetIntrinsicSize(1, 16); size.Width != 10 || size.Height != 20 {
 		t.Errorf("svg: %+v", size)

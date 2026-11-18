@@ -54,7 +54,7 @@ func (b *Box) placeholderBox() *Box {
 // setLaidOutBox is AbsolutePlaceholder.set_laid_out_box: the placeholder
 // becomes the laid out box.
 func (b *Box) setLaidOutBox(newBox *Box) {
-	*b = *newBox
+	b.copyFrom(newBox)
 	b.placeholder = placeholderDone
 }
 

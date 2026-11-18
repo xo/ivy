@@ -95,11 +95,11 @@ func constraintImageSizing(constraintWidth, constraintHeight float64, intrinsicR
 // intrinsicSize returns the intrinsic size of the image of a replaced box,
 // for its resolution and its font size.
 func intrinsicSize(box *Box) IntrinsicSize {
-	if box.Replacement == nil {
+	if box.extra().Replacement == nil {
 		// Port: a replaced box always has an image upstream.
 		return IntrinsicSize{}
 	}
-	return box.Replacement.GetIntrinsicSize(
+	return box.extra().Replacement.GetIntrinsicSize(
 		num(box.Style.Get("image_resolution")), num(box.Style.Get("font_size")))
 }
 

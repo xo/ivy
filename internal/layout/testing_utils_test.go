@@ -429,7 +429,7 @@ func serialize(boxes []*Box) []pyTree {
 		case box.IsReplaced():
 			tree.text, tree.leaf = "<replaced>", true
 		default:
-			tree.children = serialize(append(slices.Clone(box.ColumnGroups), box.Children...))
+			tree.children = serialize(append(slices.Clone(box.table().ColumnGroups), box.Children...))
 		}
 		trees = append(trees, tree)
 	}

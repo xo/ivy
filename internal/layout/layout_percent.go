@@ -216,24 +216,31 @@ func resolvePercentages(box, containingBlock *Box) {
 	adjustBoxSizing(box, "height")
 }
 
+// radiusCorners are the properties of the radii of the corners of the
+// border, in the order of Box.radii, with the sides of each corner.
+var radiusCorners = [...]struct {
+	name  string
+	sides [2]string
+}{
+	{"border_top_left_radius", [2]string{"top", "left"}},
+	{"border_top_right_radius", [2]string{"top", "right"}},
+	{"border_bottom_right_radius", [2]string{"bottom", "right"}},
+	{"border_bottom_left_radius", [2]string{"bottom", "left"}},
+}
+
 // resolveRadiiPercentages is resolve_radii_percentages in
 // weasyprint/layout/percent.py.
+//
+// Port: the box keeps nil for four radii of 0, and a new array for other
+// radii. See Box.radii.
 func resolveRadiiPercentages(box *Box) {
-	corners := [...]struct {
-		name   string
-		sides  [2]string
-		radius *[2]float64
-	}{
-		{"border_top_left_radius", [2]string{"top", "left"}, &box.BorderTopLeftRadius},
-		{"border_top_right_radius", [2]string{"top", "right"}, &box.BorderTopRightRadius},
-		{"border_bottom_right_radius", [2]string{"bottom", "right"}, &box.BorderBottomRightRadius},
-		{"border_bottom_left_radius", [2]string{"bottom", "left"}, &box.BorderBottomLeftRadius},
-	}
-	for _, corner := range corners {
+	var radii [4][2]float64
+	for i, corner := range radiusCorners {
+		radius := &radii[i]
 		computed, _ := box.Style.Get(corner.name).(Tuple)
 		if len(computed) != 2 {
 			// Port: upstream fails to unpack a value that is not a pair.
-			*corner.radius = [2]float64{}
+			*radius = [2]float64{}
 			continue
 		}
 		rx, ry := computed[0], computed[1]
@@ -241,17 +248,23 @@ func resolveRadiiPercentages(box *Box) {
 		// Short track for common case
 		zero := Dimension{Value: 0, Unit: "px"}
 		if Equal(rx, zero) || Equal(ry, zero) {
-			*corner.radius = [2]float64{}
+			*radius = [2]float64{}
 			continue
 		}
 
-		if box.RemoveDecorationSides[corner.sides[0]] || box.RemoveDecorationSides[corner.sides[1]] {
-			*corner.radius = [2]float64{}
+		if box.decorationRemoved(corner.sides[0]) || box.decorationRemoved(corner.sides[1]) {
+			*radius = [2]float64{}
 			continue
 		}
 		x, _ := percentageFloat(rx, box.Style, box.BorderWidth())
 		y, _ := percentageFloat(ry, box.Style, box.BorderHeight())
-		*corner.radius = [2]float64{x, y}
+		*radius = [2]float64{x, y}
+	}
+	if radii == ([4][2]float64{}) {
+		box.radii = nil
+	} else {
+		r := radii
+		box.radii = &r
 	}
 }
 

@@ -157,9 +157,14 @@ type StringSetEntry struct {
 //
 // The layout of a later stage reads and sets the used values of the box
 // model: the position, the size, the margins, the paddings and the borders.
+//
+// Port: the layout makes and copies millions of boxes for a large book. So
+// Box holds only the attributes that most boxes use. The attributes of the
+// boxes of tables are in tableFields, the attributes that few boxes set are
+// in boxExtra, and the attributes of a flex item are in flexItem. A box
+// allocates each of them when the layout first sets one of its fields. Until
+// then, the box reads the default values of upstream.
 type Box struct {
-	// Kind is the class of the box.
-	Kind Kind
 	// ElementTag is the tag of the element of the box, with the name of the
 	// pseudo-element after "::" for a pseudo-element, such as "p::before".
 	// It is "" for a box of a page, the None of upstream.
@@ -170,119 +175,18 @@ type Box struct {
 	Style *Style
 	// Children are the child boxes.
 	Children []*Box
-	// FirstLetterStyle and FirstLineStyle are the styles of ::first-letter
-	// and ::first-line of the element, or nil.
-	FirstLetterStyle *Style
-	FirstLineStyle   *Style
-	// RemoveDecorationSides holds the sides whose decoration the box
-	// removed: "top", "right", "bottom" or "left".
-	RemoveDecorationSides map[string]bool
 
 	// Text is the text of a text box.
 	Text string
-	// Replacement is the image of a replaced box.
-	Replacement Image
-
-	// LeadingCollapsibleSpace and TrailingCollapsibleSpace keep track of
-	// the collapsing spaces that the processing of the white space removed,
-	// for the opportunities to wrap.
-	LeadingCollapsibleSpace  bool
-	TrailingCollapsibleSpace bool
-
-	// The flags that the building of the boxes sets on some boxes.
-	IsTableWrapper   bool
-	IsFlexItem       bool
-	IsGridItem       bool
-	IsForRootElement bool
-	IsColumn         bool
-	IsLeader         bool
-	IsOutsideMarker  bool
-	// ForceFragmentation forces the fragmentation of the box.
-	ForceFragmentation bool
-
-	// TransformationMatrix is the transformation of the box, set by the
-	// drawing, or nil.
-	TransformationMatrix any
-	// BookmarkLabel is the label of the bookmark of the box, and
-	// HasBookmarkLabel is false for the None of upstream.
-	BookmarkLabel    string
-	HasBookmarkLabel bool
-	// StringSet holds the named strings that the box sets. It is nil for
-	// the None of upstream.
-	StringSet []StringSetEntry
-	// Footnote is the footnote of a footnote call.
-	Footnote *Box
-	// Note is the note of a note call, NoteCall is the call of a note, and
-	// NoteCallback is the callback of a note.
-	Note         *Box
-	NoteCall     *Box
-	NoteCallback *Box
-	// CachedCounterValues are the values of the counters when the box was
-	// built, for the targets and the pages. nil is the None of upstream.
-	CachedCounterValues map[string][]int
-	// Link is the link of the box, as GetLink gives it, or nil.
-	Link Value
-	// MissingLink is the box whose counters are missing, set by
-	// TargetCollector.CollectMissingCounters, or nil.
-	MissingLink *Box
-	// LinkAnnotation and WidgetAnnotation are set by the drawing.
-	LinkAnnotation   any
-	WidgetAnnotation any
-	// Colspan and Rowspan are the spans of a table cell, 1 by default.
-	Colspan int
-	Rowspan int
-
-	// Clearance is the clearance of a block-level box, set by the layout.
-	// HasClearance is false for the None of upstream.
-	Clearance    float64
-	HasClearance bool
-
-	// TextOverflow and BlockEllipsis are the overflow of the text of a line
-	// box: "clip" and nil by default, the "none" of upstream.
-	TextOverflow  string
-	BlockEllipsis Value
-
-	// JustificationSpacing is the spacing that justifies a text box.
-	JustificationSpacing float64
-
-	// isTab marks the text box of one tab, which the layout places at the
-	// tab stops of -ivy-tab-stops, and tab is its stop. Upstream has no tab
-	// stops.
-	isTab bool
-	tab   tabStop
-
-	// GridX is the position of a cell, a column or a column group in the
-	// grid of its table.
-	GridX int
-	// IsHeader and IsFooter mark the header and the footer row groups of a
-	// table.
-	IsHeader bool
-	IsFooter bool
-	// ColumnGroups are the column groups of a table box.
-	ColumnGroups []*Box
-	// ColumnPositions are the positions of the columns of a table box, set
-	// by the layout.
-	ColumnPositions []float64
-	// CollapsedBorderGrid is the grid of the collapsed borders of a table
-	// box, or nil.
-	CollapsedBorderGrid *CollapsedBorderGrid
-	// Advancements is the advancements of a grid container. Upstream has a
-	// TODO to move it into the context of the rendering.
-	Advancements map[any]any
-	// ViewportOverflow is the overflow of the viewport, set on the box of
-	// the root element.
-	ViewportOverflow string
-
-	// PageType is the type of a page box.
-	PageType PageType
-	// AtKeyword is the at-keyword of a margin box, such as "@top-center".
-	AtKeyword string
-	// Page is the page of a footnote area box.
-	Page *Box
-
 	// TextLayout is the layout of the text of a text box, set by the
 	// layout of the lines. It is the pango_layout of upstream.
 	TextLayout *TextLayout
+	// JustificationSpacing is the spacing that justifies a text box.
+	JustificationSpacing float64
+
+	// Clearance is the clearance of a block-level box, set by the layout.
+	// See HasClearance.
+	Clearance float64
 	// Baseline is the baseline of the box, set by the layout.
 	Baseline float64
 
@@ -301,11 +205,6 @@ type Box struct {
 	BorderRightWidth     float64
 	BorderBottomWidth    float64
 	BorderLeftWidth      float64
-	// The radii of the corners of the border, (x, y), set by the layout.
-	BorderTopLeftRadius     [2]float64
-	BorderTopRightRadius    [2]float64
-	BorderBottomRightRadius [2]float64
-	BorderBottomLeftRadius  [2]float64
 
 	// The used values of min-width, max-width, min-height and max-height,
 	// and of the offsets top, right, bottom and left of a positioned box,
@@ -316,15 +215,199 @@ type Box struct {
 	Bottom, Left         float64
 
 	// Background is the layout of the background of the box, or nil for
-	// the None of upstream. CanvasBackground is the background of the
-	// canvas of a page box, or nil. layout/background.py sets them.
-	Background       *Background
+	// the None of upstream. layout/background.py sets it.
+	Background *Background
+
+	// textIndent is the used value of text-indent of a block container,
+	// set by the layout of its lines.
+	textIndent float64
+	// index is the index of the box in the children of its parent, which
+	// the layout sets on a laid out box.
+	index int
+	// resumeAt is the resume_at of a line box.
+	resumeAt skipStack
+
+	// radii are the radii (x, y) of the corners of the border, set by the
+	// layout: top left, top right, bottom right and bottom left. nil is
+	// four radii of 0.
+	//
+	// Port: upstream has the attributes border_top_left_radius and so on.
+	// Most boxes have no radius, so the box only keeps a pointer. The
+	// layout never changes the radii in place, so the copies of a box share
+	// them.
+	radii *[4][2]float64
+
+	// removedSides is the set remove_decoration_sides of upstream: the
+	// sides whose decoration the box removed. A copy of the box shares the
+	// set, as in upstream. nil is an empty set that no other box shares.
+	//
+	// Port: upstream makes an empty set for each box. The port makes the
+	// set when a box is copied or when it removes a side.
+	removedSides *sideSet
+
+	// ext holds the attributes that few boxes set, or nil. See extra.
+	ext *boxExtra
+	// tbl holds the attributes of the boxes of tables, or nil. See table.
+	tbl *tableFields
+	// flx holds the attributes that layout/flex.py sets on a flex item, or
+	// nil. See flex.
+	flx *flexItem
+
+	// Kind is the class of the box.
+	Kind Kind
+
+	// LeadingCollapsibleSpace and TrailingCollapsibleSpace keep track of
+	// the collapsing spaces that the processing of the white space removed,
+	// for the opportunities to wrap.
+	LeadingCollapsibleSpace  bool
+	TrailingCollapsibleSpace bool
+
+	// The flags that the building of the boxes sets on some boxes.
+	IsTableWrapper   bool
+	IsFlexItem       bool
+	IsGridItem       bool
+	IsForRootElement bool
+	IsColumn         bool
+	IsLeader         bool
+	IsOutsideMarker  bool
+	// ForceFragmentation forces the fragmentation of the box.
+	ForceFragmentation bool
+
+	// HasClearance is false for the None of upstream of Clearance.
+	HasClearance bool
+
+	// isTab marks the text box of one tab, which the layout places at the
+	// tab stops of -ivy-tab-stops. boxExtra.tab is its stop. Upstream has
+	// no tab stops.
+	isTab bool
+
+	// notFloated is set when the box is a flex or a grid item, whose method
+	// is_floated upstream replaces by a function that returns False.
+	notFloated bool
+
+	// placeholder is the state of the placeholder of an absolute box. See
+	// newAbsolutePlaceholder.
+	placeholder placeholderState
+	// bordersSet is set when the layout set the used widths of the
+	// borders, for hasattr(box, 'border_left_width') of upstream.
+	bordersSet bool
+}
+
+// boxExtra holds the attributes of a box that few boxes set. A box makes
+// it when the layout first sets one of them. See Box.
+type boxExtra struct {
+	// FirstLetterStyle and FirstLineStyle are the styles of ::first-letter
+	// and ::first-line of the element, or nil.
+	FirstLetterStyle *Style
+	FirstLineStyle   *Style
+
+	// Replacement is the image of a replaced box.
+	Replacement Image
+
+	// TransformationMatrix is the transformation of the box, set by the
+	// drawing, or nil.
+	TransformationMatrix any
+	// BookmarkLabel is the label of the bookmark of the box, and
+	// HasBookmarkLabel is false for the None of upstream.
+	BookmarkLabel    string
+	HasBookmarkLabel bool
+	// StringSet holds the named strings that the box sets, or nil.
+	StringSet []StringSetEntry
+	// Footnote is the footnote of a footnote call.
+	Footnote *Box
+	// Note is the note of a note call, NoteCall is the call of a note, and
+	// NoteCallback is the callback of a note.
+	Note         *Box
+	NoteCall     *Box
+	NoteCallback *Box
+	// CachedCounterValues are the values of the counters when the box was
+	// built, for the targets and the pages. nil is the None of upstream.
+	CachedCounterValues map[string][]int
+	// Link is the link of the box, as GetLink gives it, or nil.
+	Link Value
+	// MissingLink is the box whose counters are missing, set by
+	// TargetCollector.CollectMissingCounters, or nil.
+	MissingLink *Box
+
+	// TextOverflow and BlockEllipsis are the overflow of the text of a line
+	// box: "clip" and nil by default, the "none" of upstream.
+	TextOverflow  string
+	BlockEllipsis Value
+
+	// tab is the stop of the text box of a tab. See Box.isTab.
+	tab tabStop
+
+	// Advancements is the advancements of a grid container. Upstream has a
+	// TODO to move it into the context of the rendering.
+	Advancements map[any]any
+	// ViewportOverflow is the overflow of the viewport, set on the box of
+	// the root element.
+	ViewportOverflow string
+
+	// PageType is the type of a page box.
+	PageType PageType
+	// AtKeyword is the at-keyword of a margin box, such as "@top-center".
+	AtKeyword string
+	// Page is the page of a footnote area box.
+	Page *Box
+	// CanvasBackground is the background of the canvas of a page box, or
+	// nil. layout/background.py sets it.
 	CanvasBackground *Background
+	// fixedBoxes are the fixed boxes of a page box.
+	fixedBoxes []*Box
+	// isGenerated is set on a margin box that has content.
+	isGenerated bool
+
 	// BorderImage and MaskBorderImage are the images of border-image-source
 	// and mask-border-source, or nil.
 	BorderImage     Image
 	MaskBorderImage Image
+}
 
+// defaultExtra holds the default values of boxExtra, which a box without
+// one reads. Nothing writes it.
+var defaultExtra = boxExtra{TextOverflow: "clip"}
+
+// extra returns the attributes of the box that few boxes set, for reading
+// only. A box that has none returns the default values.
+func (b *Box) extra() *boxExtra {
+	if b.ext != nil {
+		return b.ext
+	}
+	return &defaultExtra
+}
+
+// ownExtra returns the attributes of the box that few boxes set, for
+// writing. It makes them on the first call.
+func (b *Box) ownExtra() *boxExtra {
+	if b.ext == nil {
+		e := defaultExtra
+		b.ext = &e
+	}
+	return b.ext
+}
+
+// tableFields holds the attributes of the boxes of a table. A box makes it
+// when the layout first sets one of them. See Box.
+type tableFields struct {
+	// Colspan and Rowspan are the spans of a table cell, 1 by default.
+	Colspan int
+	Rowspan int
+	// GridX is the position of a cell, a column or a column group in the
+	// grid of its table.
+	GridX int
+	// IsHeader and IsFooter mark the header and the footer row groups of a
+	// table.
+	IsHeader bool
+	IsFooter bool
+	// ColumnGroups are the column groups of a table box.
+	ColumnGroups []*Box
+	// ColumnPositions are the positions of the columns of a table box, set
+	// by the layout.
+	ColumnPositions []float64
+	// CollapsedBorderGrid is the grid of the collapsed borders of a table
+	// box, or nil.
+	CollapsedBorderGrid *CollapsedBorderGrid
 	// ColumnWidths are the widths of the columns of a table box, set by
 	// the layout.
 	ColumnWidths []float64
@@ -339,34 +422,73 @@ type Box struct {
 	// SkippedRows is the number of rows of a table box that the previous
 	// pages hold.
 	SkippedRows int
+	// tableAttrs holds the attributes that layout/table.py sets on the
+	// boxes of a table.
+	tableAttrs
+}
 
-	// notFloated is set when the box is a flex or a grid item, whose method
-	// is_floated upstream replaces by a function that returns False.
-	notFloated bool
+// defaultTable holds the default values of tableFields, which a box
+// without one reads. Nothing writes it.
+var defaultTable = tableFields{Colspan: 1, Rowspan: 1}
 
-	// placeholder is the state of the placeholder of an absolute box. See
-	// newAbsolutePlaceholder.
-	placeholder placeholderState
-	// bordersSet is set when the layout set the used widths of the
-	// borders, for hasattr(box, 'border_left_width') of upstream.
-	bordersSet bool
-	// textIndent is the used value of text-indent of a block container,
-	// set by the layout of its lines.
-	textIndent float64
-	// index is the index of the box in the children of its parent, which
-	// the layout sets on a laid out box.
-	index int
-	// resumeAt is the resume_at of a line box.
-	resumeAt skipStack
-	// fixedBoxes are the fixed boxes of a page box.
-	fixedBoxes []*Box
-	// isGenerated is set on a margin box that has content.
-	isGenerated bool
-	// flex holds the attributes that layout/flex.py sets on a flex item.
-	flex flexItem
-	// table holds the attributes that layout/table.py sets on the boxes of
-	// a table.
-	table tableAttrs
+// table returns the attributes of the boxes of tables, for reading only. A
+// box that has none returns the default values.
+func (b *Box) table() *tableFields {
+	if b.tbl != nil {
+		return b.tbl
+	}
+	return &defaultTable
+}
+
+// ownTable returns the attributes of the boxes of tables, for writing. It
+// makes them on the first call.
+func (b *Box) ownTable() *tableFields {
+	if b.tbl == nil {
+		t := defaultTable
+		b.tbl = &t
+	}
+	return b.tbl
+}
+
+// flex returns the attributes that layout/flex.py sets on a flex item. It
+// makes them on the first call.
+func (b *Box) flex() *flexItem {
+	if b.flx == nil {
+		b.flx = new(flexItem)
+	}
+	return b.flx
+}
+
+// sideSet is a set of the sides "top", "right", "bottom" and "left".
+type sideSet uint8
+
+// sideBit returns the bit of a side in a sideSet, or 0.
+func sideBit(side string) sideSet {
+	switch side {
+	case "top":
+		return 1
+	case "right":
+		return 2
+	case "bottom":
+		return 4
+	case "left":
+		return 8
+	}
+	return 0
+}
+
+// decorationRemoved reports whether the box removed the decoration of a
+// side, as side in box.remove_decoration_sides of upstream.
+func (b *Box) decorationRemoved(side string) bool {
+	return b.removedSides != nil && *b.removedSides&sideBit(side) != 0
+}
+
+// shareRemovedSides makes the set of the removed sides of the box, so that
+// a copy of the box shares it.
+func (b *Box) shareRemovedSides() {
+	if b.removedSides == nil {
+		b.removedSides = new(sideSet)
+	}
 }
 
 // newBox is Box.__init__ and the __init__ of the subclasses in
@@ -375,15 +497,11 @@ type Box struct {
 // box, and image is the replacement of a replaced box.
 func newBox(kind Kind, elementTag string, style *Style, element *Element, children []*Box) *Box {
 	b := &Box{
-		Kind:                  kind,
-		ElementTag:            elementTag,
-		Element:               element,
-		Style:                 style,
-		Children:              children,
-		RemoveDecorationSides: map[string]bool{},
-		Colspan:               1,
-		Rowspan:               1,
-		TextOverflow:          "clip",
+		Kind:       kind,
+		ElementTag: elementTag,
+		Element:    element,
+		Style:      style,
+		Children:   children,
 	}
 	switch kind {
 	case KindTableCell:
@@ -399,19 +517,19 @@ func newBox(kind Kind, elementTag string, style *Style, element *Element, childr
 		if element != nil {
 			if colspan, ok := element.Get("colspan"); ok {
 				if n, ok := parseInteger(colspan); ok {
-					b.Colspan = min(max(n, 1), 1000)
+					b.ownTable().Colspan = min(max(n, 1), 1000)
 				}
 			}
 			if rowspan, ok := element.Get("rowspan"); ok {
 				if n, ok := parseInteger(rowspan); ok {
-					b.Rowspan = min(max(n, 0), 65534)
+					b.ownTable().Rowspan = min(max(n, 0), 65534)
 				}
 			}
 		}
 	case KindGrid, KindInlineGrid:
 		// TODO: we shouldn’t store this in the box but in the rendering
 		// context instead.
-		b.Advancements = map[any]any{}
+		b.ownExtra().Advancements = map[any]any{}
 	}
 	return b
 }
@@ -431,7 +549,7 @@ func newTextBox(elementTag string, style *Style, element *Element, text string) 
 // boxes.py, for a BlockReplacedBox or an InlineReplacedBox.
 func newReplacedBox(kind Kind, elementTag string, style *Style, element *Element, replacement Image) *Box {
 	b := newBox(kind, elementTag, style, element, nil)
-	b.Replacement = replacement
+	b.ownExtra().Replacement = replacement
 	return b
 }
 
@@ -439,7 +557,7 @@ func newReplacedBox(kind Kind, elementTag string, style *Style, element *Element
 // boxes.py. A page box is not linked to any element.
 func NewPageBox(pageType PageType, style *Style) *Box {
 	b := newBox(KindPage, "", style, nil, nil)
-	b.PageType = pageType
+	b.ownExtra().PageType = pageType
 	return b
 }
 
@@ -447,7 +565,7 @@ func NewPageBox(pageType PageType, style *Style) *Box {
 // boxes.py. A margin box is not linked to any element.
 func NewMarginBox(atKeyword string, style *Style) *Box {
 	b := newBox(KindMargin, "", style, nil, nil)
-	b.AtKeyword = atKeyword
+	b.ownExtra().AtKeyword = atKeyword
 	return b
 }
 
@@ -456,7 +574,7 @@ func NewMarginBox(atKeyword string, style *Style) *Box {
 // linked to any element.
 func NewFootnoteAreaBox(page *Box, style *Style) *Box {
 	b := newBox(KindFootnoteArea, "", style, nil, nil)
-	b.Page = page
+	b.ownExtra().Page = page
 	return b
 }
 
@@ -467,7 +585,7 @@ func anonymousFrom(kind Kind, parent *Box, children []*Box) *Box {
 	b := newBox(kind, parent.ElementTag, parent.Style.AnonymousStyle(), parent.Element, children)
 	if kind == KindLine && !isStr(parent.Style.Get("overflow"), "visible") {
 		// LineBox.anonymous_from.
-		b.TextOverflow = str(parent.Style.Get("text_overflow"))
+		b.ownExtra().TextOverflow = str(parent.Style.Get("text_overflow"))
 	}
 	return b
 }
@@ -489,9 +607,9 @@ func anonymousReplacedFrom(kind Kind, parent *Box, image Image) *Box {
 func (b *Box) String() string {
 	switch b.Kind {
 	case KindPage:
-		return "<PageBox " + b.PageType.key() + ">"
+		return "<PageBox " + b.extra().PageType.key() + ">"
 	case KindMargin:
-		return "<MarginBox " + b.AtKeyword + ">"
+		return "<MarginBox " + b.extra().AtKeyword + ">"
 	case KindFootnoteArea:
 		return "<FootnoteAreaBox @footnote>"
 	}
@@ -653,9 +771,31 @@ func (b *Box) hasProperParent(parentKind Kind) bool {
 
 // Copy is copy in weasyprint/formatting_structure/boxes.py. It returns a
 // shallow copy of the box.
+//
+// Port: the copy shares the set of the removed sides, as in upstream, and
+// has its own copy of the attributes of boxExtra, tableFields and flexItem.
 func (b *Box) Copy() *Box {
-	c := *b
-	return &c
+	c := new(Box)
+	c.copyFrom(b)
+	return c
+}
+
+// copyFrom makes the box a shallow copy of src, as Copy does.
+func (b *Box) copyFrom(src *Box) {
+	src.shareRemovedSides()
+	*b = *src
+	if src.ext != nil {
+		e := *src.ext
+		b.ext = &e
+	}
+	if src.tbl != nil {
+		t := *src.tbl
+		b.tbl = &t
+	}
+	if src.flx != nil {
+		f := *src.flx
+		b.flx = &f
+	}
 }
 
 // DeepCopy is deepcopy in weasyprint/formatting_structure/boxes.py. It
@@ -675,9 +815,9 @@ func (b *Box) DeepCopy() *Box {
 // the children, and the column groups of a table.
 func (b *Box) AllChildren() []*Box {
 	if b.IsTable() {
-		all := make([]*Box, 0, len(b.Children)+len(b.ColumnGroups))
+		all := make([]*Box, 0, len(b.Children)+len(b.table().ColumnGroups))
 		all = append(all, b.Children...)
-		return append(all, b.ColumnGroups...)
+		return append(all, b.table().ColumnGroups...)
 	}
 	return b.Children
 }
@@ -759,8 +899,9 @@ func (b *Box) Translate(dx, dy float64, ignoreFloats bool) {
 		return
 	}
 	if b.IsTable() {
-		for i := range b.ColumnPositions {
-			b.ColumnPositions[i] += dx
+		positions := b.table().ColumnPositions
+		for i := range positions {
+			positions[i] += dx
 		}
 	}
 	b.PositionX += dx
@@ -868,10 +1009,14 @@ type RoundedBox struct {
 // bt, br, bb and bl are the distances from the outer border box that define
 // the rectangle to round.
 func (b *Box) RoundedBox(bt, br, bb, bl float64) RoundedBox {
-	tlrx, tlry := b.BorderTopLeftRadius[0], b.BorderTopLeftRadius[1]
-	trrx, trry := b.BorderTopRightRadius[0], b.BorderTopRightRadius[1]
-	brrx, brry := b.BorderBottomRightRadius[0], b.BorderBottomRightRadius[1]
-	blrx, blry := b.BorderBottomLeftRadius[0], b.BorderBottomLeftRadius[1]
+	var radii [4][2]float64
+	if b.radii != nil {
+		radii = *b.radii
+	}
+	tlrx, tlry := radii[0][0], radii[0][1]
+	trrx, trry := radii[1][0], radii[1][1]
+	brrx, brry := radii[2][0], radii[2][1]
+	blrx, blry := radii[3][0], radii[3][1]
 
 	// TODO: clamp all computed values, see #2705.
 	clamp := func(v float64) float64 { return min(max(0, v), math.MaxInt64) }
@@ -1072,7 +1217,10 @@ func (b *Box) IsForm() bool {
 // resetSpacing is _reset_spacing: it sets the margin, the padding and the
 // border of a side to 0.
 func (b *Box) resetSpacing(side string) {
-	b.RemoveDecorationSides[side] = true
+	if b.removedSides == nil {
+		b.removedSides = new(sideSet)
+	}
+	*b.removedSides |= sideBit(side)
 	switch side {
 	case "top":
 		b.MarginTop, b.PaddingTop, b.BorderTopWidth = 0, 0, 0
@@ -1125,7 +1273,7 @@ func (b *Box) CopyWithChildren(newChildren []*Box) *Box {
 	c.Children = newChildren
 	// Clear and reset removed decorations as we don't want to keep the
 	// previous data, for example when a box is split between two pages.
-	b.RemoveDecorationSides = map[string]bool{}
+	b.removedSides = nil
 	return c
 }
 

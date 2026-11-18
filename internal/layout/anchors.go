@@ -21,7 +21,9 @@ func gatherAnchors(box *Box, depth int) {
 	//  but do not apply to elements which may be split into
 	//  multiple inline-level boxes."
 	// https://www.w3.org/TR/css-transforms-1/#introduction
-	box.TransformationMatrix = nil
+	if box.ext != nil {
+		box.ext.TransformationMatrix = nil
+	}
 	if transforms, ok := box.Style.Get("transform").(Tuple); ok && len(transforms) > 0 && box.Kind != KindInline {
 		borderWidth := box.BorderWidth()
 		borderHeight := box.BorderHeight()
@@ -62,7 +64,7 @@ func gatherAnchors(box *Box, depth int) {
 			// other names.
 			matrix = m.Mul(matrix)
 		}
-		box.TransformationMatrix = translation(-originX, -originY).Mul(matrix)
+		box.ownExtra().TransformationMatrix = translation(-originX, -originY).Mul(matrix)
 	}
 
 	// Port: the depth of the tree is bounded, as the depth of the layout.

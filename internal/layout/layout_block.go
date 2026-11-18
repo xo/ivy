@@ -478,7 +478,7 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 			if maxLines == 0 {
 				// Port: upstream fails when no line is laid out yet.
 				if n := len(*newChildren); n > 0 {
-					(*newChildren)[n-1].BlockEllipsis = box.Style.Get("block_ellipsis")
+					(*newChildren)[n-1].ownExtra().BlockEllipsis = box.Style.Get("block_ellipsis")
 				}
 				break
 			}
@@ -535,8 +535,8 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 			var footnotes []*Box
 			for _, line := range *newChildren {
 				line.Descendants(func(descendant *Box) bool {
-					if descendant.Footnote != nil && slices.Contains(lc.currentPageFootnotes, descendant.Footnote) {
-						footnotes = append(footnotes, descendant.Footnote)
+					if descendant.extra().Footnote != nil && slices.Contains(lc.currentPageFootnotes, descendant.extra().Footnote) {
+						footnotes = append(footnotes, descendant.extra().Footnote)
 					}
 					return true
 				})
@@ -591,7 +591,7 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 				return true
 			})
 			for _, descendant := range descendants {
-				footnote := descendant.Footnote
+				footnote := descendant.extra().Footnote
 				if footnote == nil || !slices.Contains(lc.footnotes, footnote) {
 					continue
 				}
@@ -958,8 +958,8 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 		}
 	}
 
-	if isStart && box.FirstLineStyle != nil {
-		boxFirstLineStyle := styleDict(box.FirstLineStyle)
+	if isStart && box.extra().FirstLineStyle != nil {
+		boxFirstLineStyle := styleDict(box.extra().FirstLineStyle)
 		if firstLineStyle == nil {
 			firstLineStyle = boxFirstLineStyle
 		} else {
@@ -967,8 +967,8 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 		}
 	}
 
-	if box.FirstLetterStyle != nil {
-		boxFirstLetterStyle := styleDict(box.FirstLetterStyle)
+	if box.extra().FirstLetterStyle != nil {
+		boxFirstLetterStyle := styleDict(box.extra().FirstLetterStyle)
 		if firstLetterStyle == nil {
 			firstLetterStyle = boxFirstLetterStyle
 		} else {
@@ -1060,7 +1060,7 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 							lc.spend(1)
 							last := children[len(children)-1]
 							if last.Kind == KindLine {
-								last.BlockEllipsis = box.Style.Get("block_ellipsis")
+								last.ownExtra().BlockEllipsis = box.Style.Get("block_ellipsis")
 							} else if last.IsParent() {
 								children = last.Children
 								continue
@@ -1154,7 +1154,7 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 	// Add block ellipsis
 	if boxIsFragmented && len(newChildren) > 0 {
 		if lastChild := newChildren[len(newChildren)-1]; lastChild.Kind == KindLine {
-			lastChild.BlockEllipsis = box.Style.Get("block_ellipsis")
+			lastChild.ownExtra().BlockEllipsis = box.Style.Get("block_ellipsis")
 		}
 	}
 
@@ -1336,7 +1336,7 @@ func findEarlierPageBreak(lc *layoutContext, children []*Box, absoluteBoxes, fix
 	index := len(children) - 1
 	for ; index >= 0; index-- {
 		child := children[index]
-		if child.Kind == KindTableRowGroup && (child.IsHeader || child.IsFooter) {
+		if child.Kind == KindTableRowGroup && (child.table().IsHeader || child.table().IsFooter) {
 			// We don’t want to break pages before table headers or footers.
 			continue
 		} else if child.IsColumn {
@@ -1368,7 +1368,7 @@ func findEarlierPageBreak(lc *layoutContext, children []*Box, absoluteBoxes, fix
 					// TODO: fix table height and footer position
 					if child.Kind == KindTableRowGroup {
 						for _, nextChild := range children[index:] {
-							if nextChild.IsFooter {
+							if nextChild.table().IsFooter {
 								newChildren = append(newChildren, nextChild)
 							}
 						}
@@ -1440,8 +1440,8 @@ func removePlaceholders(lc *layoutContext, boxList []*Box, absoluteBoxes, fixedB
 				*fixedBoxes = slices.Delete(*fixedBoxes, i, i+1)
 			}
 		}
-		if box.Footnote != nil {
-			lc.unlayoutFootnote(box.Footnote)
+		if box.extra().Footnote != nil {
+			lc.unlayoutFootnote(box.extra().Footnote)
 		}
 		lc.brokenOutOfFlow = slices.DeleteFunc(lc.brokenOutOfFlow, func(item brokenOutOfFlow) bool {
 			return item.newBox == box
@@ -1451,8 +1451,8 @@ func removePlaceholders(lc *layoutContext, boxList []*Box, absoluteBoxes, fixedB
 				shapes.boxes = slices.Delete(shapes.boxes, i, i+1)
 			}
 		}
-		if box.Note != nil {
-			lc.removeRunningElement(box.Note)
+		if box.extra().Note != nil {
+			lc.removeRunningElement(box.extra().Note)
 		}
 	}
 }

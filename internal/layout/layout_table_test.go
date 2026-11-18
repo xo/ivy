@@ -655,10 +655,10 @@ func TestLayoutTableAuto15(t *testing.T) {
         <col />
       </table>
     `)
-	if len(table.ColumnGroups) != 1 {
-		t.Fatalf("got %d column groups, want 1", len(table.ColumnGroups))
+	if len(table.table().ColumnGroups) != 1 {
+		t.Fatalf("got %d column groups, want 1", len(table.table().ColumnGroups))
 	}
-	columns := unpack(t, table.ColumnGroups[0], 2)
+	columns := unpack(t, table.table().ColumnGroups[0], 2)
 	tableEq(t, "column_1.width", columns[0].Width, 0)
 	tableEq(t, "column_2.width", columns[1].Width, 0)
 }
@@ -1455,8 +1455,8 @@ func TestTableColumnWidth1(t *testing.T) {
 	// Same as cells[1][1], 1000 - 1000 - 3*border-spacing, 8700 - borders
 	// - padding
 	check("cells[2][1]", cells[2][1], 6200, 8700, 8678)
-	if cells[2][1].Colspan != 3 { // truncated to grid width
-		t.Errorf("cells[2][1].colspan = %d, want 3", cells[2][1].Colspan)
+	if cells[2][1].table().Colspan != 3 { // truncated to grid width
+		t.Errorf("cells[2][1].colspan = %d, want 3", cells[2][1].table().Colspan)
 	}
 }
 

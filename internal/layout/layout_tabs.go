@@ -188,7 +188,7 @@ func splitTabs(box *Box) {
 // alignTabs gives the tabs their final widths.
 func (lc *layoutContext) placeTab(box *Box, x float64) {
 	stop := nextTabStop(box.Style, x-lc.tabOrigin)
-	box.tab = stop
+	box.ownExtra().tab = stop
 	box.Width = 0
 	if stop.align == "left" {
 		box.Width = max(lc.tabOrigin+stop.pos-x, 0)
@@ -233,7 +233,7 @@ func alignTabs(line *Box, origin float64) {
 			continue
 		}
 		stop := nextTabStop(tab.Style, tab.PositionX-origin)
-		tab.tab = stop
+		tab.ownExtra().tab = stop
 		width := origin + stop.pos - tab.PositionX
 		if stop.align != "left" {
 			start := tab.PositionX + tab.Width
@@ -302,7 +302,7 @@ func textWidthTo(box *Box, k int) float64 {
 // of the leader as the tab holds, which end at the end of the tab, on the
 // baseline y.
 func drawTabLeader(s *stream, textbox *Box, y float64) {
-	leader := textbox.tab.leader
+	leader := textbox.extra().tab.leader
 	if leader == "" || textbox.Width <= 0 || textbox.TextLayout == nil {
 		return
 	}

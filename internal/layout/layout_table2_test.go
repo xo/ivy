@@ -1128,19 +1128,19 @@ func TestTableBadIntTdThSpan(t *testing.T) {
 	rows := unpack(t, only(t, table), 2)
 	td := unpack(t, rows[0], 2)
 	// colspan="bad" falls back to 1
-	if td[0].Colspan != 1 {
-		t.Errorf("td_1.colspan = %d, want 1", td[0].Colspan)
+	if td[0].table().Colspan != 1 {
+		t.Errorf("td_1.colspan = %d, want 1", td[0].table().Colspan)
 	}
 	tableEq(t, "td_1.width", td[0].Width, td[1].Width)
 	// rowspan="23.4" is parsed as 23 per HTML spec (stops at "."), then
 	// clamped to actual row count by the layout engine
-	if td[1].Rowspan != 2 {
-		t.Errorf("td_2.rowspan = %d, want 2", td[1].Rowspan)
+	if td[1].table().Rowspan != 2 {
+		t.Errorf("td_2.rowspan = %d, want 2", td[1].table().Rowspan)
 	}
 	th := unpack(t, rows[1], 2)
 	// colspan="x" falls back to 1
-	if th[0].Colspan != 1 {
-		t.Errorf("th_1.colspan = %d, want 1", th[0].Colspan)
+	if th[0].table().Colspan != 1 {
+		t.Errorf("th_1.colspan = %d, want 1", th[0].table().Colspan)
 	}
 	tableEq(t, "th_1.width", th[0].Width, th[1].Width)
 }
@@ -1196,12 +1196,12 @@ func TestTableIntWithTrailingTextTdThSpan(t *testing.T) {
     `)
 	rows := unpack(t, only(t, table), 3)
 	// colspan="100%" should be parsed as colspan="100"
-	if td1 := only(t, rows[0]); td1.Colspan != 100 {
-		t.Errorf("td_1.colspan = %d, want 100", td1.Colspan)
+	if td1 := only(t, rows[0]); td1.table().Colspan != 100 {
+		t.Errorf("td_1.colspan = %d, want 100", td1.table().Colspan)
 	}
 	// rowspan="2px" should be parsed as rowspan="2"
-	if td2 := unpack(t, rows[1], 2)[0]; td2.Rowspan != 2 {
-		t.Errorf("td_2.rowspan = %d, want 2", td2.Rowspan)
+	if td2 := unpack(t, rows[1], 2)[0]; td2.table().Rowspan != 2 {
+		t.Errorf("td_2.rowspan = %d, want 2", td2.table().Rowspan)
 	}
 }
 
@@ -1406,7 +1406,7 @@ func TestBorderCollapse1(t *testing.T) {
 	if !table.IsTable() {
 		t.Errorf("the table is a %s box", table.Kind)
 	}
-	if table.CollapsedBorderGrid != nil {
+	if table.table().CollapsedBorderGrid != nil {
 		t.Error("a table with separated borders has a grid of collapsed borders")
 	}
 

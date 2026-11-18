@@ -26,7 +26,7 @@ func drawPage(s *stream, page *Box) {
 	stackingContext := StackingContextFromPage(page)
 	drawBackground(s, stackingContext.Box.Background, false)
 	setMaskBorder(s, page)
-	drawBackground(s, page.CanvasBackground, false)
+	drawBackground(s, page.extra().CanvasBackground, false)
 	drawBorder(s, page)
 	drawStackingContext(s, stackingContext)
 	drawMarks(s, page)
@@ -66,7 +66,7 @@ func drawStackingContext(s *stream, stackingContext *StackingContext) {
 			s = s.addGroup(r[0], r[1], r[2], r[3])
 		}
 
-		if m, ok := box.TransformationMatrix.(Matrix); ok {
+		if m, ok := box.extra().TransformationMatrix.(Matrix); ok {
 			if m.Determinant() == 0 {
 				return
 			}
@@ -523,7 +523,7 @@ func drawBackgroundImage(s *stream, layer BackgroundLayer, style *Style) {
 func drawTable(s *stream, table *Box) {
 	// Draw the backgrounds.
 	drawBackground(s, table.Background, true)
-	for _, columnGroup := range table.ColumnGroups {
+	for _, columnGroup := range table.table().ColumnGroups {
 		drawBackground(s, columnGroup.Background, true)
 		for _, column := range columnGroup.Children {
 			drawBackground(s, column.Background, true)
@@ -535,7 +535,7 @@ func drawTable(s *stream, table *Box) {
 		for _, row := range rowGroup.Children {
 			drawBackground(s, row.Background, true)
 			for _, cell := range row.Children {
-				if collapse || isStr(cell.Style.Get("empty_cells"), "show") || !cell.Empty {
+				if collapse || isStr(cell.Style.Get("empty_cells"), "show") || !cell.table().Empty {
 					drawBackground(s, cell.Background, true)
 				}
 			}
@@ -551,7 +551,7 @@ func drawTable(s *stream, table *Box) {
 	for _, rowGroup := range table.Children {
 		for _, row := range rowGroup.Children {
 			for _, cell := range row.Children {
-				if isStr(cell.Style.Get("empty_cells"), "show") || !cell.Empty {
+				if isStr(cell.Style.Get("empty_cells"), "show") || !cell.table().Empty {
 					drawBorder(s, cell)
 				}
 			}
@@ -580,33 +580,33 @@ func drawCollapsedBorders(s *stream, table *Box) {
 			rowPositions = append(rowPositions, row.PositionY)
 		}
 	}
-	columnWidths := table.ColumnWidths
-	if len(rowHeights) == 0 || len(columnWidths) == 0 || table.CollapsedBorderGrid == nil {
+	columnWidths := table.table().ColumnWidths
+	if len(rowHeights) == 0 || len(columnWidths) == 0 || table.table().CollapsedBorderGrid == nil {
 		// One of the lists is empty: do not bother with empty tables.
 		return
 	}
-	columnPositions := slices.Clone(table.ColumnPositions)
+	columnPositions := slices.Clone(table.table().ColumnPositions)
 	gridHeight := len(rowHeights)
 	gridWidth := len(columnWidths)
 	// Port: upstream asserts that the grid has a position for each column.
 	if gridWidth != len(columnPositions) {
 		return
 	}
-	verticalBorders, horizontalBorders := table.CollapsedBorderGrid.Vertical, table.CollapsedBorderGrid.Horizontal
+	verticalBorders, horizontalBorders := table.table().CollapsedBorderGrid.Vertical, table.table().CollapsedBorderGrid.Horizontal
 	// Add the end of the last column.
 	columnPositions = append(columnPositions, columnPositions[len(columnPositions)-1]+columnWidths[len(columnWidths)-1])
 	// Add the end of the last row.
 	rowPositions = append(rowPositions, rowPositions[len(rowPositions)-1]+rowHeights[len(rowHeights)-1])
 	headerRows, footerRows := 0, 0
-	if table.Children[0].IsHeader {
+	if table.Children[0].table().IsHeader {
 		headerRows = len(table.Children[0].Children)
 	}
-	if last := table.Children[len(table.Children)-1]; last.IsFooter {
+	if last := table.Children[len(table.Children)-1]; last.table().IsFooter {
 		footerRows = len(last.Children)
 	}
 	bodyRowsOffset := 0
-	if table.SkippedRows != 0 {
-		bodyRowsOffset = table.SkippedRows - headerRows
+	if table.table().SkippedRows != 0 {
+		bodyRowsOffset = table.table().SkippedRows - headerRows
 	}
 	originalGridHeight := len(verticalBorders)
 	footerRowsOffset := originalGridHeight - gridHeight
@@ -671,11 +671,11 @@ func drawCollapsedBorders(s *stream, table *Box) {
 		}
 		posX := columnPositions[x]
 		posY1 := rowPositions[y]
-		if y != 0 || !table.SkipCellBorderTop {
+		if y != 0 || !table.table().SkipCellBorderTop {
 			posY1 -= halfMaxWidth(horizontalBorders, [][2]int{{y, x - 1}, {y, x}}, false)
 		}
 		posY2 := rowPositions[y+1]
-		if y != gridHeight-1 || !table.SkipCellBorderBottom {
+		if y != gridHeight-1 || !table.table().SkipCellBorderBottom {
 			posY2 += halfMaxWidth(horizontalBorders, [][2]int{{y + 1, x - 1}, {y + 1, x}}, false)
 		}
 		segments = append(segments, collapsedSegment{
@@ -685,10 +685,10 @@ func drawCollapsedBorders(s *stream, table *Box) {
 	}
 
 	addHorizontal := func(x, y int) {
-		if y == 0 && table.SkipCellBorderTop {
+		if y == 0 && table.table().SkipCellBorderTop {
 			return
 		}
-		if y == gridHeight && table.SkipCellBorderBottom {
+		if y == gridHeight && table.table().SkipCellBorderBottom {
 			return
 		}
 		yy := rowNumber(y, true)
@@ -758,7 +758,7 @@ func drawReplacedbox(s *stream, box *Box) {
 		s.stacked(func() {
 			// TODO: Use the real intrinsic size here, not affected by
 			// 'image-resolution'?
-			paintImage(s, box.Replacement, drawWidth, drawHeight, box.Style)
+			paintImage(s, box.extra().Replacement, drawWidth, drawHeight, box.Style)
 		})
 	})
 }
@@ -781,8 +781,8 @@ func drawInlineLevel(s *stream, sc *StackingContext, box *Box, offsetX float64, 
 	switch box.Kind {
 	case KindInline, KindLine:
 		if box.Kind == KindLine {
-			textOverflow = box.TextOverflow
-			blockEllipsis = box.BlockEllipsis
+			textOverflow = box.extra().TextOverflow
+			blockEllipsis = box.extra().BlockEllipsis
 		}
 		var ellipsis Value
 		for i, child := range box.Children {

@@ -1202,10 +1202,10 @@ type gridAdvancementKey [2]int
 // gridAdvancement. The copies of the box share it, as they share the dict
 // of upstream.
 func gridAdvancements(box *Box) map[any]any {
-	if box.Advancements == nil {
-		box.Advancements = map[any]any{}
+	if box.extra().Advancements == nil {
+		box.ownExtra().Advancements = map[any]any{}
 	}
-	return box.Advancements
+	return box.extra().Advancements
 }
 
 // gridAdvancementGet returns advancements.get((x, y)), and false for None.

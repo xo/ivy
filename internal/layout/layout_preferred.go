@@ -212,8 +212,8 @@ func minMax(box *Box, width float64) float64 {
 		maxWidth = math.Inf(1)
 	}
 
-	if box.IsReplaced() && box.Replacement != nil {
-		size := box.Replacement.GetIntrinsicSize(1, num(box.Style.Get("font_size")))
+	if box.IsReplaced() && box.extra().Replacement != nil {
+		size := box.extra().Replacement.GetIntrinsicSize(1, num(box.Style.Get("font_size")))
 		if size.HasRatio {
 			ratio := size.Ratio
 			minHeightValue := box.Style.Get("min_height")
@@ -684,8 +684,8 @@ func tableAndColumnsPreferredWidths(lc *layoutContext, box *Box, outer bool) tab
 	for _, rowGroup := range table.Children {
 		for _, row := range rowGroup.Children {
 			for _, cell := range row.Children {
-				gridWidth = max(cell.GridX+cell.Colspan, gridWidth)
-				gridHeight = max(rowNumber+cell.Rowspan, gridHeight)
+				gridWidth = max(cell.table().GridX+cell.table().Colspan, gridWidth)
+				gridHeight = max(rowNumber+cell.table().Rowspan, gridHeight)
 			}
 			rowNumber++
 		}
@@ -703,8 +703,8 @@ func tableAndColumnsPreferredWidths(lc *layoutContext, box *Box, outer bool) tab
 	for _, rowGroup := range table.Children {
 		for _, row := range rowGroup.Children {
 			for _, cell := range row.Children {
-				if rowNumber < gridHeight && cell.GridX >= 0 && cell.GridX < gridWidth {
-					grid[rowNumber][cell.GridX] = cell
+				if rowNumber < gridHeight && cell.table().GridX >= 0 && cell.table().GridX < gridWidth {
+					grid[rowNumber][cell.table().GridX] = cell
 				}
 			}
 			rowNumber++
@@ -762,7 +762,7 @@ func tableAndColumnsPreferredWidths(lc *layoutContext, box *Box, outer bool) tab
 	columns := make([]*Box, gridWidth)
 	columnNumber := 0
 groups:
-	for _, columnGroup := range table.ColumnGroups {
+	for _, columnGroup := range table.table().ColumnGroups {
 		for _, column := range columnGroup.Children {
 			columnGroups[columnNumber] = columnGroup
 			columns[columnNumber] = column
@@ -795,14 +795,14 @@ groups:
 				continue
 			}
 			lc.spend(1)
-			if cell.Colspan == 1 {
+			if cell.table().Colspan == 1 {
 				minWidth, maxWidth := tableCellMinMaxContentWidth(lc, cell, true)
 				minContentWidths[i] = max(minContentWidths[i], minWidth)
 				maxContentWidths[i] = max(maxContentWidths[i], maxWidth)
 				intrinsicPercentages[i] = max(intrinsicPercentages[i], percentageContribution(cell))
 			} else {
 				colspanCells = append(colspanCells, cell)
-				colspans[cell.Colspan-1] = true
+				colspans[cell.table().Colspan-1] = true
 			}
 		}
 	}
@@ -833,7 +833,7 @@ groups:
 		if result, ok := percentageCache[key]; ok {
 			return result
 		}
-		end := min(origin+originCell.Colspan, gridWidth)
+		end := min(origin+originCell.table().Colspan, gridWidth)
 		baselinePercentage := sumFloats(intrinsicPercentages[origin:end])
 		cellPercentageContribution := percentageContribution(originCell)
 		diff := max(0, cellPercentageContribution-baselinePercentage)
@@ -873,7 +873,7 @@ groups:
 					continue
 				}
 				originCell := row[origin]
-				if originCell.Colspan-1 != span {
+				if originCell.table().Colspan-1 != span {
 					continue
 				}
 				cellPercentageContribution := getPercentageContribution(originCell, origin, maxContentWidths[i])
@@ -902,7 +902,7 @@ groups:
 			}
 		}
 		for _, cell := range zippedGrid[i] {
-			if cell != nil && cell.Colspan == 1 {
+			if cell != nil && cell.table().Colspan == 1 {
 				if _, ok := nonPercentLength(cell.Style.Get("width")); ok {
 					constrainedness[i] = true
 					break
@@ -924,13 +924,13 @@ groups:
 		lc.spend(1)
 		minContent := minContentWidth(lc, cell, true)
 		maxContent := maxContentWidth(lc, cell, true)
-		start, end := pySlice(cell.GridX, cell.GridX+cell.Colspan, true, gridWidth)
+		start, end := pySlice(cell.table().GridX, cell.table().GridX+cell.table().Colspan, true, gridWidth)
 		columnsMinContent := sumFloats(minContentWidths[start:end])
 		columnsMaxContent := sumFloats(maxContentWidths[start:end])
 		spacing := 0.0
 		if isStr(table.Style.Get("border_collapse"), "separate") {
 			spacingX, _ := tableBorderSpacing(table.Style)
-			spacing = float64(cell.Colspan-1) * spacingX
+			spacing = float64(cell.table().Colspan-1) * spacingX
 		}
 
 		if minContent > columnsMinContent+spacing {
@@ -1067,13 +1067,13 @@ func replacedMinContentWidth(box *Box, outer bool) float64 {
 	if isStr(widthValue, "auto") {
 		height := replacedSpecifiedHeight(box)
 		_, unknownMaxWidth := percentValue(box.Style.Get("max_width"))
-		if unknownMaxWidth || box.Replacement == nil {
+		if unknownMaxWidth || box.extra().Replacement == nil {
 			// See https://drafts.csswg.org/css-sizing/#intrinsic-contribution
 			//
 			// Port: a replaced box without an image has a width of 0.
 			width = 0
 		} else {
-			image := box.Replacement
+			image := box.extra().Replacement
 			intrinsicWidth, intrinsicHeight, intrinsicRatio := intrinsicSizePointers(image.GetIntrinsicSize(
 				num(box.Style.Get("image_resolution")), num(box.Style.Get("font_size"))))
 			width, _ = defaultImageSizing(intrinsicWidth, intrinsicHeight, intrinsicRatio, nil, height, 0, 0)
@@ -1097,9 +1097,9 @@ func replacedMaxContentWidth(box *Box, outer bool) float64 {
 	if isStr(widthValue, "auto") {
 		height := replacedSpecifiedHeight(box)
 		var intrinsicWidth, intrinsicHeight, intrinsicRatio *float64
-		if box.Replacement != nil {
+		if box.extra().Replacement != nil {
 			// Port: a replaced box without an image has no intrinsic size.
-			intrinsicWidth, intrinsicHeight, intrinsicRatio = intrinsicSizePointers(box.Replacement.GetIntrinsicSize(
+			intrinsicWidth, intrinsicHeight, intrinsicRatio = intrinsicSizePointers(box.extra().Replacement.GetIntrinsicSize(
 				num(box.Style.Get("image_resolution")), num(box.Style.Get("font_size"))))
 		}
 		width, _ = defaultImageSizing(intrinsicWidth, intrinsicHeight, intrinsicRatio, nil, height, 300, 150)

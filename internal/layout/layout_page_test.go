@@ -1174,10 +1174,10 @@ func TestPageAndLineboxBreaking(t *testing.T) {
 // pageMarginBox checks the position and the margin size of a margin box.
 func pageMarginBox(t *testing.T, box *Box, x, y, width, height float64) {
 	t.Helper()
-	pageEqual(t, box.AtKeyword+" x", box.PositionX, x)
-	pageEqual(t, box.AtKeyword+" y", box.PositionY, y)
-	pageEqual(t, box.AtKeyword+" margin width", box.MarginWidth(), width)
-	pageEqual(t, box.AtKeyword+" margin height", box.MarginHeight(), height)
+	pageEqual(t, box.extra().AtKeyword+" x", box.PositionX, x)
+	pageEqual(t, box.extra().AtKeyword+" y", box.PositionY, y)
+	pageEqual(t, box.extra().AtKeyword+" margin width", box.MarginWidth(), width)
+	pageEqual(t, box.extra().AtKeyword+" margin height", box.MarginHeight(), height)
 }
 
 // TestMarginBoxesFixedDimension1 is test_margin_boxes_fixed_dimension_1.
@@ -1491,9 +1491,9 @@ func TestPageStyleLayout(t *testing.T) {
 			var widths []float64
 			offsets := map[string]float64{"@top-left": 0, "@top-center": 0.5, "@top-right": 1}
 			for _, box := range marginBoxes {
-				atKeywords = append(atKeywords, box.AtKeyword)
+				atKeywords = append(atKeywords, box.extra().AtKeyword)
 				widths = append(widths, box.MarginWidth())
-				pageEqual(t, box.AtKeyword+" x", box.PositionX, 100+offsets[box.AtKeyword]*(600-box.MarginWidth()))
+				pageEqual(t, box.extra().AtKeyword+" x", box.PositionX, 100+offsets[box.extra().AtKeyword]*(600-box.MarginWidth()))
 			}
 			if fmt.Sprint(atKeywords) != fmt.Sprint(expected) {
 				t.Errorf("at-keywords %v, want %v", atKeywords, expected)
@@ -1914,7 +1914,7 @@ func TestMarginBoxes(t *testing.T) {
 	atKeywords := func(page *Box) string {
 		keywords := make([]string, 0, len(page.Children)-1)
 		for _, box := range page.Children[1:] {
-			keywords = append(keywords, box.AtKeyword)
+			keywords = append(keywords, box.extra().AtKeyword)
 		}
 		return strings.Join(keywords, " ")
 	}

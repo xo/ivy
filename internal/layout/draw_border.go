@@ -57,7 +57,7 @@ func sameColor(a, b *tinycss2.Color) bool {
 // mask border of the box as an alpha state on the stream.
 func setMaskBorder(s *stream, box *Box) {
 	source, _ := box.Style.Get("mask_border_source").(Tuple)
-	if len(source) == 0 || isStr(source[0], "none") || box.MaskBorderImage == nil {
+	if len(source) == 0 || isStr(source[0], "none") || box.extra().MaskBorderImage == nil {
 		return
 	}
 	r := box.RoundedBorderBox()
@@ -66,7 +66,7 @@ func setMaskBorder(s *stream, box *Box) {
 		mode = "alpha"
 	}
 	maskStream := s.setAlphaState(r.X, r.Y, r.Width, r.Height, mode)
-	drawBorderImage(box, maskStream, box.MaskBorderImage, box.Style.Get("mask_border_slice"),
+	drawBorderImage(box, maskStream, box.extra().MaskBorderImage, box.Style.Get("mask_border_slice"),
 		box.Style.Get("mask_border_repeat"), box.Style.Get("mask_border_outset"),
 		box.Style.Get("mask_border_width"))
 }
@@ -124,8 +124,8 @@ func drawBorder(s *stream, box *Box) {
 
 	// If there is a border image, that takes precedence.
 	if source, _ := box.Style.Get("border_image_source").(Tuple); len(source) > 0 && !isStr(source[0], "none") &&
-		box.BorderImage != nil {
-		drawBorderImage(box, s, box.BorderImage, box.Style.Get("border_image_slice"),
+		box.extra().BorderImage != nil {
+		drawBorderImage(box, s, box.extra().BorderImage, box.Style.Get("border_image_slice"),
 			box.Style.Get("border_image_repeat"), box.Style.Get("border_image_outset"),
 			box.Style.Get("border_image_width"))
 		return

@@ -243,8 +243,9 @@ func makeReplacedBox(element *Element, box *Box, image Image) *Box {
 	newBox := newReplacedBox(kind, element.Tag, box.Style, element, image)
 	// TODO: check other attributes that need to be copied
 	// TODO: find another solution
-	newBox.StringSet = box.StringSet
-	newBox.BookmarkLabel, newBox.HasBookmarkLabel = box.BookmarkLabel, box.HasBookmarkLabel
+	from, to := box.extra(), newBox.ownExtra()
+	to.StringSet = from.StringSet
+	to.BookmarkLabel, to.HasBookmarkLabel = from.BookmarkLabel, from.HasBookmarkLabel
 	return newBox
 }
 
@@ -271,7 +272,7 @@ func handleImg(b *builder, element *Element, box *Box, baseURL string) []*Box {
 // an <a> element.
 func handleA(b *builder, element *Element, box *Box, baseURL string) []*Box {
 	if href, ok := parseURL(b.log, element.GetDefault("href", ""), baseURL, true); ok {
-		box.Link = GetLink(b.log, href, baseURL)
+		box.ownExtra().Link = GetLink(b.log, href, baseURL)
 	}
 	return []*Box{box}
 }

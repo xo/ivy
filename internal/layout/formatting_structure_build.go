@@ -293,8 +293,14 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 	}
 
 	box := makeBox(element.Tag, style, nil, element)
-	box.FirstLetterStyle = b.styleFor(element, "first-letter")
-	box.FirstLineStyle = b.styleFor(element, "first-line")
+	// Port: the box keeps the styles in boxExtra, which it makes only for
+	// a style that is not nil.
+	if firstLetter := b.styleFor(element, "first-letter"); firstLetter != nil {
+		box.ownExtra().FirstLetterStyle = firstLetter
+	}
+	if firstLine := b.styleFor(element, "first-line"); firstLine != nil {
+		box.ownExtra().FirstLineStyle = firstLine
+	}
 
 	updateCounters(counterValues, *counterScopes, style)
 	// If this element’s direct children create new scopes, the counter
@@ -337,7 +343,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 			}
 			footnoteCall := makeBox(footnote.Element.Tag+"::footnote-call", callStyle, nil, footnote.Element)
 			footnoteCall.Children = b.contentToBoxes(callStyle, footnoteCall, quoteDepth, counterValues, nil, nil)
-			footnoteCall.Footnote = footnote
+			footnoteCall.ownExtra().Footnote = footnote
 			childBoxes = []*Box{footnoteCall}
 		}
 		if len(childBoxes) > 0 && childBoxes[0].IsNote() {
@@ -350,7 +356,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 			}
 			noteCall := makeBox(note.Element.Tag+"::note-call", callStyle, nil, note.Element)
 			noteCall.Children = b.contentToBoxes(callStyle, noteCall, quoteDepth, counterValues, nil, nil)
-			note.NoteCall, noteCall.Note = noteCall, note
+			note.ownExtra().NoteCall, noteCall.ownExtra().Note = noteCall, note
 			childBoxes = []*Box{noteCall, note}
 		}
 
@@ -426,7 +432,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 			callback := makeBox(element.Tag+"::note-callback", callbackStyle, nil, element)
 			callback.Children = b.contentToBoxes(callbackStyle, callback, quoteDepth, counterValues, nil, nil)
 			box.Children = append(box.Children, callback)
-			box.NoteCallback = callback
+			box.ownExtra().NoteCallback = callback
 		}
 	}
 
@@ -590,10 +596,10 @@ func (b *builder) computeContentList(contentList Value, parentBox *Box, counterV
 	var missingTargetOrder []string
 	inPageContext := context != nil && page != nil
 
-	if parentBox.CachedCounterValues == nil {
+	if parentBox.extra().CachedCounterValues == nil {
 		// Store the counter_values in the parent_box to make them
 		// accessible in @page context.
-		parentBox.CachedCounterValues = copyCounterValues(counterValues)
+		parentBox.ownExtra().CachedCounterValues = copyCounterValues(counterValues)
 	}
 	items, _ := contentList.(Tuple)
 loop:
@@ -688,7 +694,7 @@ loop:
 			}
 			var targetValues map[string][]int
 			if lookupTarget.TargetBox != nil {
-				targetValues = lookupTarget.TargetBox.CachedCounterValues
+				targetValues = lookupTarget.TargetBox.extra().CachedCounterValues
 			}
 			if _, ok := targetValues[counterName]; !inPageContext && !ok {
 				anchorName, _ := anchorNameFromToken(anchorToken)
@@ -842,7 +848,7 @@ func (b *builder) contentToBoxes(style *Style, parentBox *Box, quoteDepth *int, 
 	parseAgain := func(counters map[string][]int) {
 		// Parse the children of the parent_boxes all again.
 		localCounters := cloneCounterValues(counters)
-		for key, value := range parentBox.CachedCounterValues {
+		for key, value := range parentBox.extra().CachedCounterValues {
 			localCounters[key] = value
 		}
 
@@ -872,7 +878,7 @@ func (b *builder) computeStringSet(element *Element, box *Box, stringName string
 	parseAgain := func(counters map[string][]int) {
 		// Parse the string-set string value all again.
 		localCounters := cloneCounterValues(counters)
-		for key, value := range box.CachedCounterValues {
+		for key, value := range box.extra().CachedCounterValues {
 			localCounters[key] = value
 		}
 		b.computeStringSet(element, box, stringName, contentList, localCounters)
@@ -889,13 +895,14 @@ func (b *builder) computeStringSet(element *Element, box *Box, stringName string
 		}
 		// Avoid duplicates, care for parse_again and missing counters,
 		// don't change the pointer
-		for i, entry := range box.StringSet {
+		extra := box.ownExtra()
+		for i, entry := range extra.StringSet {
 			if entry.Name == stringName {
-				box.StringSet = slices.Delete(box.StringSet, i, i+1)
+				extra.StringSet = slices.Delete(extra.StringSet, i, i+1)
 				break
 			}
 		}
-		box.StringSet = append(box.StringSet, StringSetEntry{stringName, text.String()})
+		extra.StringSet = append(extra.StringSet, StringSetEntry{stringName, text.String()})
 	}
 }
 
@@ -906,7 +913,7 @@ func (b *builder) computeBookmarkLabel(element *Element, box *Box, contentList V
 	parseAgain := func(counters map[string][]int) {
 		// Parse the bookmark-label all again.
 		localCounters := cloneCounterValues(counters)
-		for key, value := range box.CachedCounterValues {
+		for key, value := range box.extra().CachedCounterValues {
 			localCounters[key] = value
 		}
 		b.computeBookmarkLabel(element, box, contentList, localCounters)
@@ -919,7 +926,7 @@ func (b *builder) computeBookmarkLabel(element *Element, box *Box, contentList V
 		for _, child := range boxList {
 			label.WriteString(child.ContentText())
 		}
-		box.BookmarkLabel, box.HasBookmarkLabel = label.String(), true
+		box.ownExtra().BookmarkLabel, box.ownExtra().HasBookmarkLabel = label.String(), true
 	}
 }
 
@@ -927,7 +934,12 @@ func (b *builder) computeBookmarkLabel(element *Element, box *Box, contentList V
 // build.py. It sets the values of the content lists of the properties of
 // GCPM, such as string-set and bookmark-label.
 func (b *builder) setContentLists(element *Element, box *Box, style *Style, counterValues map[string][]int) {
-	box.StringSet = []StringSetEntry{}
+	// Port: upstream sets an empty list. The port sets nil, which the
+	// layout reads as an empty list, so that a box without named strings
+	// does not make its boxExtra.
+	if box.ext != nil {
+		box.ext.StringSet = nil
+	}
 	if stringSet := style.Get("string_set"); !isStr(stringSet, "none") {
 		items, _ := stringSet.(Tuple)
 		for _, item := range items {
@@ -1196,12 +1208,12 @@ func wrapTable(b *builder, box *Box, children []*Box) *Box {
 	columnGroups := wrapImproper(b, box, columns, KindTableColumnGroup, nil)
 	gridX := 0
 	for _, group := range columnGroups {
-		group.GridX = gridX
+		group.ownTable().GridX = gridX
 		if len(group.Children) > 0 {
 			for _, column := range group.Children {
 				// There's no need to take care of group's span, as "span=x"
 				// already generates x TableColumnBox children
-				column.GridX = gridX
+				column.ownTable().GridX = gridX
 				gridX++
 			}
 		} else {
@@ -1218,10 +1230,10 @@ func wrapTable(b *builder, box *Box, children []*Box) *Box {
 		display := group.Style.Get("display")
 		switch {
 		case Equal(display, tupleOf("table-header-group")) && header == nil:
-			group.IsHeader = true
+			group.ownTable().IsHeader = true
 			header = group
 		case Equal(display, tupleOf("table-footer-group")) && footer == nil:
-			group.IsFooter = true
+			group.ownTable().IsFooter = true
 			footer = group
 		default:
 			bodyRowGroups = append(bodyRowGroups, group)
@@ -1261,19 +1273,19 @@ func wrapTable(b *builder, box *Box, children []*Box) *Box {
 				for occupiedCellsInThisRow[gridX] {
 					gridX++
 				}
-				cell.GridX = gridX
-				newGridX := gridX + cell.Colspan
+				cell.ownTable().GridX = gridX
+				newGridX := gridX + cell.table().Colspan
 				// https://www.w3.org/TR/html401/struct/tables.html#adef-rowspan
-				if cell.Rowspan != 1 {
+				if cell.table().Rowspan != 1 {
 					maxRowspan := len(occupiedCellsByRow) + 1
 					var spannedRows []map[int]bool
-					if cell.Rowspan == 0 {
+					if cell.table().Rowspan == 0 {
 						// All rows until the end of the group
 						spannedRows = occupiedCellsByRow
-						cell.Rowspan = maxRowspan
+						cell.ownTable().Rowspan = maxRowspan
 					} else {
-						cell.Rowspan = min(cell.Rowspan, maxRowspan)
-						spannedRows = occupiedCellsByRow[:cell.Rowspan-1]
+						cell.ownTable().Rowspan = min(cell.table().Rowspan, maxRowspan)
+						spannedRows = occupiedCellsByRow[:cell.table().Rowspan-1]
 					}
 					for _, occupiedCells := range spannedRows {
 						for x := gridX; x < newGridX && occupiedBudget > 0; x++ {
@@ -1291,9 +1303,9 @@ func wrapTable(b *builder, box *Box, children []*Box) *Box {
 
 	table := box.CopyWithChildren(rowGroups)
 	table.Style = table.Style.Copy()
-	table.ColumnGroups = columnGroups
+	table.ownTable().ColumnGroups = columnGroups
 	if isStr(table.Style.Get("border_collapse"), "collapse") {
-		table.CollapsedBorderGrid = collapseTableBorders(table, gridWidth, gridHeight)
+		table.ownTable().CollapsedBorderGrid = collapseTableBorders(table, gridWidth, gridHeight)
 	}
 
 	wrapperKind := KindBlock
@@ -1325,7 +1337,7 @@ func blockify(box *Box) *Box {
 	case box.Kind == KindInlineBlock:
 		anonymous = anonymousFrom(KindBlock, box, box.Children)
 	case box.Kind == KindInlineReplaced:
-		anonymous = anonymousReplacedFrom(KindBlockReplaced, box, box.Replacement)
+		anonymous = anonymousReplacedFrom(KindBlockReplaced, box, box.extra().Replacement)
 	case box.Kind == KindText:
 		anonymous = anonymousFrom(KindBlock, box, []*Box{box})
 	case box.Kind == KindInlineFlex:
@@ -1341,7 +1353,9 @@ func blockify(box *Box) *Box {
 	anonymous.IsTableWrapper = box.IsTableWrapper
 	anonymous.IsFlexItem = box.IsFlexItem
 	anonymous.IsGridItem = box.IsGridItem
-	anonymous.Link = box.Link
+	if link := box.extra().Link; link != nil {
+		anonymous.ownExtra().Link = link
+	}
 	return anonymous
 }
 
@@ -1736,7 +1750,7 @@ func setViewportOverflow(rootBox *Box) *Box {
 		}
 	}
 
-	rootBox.ViewportOverflow = str(chosenBox.Style.Get("overflow"))
+	rootBox.ownExtra().ViewportOverflow = str(chosenBox.Style.Get("overflow"))
 	chosenBox.Style.Set("overflow", String("visible"))
 	return rootBox
 }

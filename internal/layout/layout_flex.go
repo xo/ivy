@@ -269,8 +269,8 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			newChild.Style.Set("max_width", Dimension{Value: math.Inf(1), Unit: "px"})
 			contentSize := minContentWidth(lc, newChild, false)
 			transferredSize, hasTransferredSize := 0.0, false
-			if child.IsReplaced() && child.Replacement != nil {
-				size := child.Replacement.GetIntrinsicSize(
+			if child.IsReplaced() && child.extra().Replacement != nil {
+				size := child.extra().Replacement.GetIntrinsicSize(
 					num(child.Style.Get("image_resolution")), num(child.Style.Get("font_size")))
 				if size.HasRatio && size.Ratio != 0 && size.HasHeight && size.Height != 0 {
 					transferredSize, hasTransferredSize = size.Height*size.Ratio, true
@@ -305,8 +305,8 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				contentSize = newChild.Height
 			}
 			transferredSize, hasTransferredSize := 0.0, false
-			if child.IsReplaced() && child.Replacement != nil {
-				size := child.Replacement.GetIntrinsicSize(
+			if child.IsReplaced() && child.extra().Replacement != nil {
+				size := child.extra().Replacement.GetIntrinsicSize(
 					num(child.Style.Get("image_resolution")), num(child.Style.Get("font_size")))
 				if size.HasRatio && size.Ratio != 0 && size.HasWidth && size.Width != 0 {
 					transferredSize, hasTransferredSize = size.Width/size.Ratio, true
@@ -347,24 +347,24 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 
 		// 3.A If the item has a definite used flex basis…
 		if !contentBasis {
-			child.flex.flexBaseSize = flexBasis
+			child.flex().flexBaseSize = flexBasis
 			if main == "width" {
-				child.flex.mainOuterExtra = child.BorderLeftWidth + child.BorderRightWidth +
+				child.flex().mainOuterExtra = child.BorderLeftWidth + child.BorderRightWidth +
 					child.PaddingLeft + child.PaddingRight
 				if child.MarginLeft != Auto {
-					child.flex.mainOuterExtra += child.MarginLeft
+					child.flex().mainOuterExtra += child.MarginLeft
 				}
 				if child.MarginRight != Auto {
-					child.flex.mainOuterExtra += child.MarginRight
+					child.flex().mainOuterExtra += child.MarginRight
 				}
 			} else {
-				child.flex.mainOuterExtra = child.BorderTopWidth + child.BorderBottomWidth +
+				child.flex().mainOuterExtra = child.BorderTopWidth + child.BorderBottomWidth +
 					child.PaddingTop + child.PaddingBottom
 				if child.MarginTop != Auto {
-					child.flex.mainOuterExtra += child.MarginTop
+					child.flex().mainOuterExtra += child.MarginTop
 				}
 				if child.MarginBottom != Auto {
-					child.flex.mainOuterExtra += child.MarginBottom
+					child.flex().mainOuterExtra += child.MarginBottom
 				}
 			}
 		} else {
@@ -380,8 +380,8 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				newChild.Style.Set("min_width", Dimension{Value: 0, Unit: "px"})
 				newChild.Style.Set("max_width", Dimension{Value: math.Inf(1), Unit: "px"})
 
-				child.flex.flexBaseSize = maxContentWidth(lc, newChild, false)
-				child.flex.mainOuterExtra = maxContentWidth(lc, child, true) - child.flex.flexBaseSize
+				child.flex().flexBaseSize = maxContentWidth(lc, newChild, false)
+				child.flex().mainOuterExtra = maxContentWidth(lc, child, true) - child.flex().flexBaseSize
 			} else {
 				// … the item’s min and max main sizes are ignored.
 				newChild.Style.Set("min_height", Dimension{Value: 0, Unit: "px"})
@@ -395,23 +395,23 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 					// with the flex container), we can add the adjoining margins to the
 					// child height.
 					newChild.Height += collapseMargin(result.adjoiningMargins)
-					child.flex.flexBaseSize = newChild.Height
-					child.flex.mainOuterExtra = newChild.MarginHeight() - newChild.Height
+					child.flex().flexBaseSize = newChild.Height
+					child.flex().mainOuterExtra = newChild.MarginHeight() - newChild.Height
 				} else {
-					child.flex.flexBaseSize, child.flex.mainOuterExtra = 0, 0
+					child.flex().flexBaseSize, child.flex().mainOuterExtra = 0, 0
 				}
 			}
 		}
 
 		if main == "width" {
-			positionX += child.flex.flexBaseSize + child.flex.mainOuterExtra
+			positionX += child.flex().flexBaseSize + child.flex().mainOuterExtra
 		} else {
-			positionY += child.flex.flexBaseSize + child.flex.mainOuterExtra
+			positionY += child.flex().flexBaseSize + child.flex().mainOuterExtra
 		}
 
 		minSize := *child.usedField("min_" + main)
 		maxSize := *child.usedField("max_" + main)
-		child.flex.hypotheticalMainSize = max(minSize, min(child.flex.flexBaseSize, maxSize))
+		child.flex().hypotheticalMainSize = max(minSize, min(child.flex().flexBaseSize, maxSize))
 
 		// Skip stack is only for the first child.
 		childSkipStack = nil
@@ -430,7 +430,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				if !child.IsFlexItem {
 					continue
 				}
-				box.Height += child.flex.hypotheticalMainSize + child.flex.mainOuterExtra
+				box.Height += child.flex().hypotheticalMainSize + child.flex().mainOuterExtra
 				if i > 0 {
 					box.Height += mainGap
 				}
@@ -452,7 +452,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 		if !child.IsFlexItem {
 			continue
 		}
-		lineSize += child.flex.hypotheticalMainSize + child.flex.mainOuterExtra
+		lineSize += child.flex().hypotheticalMainSize + child.flex().mainOuterExtra
 		if i > skipIndex {
 			lineSize += mainGap
 		}
@@ -460,7 +460,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			if len(line) > 0 {
 				flexLines = append(flexLines, &flexLine{items: line})
 				line = []flexLineItem{{i, child}}
-				lineSize = child.flex.hypotheticalMainSize + child.flex.mainOuterExtra
+				lineSize = child.flex().hypotheticalMainSize + child.flex().mainOuterExtra
 			} else {
 				line = append(line, flexLineItem{i, child})
 				flexLines = append(flexLines, &flexLine{items: line})
@@ -491,7 +491,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 		// 9.7.1 Determine the used flex factor.
 		hypotheticalMainSize := 0.0
 		for _, item := range line.items {
-			hypotheticalMainSize += item.child.flex.hypotheticalMainSize + item.child.flex.mainOuterExtra
+			hypotheticalMainSize += item.child.flex().hypotheticalMainSize + item.child.flex().mainOuterExtra
 		}
 		grow := hypotheticalMainSize < availableMainSpace
 
@@ -500,17 +500,17 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			child := item.child
 			var flexCondition bool
 			if grow {
-				child.flex.flexFactor = num(child.Style.Get("flex_grow"))
-				flexCondition = child.flex.flexBaseSize > child.flex.hypotheticalMainSize
+				child.flex().flexFactor = num(child.Style.Get("flex_grow"))
+				flexCondition = child.flex().flexBaseSize > child.flex().hypotheticalMainSize
 			} else {
-				child.flex.flexFactor = num(child.Style.Get("flex_shrink"))
-				flexCondition = child.flex.flexBaseSize < child.flex.hypotheticalMainSize
+				child.flex().flexFactor = num(child.Style.Get("flex_shrink"))
+				flexCondition = child.flex().flexBaseSize < child.flex().hypotheticalMainSize
 			}
-			if child.flex.flexFactor == 0 || flexCondition {
-				child.flex.targetMainSize = child.flex.hypotheticalMainSize
-				child.flex.frozen = true
+			if child.flex().flexFactor == 0 || flexCondition {
+				child.flex().targetMainSize = child.flex().hypotheticalMainSize
+				child.flex().frozen = true
 			} else {
-				child.flex.frozen = false
+				child.flex().frozen = false
 			}
 		}
 
@@ -518,10 +518,10 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 		initialFreeSpace := availableMainSpace
 		for i, item := range line.items {
 			child := item.child
-			if child.flex.frozen {
-				initialFreeSpace -= child.flex.targetMainSize + child.flex.mainOuterExtra
+			if child.flex().frozen {
+				initialFreeSpace -= child.flex().targetMainSize + child.flex().mainOuterExtra
 			} else {
-				initialFreeSpace -= child.flex.flexBaseSize + child.flex.mainOuterExtra
+				initialFreeSpace -= child.flex().flexBaseSize + child.flex().mainOuterExtra
 			}
 			if i > 0 {
 				initialFreeSpace -= mainGap
@@ -531,7 +531,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 		// 9.7.5.a Check for flexible items.
 		allFrozen := func() bool {
 			for _, item := range line.items {
-				if !item.child.flex.frozen {
+				if !item.child.flex().frozen {
 					return false
 				}
 			}
@@ -544,7 +544,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			lc.spend(1)
 			if pass > len(line.items) {
 				for _, item := range line.items {
-					item.child.flex.frozen = true
+					item.child.flex().frozen = true
 				}
 				break
 			}
@@ -554,11 +554,11 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			// 9.7.5.b Calculate the remaining free space.
 			for i, item := range line.items {
 				child := item.child
-				if child.flex.frozen {
-					remainingFreeSpace -= child.flex.targetMainSize + child.flex.mainOuterExtra
+				if child.flex().frozen {
+					remainingFreeSpace -= child.flex().targetMainSize + child.flex().mainOuterExtra
 				} else {
-					remainingFreeSpace -= child.flex.flexBaseSize + child.flex.mainOuterExtra
-					unfrozenFactorSum += child.flex.flexFactor
+					remainingFreeSpace -= child.flex().flexBaseSize + child.flex().mainOuterExtra
+					unfrozenFactorSum += child.flex().flexFactor
 				}
 				if i > 0 {
 					remainingFreeSpace -= mainGap
@@ -587,8 +587,8 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				// If the remaining free space is zero: "Do nothing", but we at least set
 				// the flex_base_size as target_main_size for next step.
 				for _, item := range line.items {
-					if !item.child.flex.frozen {
-						item.child.flex.targetMainSize = item.child.flex.flexBaseSize
+					if !item.child.flex().frozen {
+						item.child.flex().targetMainSize = item.child.flex().flexBaseSize
 					}
 				}
 			} else {
@@ -596,50 +596,50 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				flexGrowFactorsSum := 0.0
 				for _, item := range line.items {
 					child := item.child
-					if !child.flex.frozen {
-						child.flex.scaledFlexShrinkFactor = child.flex.flexBaseSize * num(child.Style.Get("flex_shrink"))
-						scaledFlexShrinkFactorsSum += child.flex.scaledFlexShrinkFactor
+					if !child.flex().frozen {
+						child.flex().scaledFlexShrinkFactor = child.flex().flexBaseSize * num(child.Style.Get("flex_shrink"))
+						scaledFlexShrinkFactorsSum += child.flex().scaledFlexShrinkFactor
 						flexGrowFactorsSum += num(child.Style.Get("flex_grow"))
 					}
 				}
 				for _, item := range line.items {
 					child := item.child
-					if child.flex.frozen {
+					if child.flex().frozen {
 						continue
 					}
 					if grow {
 						// If using the flex grow factor…
 						if flexGrowFactorsSum == 0 {
 							// Port: upstream divides by zero.
-							child.flex.targetMainSize = child.flex.flexBaseSize
+							child.flex().targetMainSize = child.flex().flexBaseSize
 						} else {
 							ratio := num(child.Style.Get("flex_grow")) / flexGrowFactorsSum
-							child.flex.targetMainSize = child.flex.flexBaseSize + remainingFreeSpace*ratio
+							child.flex().targetMainSize = child.flex().flexBaseSize + remainingFreeSpace*ratio
 						}
 					} else {
 						// If using the flex shrink factor…
 						if scaledFlexShrinkFactorsSum == 0 {
-							child.flex.targetMainSize = child.flex.flexBaseSize
+							child.flex().targetMainSize = child.flex().flexBaseSize
 						} else {
-							ratio := child.flex.scaledFlexShrinkFactor / scaledFlexShrinkFactorsSum
-							child.flex.targetMainSize = child.flex.flexBaseSize + remainingFreeSpace*ratio
+							ratio := child.flex().scaledFlexShrinkFactor / scaledFlexShrinkFactorsSum
+							child.flex().targetMainSize = child.flex().flexBaseSize + remainingFreeSpace*ratio
 						}
 					}
-					child.flex.targetMainSize = minMax(child, child.flex.targetMainSize)
+					child.flex().targetMainSize = minMax(child, child.flex().targetMainSize)
 				}
 			}
 
 			// 9.7.5.d Fix min/max violations.
 			for _, item := range line.items {
 				child := item.child
-				child.flex.adjustment = 0
-				if !child.flex.frozen {
+				child.flex().adjustment = 0
+				if !child.flex().frozen {
 					minSize := *child.usedField("min_" + main)
 					maxSize := *child.usedField("max_" + main)
-					minSize = max(minSize, min(child.flex.targetMainSize, maxSize))
-					if child.flex.targetMainSize < minSize {
-						child.flex.adjustment = minSize - child.flex.targetMainSize
-						child.flex.targetMainSize = minSize
+					minSize = max(minSize, min(child.flex().targetMainSize, maxSize))
+					if child.flex().targetMainSize < minSize {
+						child.flex().adjustment = minSize - child.flex().targetMainSize
+						child.flex().targetMainSize = minSize
 					}
 				}
 			}
@@ -647,27 +647,27 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			// 9.7.5.e Freeze over-flexed items.
 			adjustments := 0.0
 			for _, item := range line.items {
-				adjustments += item.child.flex.adjustment
+				adjustments += item.child.flex().adjustment
 			}
 			for _, item := range line.items {
 				child := item.child
 				switch {
 				case adjustments == 0:
 					// Zero: Freeze all items.
-					child.flex.frozen = true
-				case adjustments > 0 && child.flex.adjustment > 0:
+					child.flex().frozen = true
+				case adjustments > 0 && child.flex().adjustment > 0:
 					// Positive: Freeze all the items with min violations.
-					child.flex.frozen = true
-				case adjustments < 0 && child.flex.adjustment < 0:
+					child.flex().frozen = true
+				case adjustments < 0 && child.flex().adjustment < 0:
 					// Negative: Freeze all the items with max violations.
-					child.flex.frozen = true
+					child.flex().frozen = true
 				}
 			}
 		}
 
 		// 9.7.6 Set each item’s used main size to its target main size.
 		for _, item := range line.items {
-			*item.child.usedField(main) = item.child.flex.targetMainSize
+			*item.child.usedField(main) = item.child.flex().targetMainSize
 		}
 	}
 
@@ -700,9 +700,9 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 				newChild.Children = nil
 				newChild.Width, newChild.Height = autoZero(newChild.Width), 0
 			}
-			child.flex.baseline = 0
+			child.flex().baseline = 0
 			if baseline, ok := findInFlowBaseline(newChild, false); ok {
-				child.flex.baseline = baseline
+				child.flex().baseline = baseline
 			}
 			if cross == "height" {
 				child.Height = newChild.Height
@@ -758,7 +758,7 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			}
 			crossStartDistance, crossEndDistance := 0.0, 0.0
 			for _, child := range collectedItems {
-				baseline := child.flex.baseline - child.PositionY
+				baseline := child.flex().baseline - child.PositionY
 				crossStartDistance = max(crossStartDistance, baseline)
 				crossEndDistance = max(crossEndDistance, child.MarginHeight()-baseline)
 			}
@@ -1059,14 +1059,14 @@ func flexLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack
 			}
 			if tupleHas(alignSelf, "baseline") && main == "width" {
 				// TODO: handle vertical text.
-				child.Baseline = child.flex.baseline - positionCross
+				child.Baseline = child.flex().baseline - positionCross
 				line.lowerBaseline = max(line.lowerBaseline, child.Baseline)
 			}
 		}
 		if math.IsInf(line.lowerBaseline, -1) {
 			line.lowerBaseline = 0
 			if len(line.items) > 0 {
-				line.lowerBaseline = line.items[0].child.flex.baseline
+				line.lowerBaseline = line.items[0].child.flex().baseline
 			}
 		}
 		for _, item := range line.items {

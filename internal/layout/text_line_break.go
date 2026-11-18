@@ -223,8 +223,10 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		Language:  languageOf(style),
 	}
 	features := styleFeatures(style)
-	// byRune holds the clusters by their first rune, until they are sorted.
-	byRune := make([]*textCluster, len(runes))
+	// byRune holds the clusters by their first rune, until they are sorted,
+	// and found tells which runes start a cluster.
+	byRune := scratch(&fc.shapeClusters, len(runes))
+	found := scratch(&fc.shapeFound, len(runes))
 	// The bidirectional algorithm of go-text reads one paragraph, so each
 	// paragraph is split on its own.
 	for start := 0; start < len(runes); {
@@ -254,20 +256,21 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			out := fc.shaper.Shape(item)
 			ascent, descent := faceExtents(item.Face)
 			run := shapedRun{id: id, hasID: true, ascent: ascent, descent: descent}
+			run.glyphs = make([]shapedGlyph, 0, len(out.Glyphs))
 			runIndex := len(s.runs)
 			for _, g := range out.Glyphs {
 				ci := g.TextIndex()
 				if ci < 0 || ci >= len(runes) {
 					continue
 				}
-				c := byRune[ci]
-				if c == nil {
+				c := &byRune[ci]
+				if !found[ci] {
 					end := min(ci+max(g.RunesCount(), 1), len(runes))
-					c = &textCluster{
+					*c = textCluster{
 						start: s.runeToByte[ci], end: s.runeToByte[end], runeStart: ci, r: runes[ci],
 						run: runIndex,
 					}
-					byRune[ci] = c
+					found[ci] = true
 				}
 				advance := float64(g.Advance) / 64 / upem
 				c.advance += advance
@@ -285,14 +288,16 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	}
 	// Each character that the shaper left out, such as a separator of
 	// paragraphs, is a cluster without width.
+	count := 0
 	for i, r := range runes {
-		if byRune[i] != nil {
+		if found[i] {
+			count++
 			continue
 		}
 		covered := false
 		for j := i - 1; j >= 0 && j >= i-8; j-- {
-			if c := byRune[j]; c != nil {
-				covered = c.end > s.runeToByte[i]
+			if found[j] {
+				covered = byRune[j].end > s.runeToByte[i]
 				break
 			}
 		}
@@ -300,13 +305,17 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			if len(s.runs) == 0 {
 				s.runs = append(s.runs, shapedRun{id: primaryID, hasID: true, ascent: s.ascent, descent: s.descent})
 			}
-			byRune[i] = &textCluster{start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: i, r: r}
+			byRune[i] = textCluster{start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: i, r: r}
+			found[i] = true
+			count++
 		}
 	}
 	// Sort the clusters in the order of the text.
-	index := make([]int, len(runes))
-	for i, c := range byRune {
-		if c != nil {
+	index := scratch(&fc.shapeIndex, len(runes))
+	s.clusters = make([]textCluster, 0, count)
+	for i := range byRune {
+		if found[i] {
+			c := &byRune[i]
 			index[i] = len(s.clusters)
 			c.advance = zeroWidth(c.r, c.advance)
 			s.clusters = append(s.clusters, *c)
@@ -318,6 +327,25 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			g.cluster = index[g.cluster]
 		}
 	}
+	return s
+}
+
+// maxScratch bounds the items of a buffer that scratch keeps.
+const maxScratch = 1 << 14
+
+// scratch returns the first n items of the buffer *buf, set to zero. It
+// grows the buffer when it is too small, so that shapeText reuses its
+// buffers between the texts. It does not keep a buffer of more than
+// maxScratch items.
+func scratch[T any](buf *[]T, n int) []T {
+	if n > maxScratch {
+		return make([]T, n)
+	}
+	if cap(*buf) < n {
+		*buf = make([]T, n)
+	}
+	s := (*buf)[:n]
+	clear(s)
 	return s
 }
 
@@ -466,7 +494,8 @@ func (l *TextLayout) setup(style *Style) {
 		l.HasDecorationMetrics = true
 		l.Ascent, l.UnderlinePosition, l.StrikethroughPosition = 0.9*l.fontSize, -0.1*l.fontSize, 0.3*l.fontSize
 		l.UnderlineThickness, l.StrikethroughThickness = 0.05*l.fontSize, 0.05*l.fontSize
-		if f, _ := l.fc.newFontmap(style).primary(); f != nil {
+		m, _ := l.fc.styleFontmap(style)
+		if f, _ := m.primary(); f != nil {
 			if upem := float64(f.Upem()); upem > 0 {
 				ascent, _ := faceExtents(f)
 				l.Ascent = ascent * l.fontSize

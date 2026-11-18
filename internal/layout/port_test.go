@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unsafe"
 
 	"github.com/xo/okage"
 
@@ -197,8 +198,8 @@ func TestHTMLHelpers(t *testing.T) {
 	box := &Box{Kind: KindInline}
 	a := &Element{Tag: "a", Attrib: []Attr{{"href", "#top"}}}
 	handleA(&builder{}, a, box, "")
-	if !Equal(box.Link, Tuple{String("url"), Tuple{String("internal"), String("top")}}) {
-		t.Errorf("handle_a: %s", ValueString(box.Link))
+	if !Equal(box.extra().Link, Tuple{String("url"), Tuple{String("internal"), String("top")}}) {
+		t.Errorf("handle_a: %s", ValueString(box.extra().Link))
 	}
 }
 
@@ -468,5 +469,55 @@ func TestLoadHTMLCharset(t *testing.T) {
 				t.Errorf("expected %q, got: %q", test.exp, p.Text)
 			}
 		})
+	}
+}
+
+// TestBoxSize tests that a Box stays small on a 64-bit target. The layout
+// of a large book makes and copies millions of boxes.
+func TestBoxSize(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("not a 64-bit target")
+	}
+	if size := unsafe.Sizeof(Box{}); size > 384 {
+		t.Errorf("expected at most 384 bytes, got: %d", size)
+	}
+}
+
+// TestBoxCopy tests that a copy of a box has its own attributes of
+// boxExtra, tableFields and flexItem, and shares the set of the removed
+// sides, as copy.copy does in upstream.
+func TestBoxCopy(t *testing.T) {
+	style := &Style{values: map[string]Value{"box_decoration_break": String("slice")}}
+	box := newBox(KindBlock, "div", style, nil, nil)
+	if box.ext != nil || box.tbl != nil || box.flx != nil {
+		t.Fatalf("expected no attributes, got: %v %v %v", box.ext, box.tbl, box.flx)
+	}
+	if v := box.extra().TextOverflow; v != "clip" {
+		t.Errorf("expected text overflow clip, got: %q", v)
+	}
+	if v := box.table().Colspan; v != 1 {
+		t.Errorf("expected colspan 1, got: %d", v)
+	}
+	box.ownExtra().AtKeyword = "@top-left"
+	box.ownTable().GridX = 2
+	box.flex().frozen = true
+	c := box.Copy()
+	c.ownExtra().AtKeyword = "@top-right"
+	c.ownTable().GridX = 3
+	c.flex().frozen = false
+	if box.extra().AtKeyword != "@top-left" || box.table().GridX != 2 || !box.flex().frozen {
+		t.Errorf("expected the attributes of the box to stay, got: %q %d %t",
+			box.extra().AtKeyword, box.table().GridX, box.flex().frozen)
+	}
+	c.resetSpacing("top")
+	if !box.decorationRemoved("top") {
+		t.Errorf("expected the box to share the removed sides of its copy")
+	}
+	d := box.CopyWithChildren(nil)
+	if box.decorationRemoved("top") || !d.decorationRemoved("top") {
+		t.Errorf("expected copy_with_children to reset the removed sides of the box only")
+	}
+	if defaultExtra.AtKeyword != "" || defaultTable.GridX != 0 {
+		t.Errorf("expected the default attributes not to change")
 	}
 }

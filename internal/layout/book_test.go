@@ -252,7 +252,7 @@ func bookMarginText(t *testing.T, b *Book, n int) string {
 	}
 	var text string
 	for _, child := range p.(*bookPage).box.Children {
-		if child.AtKeyword == "@top-center" {
+		if child.extra().AtKeyword == "@top-center" {
 			child.Descendants(func(d *Box) bool {
 				if d.Kind == KindText {
 					text += d.Text
@@ -319,7 +319,7 @@ func TestBookPageCounter(t *testing.T) {
 		}
 		var text string
 		for _, child := range p.(*bookPage).box.Children {
-			if child.AtKeyword == "@top-center" {
+			if child.extra().AtKeyword == "@top-center" {
 				child.Descendants(func(d *Box) bool {
 					if d.Kind == KindText {
 						text += d.Text

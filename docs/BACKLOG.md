@@ -270,31 +270,41 @@ D59 added. These items are left.
 The measurement of the speed of 2026-11-18 and D47 left these items. Each
 time is for a page at 96 dpi.
 
-1. Lay out the first page of a large sheet without the styles of the whole
-   sheet. `datasets/csv/world-cities.csv` needs 4 s and
-   `poi/xlsx/many-merges.xlsx` 2.8 s before the first page, because the
-   cascade runs on each cell of the one HTML document of the sheet. Most
-   cells have a style attribute, so the cache of the styles does not share
-   them. Source: `internal/sheet` and `internal/layout`.
-2. Make the Box of the layout smaller. Box has 96 fields. `newBox` and
-   `Box.Copy` allocate 1.7 GB for `idpf/epub/linear-algebra.epub`, and the
-   collection of the garbage takes 30 to 40 percent of the time of its
-   `PageCount`. Source: `internal/layout`.
-3. Keep the decoded images of a PDF document between the renders. Each
-   render decodes each image again, and `pdfjs/pdf/a1-plans.pdf` spends
-   about 1.7 s on it. Source: `internal/hayro/render`.
-4. Composite a group only on the area that its objects drew, not on the
-   bounds of its clip. Most of the time of
-   `pdfjs/pdf/transparency-blend-modes.pdf` is the composite of its groups.
-   Source: `internal/display`.
-5. Compute the variations of the faces of a font chain once for each
-   fontmap, in `FontConfiguration.chain` and `fontmap.ResolveFace`. Source:
-   `internal/layout/text_fonts.go`.
-6. Lay out a book of one large document faster. D48 counts the documents
+1. Lay out the first page of a large sheet without the whole sheet. The
+   cascade now shares the styles of the pseudo-elements of the elements
+   whose styles it shares, and a row leaves out its empty cells at its
+   end. `datasets/csv/world-cities.csv` still needs about 2.3 s and
+   `poi/xlsx/many-merges.xlsx` about 1.5 s before the first page, on a
+   computer that other work shared. The cascade and the boxes still cover
+   each cell of the one HTML document of the sheet: `Matcher.Match` of
+   okage takes about 4 µs for each element, and `BuildFormattingStructure`
+   builds the boxes of all the rows. `internal/sheet` cannot cut a large
+   sheet into documents at its page breaks, because the layout makes a row
+   taller when the line of its font is higher than the row, and the fonts
+   come from the program. An exact cut needs the layout to tell where a
+   page starts, for example with a row that a document adds after its last
+   row, to check that this row starts a new page. Ask the maintainers
+   before this work starts. Source: `internal/sheet` and
+   `internal/layout`.
+2. Draw a soft mask only on the pixels that its group drew. `softMask`
+   draws the content of the mask and its luminance on the whole bounds of
+   the clip of the group at `BeginGroup`. That is about a third of the time
+   of `pdfjs/pdf/transparency-soft-masks.pdf` and
+   `hayro/pdf/tile-clamp-bug.pdf`. The cache of the masks then holds the
+   content of each mask, at 4 bytes for each pixel, so the change needs a
+   decision on the memory. Source: `internal/display`.
+3. Lay out a book of one large document faster. D48 counts the documents
    of a book at the same time, but a book of one document, such as
    `gutenberg/txt/pg24264.txt` (1.7 s) or
    `gutenberg/html/pg1342-images.html` (1.1 s), lays out its pages in
    order on one goroutine. Source: `internal/layout`.
+4. Allocate less in the cascade of a book. After the smaller Box and the
+   faces of a font chain, the cascade makes about half of the 5.9 GB that
+   `idpf/epub/linear-algebra.epub` allocates for its `PageCount`:
+   `applyDeclarations`, `missingComputed`, `cascadedStyles.setDefault`,
+   `newComputedStyle` and the sets of `styleMap`. The collection of the
+   garbage still takes about 23 percent of the time. Source:
+   `internal/layout`.
 
 ## Work for okage
 
@@ -313,6 +323,11 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    draws it with that thickness. `FaceMetrics` also differs from the
    metrics of go-text for some variable fonts, such as Adwaita Sans. ivy
    keeps the metrics of go-text until the two agree. Source: okage D57,
+   2026-11-18.
+3. Make `Matcher.Match` of `cssselect2` faster. It takes about 4 µs for
+   each element of a plain table, mostly in `addRelevantSelectors` and
+   `expr.eval`, and it is the largest cost of the cascade of a large sheet,
+   such as `datasets/csv/world-cities.csv`. Source: `internal/layout`,
    2026-11-18.
 
 ## Work for iv

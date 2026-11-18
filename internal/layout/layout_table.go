@@ -185,7 +185,7 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 			for _, cell := range row.Children {
 				// Force null border inside of a cell with rowspan or
 				// colspan.
-				gridX, colspan, rowspan := cell.GridX, cell.Colspan, cell.Rowspan
+				gridX, colspan, rowspan := cell.table().GridX, cell.table().Colspan, cell.table().Rowspan
 				var verticalX, horizontalX []int
 				if ltr {
 					for xx := gridX + 1; xx < gridX+colspan; xx++ {
@@ -237,15 +237,15 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 	}
 
 	// Set column borders.
-	for _, columnGroup := range table.ColumnGroups {
+	for _, columnGroup := range table.table().ColumnGroups {
 		for _, column := range columnGroup.Children {
-			setBorders(column, column.GridX, 0, 1, gridHeight)
+			setBorders(column, column.table().GridX, 0, 1, gridHeight)
 		}
 	}
 
 	// Set column group group borders.
-	for _, columnGroup := range table.ColumnGroups {
-		setBorders(columnGroup, columnGroup.GridX, 0, columnGroup.Span(), gridHeight)
+	for _, columnGroup := range table.table().ColumnGroups {
+		setBorders(columnGroup, columnGroup.table().GridX, 0, columnGroup.Span(), gridHeight)
 	}
 
 	// Set table borders.
@@ -306,8 +306,8 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 		for _, row := range rowGroup.Children {
 			removeBorders(row)
 			for _, cell := range row.Children {
-				x, y := cell.GridX, gridY
-				colspan, rowspan := cell.Colspan, cell.Rowspan
+				x, y := cell.table().GridX, gridY
+				colspan, rowspan := cell.table().Colspan, cell.table().Rowspan
 				var top, bottom, left, right float64
 				if ltr {
 					top = maxHorizontalWidth(x, y, x+colspan, true)
@@ -330,7 +330,7 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 		}
 	}
 
-	for _, columnGroup := range table.ColumnGroups {
+	for _, columnGroup := range table.table().ColumnGroups {
 		removeBorders(columnGroup)
 		for _, column := range columnGroup.Children {
 			removeBorders(column)
@@ -395,10 +395,10 @@ type tableAttrs struct {
 // Port: upstream raises NotImplementedError for a column that is not laid
 // out.
 func (b *Box) ColumnCells() []*Box {
-	if b.table.getCells == nil {
+	if b.table().getCells == nil {
 		return nil
 	}
-	return b.table.getCells()
+	return b.table().getCells()
 }
 
 // tableGroupsResult is what the functions of table_layout return for the
@@ -421,8 +421,8 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 	defer lc.leave()
 
 	// Remove top and bottom decorations for split tables.
-	hasHeader := len(table.Children) > 0 && table.Children[0].IsHeader
-	hasFooter := len(table.Children) > 0 && table.Children[len(table.Children)-1].IsFooter
+	hasHeader := len(table.Children) > 0 && table.Children[0].table().IsHeader
+	hasFooter := len(table.Children) > 0 && table.Children[len(table.Children)-1].table().IsFooter
 	collapse := isStr(table.Style.Get("border_collapse"), "collapse")
 	removeStartDecoration := skip != nil && !hasHeader
 	table.RemoveDecoration(removeStartDecoration, false)
@@ -434,7 +434,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 	}
 
 	// Define column positions.
-	columnWidths := table.ColumnWidths
+	columnWidths := table.table().ColumnWidths
 	columnPositions := make([]float64, 0, len(columnWidths))
 	rowsLeftX := table.ContentBoxX() + borderSpacingX
 	var rowsWidth float64
@@ -457,14 +457,14 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 		}
 		rowsWidth = rowsX - positionX
 	}
-	table.ColumnPositions = columnPositions
+	table.ownTable().ColumnPositions = columnPositions
 
 	// Set border top width on tables with collapsed borders and split
 	// cells.
 	skippedRows := 0
 	if collapse {
-		table.SkipCellBorderTop = false
-		table.SkipCellBorderBottom = false
+		table.ownTable().SkipCellBorderTop = false
+		table.ownTable().SkipCellBorderBottom = false
 		splitCells := false
 		if len(skip) > 0 {
 			skippedGroups, groupSkip := skip.item()
@@ -480,7 +480,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			}
 		}
 		if !splitCells && !hasHeader {
-			if grid := table.CollapsedBorderGrid; grid != nil && len(grid.Horizontal) > 0 {
+			if grid := table.table().CollapsedBorderGrid; grid != nil && len(grid.Horizontal) > 0 {
 				// Port: upstream fails on a row out of the grid.
 				if row, ok := pyIndex(skippedRows, len(grid.Horizontal)); ok && len(grid.Horizontal[row]) > 0 {
 					width := grid.Horizontal[row][0].Width
@@ -538,15 +538,15 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			var newRowChildren []*Box
 			for indexCell, cell := range row.Children {
 				lc.spend(1)
-				first, last := pySlice(cell.GridX, 0, false, len(columnWidths))
-				last = min(last, first+max(cell.Colspan, 0))
+				first, last := pySlice(cell.table().GridX, 0, false, len(columnWidths))
+				last = min(last, first+max(cell.table().Colspan, 0))
 				spannedWidths := columnWidths[first:last]
 				// In the fixed layout the grid width is set by cells in
 				// the first row and column elements.
 				// This may be less than the previous value of cell.colspan
 				// if that would bring the cell beyond the grid width.
-				cell.Colspan = len(spannedWidths)
-				if cell.Colspan == 0 {
+				cell.ownTable().Colspan = len(spannedWidths)
+				if cell.table().Colspan == 0 {
 					// The cell is entirely beyond the grid width, remove it
 					// entirely. Subsequent cells in the same row have
 					// greater grid_x, so they are beyond too.
@@ -556,9 +556,9 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				}
 				resolvePercentages(cell, table)
 				if isStr(table.Style.Get("direction"), "ltr") {
-					cell.PositionX = columnPositions[cell.GridX]
+					cell.PositionX = columnPositions[cell.table().GridX]
 				} else {
-					cell.PositionX = columnPositions[cell.GridX+cell.Colspan-1]
+					cell.PositionX = columnPositions[cell.table().GridX+cell.table().Colspan-1]
 				}
 				cell.PositionY = row.PositionY
 				cell.MarginTop = 0
@@ -569,7 +569,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				// originating cells to cell.colspan, see
 				// test_layout_table_auto_49.
 				cell.Width = sumFloats(spannedWidths) +
-					borderSpacingX*float64(cell.Colspan-1) -
+					borderSpacingX*float64(cell.table().Colspan-1) -
 					bordersPlusPadding
 				var cellSkip skipStack
 				if len(skip) > 0 {
@@ -600,7 +600,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 						// We don’t have a header, we have to skip the
 						// decoration at the top of the table when it’s
 						// drawn.
-						table.SkipCellBorderTop = true
+						table.ownTable().SkipCellBorderTop = true
 					}
 				}
 
@@ -612,7 +612,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				// test_table_break_children_margin.
 				// Pretend that height is not set, keeping computed height
 				// as a minimum.
-				cell.table.computedHeight = cell.Height
+				cell.ownTable().computedHeight = cell.Height
 				cell.Height = Auto
 				originalStyle := cell.Style
 				if !isStr(cell.Style.Get("height"), "auto") {
@@ -649,10 +649,10 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 					}
 					resumeAt[indexRow][indexCell] = cellResumeAt
 				}
-				cell.Empty = len(cell.InFlowOrFloatedChildren()) == 0
-				cell.table.contentHeight = cell.Height
-				if cell.table.computedHeight != Auto {
-					cell.Height = max(cell.Height, cell.table.computedHeight)
+				cell.ownTable().Empty = len(cell.InFlowOrFloatedChildren()) == 0
+				cell.ownTable().contentHeight = cell.Height
+				if cell.ownTable().computedHeight != Auto {
+					cell.Height = max(cell.Height, cell.ownTable().computedHeight)
 				}
 				newRowChildren = append(newRowChildren, cell)
 			}
@@ -695,10 +695,10 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			for _, cell := range row.Children {
 				verticalAlign := cell.Style.Get("vertical_align")
 				if isStrIn(verticalAlign, "top", "middle", "bottom") {
-					cell.table.verticalAlign = str(verticalAlign)
+					cell.ownTable().verticalAlign = str(verticalAlign)
 				} else {
 					// Assume 'baseline' for any other value
-					cell.table.verticalAlign = "baseline"
+					cell.ownTable().verticalAlign = "baseline"
 					cell.Baseline = cellBaseline(cell)
 					baselineCells = append(baselineCells, cell)
 				}
@@ -708,7 +708,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				for _, cell := range baselineCells[1:] {
 					row.Baseline = max(row.Baseline, cell.Baseline)
 				}
-				row.table.hasBaseline = true
+				row.ownTable().hasBaseline = true
 				for _, cell := range baselineCells {
 					extra := row.Baseline - cell.Baseline
 					if cell.Baseline != row.Baseline && extra != 0 {
@@ -721,7 +721,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			for _, cell := range row.Children {
 				// Port: upstream fails on a row span past the rows of the
 				// group. The port ends the cell on the last row.
-				i, ok := pyIndex(cell.Rowspan-1, len(endingCellsByRow))
+				i, ok := pyIndex(cell.table().Rowspan-1, len(endingCellsByRow))
 				if !ok {
 					i = len(endingCellsByRow) - 1
 				}
@@ -773,7 +773,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 
 			if len(baselineCells) == 0 {
 				row.Baseline = rowBottomY
-				row.table.hasBaseline = true
+				row.ownTable().hasBaseline = true
 			}
 
 			// Add extra padding to make the cells the same height as the
@@ -782,7 +782,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				cellBottomY := cell.PositionY + cell.BorderHeight()
 				extra := rowBottomY - cellBottomY
 				if extra != 0 {
-					switch cell.table.verticalAlign {
+					switch cell.ownTable().verticalAlign {
 					case "bottom":
 						addTopPadding(cell, extra)
 					case "middle":
@@ -793,13 +793,13 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 						cell.PaddingBottom += extra
 					}
 				}
-				if cell.table.computedHeight != Auto {
+				if cell.ownTable().computedHeight != Auto {
 					verticalAlignShift := 0.0
-					switch cell.table.verticalAlign {
+					switch cell.ownTable().verticalAlign {
 					case "middle":
-						verticalAlignShift = (cell.table.computedHeight - cell.table.contentHeight) / 2
+						verticalAlignShift = (cell.ownTable().computedHeight - cell.ownTable().contentHeight) / 2
 					case "bottom":
-						verticalAlignShift = cell.table.computedHeight - cell.table.contentHeight
+						verticalAlignShift = cell.ownTable().computedHeight - cell.ownTable().contentHeight
 					}
 					if verticalAlignShift > 0 {
 						for _, child := range cell.Children {
@@ -820,7 +820,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			if len(resumeAt) > 0 {
 				allEmpty := true
 				for _, child := range row.Children {
-					if !child.Empty {
+					if !child.table().Empty {
 						allEmpty = false
 						break
 					}
@@ -854,7 +854,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			skip = nil
 
 			if breakCell && collapse && !hasFooter {
-				table.SkipCellBorderBottom = true
+				table.ownTable().SkipCellBorderBottom = true
 			}
 
 			if breakCell || len(resumeAt) > 0 {
@@ -876,7 +876,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 
 		// Set missing baselines in a second loop because of rowspan.
 		for _, row := range group.Children {
-			if !row.table.hasBaseline {
+			if !row.ownTable().hasBaseline {
 				if len(row.Children) > 0 {
 					// Set baseline to lowest bottom content edge.
 					bottom := math.Inf(-1)
@@ -887,7 +887,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				} else {
 					row.Baseline = 0
 				}
-				row.table.hasBaseline = true
+				row.ownTable().hasBaseline = true
 			}
 		}
 		group.Height = positionY - group.PositionY
@@ -910,7 +910,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 		nextPage := anyNextPage()
 
 		for i, group := range table.Children[start:] {
-			if group.IsHeader || group.IsFooter {
+			if group.table().IsHeader || group.table().IsFooter {
 				continue
 			}
 
@@ -962,7 +962,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 	initialPositionY := positionY
 	var tableRows []*Box
 	for _, child := range table.Children {
-		if !child.IsHeader && !child.IsFooter {
+		if !child.table().IsHeader && !child.table().IsFooter {
 			tableRows = append(tableRows, child)
 		}
 	}
@@ -1013,7 +1013,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 		}
 		avoidBreaks := false
 		for _, group := range table.Children[min(max(start, 0), len(table.Children)):] {
-			if !group.IsHeader && !group.IsFooter {
+			if !group.table().IsHeader && !group.table().IsFooter {
 				avoidBreaks = avoidPageBreak(str(group.Style.Get("break_inside")), lc)
 				break
 			}
@@ -1076,15 +1076,15 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 		children = append(children, footer)
 	}
 	table = table.CopyWithChildren(children)
-	columnGroups := make([]*Box, len(table.ColumnGroups))
-	for i, columnGroup := range table.ColumnGroups {
+	columnGroups := make([]*Box, len(table.table().ColumnGroups))
+	for i, columnGroup := range table.table().ColumnGroups {
 		columnGroups[i] = columnGroup.DeepCopy()
 	}
-	table.ColumnGroups = columnGroups
+	table.ownTable().ColumnGroups = columnGroups
 	removeEndDecoration := resumeAt != nil && !hasFooter
 	table.RemoveDecoration(removeStartDecoration, removeEndDecoration)
 	if collapse {
-		table.SkippedRows = skippedRows
+		table.ownTable().SkippedRows = skippedRows
 	}
 
 	// If the height property has a bigger value, just add blank space
@@ -1102,13 +1102,13 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 		columnsHeight -= borderSpacingY
 	}
 	laidOutTable := table
-	for _, group := range table.ColumnGroups {
+	for _, group := range table.table().ColumnGroups {
 		for _, column := range group.Children {
 			resolvePercentages(column, table)
-			if column.GridX >= 0 && column.GridX < len(columnPositions) {
-				column.PositionX = columnPositions[column.GridX]
+			if column.table().GridX >= 0 && column.table().GridX < len(columnPositions) {
+				column.PositionX = columnPositions[column.table().GridX]
 				column.PositionY = initialPositionY
-				column.Width = columnWidths[column.GridX]
+				column.Width = columnWidths[column.table().GridX]
 				column.Height = columnsHeight
 			} else {
 				// Ignore extra empty columns.
@@ -1118,7 +1118,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				column.Height = 0
 			}
 			resolvePercentages(group, table)
-			column.table.getCells = tableColumnCells(laidOutTable, column)
+			column.ownTable().getCells = tableColumnCells(laidOutTable, column)
 		}
 		if len(group.Children) == 0 {
 			// Port: upstream fails on a column group without columns.
@@ -1157,7 +1157,7 @@ func tableColumnCells(table, column *Box) func() []*Box {
 		for _, rowGroup := range table.Children {
 			for _, row := range rowGroup.Children {
 				for _, cell := range row.Children {
-					if cell.GridX == column.GridX {
+					if cell.table().GridX == column.table().GridX {
 						cells = append(cells, cell)
 					}
 				}
@@ -1213,7 +1213,7 @@ func fixedTableLayout(box *Box) {
 	// Port: upstream asserts that the width of the table is not auto.
 
 	var allColumns []*Box
-	for _, columnGroup := range table.ColumnGroups {
+	for _, columnGroup := range table.table().ColumnGroups {
 		allColumns = append(allColumns, columnGroup.Children...)
 	}
 	var firstRowCells []*Box
@@ -1223,7 +1223,7 @@ func fixedTableLayout(box *Box) {
 	}
 	colspans := 0
 	for _, cell := range firstRowCells {
-		colspans += max(cell.Colspan, 0)
+		colspans += max(cell.table().Colspan, 0)
 	}
 	numColumns := max(len(allColumns), colspans)
 	// known is false for the None of upstream: not known yet.
@@ -1250,13 +1250,13 @@ func fixedTableLayout(box *Box) {
 		resolvePercentages(cell, table)
 		if cell.Width != Auto {
 			width := cell.BorderWidth()
-			width -= borderSpacingX * float64(cell.Colspan-1)
+			width -= borderSpacingX * float64(cell.table().Colspan-1)
 			// In the general case, this width affects several columns
 			// (through colspan) some of which already have a width.
 			// Subtract these known widths and divide among remaining
 			// columns.
 			var columnsWithoutWidth []int // and occupied by this cell
-			for j := i; j < min(i+cell.Colspan, numColumns); j++ {
+			for j := i; j < min(i+cell.table().Colspan, numColumns); j++ {
 				if !known[j] {
 					columnsWithoutWidth = append(columnsWithoutWidth, j)
 				} else {
@@ -1271,7 +1271,7 @@ func fixedTableLayout(box *Box) {
 				}
 			}
 		}
-		i += max(cell.Colspan, 0)
+		i += max(cell.table().Colspan, 0)
 	}
 
 	// Distribute the remaining space equally on columns that do not have
@@ -1315,7 +1315,7 @@ func fixedTableLayout(box *Box) {
 	// Now we have table.width == sum(column_widths) + all_border_spacing
 	// with possible floating point rounding errors (unless there is zero
 	// column).
-	table.ColumnWidths = columnWidths
+	table.ownTable().ColumnWidths = columnWidths
 }
 
 // autoTableLayout is auto_table_layout in weasyprint/layout/table.py: it
@@ -1364,7 +1364,7 @@ func autoTableLayout(lc *layoutContext, box, containingBlock *Box) {
 	}
 
 	if len(grid) == 0 {
-		table.ColumnWidths = []float64{}
+		table.ownTable().ColumnWidths = []float64{}
 		return
 	}
 
@@ -1414,7 +1414,7 @@ func autoTableLayout(lc *layoutContext, box, containingBlock *Box) {
 			}
 		}
 		if slices.Equal(upperGuess, lowerGuess) {
-			table.ColumnWidths = upperGuess
+			table.ownTable().ColumnWidths = upperGuess
 		} else {
 			addedWidths := make([]float64, len(grid))
 			for i := range grid {
@@ -1423,7 +1423,7 @@ func autoTableLayout(lc *layoutContext, box, containingBlock *Box) {
 			addedSum := sumFloats(addedWidths)
 			if addedSum == 0 {
 				// Port: upstream divides by zero.
-				table.ColumnWidths = lowerGuess
+				table.ownTable().ColumnWidths = lowerGuess
 				return
 			}
 			availableRatio := (assignableWidth - sumFloats(lowerGuess)) / addedSum
@@ -1431,12 +1431,12 @@ func autoTableLayout(lc *layoutContext, box, containingBlock *Box) {
 			for i := range grid {
 				columnWidths[i] = lowerGuess[i] + addedWidths[i]*availableRatio
 			}
-			table.ColumnWidths = columnWidths
+			table.ownTable().ColumnWidths = columnWidths
 		}
 	} else {
-		table.ColumnWidths = maxContentGuess
+		table.ownTable().ColumnWidths = maxContentGuess
 		excessWidth := assignableWidth - sumFloats(maxContentGuess)
-		distributeExcessWidth(lc, grid, excessWidth, table.ColumnWidths, constrainedness,
+		distributeExcessWidth(lc, grid, excessWidth, table.table().ColumnWidths, constrainedness,
 			columnIntrinsicPercentages, columnMaxContentWidths, 0, len(grid))
 	}
 }

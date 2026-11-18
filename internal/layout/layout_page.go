@@ -313,7 +313,7 @@ func computeVariableDimension(lc *layoutContext, sideBoxes [3]*Box, vertical boo
 		}
 	}
 
-	if !boxB.box.isGenerated {
+	if !boxB.box.extra().isGenerated {
 		// Non-generated boxes get zero for every box-model property.
 		// Port: upstream asserts that the inner size of B is 0.
 		switch {
@@ -491,9 +491,9 @@ func updatePageCounters(style *Style, lc *layoutContext, page *Box, counterValue
 		// `content` requires another call to make_page. There is maximum
 		// one 'content' item per box.
 		var counter *TargetCounter
-		if child.MissingLink != nil {
+		if child.extra().MissingLink != nil {
 			// A Counter exists for the css-token 'content'.
-			counter = targetCollector.Counters[CounterKey{child.MissingLink, "content"}]
+			counter = targetCollector.Counters[CounterKey{child.extra().MissingLink, "content"}]
 		}
 
 		// Resolve missing page based counters.
@@ -585,7 +585,7 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 	// atKeyword is which margin box to return, e.g. '@top-left', and
 	// containingBlock is as expected by resolvePercentages.
 	makeBox := func(atKeyword string, containingBlock *Box) *Box {
-		style := lc.styleFor.Get(page.PageType, atKeyword)
+		style := lc.styleFor.Get(page.extra().PageType, atKeyword)
 		if style == nil {
 			// doesn't affect counters
 			style = page.Style.AnonymousStyle()
@@ -595,10 +595,10 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 		// Empty boxes should not be generated, but they may be needed for
 		// the layout of their neighbors.
 		// TODO: should be the computed value.
-		box.isGenerated = !isStrIn(style.Get("content"), "normal", "inhibit", "none")
+		box.ownExtra().isGenerated = !isStrIn(style.Get("content"), "normal", "inhibit", "none")
 		// TODO: get actual counter values at the time of the last page
 		// break
-		if box.isGenerated {
+		if box.extra().isGenerated {
 			// @margins mustn't manipulate page-context counters
 			marginQuoteDepth := *quoteDepth
 			marginCounterValues := copyCounterValues(counterValues)
@@ -615,7 +615,7 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 			lc.checkBuilder()
 		}
 		resolvePercentages(box, containingBlock)
-		if !box.isGenerated {
+		if !box.extra().isGenerated {
 			box.Width, box.Height = 0, 0
 			for _, side := range [...]string{"top", "right", "bottom", "left"} {
 				box.resetSpacing(side)
@@ -660,7 +660,7 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 		anyGenerated := false
 		for i, suffix := range suffixes {
 			sideBoxes[i] = makeBox("@"+s.prefix+"-"+suffix, sizeBlock(s.cbWidth, s.cbHeight))
-			anyGenerated = anyGenerated || sideBoxes[i].isGenerated
+			anyGenerated = anyGenerated || sideBoxes[i].extra().isGenerated
 		}
 		if !anyGenerated {
 			continue
@@ -668,7 +668,7 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 		computeVariableDimension(lc, sideBoxes, s.vertical, variableOuter)
 		for i, offset := range [...]float64{0, 0.5, 1} {
 			box := sideBoxes[i]
-			if !box.isGenerated {
+			if !box.extra().isGenerated {
 				continue
 			}
 			box.PositionX = s.positionX
@@ -696,7 +696,7 @@ func makeMarginBoxes(lc *layoutContext, page *Box, quoteDepth *int, counterValue
 	}
 	for _, c := range corners {
 		box := makeBox(c.atKeyword, sizeBlock(c.cbWidth, c.cbHeight))
-		if !box.isGenerated {
+		if !box.extra().isGenerated {
 			continue
 		}
 		box.PositionX = c.positionX
@@ -1000,7 +1000,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	}
 
 	// Propagate overflow from the root or body.
-	style.Set("overflow", String(rootBox.ViewportOverflow))
+	style.Set("overflow", String(rootBox.extra().ViewportOverflow))
 
 	// Create and setup page box.
 	page := NewPageBox(pageType, style)
@@ -1231,7 +1231,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	// Do the layout of the footnote area.
 	footnoteArea = createAnonymousBoxes(lc.builder, footnoteArea.DeepCopy())
 	lc.checkBuilder()
-	if box := blockLevelLayout(lc, footnoteArea, math.Inf(-1), nil, footnoteArea.Page,
+	if box := blockLevelLayout(lc, footnoteArea, math.Inf(-1), nil, footnoteArea.extra().Page,
 		true, &positionedBoxes, &positionedBoxes, nil, nil, nil, false, noMaxLines).box; box != nil {
 		footnoteArea = box
 	}
@@ -1244,7 +1244,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			fixedBoxes = append(fixedBoxes, placeholder.placeholderBox())
 		}
 	}
-	page.fixedBoxes = fixedBoxes
+	page.ownExtra().fixedBoxes = fixedBoxes
 	for i := 0; i < len(positionedBoxes); i++ {
 		lc.spend(1)
 		absoluteLayout(lc, positionedBoxes[i], page, &positionedBoxes, 0, nil)

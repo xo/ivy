@@ -124,8 +124,8 @@ func marginBoxGrowth(lc *layoutContext, page *Box, index int) pageGrowth {
 		cloneCounterValues(pageData.counterValues), cloneCounterScopes(pageData.counterScopes))
 	var top, bottom float64
 	for _, box := range boxes {
-		isTop := strings.HasPrefix(box.AtKeyword, "@top-") && !strings.HasSuffix(box.AtKeyword, "-corner")
-		isBottom := strings.HasPrefix(box.AtKeyword, "@bottom-") && !strings.HasSuffix(box.AtKeyword, "-corner")
+		isTop := strings.HasPrefix(box.extra().AtKeyword, "@top-") && !strings.HasSuffix(box.extra().AtKeyword, "-corner")
+		isBottom := strings.HasPrefix(box.extra().AtKeyword, "@bottom-") && !strings.HasSuffix(box.extra().AtKeyword, "-corner")
 		if !isTop && !isBottom {
 			continue
 		}

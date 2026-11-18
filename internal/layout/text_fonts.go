@@ -103,6 +103,11 @@ type FontConfiguration struct {
 	// their texts.
 	shaped      map[shapeKey]*shapedText
 	shapedBytes int
+	// shapeClusters, shapeFound and shapeIndex are the buffers of
+	// shapeText, which it reuses for each text.
+	shapeClusters []textCluster
+	shapeFound    []bool
+	shapeIndex    []int
 
 	// strutLayouts is the cache strut_layouts of upstream.
 	strutLayouts map[string][2]float64
@@ -676,7 +681,7 @@ const maxFamilies = 64
 // does. The query looks for each family in the faces in the order of
 // FontConfiguration.query.
 func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
-	key := fontKey(style)
+	key := fontStyleCacheKey(style, false)
 	if ids, ok := fc.chains[key]; ok {
 		return ids
 	}
@@ -915,14 +920,27 @@ func (fc *FontConfiguration) queryRange(lo, hi int, name string, q svg.FontQuery
 // face returns the face of go-text of a font, with the variations of a
 // style, or nil when the font cannot be parsed. The face shares the font
 // that the database parses once (okage D57).
+//
+// A style that keeps a fontmap of fc gives the face of that fontmap, whose
+// variations are computed once.
 func (fc *FontConfiguration) face(id svg.FontID, style *Style) *font.Face {
+	if style != nil {
+		if sf := style.fonts; sf != nil && sf.fc == fc {
+			return sf.m.face(id)
+		}
+	}
 	variations := fontVariations(style)
-	key := faceKey{id, variationsKey(variations)}
-	if f, ok := fc.faces[key]; ok {
+	return fc.faceWith(id, variations, variationsKey(variations))
+}
+
+// faceWith returns the face of a font with variations, whose key is key.
+func (fc *FontConfiguration) faceWith(id svg.FontID, variations []svg.FontVariation, key string) *font.Face {
+	k := faceKey{id, key}
+	if f, ok := fc.faces[k]; ok {
 		return f
 	}
 	f := newFace(fc.db, id, variations)
-	fc.faces[key] = f
+	fc.faces[k] = f
 	return f
 }
 
@@ -1109,13 +1127,43 @@ type fontmap struct {
 	// of the style (eastAsianStyle).
 	kind fontdb.Kind
 	lang fontdb.Lang
+	// variations are the variations of the faces of the style, and
+	// variationsKey is their key. newFontmap computes them once.
+	variations    []svg.FontVariation
+	variationsKey string
+	// faces holds the face of each font that the fontmap asked for, and nil
+	// for a font that go-text cannot parse.
+	faces []fontmapFace
+}
+
+// fontmapFace is a font and its face, in a fontmap.
+type fontmapFace struct {
+	id   svg.FontID
+	face *font.Face
 }
 
 // newFontmap returns the fontmap of a style.
 func (fc *FontConfiguration) newFontmap(style *Style) *fontmap {
 	m := &fontmap{fc: fc, style: style, chain: fc.chain(style), byFace: map[*font.Face]svg.FontID{}}
 	m.kind, m.lang = eastAsianStyle(style)
+	m.variations = fontVariations(style)
+	m.variationsKey = variationsKey(m.variations)
 	return m
+}
+
+// face returns the face of a font with the variations of the style of the
+// fontmap, or nil when the font cannot be parsed. It is face of
+// FontConfiguration, without the computation of the variations for each
+// call.
+func (m *fontmap) face(id svg.FontID) *font.Face {
+	for _, f := range m.faces {
+		if f.id == id {
+			return f.face
+		}
+	}
+	f := m.fc.faceWith(id, m.variations, m.variationsKey)
+	m.faces = append(m.faces, fontmapFace{id, f})
+	return f
 }
 
 // ResolveFace satisfies shaping.Fontmap. It returns the first face of the
@@ -1127,7 +1175,7 @@ func (m *fontmap) ResolveFace(r rune) *font.Face {
 		if !m.fc.covers(id, r) {
 			continue
 		}
-		if f := m.fc.face(id, m.style); f != nil {
+		if f := m.face(id); f != nil {
 			m.byFace[f] = id
 			return f
 		}
@@ -1150,13 +1198,13 @@ func (m *fontmap) ResolveFace(r rune) *font.Face {
 		m.fc.fallbacks[key] = id
 	}
 	if id >= 0 {
-		if f := m.fc.face(svg.FontID(id), m.style); f != nil {
+		if f := m.face(svg.FontID(id)); f != nil {
 			m.byFace[f] = svg.FontID(id)
 			return f
 		}
 	}
 	for _, id := range m.chain {
-		if f := m.fc.face(id, m.style); f != nil {
+		if f := m.face(id); f != nil {
 			m.byFace[f] = id
 			return f
 		}
@@ -1192,7 +1240,7 @@ func (m *fontmap) eastAsianFallback(r rune) (svg.FontID, bool) {
 		Style:   fontStyle(str(m.style.Get("font_style"))),
 	}
 	for _, id := range m.fc.eastAsianChain(m.kind, m.lang, q) {
-		if m.fc.covers(id, r) && m.fc.face(id, m.style) != nil {
+		if m.fc.covers(id, r) && m.face(id) != nil {
 			return id, true
 		}
 	}
@@ -1203,7 +1251,7 @@ func (m *fontmap) eastAsianFallback(r rune) (svg.FontID, bool) {
 // its font, or nil.
 func (m *fontmap) primary() (*font.Face, svg.FontID) {
 	for _, id := range m.chain {
-		if f := m.fc.face(id, m.style); f != nil {
+		if f := m.face(id); f != nil {
 			return f, id
 		}
 	}
