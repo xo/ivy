@@ -6,10 +6,17 @@
 // metadata.
 //
 // The package converts the text into a document of HTML. A blank line ends a
-// paragraph, and the style sheet keeps each break of a line and each run of
-// spaces. The text is UTF-8 or UTF-16 with a byte order mark, or UTF-8
-// without one. Text that is not valid UTF-8 is read as windows-1252. Markdown
-// is the package markdown.
+// paragraph. A text file joins the lines of a paragraph, which the layout
+// wraps to the page, as calibre does with a book that a program wrapped,
+// such as a book of Project Gutenberg (D34). A line that starts with white
+// space, such as a space, a tab or an ideographic space, starts a new line,
+// so that a table, code, a poem with an indent and a paragraph with an
+// indent keep their lines. A TXTZ file keeps each break of a line. The
+// style sheet keeps each run of spaces.
+//
+// The text is UTF-8 or UTF-16 with a byte order mark, or UTF-8 without one.
+// Text that is not valid UTF-8 is read as windows-1252. Markdown is the
+// package markdown.
 //
 // The document takes the language of the text: the language of the header of
 // a Project Gutenberg file, or else the East Asian language that the letters
@@ -32,6 +39,8 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
@@ -170,7 +179,7 @@ func (d *Document) openText(src ivy.Source) error {
 	if err != nil {
 		return fmt.Errorf("reading text: %w", err)
 	}
-	doc, err := d.convert(data, "", "")
+	doc, err := d.convert(data, "", "", true)
 	if err != nil {
 		return err
 	}
@@ -210,7 +219,8 @@ func (d *Document) openTXTZ(src ivy.Source) error {
 	if d.pkg != nil {
 		title, lang = d.pkg.Metadata.Title, d.pkg.Metadata.Language
 	}
-	doc, err := d.convert(data, title, lang)
+	// a TXTZ file keeps the lines of its text (D34)
+	doc, err := d.convert(data, title, lang, false)
 	if err != nil {
 		return err
 	}
@@ -254,13 +264,14 @@ func depth(name string) int {
 }
 
 // convert converts the text data into a document of HTML, within the limit
-// of memory. An empty lang takes the language that the text shows.
-func (d *Document) convert(data []byte, title, lang string) ([]byte, error) {
+// of memory. An empty lang takes the language that the text shows. If join
+// is set, the lines of a paragraph join, as toHTML says.
+func (d *Document) convert(data []byte, title, lang string, join bool) ([]byte, error) {
 	text := ebook.Text(data)
 	if lang == "" {
 		lang = ebook.TextLanguage(text)
 	}
-	doc := toHTML(text, title, lang)
+	doc := toHTML(text, title, lang, join)
 	if int64(len(doc)) > d.lim.MaxMemory {
 		return nil, fmt.Errorf("document of html of %d bytes: %w", len(doc), ivy.ErrLimit)
 	}
@@ -268,10 +279,15 @@ func (d *Document) convert(data []byte, title, lang string) ([]byte, error) {
 }
 
 // toHTML converts text into a document of HTML. Each run of lines between
-// blank lines is a paragraph, and each paragraph keeps its breaks of lines.
-// A line that holds only white space is blank. A zero byte becomes U+FFFD.
-// An empty title or lang is left out.
-func toHTML(text, title, lang string) []byte {
+// blank lines is a paragraph. A line that holds only white space is blank.
+// A zero byte becomes U+FFFD. An empty title or lang is left out.
+//
+// If join is not set, each paragraph keeps its breaks of lines. If join is
+// set, a line joins the line before it, with one space, and without the
+// space next to a letter of Chinese or Japanese, which does not separate
+// its words with spaces. A line that starts with white space keeps the
+// break before it (D34).
+func toHTML(text, title, lang string, join bool) []byte {
 	text = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\x00", "�").Replace(text)
 	var b strings.Builder
 	b.Grow(len(text) + len(text)/8 + 256)
@@ -285,6 +301,9 @@ func toHTML(text, title, lang string) []byte {
 	}
 	b.WriteString("</head>\n<body>\n")
 	open := false
+	// last is the line before, without the white space at its end, if join
+	// is set
+	var last string
 	for line := range strings.Lines(text) {
 		line = strings.TrimSuffix(line, "\n")
 		if strings.TrimSpace(line) == "" {
@@ -294,19 +313,59 @@ func toHTML(text, title, lang string) []byte {
 			}
 			continue
 		}
-		if open {
-			b.WriteByte('\n')
-		} else {
+		switch {
+		case !open:
 			b.WriteString("<p>")
 			open = true
+		case !join || startsWithSpace(line):
+			b.WriteByte('\n')
+		default:
+			if !noSpace(last, line) {
+				b.WriteByte(' ')
+			}
+		}
+		if join {
+			line = strings.TrimRightFunc(line, unicode.IsSpace)
 		}
 		b.WriteString(html.EscapeString(line))
+		last = line
 	}
 	if open {
 		b.WriteString("</p>\n")
 	}
 	b.WriteString("</body>\n</html>\n")
 	return []byte(b.String())
+}
+
+// startsWithSpace reports whether line starts with white space, such as a
+// space, a tab or an ideographic space.
+func startsWithSpace(line string) bool {
+	r, _ := utf8.DecodeRuneInString(line)
+	return unicode.IsSpace(r)
+}
+
+// noSpace reports whether the line next joins the line before it without
+// a space: when the last letter before or the first letter after is a
+// letter or a mark of Chinese or Japanese.
+func noSpace(before, next string) bool {
+	r1, _ := utf8.DecodeLastRuneInString(before)
+	r2, _ := utf8.DecodeRuneInString(next)
+	return wide(r1) || wide(r2)
+}
+
+// wide reports whether r is a letter or a punctuation mark of Chinese or
+// Japanese: Han, Hiragana, Katakana, Bopomofo, the punctuation of CJK and
+// the forms of full width. Korean separates its words with spaces, so
+// Hangul is not wide here.
+func wide(r rune) bool {
+	switch {
+	case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Bopomofo):
+		return true
+	case r >= 0x3000 && r <= 0x303f, r >= 0xff00 && r <= 0xff60, r >= 0xffe0 && r <= 0xffe6:
+		// the CJK Symbols and Punctuation, and the forms of full width
+		return true
+	}
+	return false
 }
 
 // Close satisfies the ivy.Document interface.

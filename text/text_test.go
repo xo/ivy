@@ -34,21 +34,54 @@ func TestToHTML(t *testing.T) {
 		{"form feed", "a\n\f\nb", "", "", "<p>a</p>\n<p>b</p>\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(toHTML(tt.text, tt.title, tt.lang))
+			got := string(toHTML(tt.text, tt.title, tt.lang, false))
 			body := got[strings.Index(got, "<body>\n")+len("<body>\n") : strings.Index(got, "</body>")]
 			if body != tt.want {
 				t.Errorf("expected %q, got: %q", tt.want, body)
 			}
 		})
 	}
-	got := string(toHTML("x", "A <Title>", `e"n`))
+	got := string(toHTML("x", "A <Title>", `e"n`, true))
 	for _, want := range []string{`<html lang="e&#34;n">`, "<title>A &lt;Title&gt;</title>", `<meta charset="utf-8">`, "<!DOCTYPE html>"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("expected %q in %q", want, got)
 		}
 	}
-	if got := string(toHTML("x", "", "")); strings.Contains(got, "<title>") || strings.Contains(got, "lang=") {
+	if got := string(toHTML("x", "", "", true)); strings.Contains(got, "<title>") || strings.Contains(got, "lang=") {
 		t.Errorf("expected no title and no lang, got: %q", got)
+	}
+}
+
+func TestJoin(t *testing.T) {
+	for _, tt := range []struct {
+		name, text, want string
+	}{
+		{"paragraph", "A line that\nwraps,  and\r\nends.\n\nNext", "<p>A line that wraps,  and ends.</p>\n<p>Next</p>\n"},
+		{"space at the end", "one  \t\ntwo", "<p>one two</p>\n"},
+		{"indented block", "Code:\n    if x {\n\ty()\n    }\n", "<p>Code:\n    if x {\n\ty()\n    }</p>\n"},
+		{"poem", "  Twinkle, twinkle,\n  little star,\n\n", "<p>  Twinkle, twinkle,\n  little star,</p>\n"},
+		{"indented paragraphs", "    It was a dark\nand stormy night.\n    The rain\nfell.", "<p>    It was a dark and stormy night.\n    The rain fell.</p>\n"},
+		{"table of contents", "Contents\n\n CHAPTER I.     Down\n CHAPTER II.    Tears\n", "<p>Contents</p>\n<p> CHAPTER I.     Down\n CHAPTER II.    Tears</p>\n"},
+		{"chinese", "此開卷第一回也，作者\n自云。\n　　此回中凡用\n“夢”\n", "<p>此開卷第一回也，作者自云。\n　　此回中凡用“夢”</p>\n"},
+		{"japanese and latin", "吾輩は\nCat である\nand dog", "<p>吾輩はCat であるand dog</p>\n"},
+		{"korean", "가나\n다라", "<p>가나 다라</p>\n"},
+		{"escape", "a <\n& b", "<p>a &lt; &amp; b</p>\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(toHTML(tt.text, "", "", true))
+			body := got[strings.Index(got, "<body>\n")+len("<body>\n") : strings.Index(got, "</body>")]
+			if body != tt.want {
+				t.Errorf("expected %q, got: %q", tt.want, body)
+			}
+		})
+	}
+	// a text file joins its lines, and a TXTZ file keeps them
+	d, err := Open(t.Context(), strings.NewReader("First paragraph\nstill first.\n\nSecond."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := document(t, d), "<p>First paragraph still first.</p>\n<p>Second.</p>"; !strings.Contains(got, want) {
+		t.Errorf("expected %q in %q", want, got)
 	}
 }
 
@@ -245,7 +278,7 @@ func FuzzOpen(f *testing.F) {
 }
 
 func TestPages(t *testing.T) {
-	text := "First paragraph\n\n" + strings.Repeat("A line of the long text.\n", 200)
+	text := "First paragraph\n\n" + strings.Repeat("A line of the long text.\n\n", 200)
 	d, err := Open(t.Context(), strings.NewReader(text))
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +287,8 @@ func TestPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Lines of 15px on a page of 9.5 inches give about 45 lines a page.
+	// Paragraphs of a line of 15px, with a margin of 13px between them, on a
+	// page of 9.5 inches give about 32 paragraphs a page.
 	if n < 3 {
 		t.Errorf("expected 3 pages or more, got: %d", n)
 	}
