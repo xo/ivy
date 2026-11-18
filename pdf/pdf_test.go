@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -258,6 +259,39 @@ func TestLimit(t *testing.T) {
 	err := page(t, d, 0).Render(t.Context(), dst, okage.IdentityTransform())
 	if _, ok := errors.AsType[*ivy.PartialError](err); !ok || !errors.Is(err, ivy.ErrLimit) {
 		t.Errorf("expected a partial error of ivy.ErrLimit, got: %v", err)
+	}
+}
+
+// largeSource is a source of size bytes that records each read.
+type largeSource struct {
+	size  int64
+	reads int
+}
+
+func (s *largeSource) ReadAt([]byte, int64) (int, error) {
+	s.reads++
+	return 0, io.ErrUnexpectedEOF
+}
+
+func (s *largeSource) Size() int64 {
+	return s.size
+}
+
+func TestMaxMemory(t *testing.T) {
+	buf := onePage("0 0 1 rg 10 10 30 30 re f", "", "")
+	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: int64(len(buf))}}
+	open(t, buf, WithConfig(cfg))
+	cfg.Limits.MaxMemory--
+	if _, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg)); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ivy.ErrLimit for a file 1 byte over the limit, got: %v", err)
+	}
+	// The default limit refuses a file of 1 GiB before it reads a byte.
+	src := &largeSource{size: 1 << 30}
+	if _, err := Open(t.Context(), src); !errors.Is(err, ivy.ErrLimit) {
+		t.Errorf("expected ivy.ErrLimit for a file of 1 GiB, got: %v", err)
+	}
+	if src.reads != 0 {
+		t.Errorf("expected no read of a file over the limit, got %d", src.reads)
 	}
 }
 

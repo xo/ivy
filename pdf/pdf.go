@@ -127,9 +127,10 @@ var (
 )
 
 // Open opens a PDF file. It reads the whole file into memory. It returns an
-// error that wraps ivy.ErrFormat if src is not a PDF file, and one that
-// wraps ivy.ErrPassword if the file needs a password that the configuration
-// does not give.
+// error that wraps ivy.ErrFormat if src is not a PDF file, one that wraps
+// ivy.ErrLimit if src is larger than Limits.MaxMemory, and one that wraps
+// ivy.ErrPassword if the file needs a password that the configuration does
+// not give.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	o := options{annotations: true}
 	for _, opt := range opts {
@@ -147,6 +148,11 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	size := src.Size()
 	if size <= 0 || size > math.MaxInt32*int64(16) {
 		return nil, fmt.Errorf("pdf of %d bytes: %w", size, ivy.ErrFormat)
+	}
+	// The whole file goes into memory, so a file larger than the limit
+	// stops before the read (D39).
+	if size > lim.MaxMemory {
+		return nil, fmt.Errorf("pdf of %d bytes, more than %d: %w", size, lim.MaxMemory, ivy.ErrLimit)
 	}
 	data := make([]byte, size)
 	if _, err := src.ReadAt(data, 0); err != nil {
