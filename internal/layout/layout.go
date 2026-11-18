@@ -567,7 +567,7 @@ func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLa
 		uses.add(valueUses(name, value))
 	}
 	for _, k := range cascaded.order {
-		style := cascaded.styles[k]
+		style, _ := cascaded.styles.get(k)
 		for _, name := range wholeLayoutProperties {
 			if cv, ok := style[name]; ok {
 				look(name, cv.value)
@@ -602,7 +602,8 @@ func findWholeLayoutUses(cascaded *cascadedStyles, sheets []sheetOrigin) wholeLa
 		}
 	}
 	for _, k := range cascaded.order {
-		for name, cv := range cascaded.styles[k] {
+		style, _ := cascaded.styles.get(k)
+		for name, cv := range style {
 			customUses(name, cv.value)
 		}
 	}

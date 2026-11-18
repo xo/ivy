@@ -43,18 +43,27 @@ func (t *transformLut4To3) transformChunk(src, dst []uint8, interpolator triline
 	gridSize3 := t.gridSize * t.gridSize * t.gridSize
 	valueScale := float32(int(1)<<t.bitDepth - 1)
 	maxValue := uint8(uint32(1)<<t.bitDepth - 1)
+	// Port: the last color and its result are kept, as in
+	// transformLut3x3.transformChunk. The result is the same.
+	var last [4]uint8
+	var out [3]uint8
+	hasLast := false
 	for i, j := 0, 0; i+4 <= len(src) && j+channels <= len(dst); i, j = i+4, j+channels {
 		s, d := src[i:i+4], dst[j:j+channels]
 		c, m, y, k := s[0], s[1], s[2], s[3]
-		kWeights := t.weights[k]
-		table1 := t.lut[int(kWeights.x)*gridSize3*3:]
-		table2 := t.lut[int(kWeights.xn)*gridSize3*3:]
-		r1 := interpolator.inter3(table1, &t.weights[c], &t.weights[m], &t.weights[y])
-		r2 := interpolator.inter3(table2, &t.weights[c], &t.weights[m], &t.weights[y])
-		r := defaultVector3fLerp(r1, r2, kWeights.w, valueScale)
-		d[cn.rI()] = f32ToU8(r.V[0])
-		d[cn.gI()] = f32ToU8(r.V[1])
-		d[cn.bI()] = f32ToU8(r.V[2])
+		if !hasLast || [4]uint8{c, m, y, k} != last {
+			kWeights := t.weights[k]
+			table1 := t.lut[int(kWeights.x)*gridSize3*3:]
+			table2 := t.lut[int(kWeights.xn)*gridSize3*3:]
+			r1 := interpolator.inter3(table1, &t.weights[c], &t.weights[m], &t.weights[y])
+			r2 := interpolator.inter3(table2, &t.weights[c], &t.weights[m], &t.weights[y])
+			r := defaultVector3fLerp(r1, r2, kWeights.w, valueScale)
+			out = [3]uint8{f32ToU8(r.V[0]), f32ToU8(r.V[1]), f32ToU8(r.V[2])}
+			last, hasLast = [4]uint8{c, m, y, k}, true
+		}
+		d[cn.rI()] = out[0]
+		d[cn.gI()] = out[1]
+		d[cn.bI()] = out[2]
 		if channels == 4 {
 			d[cn.aI()] = maxValue
 		}
@@ -160,18 +169,31 @@ func (t *transformLut4To3Q015) transformChunk(src, dst []uint8) {
 	gridSize3 := t.gridSize * t.gridSize * t.gridSize
 	maxValue := uint8(uint32(1)<<t.bitDepth - 1)
 	maxI16 := int16(int32(1)<<t.bitDepth - 1)
+	// Port: the last color and its result are kept, as in
+	// transformLut3x3.transformChunk. The result is the same.
+	var last [4]uint8
+	var out [3]uint8
+	hasLast := false
 	for i, j := 0, 0; i+4 <= len(src) && j+channels <= len(dst); i, j = i+4, j+channels {
 		s, d := src[i:i+4], dst[j:j+channels]
 		c, m, y, k := s[0], s[1], s[2], s[3]
-		kWeights := t.weights[k]
-		table1 := t.lut[int(kWeights.x)*gridSize3:]
-		table2 := t.lut[int(kWeights.xn)*gridSize3:]
-		r1 := t.inter3(table1, c, m, y)
-		r2 := t.inter3(table2, c, m, y)
-		r := q015Lerp3(r1, r2, kWeights.w)
-		d[cn.rI()] = uint8(uint32(max(min(r[0], maxI16), 0)))
-		d[cn.gI()] = uint8(uint32(max(min(r[1], maxI16), 0)))
-		d[cn.bI()] = uint8(uint32(max(min(r[2], maxI16), 0)))
+		if !hasLast || [4]uint8{c, m, y, k} != last {
+			kWeights := t.weights[k]
+			table1 := t.lut[int(kWeights.x)*gridSize3:]
+			table2 := t.lut[int(kWeights.xn)*gridSize3:]
+			r1 := t.inter3(table1, c, m, y)
+			r2 := t.inter3(table2, c, m, y)
+			r := q015Lerp3(r1, r2, kWeights.w)
+			out = [3]uint8{
+				uint8(uint32(max(min(r[0], maxI16), 0))),
+				uint8(uint32(max(min(r[1], maxI16), 0))),
+				uint8(uint32(max(min(r[2], maxI16), 0))),
+			}
+			last, hasLast = [4]uint8{c, m, y, k}, true
+		}
+		d[cn.rI()] = out[0]
+		d[cn.gI()] = out[1]
+		d[cn.bI()] = out[2]
 		if channels == 4 {
 			d[cn.aI()] = maxValue
 		}

@@ -146,7 +146,7 @@ func isWhite(r rune) bool {
 // can.
 func (fc *FontConfiguration) shape(text string, style *Style) *shapedText {
 	rtl := isStr(style.Get("direction"), "rtl")
-	key := shapeKey{fontKey(style), rtl, text}
+	key := shapeKey{fontStyleCacheKey(style, false), rtl, text}
 	if s, ok := fc.shaped[key]; ok {
 		return s
 	}
@@ -174,7 +174,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	}
 	s.runeToByte[len(runes)] = offset
 
-	m := fc.newFontmap(style)
+	m, faces := fc.styleFontmap(style)
 	primary, primaryID := m.primary()
 	if primary == nil {
 		// No font: each character is half the font size, as the default
@@ -240,7 +240,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		}
 		input.RunStart, input.RunEnd = start, end
 		start = end
-		for _, item := range fc.segmenter.Split(input, m) {
+		for _, item := range fc.segmenter.Split(input, faces) {
 			if item.Face == nil {
 				continue
 			}
@@ -319,6 +319,64 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		}
 	}
 	return s
+}
+
+// styleFonts is the fontmap of a style, with the faces of the characters
+// that it resolved. A style keeps it for one FontConfiguration, while the
+// FontConfiguration reads no new @font-face rule.
+type styleFonts struct {
+	fc *FontConfiguration
+	// rules is the number of @font-face rules of fc when the fontmap was
+	// made.
+	rules int
+	m     *fontmap
+	faces runeFaces
+}
+
+// styleFontmap returns the fontmap of a style, and the shaping.Fontmap that
+// keeps the faces of its characters.
+//
+// Port: the segmenter of go-text asks for the face of each character of
+// each line, and the fontmap looks for it again in each font of the chain.
+// The style keeps the faces between the lines. A face of a character does
+// not change for a style, until a new @font-face rule changes the faces of
+// the families.
+func (fc *FontConfiguration) styleFontmap(style *Style) (*fontmap, *runeFaces) {
+	if sf := style.fonts; sf != nil && sf.fc == fc && sf.rules == len(fc.rules) {
+		return sf.m, &sf.faces
+	}
+	sf := &styleFonts{fc: fc, rules: len(fc.rules), m: fc.newFontmap(style)}
+	sf.faces.m = sf.m
+	style.fonts = sf
+	return sf.m, &sf.faces
+}
+
+// runeFaces is a shaping.Fontmap that keeps the face of each character
+// that its fontmap resolved.
+type runeFaces struct {
+	m     *fontmap
+	ascii [128]*font.Face
+	known [128]bool
+	other map[rune]*font.Face
+}
+
+// ResolveFace satisfies shaping.Fontmap.
+func (rf *runeFaces) ResolveFace(r rune) *font.Face {
+	if r >= 0 && r < 128 {
+		if !rf.known[r] {
+			rf.ascii[r], rf.known[r] = rf.m.ResolveFace(r), true
+		}
+		return rf.ascii[r]
+	}
+	if f, ok := rf.other[r]; ok {
+		return f
+	}
+	f := rf.m.ResolveFace(r)
+	if rf.other == nil {
+		rf.other = map[rune]*font.Face{}
+	}
+	rf.other[r] = f
+	return f
 }
 
 // zeroWidth returns 0 for the characters that Pango draws without width:
@@ -1233,11 +1291,22 @@ func sliceAttrs(attrs []LogAttr, start, end int) []LogAttr {
 
 // fontStyleCacheKey is _font_style_cache_key in
 // weasyprint/text/line_break.py.
+//
+// Port: the style keeps the key, which upstream makes again for each line.
 func fontStyleCacheKey(style *Style, includeSize bool) string {
+	i, bit := 0, uint8(1)
+	if includeSize {
+		i, bit = 1, 2
+	}
+	if style.fontKeysSet&bit != 0 {
+		return style.fontKeys[i]
+	}
 	key := fontKey(style)
 	if includeSize {
 		key += ValueString(style.Get("font_size")) + ValueString(style.Get("line_height"))
 	}
+	style.fontKeys[i] = key
+	style.fontKeysSet |= bit
 	return key
 }
 

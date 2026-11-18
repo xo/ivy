@@ -11,6 +11,7 @@ package layout
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/xo/okage/tinycss2"
@@ -265,15 +266,18 @@ func tokenEqual(a, b tinycss2.Node) bool {
 }
 
 // ValueString returns the value as Python would print it, for the messages
-// of the log and the tests.
+// of the log, the tests and the keys of the caches of the fonts.
+//
+// Port: the layout calls it for each line, so it uses strconv and not fmt.
+// The text is the same.
 func ValueString(v Value) string {
 	switch v := v.(type) {
 	case nil:
 		return "None"
 	case String:
-		return fmt.Sprintf("%q", string(v))
+		return strconv.Quote(string(v))
 	case Int:
-		return fmt.Sprint(int(v))
+		return strconv.Itoa(int(v))
 	case Float:
 		return pyStr(float64(v))
 	case Bool:
@@ -284,9 +288,9 @@ func ValueString(v Value) string {
 	case Dimension:
 		unit := "None"
 		if v.Unit != "" {
-			unit = fmt.Sprintf("%q", v.Unit)
+			unit = strconv.Quote(v.Unit)
 		}
-		return fmt.Sprintf("Dimension(%s, %s)", pyStr(v.Value), unit)
+		return "Dimension(" + pyStr(v.Value) + ", " + unit + ")"
 	case Tuple:
 		parts := make([]string, len(v))
 		for i, item := range v {
@@ -299,7 +303,7 @@ func ValueString(v Value) string {
 	case StringSet:
 		parts := make([]string, len(v))
 		for i, item := range v {
-			parts[i] = fmt.Sprintf("%q", item)
+			parts[i] = strconv.Quote(item)
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
 	case Token:

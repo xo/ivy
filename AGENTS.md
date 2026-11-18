@@ -219,7 +219,7 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-On 2026-11-18 the `go.mod` of ivy requires okage v0.11.0 and magic v0.7.0.
+On 2026-11-18 the `go.mod` of ivy requires okage v0.11.1 and magic v0.7.0.
 If a change needs a commit of okage or magic that is pushed and not tagged,
 require it as a pseudo-version. When okage and magic tag that commit,
 require the tag. A change that needs a commit of okage or magic that is not

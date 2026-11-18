@@ -30,6 +30,11 @@ func (t *transformLut3x3) transformChunk(src, dst []uint8, interpolator trilinea
 	srcChannels, dstChannels := srcCn.Channels(), dstCn.Channels()
 	valueScale := float32(int(1)<<t.bitDepth - 1)
 	maxValue := uint8(uint32(1)<<t.bitDepth - 1)
+	// Port: the last color and its result are kept, because the pixels of
+	// an image come in runs of one color, such as the white of a page.
+	// Upstream interpolates each pixel. The result is the same.
+	var lastX, lastY, lastZ, out0, out1, out2 uint8
+	hasLast := false
 	for i, j := 0, 0; i+srcChannels <= len(src) && j+dstChannels <= len(dst); i, j = i+srcChannels, j+dstChannels {
 		s, d := src[i:i+srcChannels], dst[j:j+dstChannels]
 		// The reduction of a sample of 8 bits to 256 bins is the sample.
@@ -40,13 +45,19 @@ func (t *transformLut3x3) transformChunk(src, dst []uint8, interpolator trilinea
 		if srcChannels == 4 {
 			a = s[srcCn.aI()]
 		}
-		v := interpolator.inter3(t.lut, &t.weights[x], &t.weights[y], &t.weights[z])
-		r0 := float32(v.V[0]*valueScale) + 0.5
-		r1 := float32(v.V[1]*valueScale) + 0.5
-		r2 := float32(v.V[2]*valueScale) + 0.5
-		d[dstCn.rI()] = f32ToU8(maxF32(minF32(r0, valueScale), 0))
-		d[dstCn.gI()] = f32ToU8(maxF32(minF32(r1, valueScale), 0))
-		d[dstCn.bI()] = f32ToU8(maxF32(minF32(r2, valueScale), 0))
+		if !hasLast || x != lastX || y != lastY || z != lastZ {
+			v := interpolator.inter3(t.lut, &t.weights[x], &t.weights[y], &t.weights[z])
+			r0 := float32(v.V[0]*valueScale) + 0.5
+			r1 := float32(v.V[1]*valueScale) + 0.5
+			r2 := float32(v.V[2]*valueScale) + 0.5
+			out0 = f32ToU8(maxF32(minF32(r0, valueScale), 0))
+			out1 = f32ToU8(maxF32(minF32(r1, valueScale), 0))
+			out2 = f32ToU8(maxF32(minF32(r2, valueScale), 0))
+			lastX, lastY, lastZ, hasLast = x, y, z, true
+		}
+		d[dstCn.rI()] = out0
+		d[dstCn.gI()] = out1
+		d[dstCn.bI()] = out2
 		if dstChannels == 4 {
 			d[dstCn.aI()] = a
 		}

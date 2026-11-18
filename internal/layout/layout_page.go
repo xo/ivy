@@ -827,11 +827,9 @@ func setPageTypeStyles(lc *layoutContext, pageType PageType, html *HTML) {
 	}
 
 	// Apply style for page pseudo-elements (margin boxes)
-	key := pageType.ownerKey()
-	for _, cascaded := range styleFor.CascadedKeys() {
-		if cascaded.Pseudo == "" || cascaded.Owner.ownerKey() != key {
-			continue
-		}
+	// Port: pseudoKeys gives the keys of the page that upstream finds in
+	// all the cascaded styles.
+	for _, cascaded := range styleFor.pseudoKeys(pageType) {
 		// The pseudo-element inherits from the element.
 		if err := styleFor.SetComputedStyles(cascaded.Owner, cascaded.Owner, root, cascaded.Pseudo, html.BaseURL, nil); err != nil {
 			lc.abort(err)

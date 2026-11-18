@@ -387,3 +387,22 @@ func ivyMediaBox(ctx context.Context, path string, cfg ivy.Config, n int, dpi fl
 	}
 	return img, err
 }
+
+// FormatFor returns the format of ivy that opens the kind of a document of
+// the manifest.
+func FormatFor(kind string) (ivy.Format, bool) {
+	return formatFor(kind)
+}
+
+// OpenIvy opens src with format and the configuration cfg, as render does.
+// An HTML or Markdown file reads the files that it links to from the
+// folder dir.
+func OpenIvy(ctx context.Context, format ivy.Format, src ivy.Source, cfg ivy.Config, dir string) (ivy.Document, error) {
+	switch format.Name {
+	case html.Format.Name:
+		return html.Open(ctx, src, html.WithConfig(cfg), html.WithDir(os.DirFS(dir)))
+	case markdown.Format.Name:
+		return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(os.DirFS(dir)))
+	}
+	return format.Open(ctx, src, cfg)
+}
