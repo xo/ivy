@@ -177,14 +177,11 @@ func (r *renderer) drawOutlines(outlines []*okage.Path, bbox kurbo.Rect, props *
 	if stroke != nil {
 		width = float64(stroke.Width)
 	}
-	shader, clipPath := r.setPaint(props.Paint, props.Transform, func() kurbo.Rect { return bbox }, stroke != nil, width)
+	shader, clips := r.setPaint(props.Paint, props.Transform, func() kurbo.Rect { return bbox }, stroke != nil, width)
 	if shader == nil {
 		return
 	}
-	if clipPath != nil {
-		r.pushClipPathInner(clipPath, interpret.FillRuleNonZero)
-		defer r.popClip()
-	}
+	defer r.popPaintClips(r.pushPaintClips(clips, interpret.FillRuleNonZero))
 	r.dev.Save()
 	defer r.dev.Restore()
 	r.dev.Concat(toTransform(props.Transform))

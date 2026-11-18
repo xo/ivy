@@ -95,14 +95,11 @@ func (r *renderer) strokePath(path *kurboext.BezPath, props interpret.DrawProps,
 	}
 	end := r.applyDrawProps(props.SoftMask, props.BlendMode)
 	defer end()
-	shader, clipPath := r.setPaint(props.Paint, props.Transform, path.BoundingBox, true, float64(stroke.Width))
+	shader, clips := r.setPaint(props.Paint, props.Transform, path.BoundingBox, true, float64(stroke.Width))
 	if shader == nil {
 		return
 	}
-	if clipPath != nil {
-		r.pushClipPathInner(clipPath, interpret.FillRuleNonZero)
-		defer r.popClip()
-	}
+	defer r.popPaintClips(r.pushPaintClips(clips, interpret.FillRuleNonZero))
 	r.dev.Save()
 	defer r.dev.Restore()
 	r.dev.Concat(toTransform(props.Transform))
@@ -141,14 +138,11 @@ func (r *renderer) fillPath(path *okage.Path, bbox func() kurbo.Rect, props inte
 	}
 	end := r.applyDrawProps(props.SoftMask, props.BlendMode)
 	defer end()
-	shader, clipPath := r.setPaint(props.Paint, props.Transform, bbox, false, 0)
+	shader, clips := r.setPaint(props.Paint, props.Transform, bbox, false, 0)
 	if shader == nil {
 		return
 	}
-	if clipPath != nil {
-		r.pushClipPathInner(clipPath, fillRule)
-		defer r.popClip()
-	}
+	defer r.popPaintClips(r.pushPaintClips(clips, fillRule))
 	r.dev.Save()
 	defer r.dev.Restore()
 	r.dev.Concat(toTransform(props.Transform))

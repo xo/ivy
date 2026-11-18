@@ -95,7 +95,7 @@ func (m *Machine) fillPath(p *Path, evenOdd bool) error {
 		// show
 		return m.capture.fill(m, p, evenOdd)
 	}
-	shader := m.shader(m.gs.color)
+	shader, clip := m.paintShader(m.gs.color)
 	if shader == nil {
 		return nil
 	}
@@ -108,6 +108,11 @@ func (m *Machine) fillPath(p *Path, evenOdd bool) error {
 		rule = okage.FillRuleEvenOdd
 	}
 	m.mark()
+	if clip != nil {
+		m.dev.Save()
+		defer m.dev.Restore()
+		m.dev.ClipPath(clip, okage.FillRuleWinding)
+	}
 	m.dev.FillPath(op, rule, shader)
 	return nil
 }
@@ -162,7 +167,7 @@ func (m *Machine) stroke() error {
 		outline := m.strokeOutline()
 		return m.capture.fill(m, &outline, false)
 	}
-	shader := m.shader(m.gs.color)
+	shader, clip := m.paintShader(m.gs.color)
 	if shader == nil {
 		return nil
 	}
@@ -176,6 +181,9 @@ func (m *Machine) stroke() error {
 	}
 	m.mark()
 	m.dev.Save()
+	if clip != nil {
+		m.dev.ClipPath(clip, okage.FillRuleWinding)
+	}
 	m.dev.Concat(toTransform(m.gs.ctm))
 	m.dev.strokeMin(p, m.strokeStyle(), m.gs.strokeAdjust, m.userShader(shader, inv), m.gs.ctm.Scale())
 	m.dev.Restore()

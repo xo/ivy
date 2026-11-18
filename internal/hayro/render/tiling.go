@@ -44,7 +44,9 @@ const (
 // the whole area in a direction that pads, so a repetition in that direction
 // does not show, and the port repeats when one direction repeats. The
 // pixmap is smaller than upstream when it would pass maxCellSide or
-// maxCellPixels, and the cell then draws at a lower resolution.
+// maxCellPixels, and the cell then draws at a lower resolution. When the
+// matrix keeps the axes, the pixels of a direction that pads are the pixels
+// of the device. See alignedAxes.
 func (r *renderer) tilingPaint(t *interpret.TilingPattern, area kurbo.Rect, isStroke bool) (*okage.Pixmap, okage.SpreadMode, kurbo.Affine, bool) {
 	if !invertible(t.Matrix) {
 		return nil, 0, kurbo.Affine{}, false
@@ -52,10 +54,20 @@ func (r *renderer) tilingPaint(t *interpret.TilingPattern, area kurbo.Rect, isSt
 	area = t.Matrix.Inverse().TransformRectBbox(area)
 	xAdvance, yAdvance := interpret.XYAdvances(t.Matrix)
 	xScale, yScale := xAdvance.Hypot(), yAdvance.Hypot()
+	alignX, alignY, aligned := alignedAxes(t.Matrix)
 	var x, y tileAxis
-	for range 8 {
-		x = newTileAxis(xScale, t.BBox.X0, t.BBox.X1, t.XStep, area.X0, area.X1)
-		y = newTileAxis(yScale, t.BBox.Y0, t.BBox.Y1, t.YStep, area.Y0, area.Y1)
+	for i := range 8 {
+		if i > 0 {
+			// A smaller pixmap cannot have the pixels of the device.
+			aligned = false
+		}
+		if aligned {
+			x = newAlignedTileAxis(xScale, t.BBox.X0, t.BBox.X1, t.XStep, area.X0, area.X1, alignX)
+			y = newAlignedTileAxis(yScale, t.BBox.Y0, t.BBox.Y1, t.YStep, area.Y0, area.Y1, alignY)
+		} else {
+			x = newTileAxis(xScale, t.BBox.X0, t.BBox.X1, t.XStep, area.X0, area.X1)
+			y = newTileAxis(yScale, t.BBox.Y0, t.BBox.Y1, t.YStep, area.Y0, area.Y1)
+		}
 		// Port: see maxCellSide and maxCellPixels.
 		fx := math.Min(1, maxCellSide/float64(x.size))
 		fy := math.Min(1, maxCellSide/float64(y.size))
@@ -155,6 +167,57 @@ func newTileAxis(scale, cell0, cell1 float64, step32 float32, area0, area1 float
 		first: asI32(math.Ceil((area0 - cell1) / step)),
 		last:  asI32(math.Floor((area1 - cell0) / step)),
 	}
+}
+
+// deviceAxis maps one direction of the space of a pattern to one direction
+// of the device. A coordinate p of the pattern is at k*p + offset on the
+// device.
+type deviceAxis struct {
+	k, offset float64
+}
+
+// alignedAxes returns the directions of the device of the two directions of
+// the space of a pattern. It returns false when m rotates or skews the
+// pattern, other than by a multiple of 90 degrees.
+func alignedAxes(m kurbo.Affine) (deviceAxis, deviceAxis, bool) {
+	a, b, c, d, e, f := m[0], m[1], m[2], m[3], m[4], m[5]
+	switch {
+	case b == 0 && c == 0 && a != 0 && d != 0:
+		return deviceAxis{a, e}, deviceAxis{d, f}, true
+	case a == 0 && d == 0 && b != 0 && c != 0:
+		return deviceAxis{b, f}, deviceAxis{c, e}, true
+	}
+	return deviceAxis{}, deviceAxis{}, false
+}
+
+// newAlignedTileAxis is newTileAxis for a direction whose pixels can be the
+// pixels of the device, along dev.
+//
+// Port: upstream rounds the scale so that a step of the cell is a whole
+// number of pixels, and it starts the pixmap on a pixel of the space of the
+// pattern. The pixmap is then drawn with a part of a pixel of offset and a
+// scale near 1, and its sampling blurs the thin lines of an image, such as
+// those of pdfjs/pdf/a1-plans.pdf. When the direction pads, the steps of
+// the cell do not repeat in the pixmap. The port then keeps the scale of
+// the device, and starts the pixmap on a pixel of the device.
+func newAlignedTileAxis(scale, cell0, cell1 float64, step32 float32, area0, area1 float64, dev deviceAxis) tileAxis {
+	axis := newTileAxis(scale, cell0, cell1, step32, area0, area1)
+	if axis.repeat || !(math.Abs(dev.k) > 0) {
+		return axis
+	}
+	u := dev.k*area0 + dev.offset
+	edge := math.Floor(u)
+	if dev.k < 0 {
+		edge = math.Ceil(u)
+	}
+	start := (edge - dev.offset) / dev.k
+	scale = math.Abs(dev.k)
+	size := math.Ceil((area1 - start) * scale)
+	if !(start <= area0) || !(size >= 1) || size > maxCellSide {
+		return axis
+	}
+	axis.start, axis.scale, axis.size = start, scale, uint32(size)
+	return axis
 }
 
 // asI32 is the cast `as i32` of Rust: it saturates, and NaN becomes 0.

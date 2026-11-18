@@ -672,8 +672,9 @@ func (m *Machine) shadingBounds(s *shading, toDevice Matrix, area [4]float64) [4
 }
 
 // shfill paints a shading over the clip, as shfill does. okage fills a
-// mesh and an axial or a radial shading with no extend itself. shfill draws
-// any other shading as an image.
+// mesh, an axial shading and most radial shadings itself. shfill draws any
+// other shading as an image. It fills a mesh through the outline of its
+// triangles, which gives the antialiasing at the free edges of the mesh.
 func (m *Machine) shfill(s *shading) error {
 	if m.capture != nil && m.capture.intercept() {
 		return nil
@@ -681,12 +682,18 @@ func (m *Machine) shfill(s *shading) error {
 	toDevice := m.gs.ctm
 	area := m.shadingBounds(s, toDevice, m.deviceArea())
 	var paint func()
-	if shader, native := m.nativeShader(s, toDevice, false); native {
-		r, ok := okage.RectFromLTRB(float32(area[0]), float32(area[1]), float32(area[2]), float32(area[3]))
+	if shader, outline, native := m.nativeShader(s, toDevice, false); native {
+		// The rectangle covers whole pixels, so that only the clip gives the
+		// antialiasing at its edges.
+		r, ok := okage.RectFromLTRB(float32(math.Floor(area[0])), float32(math.Floor(area[1])), float32(math.Ceil(area[2])), float32(math.Ceil(area[3])))
 		if shader == nil || !ok {
 			return nil
 		}
-		paint = func() { m.dev.FillPath(okage.PathFromRect(r), okage.FillRuleWinding, shader) }
+		fill := okage.PathFromRect(r)
+		if outline != nil {
+			fill = outline
+		}
+		paint = func() { m.dev.FillPath(fill, okage.FillRuleWinding, shader) }
 	} else {
 		img, t, ok := m.shadingImage(s, toDevice, area, false)
 		if !ok {
@@ -716,22 +723,23 @@ func (m *Machine) shfill(s *shading) error {
 }
 
 // shadingShader returns the shader of a shading pattern, over the area of
-// the clip.
-func (m *Machine) shadingShader(pat *pattern) okage.Shader {
+// the clip, and the outline of a mesh in the device space, or nil. A fill
+// with the shader must clip to the outline. See meshGradient.
+func (m *Machine) shadingShader(pat *pattern) (okage.Shader, *okage.Path) {
 	s := pat.shading
-	if shader, native := m.nativeShader(s, pat.matrix, true); native {
-		return shader
+	if shader, outline, native := m.nativeShader(s, pat.matrix, true); native {
+		return shader, outline
 	}
 	area := m.shadingBounds(s, pat.matrix, m.deviceArea())
 	img, t, ok := m.shadingImage(s, pat.matrix, area, true)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	pix, err := raster.Pixmap(img)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return okage.NewPattern(pix.AsRef(), okage.SpreadModePad, okage.FilterQualityBilinear, 1, toTransform(t))
+	return okage.NewPattern(pix.AsRef(), okage.SpreadModePad, okage.FilterQualityBilinear, 1, toTransform(t)), nil
 }
 
 // maxMeshTriangles bounds the triangles that a mesh gives to okage, with
@@ -757,63 +765,86 @@ const (
 
 // nativeShader returns the shader of okage of a shading in the device
 // space, when okage fills the shading itself: a mesh of type 4 to 7, or an
-// axial or a radial shading with no extend at either end. toDevice maps the
+// axial or a radial shading that gradientShader takes. toDevice maps the
 // shading space onto the device space. background paints the Background of
-// the shading under a mesh, over the area of the clip. It returns false for
-// a shading that shadingImage draws, and a nil shader for a mesh that paints
-// nothing.
-func (m *Machine) nativeShader(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
+// the shading under a mesh, over the area of the clip. For a mesh, it also
+// returns the outline of the triangles in the device space. It returns
+// false for a shading that shadingImage draws, and a nil shader for a mesh
+// that paints nothing.
+func (m *Machine) nativeShader(s *shading, toDevice Matrix, background bool) (okage.Shader, *okage.Path, bool) {
 	switch s.typ {
 	case 2, 3:
-		return m.decalGradient(s, toDevice, background)
+		shader, ok := m.gradientShader(s, toDevice, background)
+		return shader, nil, ok
 	case 4, 5, 6, 7:
-		return m.meshGradient(s, toDevice, background), true
+		shader, outline := m.meshGradient(s, toDevice, background)
+		return shader, outline, true
 	}
-	return nil, false
+	return nil, nil, false
 }
 
-// decalGradient returns the gradient of okage of an axial or a radial
-// shading with no extend at either end. The gradient has the spread mode
-// okage.SpreadModeDecal, which paints nothing past its ends (okage D55).
-// decalGradient returns false for a shading that extends, for a pattern
-// with a Background, and for a radial shading whose circles do not nest. In
-// that last case, PostScript paints a point with the largest circle in the
-// domain that holds it, and okage does not.
-func (m *Machine) decalGradient(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
-	if s.extend[0] || s.extend[1] || background && len(s.bg) >= s.space.n {
+// gradientShader returns the gradient of okage of an axial or a radial
+// shading. A shading with no extend has the spread mode
+// okage.SpreadModeDecal, which paints nothing past its ends (okage D55). Any
+// other has the spread mode okage.SpreadModePad, and an end with no extend
+// gets a transparent stop at the same place as its last color, so that the
+// gradient paints nothing past that end.
+//
+// gradientShader returns false for a pattern with a Background, and for
+// some radial shadings whose circles do not nest. PostScript paints a point
+// with the largest circle that holds it in the domain and its extends.
+// okage paints it with the largest circle that holds it. The two agree when
+// the circles nest, because then one circle holds the point, and when the
+// shading extends past its end circle.
+func (m *Machine) gradientShader(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
+	if background && len(s.bg) >= s.space.n {
 		return nil, false
 	}
 	c := s.coords
-	if s.typ == 3 && !(c[2] >= 0 && c[5] >= 0 && math.Abs(c[5]-c[2])-math.Hypot(c[3]-c[0], c[4]-c[1]) > 1e-6) {
-		return nil, false
+	if s.typ == 3 {
+		nested := math.Abs(c[5]-c[2])-math.Hypot(c[3]-c[0], c[4]-c[1]) > 1e-6
+		if !(c[2] >= 0 && c[5] >= 0) || !nested && !s.extend[1] {
+			return nil, false
+		}
 	}
 	stops := m.functionStops(s, s.domain[0], s.domain[1])
-	gradientStops := make([]okage.GradientStop, len(stops))
-	for i, st := range stops {
-		gradientStops[i] = okage.NewGradientStop(float32(st.u), okageColor(st.c))
+	gradientStops := make([]okage.GradientStop, 0, len(stops)+2)
+	if s.extend[1] && !s.extend[0] {
+		gradientStops = append(gradientStops, okage.NewGradientStop(float32(stops[0].u), okage.Color{}))
+	}
+	for _, st := range stops {
+		gradientStops = append(gradientStops, okage.NewGradientStop(float32(st.u), okageColor(st.c)))
+	}
+	if s.extend[0] && !s.extend[1] {
+		gradientStops = append(gradientStops, okage.NewGradientStop(float32(stops[len(stops)-1].u), okage.Color{}))
+	}
+	spread := okage.SpreadModePad
+	if !s.extend[0] && !s.extend[1] {
+		spread = okage.SpreadModeDecal
 	}
 	pt := func(x, y float64) okage.Point { return okage.PointFromXY(float32(x), float32(y)) }
-	var shader okage.Shader
-	var ok bool
 	if s.typ == 2 {
-		shader, ok = okage.NewLinearGradient(pt(c[0], c[1]), pt(c[2], c[3]), gradientStops, okage.SpreadModeDecal, toTransform(toDevice))
-	} else {
-		shader, ok = okage.NewRadialGradient(pt(c[0], c[1]), float32(c[2]), pt(c[3], c[4]), float32(c[5]), gradientStops, okage.SpreadModeDecal, toTransform(toDevice))
+		return okage.NewLinearGradient(pt(c[0], c[1]), pt(c[2], c[3]), gradientStops, spread, toTransform(toDevice))
 	}
-	return shader, ok
+	return okage.NewRadialGradient(pt(c[0], c[1]), float32(c[2]), pt(c[3], c[4]), float32(c[5]), gradientStops, spread, toTransform(toDevice))
 }
 
 // meshGradient returns the MeshGradient of okage of a mesh, a shading of
-// type 4 to 7 (okage D55). It returns nil when the mesh holds no triangle.
-// toDevice and background are as for nativeShader.
+// type 4 to 7 (okage D55), and the outline of its triangles in the device
+// space. It returns nil when the mesh holds no triangle. toDevice and
+// background are as for nativeShader.
 //
 // A function of the colors is not linear in a triangle. meshGradient thus
 // cuts each triangle at the stops of the function, where the color goes
 // from one linear segment to the next.
-func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) okage.Shader {
+//
+// okage paints a pixel at a free edge of a mesh in full. A fill of the mesh
+// must thus clip to the outline, which gives the antialiasing at that edge,
+// so that the mesh does not grow by a pixel.
+func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) (okage.Shader, *okage.Path) {
 	inv, ok := toDevice.Invert()
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	b := &meshBuilder{}
 	if background && len(s.bg) >= s.space.n {
@@ -833,7 +864,7 @@ func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) oka
 		linear := s.space.cie == nil && (s.space.family == "DeviceGray" || s.space.family == "DeviceRGB")
 		for i := 0; i+2 < len(s.tris) && len(b.tris) < maxMeshTriangles; i += 3 {
 			if i&1023 == 0 && m.in.Context().Err() != nil {
-				return nil
+				return nil, nil
 			}
 			n := 1
 			if !linear {
@@ -853,7 +884,7 @@ func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) oka
 		}
 		for i := 0; i+2 < len(s.tris) && len(b.tris) < maxMeshTriangles; i += 3 {
 			if i&1023 == 0 && m.in.Context().Err() != nil {
-				return nil
+				return nil, nil
 			}
 			var tri [3]meshCut
 			for j := range tri {
@@ -865,9 +896,39 @@ func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) oka
 	}
 	shader, ok := okage.NewMeshGradient(b.tris, toTransform(toDevice))
 	if !ok {
+		return nil, nil
+	}
+	return shader, meshOutline(b.tris, toDevice)
+}
+
+// meshOutline returns the outline of the triangles of a mesh in the device
+// space, or nil when no triangle has an area. Each triangle turns the same
+// way, so that the nonzero rule fills the union of the triangles.
+func meshOutline(tris []okage.MeshTriangle, toDevice Matrix) *okage.Path {
+	pb := okage.NewPathBuilder()
+	for _, t := range tris {
+		var x, y [3]float64
+		for i, v := range t {
+			x[i], y[i] = toDevice.Apply(float64(v.Point.X), float64(v.Point.Y))
+		}
+		cross := (x[1]-x[0])*(y[2]-y[0]) - (y[1]-y[0])*(x[2]-x[0])
+		if cross == 0 || math.IsNaN(cross) || math.IsInf(cross, 0) {
+			continue
+		}
+		if cross < 0 {
+			x[1], x[2] = x[2], x[1]
+			y[1], y[2] = y[2], y[1]
+		}
+		pb.MoveTo(float32(x[0]), float32(y[0]))
+		pb.LineTo(float32(x[1]), float32(y[1]))
+		pb.LineTo(float32(x[2]), float32(y[2]))
+		pb.Close()
+	}
+	p, ok := pb.Finish()
+	if !ok {
 		return nil
 	}
-	return shader
+	return p
 }
 
 // meshSplitSide is the length in pixels of the side of a part of a triangle

@@ -152,14 +152,21 @@ func (r *renderer) drawImageWithAlphaMask(data renderImageData, alpha interpret.
 // drawImage is Renderer::draw_image in hayro src/image.rs. t is the
 // transform of the image: it maps its pixels to the space of the target.
 //
+// Port: upstream draws the image at t. The port first moves an edge of an
+// image that keeps the axes onto a whole pixel when it is very near it. See
+// gridFit.
+//
 // Port: upstream builds a pixmap of RGBA, which it resizes in the formats
 // of luma, RGB or RGBA. The port builds an image of RGBA, premultiplied, and
-// resizes it, which gives the same pixels. A solid image becomes the stencil
+// resizes it, as buildImagePixels says. A solid image becomes the stencil
 // of FillMask. The data of an image shorter than its size draws nothing.
 func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t kurbo.Affine) {
 	imgWidth, imgHeight := data.width(), data.height()
 	if imgWidth == 0 || imgHeight == 0 {
 		return
+	}
+	if !r.inType3Glyph {
+		t = gridFit(t, imgWidth, imgHeight)
 	}
 	xAdvance, yAdvance := interpret.XYAdvances(t)
 	xScale, yScale := float32(xAdvance.Hypot()), float32(yAdvance.Hypot())
@@ -258,23 +265,105 @@ func (r *renderer) imagePixels(data renderImageData, alpha *interpret.LumaData, 
 }
 
 // buildImagePixels builds the pixels of imagePixels.
+//
+// Port: upstream multiplies the colors by the alpha channel, and then
+// resizes the colors and the alpha channel. The port resizes the colors and
+// the alpha channel each on its own, and then multiplies them, as MuPDF and
+// Poppler do. A color then keeps its weight where the alpha channel is low.
+// In pdfjs/pdf/a1-plans.pdf, the colors of the plans are black where their
+// alpha channel is 0, and the thin lines are then as dark as in MuPDF.
 func buildImagePixels(data renderImageData, alpha *interpret.LumaData, newWidth, newHeight uint32) *image.RGBA {
 	imgWidth, imgHeight := data.width(), data.height()
-	var rgba *image.RGBA
+	resize := newWidth != imgWidth || newHeight != imgHeight
 	if data.solid != nil {
-		rgba = alphaImage(alpha.Data[:int(imgWidth)*int(imgHeight)], imgWidth, imgHeight)
-	} else {
-		rgba = premultipliedImage(data, alpha, imgWidth, imgHeight)
+		return resizeImage(alphaImage(alpha.Data[:int(imgWidth)*int(imgHeight)], imgWidth, imgHeight), newWidth, newHeight)
+	}
+	if !resize || alpha == nil {
+		rgba := premultipliedImage(data, alpha, imgWidth, imgHeight)
 		if rgba == nil {
 			return nil
 		}
+		return resizeImage(rgba, newWidth, newHeight)
 	}
-	if newWidth == imgWidth && newHeight == imgHeight {
+	colors := premultipliedImage(data, nil, imgWidth, imgHeight)
+	if colors == nil {
+		return nil
+	}
+	colors = resizeImage(colors, newWidth, newHeight)
+	mask := resizeImage(alphaImage(alpha.Data[:int(imgWidth)*int(imgHeight)], imgWidth, imgHeight), newWidth, newHeight)
+	pix := colors.Pix
+	for i := 0; i < len(pix); i += 4 {
+		a := uint16(mask.Pix[i+3])
+		pix[i] = div255(uint16(pix[i]) * a)
+		pix[i+1] = div255(uint16(pix[i+1]) * a)
+		pix[i+2] = div255(uint16(pix[i+2]) * a)
+		pix[i+3] = uint8(a)
+	}
+	return colors
+}
+
+// resizeImage returns rgba resized to width by height pixels with the kernel
+// of resampling, or rgba when it has that size.
+func resizeImage(rgba *image.RGBA, width, height uint32) *image.RGBA {
+	if rgba.Rect.Dx() == int(width) && rgba.Rect.Dy() == int(height) {
 		return rgba
 	}
-	resized := image.NewRGBA(image.Rect(0, 0, int(newWidth), int(newHeight)))
+	resized := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
 	resampling.Scale(resized, resized.Rect, rgba, rgba.Rect, xdraw.Src, nil)
 	return resized
+}
+
+// gridTolerance is the largest distance, in pixels of the target, from an
+// edge of an image to a whole pixel that gridFit moves the edge onto.
+const gridTolerance = 1.0 / 64
+
+// gridFit returns t with each edge of an image of width by height pixels
+// that is within gridTolerance of a whole pixel of the target moved onto
+// that pixel, when t keeps the axes or turns them by a multiple of 90
+// degrees. Otherwise it returns t.
+//
+// Port: upstream has no such step. A scale in float32 puts an edge that a
+// document places on a whole pixel a little past it. The resize then gives
+// the image one more pixel, and it draws a little smaller and blurred, as
+// the pages of pdfjs/pdf/codecs-ccitt.pdf did.
+func gridFit(t kurbo.Affine, width, height uint32) kurbo.Affine {
+	a, b, c, d, e, f := t[0], t[1], t[2], t[3], t[4], t[5]
+	w, h := float64(width), float64(height)
+	switch {
+	case b == 0 && c == 0:
+		a, e = fitAxis(a, e, w)
+		d, f = fitAxis(d, f, h)
+	case a == 0 && d == 0:
+		b, f = fitAxis(b, f, w)
+		c, e = fitAxis(c, e, h)
+	default:
+		return t
+	}
+	fit := kurbo.Affine{a, b, c, d, e, f}
+	if !fit.IsFinite() || fit.Determinant() == 0 {
+		return t
+	}
+	return fit
+}
+
+// fitAxis returns the scale k and the offset off of one direction of an
+// image of n pixels, with each edge that is within gridTolerance of a whole
+// pixel moved onto it. A pixel p of the image is at k*p + off.
+func fitAxis(k, off, n float64) (float64, float64) {
+	start, end := snapEdge(off), snapEdge(k*n+off)
+	if !(start != end) {
+		return k, off
+	}
+	return (end - start) / n, start
+}
+
+// snapEdge returns v moved onto the nearest whole number when it is within
+// gridTolerance of it, and v otherwise.
+func snapEdge(v float64) float64 {
+	if r := math.Round(v); math.Abs(v-r) <= gridTolerance {
+		return r
+	}
+	return v
 }
 
 // resizedSide returns the side of an image of side pixels at the scale,
@@ -381,14 +470,11 @@ func (r *renderer) drawPDFImage(img interpret.Image, props interpret.ImageDrawPr
 				return
 			}
 			stencilRect := kurbo.NewRect(0, 0, float64(stencil.Width), float64(stencil.Height))
-			shader, clipPath := r.setPaint(paint, transform, func() kurbo.Rect { return stencilRect }, false, 0)
+			shader, clips := r.setPaint(paint, transform, func() kurbo.Rect { return stencilRect }, false, 0)
 			if shader == nil {
 				return
 			}
-			if clipPath != nil {
-				r.pushClipPathInner(clipPath, interpret.FillRuleNonZero)
-				defer r.popClip()
-			}
+			defer r.popPaintClips(r.pushPaintClips(clips, interpret.FillRuleNonZero))
 			r.drawImage(renderImageData{solid: &solidColorImage{
 				shader:      shader,
 				width:       stencil.Width,

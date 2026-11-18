@@ -238,14 +238,22 @@ func (m *Machine) dropTo(depth int) {
 // nothing. t is the transform from the space of the shader to the device
 // space.
 func (m *Machine) shader(p paint) okage.Shader {
+	shader, _ := m.paintShader(p)
+	return shader
+}
+
+// paintShader returns the shader of a paint, as shader does, and the path
+// in the device space that a fill with the shader clips to, or nil. The
+// path is the outline of a mesh. See meshGradient.
+func (m *Machine) paintShader(p paint) (okage.Shader, *okage.Path) {
 	if p.pattern != nil {
 		return m.patternShader(p)
 	}
 	rgb, ok := m.rgb(p)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return okage.SolidColor(okage.ColorFromRGBAUnchecked(float32(rgb[0]), float32(rgb[1]), float32(rgb[2]), 1))
+	return okage.SolidColor(okage.ColorFromRGBAUnchecked(float32(rgb[0]), float32(rgb[1]), float32(rgb[2]), 1)), nil
 }
 
 // clamp01 clamps v to [0, 1]. NaN becomes 0.

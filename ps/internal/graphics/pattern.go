@@ -123,8 +123,9 @@ func (m *Machine) setPatternColor(cs *colorSpace) error {
 	return nil
 }
 
-// patternShader returns the shader of a pattern paint in the device space.
-func (m *Machine) patternShader(p paint) okage.Shader {
+// patternShader returns the shader of a pattern paint in the device space,
+// and the path in the device space that a fill with it clips to, or nil.
+func (m *Machine) patternShader(p paint) (okage.Shader, *okage.Path) {
 	pat := p.pattern
 	if pat.typ == 2 {
 		return m.shadingShader(pat)
@@ -134,17 +135,17 @@ func (m *Machine) patternShader(p paint) okage.Shader {
 		m.renderTile(pat)
 	}
 	if pat.tile == nil {
-		return nil
+		return nil, nil
 	}
 	pix := pat.tile
 	if pat.paintType == 2 {
 		rgb, ok := m.toRGB(p.space.base, p.comps, 0)
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		pix = pat.colorize(rgb)
 	}
-	return okage.NewPattern(pix.AsRef(), okage.SpreadModeRepeat, okage.FilterQualityBilinear, 1, toTransform(pat.tileMatrix))
+	return okage.NewPattern(pix.AsRef(), okage.SpreadModeRepeat, okage.FilterQualityBilinear, 1, toTransform(pat.tileMatrix)), nil
 }
 
 // colorize returns the tile of an uncolored pattern in a color.

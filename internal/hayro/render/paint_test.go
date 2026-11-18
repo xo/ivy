@@ -122,3 +122,21 @@ func TestMeshBackground(t *testing.T) {
 		{50, 52}: {255, 0, 0},
 	})
 }
+
+// TestMeshEdge fills the page with a pattern of a red square of two
+// triangles, from x = 20.5 to x = 60.5. The free edges of the mesh cover
+// half of their pixels, and the mesh does not grow by a pixel.
+func TestMeshEdge(t *testing.T) {
+	shading := meshStream("/ColorSpace /DeviceRGB /Decode [0 127.5 0 127.5 0 1 0 1 0 1]",
+		[]byte{0, 41, 40, 255, 0, 0}, []byte{0, 121, 40, 255, 0, 0}, []byte{0, 41, 160, 255, 0, 0},
+		[]byte{1, 121, 160, 255, 0, 0})
+	pix := renderPage(t, "/Pattern cs /P scn 0 0 100 100 re f",
+		"<< /Pattern << /P 6 0 R >> >>", "<< /PatternType 2 /Shading 7 0 R >>", shading)
+	checkPixels(t, pix, map[[2]uint32][3]uint8{
+		{19, 50}: {255, 255, 255},
+		{20, 50}: {255, 128, 128},
+		{40, 50}: {255, 0, 0},
+		{60, 50}: {255, 128, 128},
+		{61, 50}: {255, 255, 255},
+	})
+}
