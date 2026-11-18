@@ -73,23 +73,6 @@ found these faults. Each item names a file of the corpus.
     seams where the rows cut it, as the jellyfish of `poi/xls/drawings.xls`
     shows. Source: `internal/sheet`.
 
-## Left by the decisions of 2026-11-18
-
-The maintainers answered the open questions on 2026-11-18, in D33 to D45.
-These items carry out the decisions that ask for code.
-
-1. Join the lines of a paragraph of a text file, and keep the breaks of the
-   lines that start with a space or a tab (D34). Source: `text`.
-2. Add `csv.WithSeparator` (D36). Source: `csv`.
-3. Open an indirect DjVu document with `djvu.WithDir` (D38). Source: `djvu`.
-4. Give `ErrLimit` in `pdf.Open` for a file larger than `Limits.MaxMemory`
-   (D39). Source: `pdf`.
-5. Delete the `TestMain` of `msppt` and `msxls` that sets
-   `-test.fuzzminimizetime` (D41). Source: `msppt` and `msxls`.
-6. Lay out the whole document before a page when it uses `counter(pages)`, a
-   target counter or a box with `position: fixed`, and all the documents of
-   a book when one uses `counter(pages)` (D43). Source: `internal/layout`.
-
 ## Left by the charts
 
 1. Draw the treemap, the sunburst and the region map of Office 2016. They

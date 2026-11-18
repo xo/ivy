@@ -424,6 +424,23 @@ The form of the options repeats in each package. A generic helper in
 `internal/` can hold the shared code (D9), but each package keeps its own
 `Option` type, so that an option of one format does not compile for another.
 
+Some packages have options of their own, besides `WithConfig`:
+
+```go
+// WithSeparator gives the separator of the fields, such as ';'. Without
+// it, csv finds the separator in the first records. A quote, a line break
+// or a rune that is not valid gives an error that wraps ErrUnsupported
+// (D36).
+func WithSeparator(r rune) Option // package csv
+
+// WithDir gives the folder of an indirect DjVu document, which holds its
+// index. The document reads each file that the index names from dir when
+// a page needs it, within the limits of the configuration. dir must be
+// safe for concurrent use. Without it, an indirect document gives
+// ErrUnsupported (D38).
+func WithDir(dir fs.FS) Option // package djvu
+```
+
 A format that holds one image, such as `psd`, also has `Decode` and
 `DecodeConfig`, and registers with the package `image` from `init` (D11). A
 format can add a method of its own to its `Document`, such as `Mime` of `odf`
