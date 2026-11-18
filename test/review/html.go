@@ -203,6 +203,30 @@ table.kinds{border-collapse:collapse;margin:6px 0 12px;font-size:13px}
 .kinds th,.kinds td{padding:2px 10px;border-bottom:1px solid var(--line);text-align:right}
 .kinds th:first-child,.kinds td:first-child{text-align:left}
 .hidden{display:none}
+section.doc figure a{cursor:zoom-in}
+.gal{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:rgba(10,12,16,.94);color:#e6edf3}
+.gal.hidden{display:none}
+.galtop{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #30363d;flex-wrap:wrap}
+.galtitle{min-width:0;flex:1 1 320px}
+.galtitle h2{font-size:15px;color:#e6edf3}
+.galcap{font-size:13px;color:#9aa7b3;margin-top:2px}
+.galtools{display:flex;gap:14px;align-items:center;font-size:13px;white-space:nowrap}
+.galtools a{color:#58a6ff}
+.gal button{font:inherit;color:#e6edf3;background:#21262d;border:1px solid #30363d;border-radius:6px;padding:4px 10px;cursor:pointer}
+.gal button:hover{background:#30363d}
+.gal kbd{font-size:11px;border:1px solid #30363d;border-radius:4px;padding:0 4px;color:#9aa7b3}
+.galmain{flex:1;min-height:0;display:flex;align-items:center;gap:8px;padding:10px}
+.galimg{flex:1;min-width:0;height:100%;display:flex;align-items:center;justify-content:center}
+.galimg img{max-width:100%;max-height:100%;object-fit:contain;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.5)}
+.galnav{font-size:26px!important;line-height:1;padding:10px 12px!important;flex:none}
+.galnav:disabled{opacity:.3;cursor:default}
+.galinfo{max-height:32vh;overflow:auto;overflow-wrap:anywhere;padding:8px 16px 14px;border-top:1px solid #30363d;font-size:13px}
+.galinfo .meta,.galinfo .m{color:#9aa7b3}
+.galinfo .ce,.galinfo .err{color:#f85149}
+.galinfo .fnote{color:#d29922}
+.galinfo .good{color:#3fb950}.galinfo .fair{color:#d29922}.galinfo .bad{color:#f85149}
+.galinfo pre{background:#161b22;color:#e6edf3}
+@media (max-width:640px){.galnav{display:none}.galtools{flex-wrap:wrap}}
 </style>
 </head>
 <body>
@@ -268,6 +292,14 @@ table.kinds{border-collapse:collapse;margin:6px 0 12px;font-size:13px}
 </div>{{end}}
 </section>
 {{end}}
+<div id="gal" class="gal hidden" role="dialog" aria-modal="true" aria-label="gallery of the images of a document">
+<div class="galtop">
+<div class="galtitle"><h2 id="galdoc"></h2><div id="galcap" class="galcap"></div></div>
+<div class="galtools"><span id="galpos"></span><label><input id="galdiff" type="checkbox"> differences <kbd>d</kbd></label><a id="galopen" href="#" target="_blank" rel="noopener">open the file</a><button type="button" id="galclose" aria-label="close the gallery">✕</button></div>
+</div>
+<div class="galmain"><button type="button" class="galnav" id="galprev" aria-label="previous image">‹</button><div class="galimg"><img id="galimg" alt=""></div><button type="button" class="galnav" id="galnext" aria-label="next image">›</button></div>
+<div id="galinfo" class="galinfo"></div>
+</div>
 <script>
 (function(){
 var rows=[].slice.call(document.querySelectorAll('#sum tbody tr'));
@@ -298,6 +330,80 @@ var dir={};
 document.getElementById('showdiff').addEventListener('change',function(e){document.body.classList.toggle('showdiff',e.target.checked)});
 [].forEach.call(document.querySelectorAll('button.rowdiff'),function(b){
   b.addEventListener('click',function(){b.closest('.row').classList.toggle('showdiff')});
+});
+// The gallery shows the images of one document, in the order of the page:
+// ivy, ivy PDF and each reference, row by row.
+var gal=document.getElementById('gal'),gimg=document.getElementById('galimg'),gdoc=document.getElementById('galdoc'),
+  gcap=document.getElementById('galcap'),gpos=document.getElementById('galpos'),gdiff=document.getElementById('galdiff'),
+  gopen=document.getElementById('galopen'),ginfo=document.getElementById('galinfo'),
+  gprev=document.getElementById('galprev'),gnext=document.getElementById('galnext'),items=[],cur=0,gsec=null;
+function rowLabel(row){
+  var h=row&&row.querySelector('.rowhead');if(!h)return '';
+  var c=h.cloneNode(true);[].forEach.call(c.querySelectorAll('button'),function(b){b.remove()});
+  return c.textContent.replace(/\s+/g,' ').trim();
+}
+function itemsOf(sec){
+  var out=[];
+  [].forEach.call(sec.querySelectorAll('figure'),function(f){
+    var p=f.querySelector('a.plain'),d=f.querySelector('a.diff');if(!p&&!d)return;
+    var cap=f.querySelector('figcaption');
+    out.push({fig:f,plain:p?p.getAttribute('href'):'',diff:d?d.getAttribute('href'):'',
+      cap:cap?cap.textContent.trim():'',page:rowLabel(f.closest('.row'))});
+  });
+  return out;
+}
+function copyOf(el){var c=el.cloneNode(true);c.removeAttribute('id');return c}
+function show(){
+  var it=items[cur],diff=gdiff.checked&&!!it.diff,src=diff||!it.plain?it.diff:it.plain;
+  gimg.src=src;gimg.alt=it.page+' · '+it.cap;gopen.href=src;
+  gcap.textContent=it.page+' · '+it.cap+(diff?' · difference':gdiff.checked?' · no image of the differences':'');
+  gpos.textContent=(cur+1)+' / '+items.length;
+  gprev.disabled=cur===0;gnext.disabled=cur===items.length-1;
+  ginfo.textContent='';
+  [].forEach.call(it.fig.querySelectorAll('.m,.fnote,.ce'),function(e){ginfo.appendChild(copyOf(e))});
+  [].forEach.call(gsec.children,function(e){
+    if(e.matches('p.meta,p.err')||(e.tagName==='DETAILS'))ginfo.appendChild(copyOf(e));
+  });
+  [cur-1,cur+1].forEach(function(i){var n=items[i];if(n){(new Image()).src=gdiff.checked&&n.diff?n.diff:(n.plain||n.diff)}});
+}
+function openGallery(sec,fig,diff){
+  items=itemsOf(sec);if(!items.length)return;gsec=sec;
+  cur=Math.max(0,items.findIndex(function(it){return it.fig===fig}));
+  var h=sec.querySelector('h2');gdoc.innerHTML=h?h.innerHTML:'';
+  var row=fig.closest('.row');
+  gdiff.checked=diff||document.body.classList.contains('showdiff')||!!(row&&row.classList.contains('showdiff'));
+  gal.classList.remove('hidden');document.body.style.overflow='hidden';show();
+  document.getElementById('galclose').focus();
+}
+function closeGallery(){gal.classList.add('hidden');document.body.style.overflow='';gimg.removeAttribute('src')}
+function step(n){var i=cur+n;if(i>=0&&i<items.length){cur=i;show()}}
+document.addEventListener('click',function(e){
+  var a=e.target.closest&&e.target.closest('section.doc figure a');
+  if(!a||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
+  e.preventDefault();openGallery(a.closest('section.doc'),a.closest('figure'),a.classList.contains('diff'));
+});
+gprev.addEventListener('click',function(){step(-1)});gnext.addEventListener('click',function(){step(1)});
+document.getElementById('galclose').addEventListener('click',closeGallery);
+gdiff.addEventListener('change',show);
+gal.addEventListener('click',function(e){if(e.target===gal||e.target.classList.contains('galmain')||e.target.classList.contains('galimg'))closeGallery()});
+document.addEventListener('keydown',function(e){
+  if(gal.classList.contains('hidden')||e.metaKey||e.ctrlKey||e.altKey)return;
+  switch(e.key){
+  case 'Escape':closeGallery();break;
+  case 'ArrowRight':step(1);break;
+  case 'ArrowLeft':step(-1);break;
+  case 'Home':cur=0;show();break;
+  case 'End':cur=items.length-1;show();break;
+  case 'd':case 'D':if(e.target!==gdiff){gdiff.checked=!gdiff.checked;show()}break;
+  default:return;
+  }
+  e.preventDefault();
+});
+var tx=null;
+gal.addEventListener('touchstart',function(e){tx=e.touches.length===1?e.touches[0].clientX:null},{passive:true});
+gal.addEventListener('touchend',function(e){
+  if(tx===null)return;var dx=e.changedTouches[0].clientX-tx;tx=null;
+  if(Math.abs(dx)>50)step(dx<0?1:-1);
 });
 filter();
 })();

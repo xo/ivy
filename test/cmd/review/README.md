@@ -596,10 +596,29 @@ the primary external references, MuPDF, Poppler Splash, Poppler Cairo, and
 the other external references. When a document has more than one
 reference, the caption of a cell names the reference too, such as
 "Microsoft Office · MuPDF", and the header of a row names its primary
-reference. A click on an image
-opens it at its full size. The box "show the differences", or the button of
-a row, shows the map of the difference in place of each reference and of ivy
-PDF: red where the pages differ, darker where they differ more.
+reference. The box "show the differences", or the button of a row, shows
+the map of the difference in place of each reference and of ivy PDF: red
+where the pages differ, darker where they differ more.
+
+A click on an image opens the gallery of its document. The gallery holds
+the images of that document only, in the order of the rows: for each page,
+ivy, ivy PDF and each reference. These keys and controls work in the
+gallery:
+
+- The left and right arrows, the buttons at the sides, or a swipe show the
+  image before or after. Home and End show the first and the last image.
+- The box "differences", or the key `d`, shows the map of the difference
+  in place of each image that has one. The choice stays as you go to the
+  next image. The box starts checked when you click a map of the
+  difference, or when the page shows the differences.
+- Esc, the button ✕ or a click outside the image closes the gallery.
+
+The top of the gallery gives the name and the status of the document, the
+page and the column of the image, and its place in the gallery, such as
+"3 / 29". Under the image are the numbers of the cell, then the summary of
+the document: its source, its license, its URL, the times, the worst by
+reference and the errors. "open the file" opens the image at its full size.
+A click with Ctrl, Cmd or Shift opens the image without the gallery.
 
 A row of the MediaBox has the same cells and the same numbers as the other
 rows, at the MediaBox. Its header gives the blurred difference between its
