@@ -1,5 +1,7 @@
 // Package fb2 opens FictionBook 2 files: an .fb2 file, which is XML, and a
-// zip archive that holds one, such as .fb2.zip or .fbz.
+// zip archive that holds one, such as .fb2.zip or .fbz. A zip archive whose
+// entries ZipCrypto or the AES of WinZip encrypts opens with the password of
+// ivy.Config, or with its function PasswordFunc (D12).
 //
 // The package converts the body of the book into one XHTML document with a
 // style sheet, for the layout of ivy (D10, D21). The images of the book are
@@ -104,7 +106,8 @@ var (
 
 // Open opens a FictionBook file, or a zip archive that holds one. It parses
 // the XML of the book. It returns an error that wraps ivy.ErrFormat if src
-// is not a FictionBook file.
+// is not a FictionBook file, and one that wraps ivy.ErrPassword if no
+// password opens an encrypted zip archive.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
 	for _, opt := range opts {
@@ -115,7 +118,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	}
 	defer ebook.Recover("opening fictionbook", &err)
 	lim := o.cfg.Limits.WithDefaults()
-	buf, err := readBook(src, lim)
+	buf, err := readBook(ctx, src, o.cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +161,8 @@ var zipMagic = []byte("PK\x03\x04")
 
 // readBook reads the XML of the book from src. If src is a zip archive, it
 // reads the first entry whose name ends in .fb2, or the only entry.
-func readBook(src ivy.Source, lim ivy.Limits) ([]byte, error) {
+func readBook(ctx context.Context, src ivy.Source, cfg ivy.Config) ([]byte, error) {
+	lim := cfg.Limits.WithDefaults()
 	size := src.Size()
 	switch {
 	case size <= 0:
@@ -168,7 +172,7 @@ func readBook(src ivy.Source, lim ivy.Limits) ([]byte, error) {
 	}
 	head := make([]byte, len(zipMagic))
 	if _, err := src.ReadAt(head, 0); err == nil && bytes.Equal(head, zipMagic) {
-		return readZip(src, lim)
+		return readZip(ctx, src, cfg)
 	}
 	buf := make([]byte, size)
 	if _, err := src.ReadAt(buf, 0); err != nil {
@@ -177,11 +181,15 @@ func readBook(src ivy.Source, lim ivy.Limits) ([]byte, error) {
 	return buf, nil
 }
 
-// readZip reads the book from a zip archive.
-func readZip(src ivy.Source, lim ivy.Limits) ([]byte, error) {
-	archive, err := zipdoc.Open(src, lim)
+// readZip reads the book from a zip archive. If the archive encrypts its
+// entries, it asks for the password as D12 says.
+func readZip(ctx context.Context, src ivy.Source, cfg ivy.Config) ([]byte, error) {
+	archive, err := zipdoc.Open(src, cfg.Limits)
 	if err != nil {
 		return nil, err
+	}
+	if err := archive.UnlockSmallest(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("opening fictionbook: %w", err)
 	}
 	var files []string
 	for _, f := range archive.Files() {

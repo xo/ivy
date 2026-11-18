@@ -158,6 +158,21 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+func TestPassword(t *testing.T) {
+	buf := fixture.EncryptedZip(fixture.ZipCrypto, "secret", fixture.Entry{Name: "book.fb2", Data: []byte(book("utf-8"))})
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ErrPassword without a password, got: %v", err)
+	}
+	cfg := ivy.Config{PasswordFunc: func(context.Context, int) (string, error) { return "secret", nil }}
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := d.Describe(t.Context()); err != nil || info.Title != "Война и мир" {
+		t.Errorf("expected the title of the book, got: %+v, %v", info, err)
+	}
+}
+
 // equalInfo reports whether two descriptions are equal.
 func equalInfo(a, b ivy.Info) bool {
 	return a.Title == b.Title && strings.Join(a.Authors, "|") == strings.Join(b.Authors, "|") &&
@@ -362,10 +377,11 @@ func FuzzOpen(f *testing.F) {
 	f.Add([]byte(book("utf-8")))
 	f.Add(toWindows1251(f, book("windows-1251")))
 	f.Add(fixture.Zip(fixture.Entry{Name: "book.fb2", Data: []byte(book("utf-8"))}))
+	f.Add(fixture.EncryptedZip(fixture.WinZipAES1, "secret", fixture.Entry{Name: "book.fb2", Data: []byte(book("utf-8"))}))
 	f.Add([]byte(billionLaughs))
 	f.Add(fixture.FictionBook(``, `<coverpage><image l:href="#c.png"/></coverpage>`, `<p foo:a="1">a<a l:href="#n">1</a></p>`,
 		fixture.Binary{ID: "c.png", ContentType: "image/png", Data: fixture.PNG(2, 3, color.Black)}))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
+	cfg := ivy.Config{Password: "secret", Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
 		if err != nil {

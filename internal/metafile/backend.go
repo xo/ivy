@@ -23,12 +23,6 @@ type backend struct {
 	// surface is the rectangle that the clip of GDI covers by default: the
 	// target of the picture, with a margin of its size on each side.
 	surface okage.Rect
-	// far is the distance from the target past which a point is garbage. A
-	// path with such a point is left out, because okage fails on a
-	// coordinate near 1e12 pixels.
-	far float64
-	// cx and cy are the center of the target.
-	cx, cy float64
 	// drew is set after the first operation that reached the device.
 	drew bool
 	// skipped counts the records that the backend left out, and firstSkip
@@ -61,19 +55,7 @@ func newBackend(ctx context.Context, d display.Device, dst okage.Rect, p *Pictur
 		d:       d,
 		pic:     p,
 		surface: surface,
-		far:     maxFar * max(float64(dst.Width()), float64(dst.Height()), 1),
-		cx:      float64(dst.X() + dst.Width()/2),
-		cy:      float64(dst.Y() + dst.Height()/2),
 	}
-}
-
-// maxFar is the distance from the target, in sizes of the target, past which
-// a point is garbage.
-const maxFar = 1e6
-
-// near reports whether the point (x, y) is not garbage.
-func (b *backend) near(x, y float64) bool {
-	return math.Abs(x-b.cx) <= b.far && math.Abs(y-b.cy) <= b.far
 }
 
 // close removes the clip that the backend left on the device, and releases
@@ -118,41 +100,31 @@ func transform(m gowemf.Matrix) okage.Transform {
 }
 
 // path converts a path of gowemf to a path of okage. It returns nil for an
-// empty path, and for a path with a point that is garbage.
+// empty path, and for a path that lacks a point. okage leaves out a path
+// with a point that is not finite.
 func (b *backend) path(p gowemf.Path) *okage.Path {
 	pb := okage.NewPathBuilderWithCapacity(len(p.Verbs), len(p.Points))
 	pts := p.Points
-	i := 0
-	pt := func() (float32, float32, bool) {
-		if i >= len(pts) {
-			return 0, 0, false
-		}
-		v := pts[i]
-		i++
-		return float32(v.X), float32(v.Y), b.near(v.X, v.Y)
-	}
 	for _, v := range p.Verbs {
 		switch v {
 		case gowemf.PathMoveTo:
-			x, y, ok := pt()
-			if !ok {
+			if len(pts) < 1 {
 				return nil
 			}
-			pb.MoveTo(x, y)
+			pb.MoveTo(float32(pts[0].X), float32(pts[0].Y))
+			pts = pts[1:]
 		case gowemf.PathLineTo:
-			x, y, ok := pt()
-			if !ok {
+			if len(pts) < 1 {
 				return nil
 			}
-			pb.LineTo(x, y)
+			pb.LineTo(float32(pts[0].X), float32(pts[0].Y))
+			pts = pts[1:]
 		case gowemf.PathCubicTo:
-			x1, y1, ok1 := pt()
-			x2, y2, ok2 := pt()
-			x, y, ok3 := pt()
-			if !ok1 || !ok2 || !ok3 {
+			if len(pts) < 3 {
 				return nil
 			}
-			pb.CubicTo(x1, y1, x2, y2, x, y)
+			pb.CubicTo(float32(pts[0].X), float32(pts[0].Y), float32(pts[1].X), float32(pts[1].Y), float32(pts[2].X), float32(pts[2].Y))
+			pts = pts[3:]
 		case gowemf.PathClose:
 			pb.Close()
 		}
@@ -223,10 +195,7 @@ func (b *backend) stroke(p *okage.Path, s gowemf.Stroke, shader okage.Shader) {
 	if !s.Hairline {
 		t := transform(s.Transform)
 		inv, ok := t.Invert()
-		m := s.Transform
-		scale := math.Max(math.Hypot(m.M11, m.M12), math.Hypot(m.M21, m.M22))
-		if !ok || !(s.Width > 0) || !(s.Width*scale <= b.far) {
-			// a pen wider than the distance of garbage is garbage
+		if !ok || !(s.Width > 0) {
 			return
 		}
 		pen, ok := display.Clone(p).Transform(inv)
@@ -420,7 +389,7 @@ func (b *backend) DrawImage(im gowemf.ImageDraw, clip gowemf.Clip) error {
 
 // placeImage returns the pixels of the source rectangle of im, and the
 // transform that places them in the user space. It returns false if the
-// rectangle is empty, or if a corner of the image is garbage.
+// rectangle is empty.
 func (b *backend) placeImage(im gowemf.ImageDraw) (image.Image, okage.Transform, bool) {
 	img := im.Image
 	if img == nil {
@@ -438,11 +407,6 @@ func (b *backend) placeImage(im gowemf.ImageDraw) (image.Image, okage.Transform,
 			return nil, okage.Transform{}, false
 		}
 		img = sub.SubImage(src)
-	}
-	for _, c := range []image.Point{src.Min, {src.Max.X, src.Min.Y}, {src.Min.X, src.Max.Y}, src.Max} {
-		if q := im.Transform.Apply(gowemf.Point{X: float64(c.X), Y: float64(c.Y)}); !b.near(q.X, q.Y) {
-			return nil, okage.Transform{}, false
-		}
 	}
 	return img, transform(im.Transform).PreTranslate(float32(src.Min.X), float32(src.Min.Y)), true
 }

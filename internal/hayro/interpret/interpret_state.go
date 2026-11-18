@@ -268,6 +268,11 @@ func handleGsSingle(dict syntax.Dict, key syntax.Name, ctx *Context, parentResou
 		if v, ok := dict.Get[float32](key); ok {
 			ctx.strokePropsMut().MiterLimit = v
 		}
+	case "SA":
+		// Port: upstream ignores SA.
+		if v, ok := dict.Get[bool](key); ok {
+			ctx.strokePropsMut().StrokeAdjust = v
+		}
 	case "CA":
 		if v, ok := dict.Get[float32](key); ok {
 			ctx.strokePaintMut().alpha = v

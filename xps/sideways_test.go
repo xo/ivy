@@ -91,26 +91,22 @@ func TestSidewaysRender(t *testing.T) {
 	}
 }
 
-func TestTablesFit(t *testing.T) {
-	if !tablesFit(goregular.TTF) {
-		t.Error("expected the tables of Go Regular to fit")
-	}
-	// the length of the first table of the directory
+func TestSidewaysLongTable(t *testing.T) {
+	// a font whose first table claims 4 GB still gives the vertical metrics
+	// of a sideways run, because font.Load cuts the table
 	long := bytes.Clone(goregular.TTF)
 	binary.BigEndian.PutUint32(long[12+12:], 0xfffffff0)
-	if tablesFit(long) {
-		t.Error("expected a table of 4 GB not to fit")
-	}
-	if tablesFit([]byte("ttcf")) {
-		t.Error("expected a short file not to fit")
-	}
-	// a font whose tables do not fit has no vertical metrics, and takes
-	// the fallback
 	d, err := Open(t.Context(), bytes.NewReader(pkgFile("", fixture.Entry{Name: "font.ttf", Data: long})))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := d.vertical("/font.ttf"); v.face != nil {
-		t.Error("expected no vertical metrics")
+	r := &renderer{ctx: t.Context(), doc: d, part: "/Documents/Pages/1.fpage", dev: &display.List{}}
+	n := mustParse(t, `<Glyphs FontUri="/font.ttf" FontRenderingEmSize="10" OriginX="0" OriginY="0" UnicodeString="II" IsSideways="true"/>`)
+	run, err := r.glyphRun(n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.Glyphs) != 2 || run.Glyphs[1].X <= run.Glyphs[0].X {
+		t.Errorf("expected 2 glyphs down the run, got: %+v", run.Glyphs)
 	}
 }

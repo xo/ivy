@@ -1,6 +1,6 @@
 # D28. ivy reads fonts with the typesetting of okage, and fills small glyphs finely
 
-Status: Decided.
+Status: Decided. Amended by D46.
 
 On 2026-11-17 the visual review showed that the text of ivy looks lighter,
 thinner and wider than the text of MuPDF, Poppler and LibreOffice. The

@@ -72,13 +72,16 @@ type Group struct {
 	// okage.BlendModeSourceOver.
 	Blend okage.BlendMode
 	// Isolated starts the layer transparent, without the backdrop of the
-	// parent. OkageDevice draws every group as isolated, as hayro does. The
-	// result differs from PDF only for a blend mode inside a group that is
-	// not isolated.
+	// parent. Without it, the objects of the group blend with the backdrop
+	// of the parent, and the device removes the backdrop from the layer
+	// before it draws the layer onto the parent (ISO 32000-2, 11.6.3).
+	// This changes the result only for an object with a blend mode other
+	// than the normal one.
 	Isolated bool
 	// Knockout makes each object of the group draw over the backdrop of the
-	// group, not over the earlier objects. OkageDevice draws a knockout group
-	// as a group that is not knockout.
+	// group, not over the earlier objects of the group. Where an object
+	// covers a pixel, it replaces the earlier objects (ISO 32000-2, 11.4.8).
+	// A nested group is one object.
 	Knockout bool
 	// Mask is the soft mask of the group, or nil.
 	Mask *Mask
@@ -93,9 +96,9 @@ type Mask struct {
 	// Backdrop is the color under the content of a luminosity mask. The
 	// zero Color is transparent, which gives the same mask as black.
 	Backdrop okage.Color
-	// Transfer changes the values of the mask in place, one byte for each
-	// pixel, or is nil.
-	Transfer func(mask []byte)
+	// Transfer is the transfer function of the mask, or nil. Each value v
+	// of the mask becomes Transfer[v].
+	Transfer *[256]uint8
 	// Content draws the content of the mask onto d. The user space of d is
 	// the user space at BeginGroup.
 	Content func(d Device)
@@ -123,6 +126,28 @@ func FillText(d Device, p *okage.Path, rule okage.FillRule, shader okage.Shader)
 		return
 	}
 	d.FillPath(p, rule, shader)
+}
+
+// StrokeAdjuster is a device that can stroke a path with the automatic
+// stroke adjustment of PDF, the entry SA of a graphics state. An OkageDevice
+// and a List are stroke adjusters.
+type StrokeAdjuster interface {
+	// StrokeAdjusted strokes p with the shader, as StrokePath does. It rounds
+	// the width of the stroke to whole pixels, at least 1, and moves each
+	// horizontal or vertical line onto the grid of the pixels, so that a
+	// thin line covers whole pixels.
+	StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage.Shader)
+}
+
+// StrokeAdjusted strokes p with the stroke adjustment of PDF. It calls
+// StrokeAdjusted of d when d is a StrokeAdjuster, and StrokePath of d
+// otherwise.
+func StrokeAdjusted(d Device, p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
+	if sa, ok := d.(StrokeAdjuster); ok {
+		sa.StrokeAdjusted(p, stroke, shader)
+		return
+	}
+	d.StrokePath(p, stroke, shader)
 }
 
 // GlyphRun is a run of glyphs of one font and one size.
@@ -206,8 +231,9 @@ type List struct {
 
 // The interfaces that a List implements.
 var (
-	_ Device     = (*List)(nil)
-	_ TextFiller = (*List)(nil)
+	_ Device         = (*List)(nil)
+	_ TextFiller     = (*List)(nil)
+	_ StrokeAdjuster = (*List)(nil)
 )
 
 // record keeps one command.
@@ -251,6 +277,13 @@ func (l *List) FillPath(p *okage.Path, rule okage.FillRule, shader okage.Shader)
 // StrokePath satisfies the Device interface.
 func (l *List) StrokePath(p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
 	l.record(fmt.Sprintf("stroke %v %g", bounds(p), stroke.Width), func(d Device) { d.StrokePath(p, stroke, shader) })
+}
+
+// StrokeAdjusted satisfies the StrokeAdjuster interface. The replay calls
+// StrokeAdjusted of this package with the device of the replay.
+func (l *List) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
+	l.record(fmt.Sprintf("stroke adjusted %v %g", bounds(p), stroke.Width),
+		func(d Device) { StrokeAdjusted(d, p, stroke, shader) })
 }
 
 // ClipPath satisfies the Device interface.

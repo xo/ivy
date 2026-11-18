@@ -177,7 +177,7 @@ func (m *Machine) stroke() error {
 	m.mark()
 	m.dev.Save()
 	m.dev.Concat(toTransform(m.gs.ctm))
-	m.dev.strokeMin(p, m.strokeStyle(), m.userShader(shader, inv), m.gs.ctm.Scale())
+	m.dev.strokeMin(p, m.strokeStyle(), m.gs.strokeAdjust, m.userShader(shader, inv), m.gs.ctm.Scale())
 	m.dev.Restore()
 	return nil
 }

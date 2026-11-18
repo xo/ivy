@@ -202,6 +202,24 @@ func TestTXTZ(t *testing.T) {
 	}
 }
 
+func TestTXTZPassword(t *testing.T) {
+	buf := fixture.EncryptedZip(fixture.ZipCrypto, "secret",
+		fixture.Entry{Name: "index.txt", Data: []byte("Hidden text.")},
+		fixture.Entry{Name: "metadata.opf", Data: []byte(metadata)},
+	)
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ErrPassword without a password, got: %v", err)
+	}
+	cfg := ivy.Config{PasswordFunc: func(context.Context, int) (string, error) { return "secret", nil }}
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := document(t, d); !strings.Contains(got, "<p>Hidden text.</p>") {
+		t.Errorf("expected the text, got: %q", got)
+	}
+}
+
 func TestTXTZWithoutIndex(t *testing.T) {
 	buf := fixture.Zip(
 		fixture.Entry{Name: "deep/a.txt", Data: []byte("deep")},
@@ -254,7 +272,8 @@ func FuzzOpen(f *testing.F) {
 		fixture.Entry{Name: "metadata.opf", Data: []byte(metadata)},
 		fixture.Entry{Name: "images/cover.png", Data: fixture.PNG(3, 3, color.White)},
 	))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
+	f.Add(fixture.EncryptedZip(fixture.ZipCrypto, "secret", fixture.Entry{Name: "index.txt", Data: []byte("text")}))
+	cfg := ivy.Config{Password: "secret", Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		check := func(err error) {
 			if err != nil && strings.Contains(err.Error(), "panic:") {

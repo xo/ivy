@@ -100,3 +100,30 @@ func TestEncryptedErrors(t *testing.T) {
 		t.Errorf("expected ErrFormat without the extra field, got: %v", err)
 	}
 }
+
+func TestUnlockSmallest(t *testing.T) {
+	// an archive without encrypted entries needs no password
+	a, err := Open(bytes.NewReader(fixture.Zip(fixture.Entry{Name: "a.txt", Data: []byte("plain")})), ivy.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UnlockSmallest(t.Context(), ivy.Config{}); err != nil {
+		t.Errorf("expected no error, got: %v", err)
+	}
+	buf := fixture.EncryptedZip(fixture.ZipCrypto, "secret",
+		fixture.Entry{Name: "big.txt", Data: bytes.Repeat([]byte("ivy "), 1000)},
+		fixture.Entry{Name: "small.txt", Data: []byte("small")},
+	)
+	if a, err = Open(bytes.NewReader(buf), ivy.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.UnlockSmallest(t.Context(), ivy.Config{}); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ErrPassword without a password, got: %v", err)
+	}
+	if err := a.UnlockSmallest(t.Context(), ivy.Config{Password: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := a.Read(a.Find("big.txt")); err != nil || len(got) != 4000 {
+		t.Errorf("expected the big entry, got: %d bytes, %v", len(got), err)
+	}
+}

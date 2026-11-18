@@ -310,6 +310,11 @@ type StrokeProps struct {
 	DashArray []float32
 	// DashOffset is the dash offset.
 	DashOffset float32
+	// StrokeAdjust is the automatic stroke adjustment, the entry SA of a
+	// graphics state.
+	//
+	// Port: upstream has no such field, and ignores SA.
+	StrokeAdjust bool
 }
 
 // DefaultStrokeProps is the Default implementation of StrokeProps in

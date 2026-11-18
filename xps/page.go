@@ -511,10 +511,8 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 		// an italic simulation slants each glyph by 20 degrees
 		run.Transform = okage.TransformFromRow(1, 0, -0.36397, 1, 0, 0)
 	}
-	var vert *vertical
 	sideways := attr(n, "IsSideways") == "true"
 	if sideways {
-		vert = r.doc.vertical(name)
 		run.Transform = sidewaysTurn.PreConcat(run.Transform)
 	}
 	text := []rune(strings.TrimPrefix(attr(n, "UnicodeString"), "{}"))
@@ -559,7 +557,7 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 		// dx and dy move the origin of a sideways glyph to the pen
 		var dx, dy float32
 		if sideways {
-			va, ox, oy := vert.metrics(face, gid)
+			va, ox, oy := verticalMetrics(face, gid)
 			advance = va * size
 			dx, dy = oy*size, ox*size
 		}

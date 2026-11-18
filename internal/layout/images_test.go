@@ -15,19 +15,24 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"log/slog"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/xo/okage/roxmltree"
 	"github.com/xo/okage/svg"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // testImageLoader returns a loader of the files of testdata and of extra
@@ -194,6 +199,173 @@ func TestSVGImage(t *testing.T) {
 	if _, err := newSVGImage([]byte("<svg"), "", nil, defaultLimits); err == nil {
 		t.Error("no error for XML that is not valid")
 	}
+
+	// A length that okage does not read is read as upstream reads it, and a
+	// viewBox that okage does not accept gives no ratio.
+	for _, c := range []struct {
+		svg  string
+		size IntrinsicSize
+	}{
+		{`<svg xmlns="http://www.w3.org/2000/svg" width="1rem" height=" 2 "/>`, IntrinsicSize{16, 2, 8, true, true, true}},
+		{`<svg xmlns="http://www.w3.org/2000/svg" width="3q" height="auto"/>`, IntrinsicSize{3 * 96 / 25.4 / 4, 0, 1, true, true, true}},
+		{`<svg xmlns="http://www.w3.org/2000/svg" width="20" viewBox="0 0 -10 5"/>`, IntrinsicSize{20, 0, 0, true, false, false}},
+		{`<svg xmlns="http://www.w3.org/2000/svg" width="6ex" height="3pc"/>`, IntrinsicSize{48, 48, 1, true, true, true}},
+	} {
+		img, err := newSVGImage([]byte(c.svg), "file:///a.svg", nil, defaultLimits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := img.GetIntrinsicSize(1, 16); got != c.size {
+			t.Errorf("%s: %+v", c.svg, got)
+		}
+	}
+}
+
+// TestBuildSVG checks the document of an inline svg element: the
+// namespaces of the names, the text, and the depth.
+func TestBuildSVG(t *testing.T) {
+	h := fakeHTML(t, `<p><svg width=10 height=20 xmlns:foo="urn:foo"><rect xlink:href="#a" width=5 height=5 />tail<foreignObject><div>t</div></foreignObject></svg>after`, testBaseURL, nil)
+	element := findElement(h.EtreeElement, "{"+nsSVG+"}svg")
+	img := newInlineSVGImage(element, testBaseURL, nil, defaultLimits)
+	if img.err != nil {
+		t.Fatal(img.err)
+	}
+	if size := img.GetIntrinsicSize(1, 16); size.Width != 10 || size.Height != 20 {
+		t.Errorf("size: %+v", size)
+	}
+	root := img.doc.RootElement()
+	if got := root.TagName(); got != roxmltree.ExpandedNameFromTuple(nsSVG, "svg") {
+		t.Errorf("root: %v", got)
+	}
+	if _, ok := root.Attribute(roxmltree.ExpandedNameFromStr("xmlns:foo")); ok {
+		t.Error("declaration of a namespace as an attribute")
+	}
+	var got []string
+	for node := range root.Descendants() {
+		switch {
+		case node.IsElement():
+			got = append(got, node.TagName().String())
+			if href, ok := node.Attribute(roxmltree.ExpandedNameFromTuple(nsXLink, "href")); ok {
+				got = append(got, "href="+href)
+			}
+		case node.IsText():
+			text, _ := node.Text()
+			got = append(got, text)
+		}
+	}
+	want := []string{
+		"{" + nsSVG + "}svg", "{" + nsSVG + "}rect", "href=#a", "tail",
+		"{" + nsSVG + "}foreignObject", "{" + nsHTML + "}div", "t",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("nodes:\n got %q\nwant %q", got, want)
+	}
+
+	// An element deeper than DefaultMaxTreeDepth is left out, and its tail
+	// is kept.
+	deep := &Element{Tag: "{" + nsSVG + "}svg"}
+	for parent, i := deep, 0; i < DefaultMaxTreeDepth+5; i++ {
+		child := &Element{Tag: "{" + nsSVG + "}g", Tail: "x", Parent: parent}
+		parent.Children = []*Element{child}
+		parent = child
+	}
+	img = newInlineSVGImage(deep, testBaseURL, nil, defaultLimits)
+	if img.err != nil {
+		t.Fatal(img.err)
+	}
+	depth := 0
+	for node := img.doc.RootElement(); ; depth++ {
+		child, ok := node.FirstElementChild()
+		if !ok {
+			break
+		}
+		node = child
+	}
+	if depth != DefaultMaxTreeDepth {
+		t.Errorf("depth: %d", depth)
+	}
+
+	// An element that the builder refuses is an image that cannot be drawn.
+	img = newInlineSVGImage(&Element{Tag: "{" + nsSVG + "}"}, testBaseURL, nil, defaultLimits)
+	if img.err == nil {
+		t.Fatal("no error for an element without a name")
+	}
+	if _, err := img.Tree(); err == nil {
+		t.Error("tree of an element without a name")
+	}
+	if size := img.GetIntrinsicSize(1, 16); size != (IntrinsicSize{}) {
+		t.Errorf("size of an element without a name: %+v", size)
+	}
+	if _, err := img.sizedDocument(10, 10); err == nil {
+		t.Error("sized document of an element without a name")
+	}
+}
+
+// TestSVGSizedDocument checks the attributes of the root element of the
+// sized document, and the copy of its children.
+func TestSVGSizedDocument(t *testing.T) {
+	const head = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xlink:title="t" `
+	for _, c := range []struct {
+		svg  string
+		want map[string]string
+	}{
+		{
+			head + `width="2em" height="1in" preserveAspectRatio="xMinYMin"><rect width="1" height="1"/>text<!-- comment --></svg>`,
+			map[string]string{"width": "30", "height": "40.5", "viewBox": "0 0 32 96", "preserveAspectRatio": "none"},
+		},
+		{
+			head + `width="2em" viewBox="0 0 4 2" preserveAspectRatio="xMinYMin"><rect width="1" height="1"/>text<!-- comment --></svg>`,
+			map[string]string{"width": "30", "height": "40.5", "viewBox": "0 0 4 2", "preserveAspectRatio": "xMinYMin"},
+		},
+		{
+			head + `><rect width="1" height="1"/>text<!-- comment --></svg>`,
+			map[string]string{"width": "30", "height": "40.5"},
+		},
+	} {
+		img, err := newSVGImage([]byte(c.svg), "file:///a.svg", nil, defaultLimits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := img.sizedDocument(30, 40.5)
+		if err != nil {
+			t.Fatal(err)
+		}
+		root := doc.RootElement()
+		got := map[string]string{}
+		for attr := range root.Attributes() {
+			if _, ok := attr.Namespace(); !ok {
+				got[attr.Name()] = attr.Value()
+			}
+		}
+		if !maps.Equal(got, c.want) {
+			t.Errorf("%s: %v", c.svg, got)
+		}
+		if title, _ := root.Attribute(roxmltree.ExpandedNameFromTuple(nsXLink, "title")); title != "t" {
+			t.Errorf("%s: xlink:title %q", c.svg, title)
+		}
+		if uri, ok := root.LookupNamespaceURI("xlink"); !ok || uri != nsXLink {
+			t.Errorf("%s: prefix xlink: %q", c.svg, uri)
+		}
+		var children []string
+		for child := range root.Children() {
+			if child.IsText() {
+				text, _ := child.Text()
+				children = append(children, text)
+			} else {
+				children = append(children, child.TagName().String())
+			}
+		}
+		if want := []string{"{" + nsSVG + "}rect", "text"}; !slices.Equal(children, want) {
+			t.Errorf("%s: children %q", c.svg, children)
+		}
+		tree, err := svg.FromXMLTree(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size := tree.Size(); size.Width() != 30 || size.Height() != 40.5 {
+			t.Errorf("%s: tree of %v", c.svg, size)
+		}
+	}
 }
 
 // TestSVGSize checks size and normalize of weasyprint/svg/utils.py.
@@ -311,4 +483,65 @@ func TestProcessColorStops(t *testing.T) {
 	if len(hints) != 4 || hints[1] != 1<<16 {
 		t.Errorf("hints: %v", hints)
 	}
+}
+
+// svgBenchFiles returns a document of n inline svg elements and n img
+// elements of one SVG file, with that file.
+func svgBenchFiles(n int) fstest.MapFS {
+	var image strings.Builder
+	image.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" width="60" height="30" viewBox="0 0 60 30">`)
+	image.WriteString(`<defs><linearGradient id="g"><stop offset="0" stop-color="#00f"/><stop offset="1" stop-color="#f00"/></linearGradient></defs>`)
+	for i := range 40 {
+		fmt.Fprintf(&image, `<rect x="%d" y="%d" width="4" height="4" fill="url(#g)"/>`, i%15*4, i/15*10)
+	}
+	image.WriteString(`<text x="2" y="28" font-size="8">SVG</text></svg>`)
+	var page strings.Builder
+	page.WriteString(`<style>@page { size: 600px 400px; margin: 10px } body { margin: 0 }</style><p>`)
+	for i := range n {
+		fmt.Fprintf(&page, `<svg width="40" height="20" viewBox="0 0 40 20"><rect width="%d" height="10" fill="#00f"/>`, i%40)
+		fmt.Fprintf(&page, `<circle cx="30" cy="10" r="8" fill="red"/><a xlink:href="#x"><text x="1" y="19" font-size="6">%d</text></a></svg> `, i)
+		page.WriteString(`<img src="image.svg"> `)
+	}
+	return fstest.MapFS{
+		"a.html":    &fstest.MapFile{Data: []byte(page.String())},
+		"image.svg": &fstest.MapFile{Data: []byte(image.String())},
+	}
+}
+
+// BenchmarkSVGImages lays out a document of many inline svg elements and SVG
+// images, and draws its pages.
+func BenchmarkSVGImages(b *testing.B) {
+	ctx := context.Background()
+	fsys := svgBenchFiles(200)
+	fonts, _ := fontdb.Load(nil, false, ivy.Limits{}.WithDefaults(), testLogger())
+	open := func() *Book {
+		return NewBook(Source{FS: fsys, Documents: []string{"a.html"}}, BookOptions{Fonts: fonts})
+	}
+	b.Run("layout", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := open().PageCount(ctx); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("draw", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			book := open()
+			n, err := book.PageCount(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := range n {
+				p, err := book.Page(ctx, i)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := ivy.RenderImage(ctx, p, 96, color.White); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	})
 }

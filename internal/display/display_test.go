@@ -253,14 +253,14 @@ func TestSoftMask(t *testing.T) {
 		t.Errorf("expected nothing under the black of the mask, got: %v", c)
 	}
 	// a white backdrop and a transfer function that inverts the mask
+	var invert [256]uint8
+	for i := range invert {
+		invert[i] = uint8(255 - i)
+	}
 	inverted := &Mask{
 		Type:     okage.MaskTypeLuminance,
 		Backdrop: okage.ColorWhite,
-		Transfer: func(m []byte) {
-			for i := range m {
-				m[i] = 255 - m[i]
-			}
-		},
+		Transfer: &invert,
 		Content: func(d Device) {
 			d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(0, 0, 0, 255))
 		},
@@ -383,5 +383,233 @@ func TestFillGlyphsLarge(t *testing.T) {
 	db.FillPath(run.Path(), okage.FillRuleWinding, solid(0, 0, 0, 255))
 	if !slices.Equal(a.Data(), b.Data()) {
 		t.Error("expected the pixels of FillPath for a large glyph")
+	}
+}
+
+// near reports whether each channel of c is within 1 of want.
+func near(c, want color.NRGBA) bool {
+	d := func(a, b uint8) bool { return int(a) <= int(b)+1 && int(b) <= int(a)+1 }
+	return d(c.R, want.R) && d(c.G, want.G) && d(c.B, want.B) && d(c.A, want.A)
+}
+
+// multiply draws a rectangle in a group with the blend mode multiply.
+func multiply(d Device, r *okage.Path, shader okage.Shader) {
+	d.BeginGroup(Group{Opacity: 1, Blend: okage.BlendModeMultiply})
+	d.FillPath(r, okage.FillRuleWinding, shader)
+	d.EndGroup()
+}
+
+func TestGroupNotIsolated(t *testing.T) {
+	yellow, cyan := solid(255, 255, 0, 255), solid(0, 255, 255, 255)
+	white := &Mask{
+		Type: okage.MaskTypeLuminance,
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+		},
+	}
+	for _, tt := range []struct {
+		name string
+		draw func(d *OkageDevice)
+		want color.NRGBA
+	}{
+		{
+			// the cyan multiplies with the yellow of the backdrop into
+			// green, and the group draws the green at half opacity over the
+			// yellow: (0.5*0 + 0.5*255, 255, 0)
+			"not isolated",
+			func(d *OkageDevice) {
+				d.BeginGroup(Group{Opacity: 0.5})
+				multiply(d, rect(0, 0, 10, 10), cyan)
+				d.EndGroup()
+			},
+			color.NRGBA{128, 255, 0, 255},
+		},
+		{
+			// the cyan multiplies with the transparent layer, and stays
+			// cyan: (0.5*0 + 0.5*255, 255, 0.5*255 + 0.5*0)
+			"isolated",
+			func(d *OkageDevice) {
+				d.BeginGroup(Group{Opacity: 0.5, Isolated: true})
+				multiply(d, rect(0, 0, 10, 10), cyan)
+				d.EndGroup()
+			},
+			color.NRGBA{128, 255, 128, 255},
+		},
+		{
+			// a nested group that is not isolated takes the backdrop of
+			// its parent, which takes the backdrop of the target
+			"nested",
+			func(d *OkageDevice) {
+				d.BeginGroup(Group{Opacity: 0.5})
+				d.BeginGroup(Group{Opacity: 1, Mask: white})
+				multiply(d, rect(0, 0, 10, 10), cyan)
+				d.EndGroup()
+				d.EndGroup()
+			},
+			color.NRGBA{128, 255, 0, 255},
+		},
+		{
+			// the red before the multiply is part of the group alone: the
+			// cyan multiplies with the red over the yellow into black, and
+			// the group draws the black at half opacity over the yellow
+			"object before the blend",
+			func(d *OkageDevice) {
+				d.BeginGroup(Group{Opacity: 0.5})
+				d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(255, 0, 0, 255))
+				multiply(d, rect(0, 0, 10, 10), cyan)
+				d.EndGroup()
+			},
+			color.NRGBA{128, 128, 0, 255},
+		},
+	} {
+		dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+		d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, yellow)
+		tt.draw(d)
+		if c := at(dst, 5, 5); !near(c, tt.want) {
+			t.Errorf("%s: expected %v, got: %v", tt.name, tt.want, c)
+		}
+		if len(d.groups) != 0 || d.dst != dst || d.alpha != nil {
+			t.Errorf("%s: expected the device back on its target", tt.name)
+		}
+	}
+}
+
+func TestGroupNotIsolatedTransparent(t *testing.T) {
+	// over a transparent backdrop, a group that is not isolated keeps the
+	// colors and the alpha of its objects
+	dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(255, 255, 0, 255))
+	d.BeginGroup(Group{Opacity: 1, Mask: &Mask{
+		Type: okage.MaskTypeAlpha,
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(0, 0, 0, 255))
+		},
+	}})
+	multiply(d, rect(0, 0, 10, 10), solid(0, 255, 255, 128))
+	d.EndGroup()
+	// over the yellow, half of the cyan multiplies into green: (127, 255,
+	// 0). Over nothing, the cyan stays at half alpha.
+	if c := at(dst, 2, 5); !near(c, color.NRGBA{127, 255, 0, 255}) {
+		t.Errorf("expected yellow and green, got: %v", c)
+	}
+	if c := at(dst, 7, 5); !near(c, color.NRGBA{0, 255, 255, 128}) {
+		t.Errorf("expected cyan at half alpha, got: %v", c)
+	}
+}
+
+func TestGroupKnockout(t *testing.T) {
+	// in an isolated knockout group on white, the blue at half alpha
+	// replaces the red at half alpha where they overlap. The red over white
+	// is (255, 127.5, 127.5), and the blue over white is (127.5, 127.5,
+	// 255).
+	dst, d := newDevice(t, 30, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 30, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+	d.BeginGroup(Group{Opacity: 1, Isolated: true, Knockout: true})
+	d.FillPath(rect(0, 0, 20, 10), okage.FillRuleWinding, solid(255, 0, 0, 128))
+	d.FillPath(rect(10, 0, 20, 10), okage.FillRuleWinding, solid(0, 0, 255, 128))
+	d.EndGroup()
+	for _, tt := range []struct {
+		x    int
+		want color.NRGBA
+	}{
+		{5, color.NRGBA{255, 127, 127, 255}},
+		{15, color.NRGBA{127, 127, 255, 255}},
+		{25, color.NRGBA{127, 127, 255, 255}},
+	} {
+		if c := at(dst, tt.x, 5); !near(c, tt.want) {
+			t.Errorf("expected %v at x %d, got: %v", tt.want, tt.x, c)
+		}
+	}
+	// without knockout, the blue covers the red. The layer is (63.75,
+	// 0, 127.5) premultiplied at an alpha of 0.75, and over white it is
+	// (127.5, 63.75, 191.25).
+	dst, d = newDevice(t, 30, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 30, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+	d.BeginGroup(Group{Opacity: 1, Isolated: true})
+	d.FillPath(rect(0, 0, 20, 10), okage.FillRuleWinding, solid(255, 0, 0, 128))
+	d.FillPath(rect(10, 0, 20, 10), okage.FillRuleWinding, solid(0, 0, 255, 128))
+	d.EndGroup()
+	if c := at(dst, 15, 5); !near(c, color.NRGBA{127, 64, 191, 255}) {
+		t.Errorf("expected the blue over the red, got: %v", c)
+	}
+}
+
+func TestGroupKnockoutNotIsolated(t *testing.T) {
+	// in a knockout group that is not isolated, the magenta multiplies with
+	// the yellow of the backdrop into red, not with the green that the
+	// cyan made
+	dst, d := newDevice(t, 20, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 20, 10), okage.FillRuleWinding, solid(255, 255, 0, 255))
+	d.BeginGroup(Group{Opacity: 1, Knockout: true})
+	multiply(d, rect(0, 0, 20, 10), solid(0, 255, 255, 255))
+	multiply(d, rect(0, 0, 10, 10), solid(255, 0, 255, 255))
+	d.EndGroup()
+	if c := at(dst, 5, 5); !near(c, color.NRGBA{255, 0, 0, 255}) {
+		t.Errorf("expected red, got: %v", c)
+	}
+	if c := at(dst, 15, 5); !near(c, color.NRGBA{0, 255, 0, 255}) {
+		t.Errorf("expected green, got: %v", c)
+	}
+	// without knockout, the magenta multiplies with the green into black
+	dst, d = newDevice(t, 20, 10, okage.IdentityTransform())
+	d.FillPath(rect(0, 0, 20, 10), okage.FillRuleWinding, solid(255, 255, 0, 255))
+	d.BeginGroup(Group{Opacity: 1})
+	multiply(d, rect(0, 0, 20, 10), solid(0, 255, 255, 255))
+	multiply(d, rect(0, 0, 10, 10), solid(255, 0, 255, 255))
+	d.EndGroup()
+	if c := at(dst, 5, 5); !near(c, color.NRGBA{0, 0, 0, 255}) {
+		t.Errorf("expected black, got: %v", c)
+	}
+}
+
+func TestSoftMaskBackdrop(t *testing.T) {
+	// a mask of luminosity over a gray backdrop. Where the content is
+	// transparent, the mask is the luminance of the gray, about 0.5.
+	gray := okage.ColorFromRGBA8(128, 128, 128, 255)
+	dst, d := newDevice(t, 10, 10, okage.IdentityTransform())
+	d.BeginGroup(Group{Opacity: 1, Mask: &Mask{
+		Type:     okage.MaskTypeLuminance,
+		Backdrop: gray,
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 5, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+		},
+	}})
+	d.FillPath(rect(0, 0, 10, 10), okage.FillRuleWinding, solid(0, 0, 255, 255))
+	d.EndGroup()
+	if c := at(dst, 2, 5); c != (color.NRGBA{0, 0, 255, 255}) {
+		t.Errorf("expected blue under the white, got: %v", c)
+	}
+	if c := at(dst, 7, 5); !near(c, color.NRGBA{0, 0, 255, 128}) {
+		t.Errorf("expected blue at the luminance of the gray, got: %v", c)
+	}
+}
+
+func TestStrokeAdjusted(t *testing.T) {
+	pb := okage.NewPathBuilder()
+	pb.MoveTo(1, 3)
+	pb.LineTo(9, 3)
+	p, ok := pb.Finish()
+	if !ok {
+		t.Fatal("expected a path")
+	}
+	stroke := okage.DefaultStroke()
+	// a line of 1 pixel on the border of the rows 2 and 3 covers half of
+	// each. The stroke adjustment moves it into one row, which it covers
+	// whole.
+	dst, d := newDevice(t, 10, 6, okage.IdentityTransform())
+	d.StrokePath(p, stroke, solid(0, 0, 0, 255))
+	if a2, a3 := at(dst, 5, 2).A, at(dst, 5, 3).A; a2 < 120 || a2 > 136 || a3 < 120 || a3 > 136 {
+		t.Errorf("expected two rows at half alpha, got: %d and %d", a2, a3)
+	}
+	dst, d = newDevice(t, 10, 6, okage.IdentityTransform())
+	StrokeAdjusted(d, p, stroke, solid(0, 0, 0, 255))
+	a2, a3 := at(dst, 5, 2).A, at(dst, 5, 3).A
+	if max(a2, a3) != 255 || min(a2, a3) != 0 {
+		t.Errorf("expected one opaque row, got: %d and %d", a2, a3)
+	}
+	var l List
+	StrokeAdjusted(&l, p, stroke, solid(0, 0, 0, 255))
+	if got := l.String(); got != "stroke adjusted [1 3 9 3] 1" {
+		t.Errorf("expected the adjusted stroke in the list, got: %q", got)
 	}
 }

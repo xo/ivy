@@ -47,7 +47,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D25 | [ivy derives the keys of OpenDocument with Argon2id](D025-ivy-derives-the-keys-of-opendocument-with-argon2id.md) | Decided |
 | D26 | [ivy reads DjVu with a copy of the decoders of dejapdf](D026-ivy-reads-djvu-with-a-copy-of-the-decoders-of-dejapdf.md) | Decided. Amended by D38 |
 | D27 | [ivy draws the charts of Office itself](D027-ivy-draws-the-charts-of-office-itself.md) | Decided. Amends D24 |
-| D28 | [ivy reads fonts with the typesetting of okage, and fills small glyphs finely](D028-ivy-reads-fonts-with-the-typesetting-of-okage-and-fills-small-glyphs-finely.md) | Decided |
+| D28 | [ivy reads fonts with the typesetting of okage, and fills small glyphs finely](D028-ivy-reads-fonts-with-the-typesetting-of-okage-and-fills-small-glyphs-finely.md) | Decided. Amended by D46 |
 | D29 | [ivy interprets PostScript](D029-ivy-interprets-postscript.md) | Decided |
 | D30 | [vsdx draws the pages of Visio](D030-vsdx-draws-the-pages-of-visio.md) | Decided |
 | D31 | [pdf can render another page box](D031-pdf-can-render-another-page-box.md) | Decided |
@@ -65,3 +65,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D43 | [The layout lays out the whole document when a page needs the later pages](D043-the-layout-lays-out-the-whole-document-when-a-page-needs-the-later-pages.md) | Decided |
 | D44 | [ivy does not aim at TinyGo](D044-ivy-does-not-aim-at-tinygo.md) | Decided |
 | D45 | [The backlog drops ivy.Cache, keeps JPEG XR, and waits on JPEG and SVM](D045-the-backlog-drops-ivy-cache-keeps-jpeg-xr-and-waits-on-jpeg-and-svm.md) | Decided |
+| D46 | [ivy fills small glyphs with the coverage of okage](D046-ivy-fills-small-glyphs-with-the-coverage-of-okage.md) | Decided. Amends D28 |

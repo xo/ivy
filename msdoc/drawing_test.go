@@ -2,8 +2,12 @@ package msdoc
 
 import (
 	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
+
+	"github.com/xo/okage"
+	"github.com/xo/okage/svg"
 )
 
 // The tests of this file check the text boxes, the shapes of Office
@@ -129,17 +133,52 @@ func TestDrawing(t *testing.T) {
 			t.Errorf("expected %q in the svg of the group:\n%s", want, svg)
 		}
 	}
-	// a solid line is the area of its stroke, 1 point wide
+	// a solid line is a stroke of 1 point
 	if d, err = p.drawnAt(t.Context(), 3, false); err != nil || d == nil {
 		t.Fatalf("expected the line, got %v", err)
 	}
-	svg = string(p.media[len(p.media)-1].data)
-	if !strings.Contains(svg, `d="M0 0.5 L144 0.5 L144 -0.5 L0 -0.5 Z" fill="#000000" stroke="none"`) {
-		t.Errorf("expected the area of the line in the svg:\n%s", svg)
+	data := p.media[len(p.media)-1].data
+	svg = string(data)
+	if !strings.Contains(svg, `d="M0 0 L144 0" fill="none" stroke="#000000" stroke-width="1"`) {
+		t.Errorf("expected the stroke of the line in the svg:\n%s", svg)
+	}
+	// the line covers a row of pixels at 96 dpi. At 18 dpi it is a quarter
+	// of a pixel wide on an image of one row, and draws light
+	for _, c := range []struct {
+		s    float32
+		want uint8
+	}{{96.0 / 72, 0xff}, {18.0 / 72, 0x20}} {
+		if a := darkest(t, data, c.s); a < c.want {
+			t.Errorf("expected an alpha of at least %d at the scale %g, got %d", c.want, c.s, a)
+		}
 	}
 	if d, _ := p.drawnAt(t.Context(), 4, false); d != nil {
 		t.Errorf("expected no shape at the character 4, got %+v", d)
 	}
+}
+
+// darkest renders the SVG image data at s pixels for each point, and
+// returns the largest alpha of its pixels.
+func darkest(t *testing.T, data []byte, s float32) uint8 {
+	t.Helper()
+	tree, err := svg.FromData(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the size of the tree is in the pixels of CSS, 96 for each inch
+	k := s * 72 / 96
+	size := tree.Size()
+	pm, ok := okage.NewPixmap(uint32(math.Ceil(float64(size.Width()*k))), uint32(math.Ceil(float64(size.Height()*k))))
+	if !ok {
+		t.Fatal("no pixmap")
+	}
+	mut := pm.AsMut()
+	svg.Render(tree, okage.TransformFromScale(k, k), &mut)
+	var a uint8
+	for i := 3; i < len(pm.Data()); i += 4 {
+		a = max(a, pm.Data()[i])
+	}
+	return a
 }
 
 // TestTextbox checks that a text box writes its text from the part of

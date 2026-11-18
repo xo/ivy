@@ -73,10 +73,9 @@ type Document struct {
 	pages []*Page
 	rels  []rel
 
-	mu        sync.Mutex
-	fonts     map[string]fontResult
-	verticals map[string]*vertical
-	images    map[string]imageResult
+	mu     sync.Mutex
+	fonts  map[string]fontResult
+	images map[string]imageResult
 }
 
 // fontResult is a font that the document loaded, or the error of its load.
@@ -119,12 +118,11 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (*Document, error
 		return nil, err
 	}
 	d := &Document{
-		pkg:       &pkg{archive: archive, lim: lim},
-		lim:       lim,
-		log:       o.cfg.Log(),
-		fonts:     make(map[string]fontResult),
-		verticals: make(map[string]*vertical),
-		images:    make(map[string]imageResult),
+		pkg:    &pkg{archive: archive, lim: lim},
+		lim:    lim,
+		log:    o.cfg.Log(),
+		fonts:  make(map[string]fontResult),
+		images: make(map[string]imageResult),
 	}
 	d.rels = d.pkg.rels("/")
 	seq, ok := find(d.rels, relFixedRepresentation)

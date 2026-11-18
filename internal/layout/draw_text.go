@@ -9,20 +9,27 @@
 // PDF, with the widths and the mapping to Unicode of each glyph. The port
 // fills the outlines of the glyphs of TextLine.GlyphRuns, at the positions
 // of the shaper, so the widths and the kerning of PDF are not needed. A
-// glyph without an outline that has a bitmap, such as an emoji of the
-// tables CBDT and sbix, draws its bitmap. The glyphs of the tables SVG and
-// COLR are not drawn: internal/font gives their outlines only, which the
-// fonts of emojis often do not have, so such a glyph draws nothing.
+// glyph of the tables COLR and SVG, such as a color emoji, draws as the
+// tree that okage gives for it (okage D57). A glyph without an outline that
+// has a bitmap, such as an emoji of the tables CBDT and sbix, draws its
+// bitmap.
 
 package layout
 
 import (
+	"fmt"
+	"image"
+	"image/color"
+	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/xo/okage"
+	"github.com/xo/okage/svg"
 	"github.com/xo/okage/tinycss2"
+
+	"github.com/xo/ivy"
 
 	"github.com/xo/ivy/internal/display"
 	ivyfont "github.com/xo/ivy/internal/font"
@@ -99,8 +106,8 @@ func isNone(v Value) bool {
 // first line of a text box, whose baseline starts at (x, y).
 //
 // Port: upstream returns the emojis of the line, which draw_emojis draws.
-// The port draws the bitmaps of the glyphs that have one in the line, and
-// no emoji of the tables SVG and COLR, see the comment of the file.
+// The port draws the color glyphs and the bitmaps of the glyphs of the
+// line, see the comment of the file.
 func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis Value, x, y float64) {
 	layout := textbox.TextLayout
 	style := textbox.Style
@@ -167,6 +174,11 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 	}
 
 	fc := layout.fc
+	// The color of the text, for the palette entry of a color glyph that
+	// takes it. The alpha of the color is the opacity of the glyph.
+	fill := s.state.fill
+	fg := color.NRGBA{R: colorByte(fill.r), G: colorByte(fill.g), B: colorByte(fill.b), A: 0xff}
+	variations := fontVariations(style)
 	for _, run := range firstLine.GlyphRuns() {
 		if !run.HasFont || fc == nil {
 			continue
@@ -177,6 +189,7 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		}
 		glyphs := make([]display.Glyph, 0, len(run.Glyphs))
 		var bitmaps []glyphBitmap
+		var colors []glyphTree
 		for _, g := range run.Glyphs {
 			r, _ := utf8.DecodeRuneInString(layout.Text[min(g.Cluster, len(layout.Text)):])
 			if unicode.IsControl(r) {
@@ -192,6 +205,12 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 						r, r)
 				}
 			}
+			// A color glyph of COLR or SVG comes first, then a bitmap, then
+			// the outline, as the renderer of okage draws a glyph.
+			if tree := fc.colorGlyph(run.Font, g.ID, variations, fg); tree != nil {
+				colors = append(colors, glyphTree{tree, x + g.X, y + g.Y})
+				continue
+			}
 			if face.Outline(g.ID) == nil {
 				// Port: upstream draws the bitmap glyphs, such as the
 				// color emojis of CBDT and sbix, with Cairo.
@@ -201,6 +220,11 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 				}
 			}
 			glyphs = append(glyphs, display.Glyph{ID: g.ID, X: float32(x + g.X), Y: float32(y + g.Y)})
+		}
+		for _, c := range colors {
+			if err := s.drawColorGlyph(c.tree, c.x, c.y, run.Size); err != nil {
+				s.dc.log.warning("Failed to draw a color glyph: %v", err)
+			}
 		}
 		for _, b := range bitmaps {
 			s.drawGlyphBitmap(b.bitmap, b.x, b.y, run.Size)
@@ -226,6 +250,78 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 type glyphBitmap struct {
 	bitmap *ivyfont.Bitmap
 	x, y   float64
+}
+
+// glyphTree is the tree of a color glyph whose origin is at (x, y).
+type glyphTree struct {
+	tree *svg.Tree
+	x, y float64
+}
+
+// colorByte returns the byte of a channel of a color from 0 to 1.
+func colorByte(v float64) uint8 {
+	return uint8(math.Round(clamp01(v) * 0xff))
+}
+
+// drawColorGlyph draws the tree of a color glyph, which is in em units, with
+// its origin at (x, y) and at the font size size. okage renders the tree
+// into pixels at the scale of the device, as for an SVG image, and the
+// stream draws the pixels with the alpha of the filling.
+//
+// Port: upstream draws the color glyphs with Cairo.
+func (s *stream) drawColorGlyph(tree *svg.Tree, x, y, size float64) (err error) {
+	if s.state.fill.alpha <= 0 || !(size > 0) {
+		return nil
+	}
+	defer func() {
+		// Port: a panic in the renderer of okage is a glyph that cannot be
+		// drawn.
+		if r := recover(); r != nil {
+			err = fmt.Errorf("rendering color glyph: panic: %v: %w", r, ivy.ErrFormat)
+		}
+	}()
+	bbox, ok := tree.Root().AbsLayerBoundingBox()
+	if !ok {
+		return nil
+	}
+	toUser, ok := s.absolute().Invert()
+	if !ok {
+		return nil
+	}
+	toDevice := Matrix{A: size, D: size, E: x, F: y}.Mul(s.absolute())
+	// The box of the glyph on the device, inside the area of the stream.
+	minX, minY := math.Inf(1), math.Inf(1)
+	maxX, maxY := math.Inf(-1), math.Inf(-1)
+	for _, corner := range [4][2]float32{
+		{bbox.Left(), bbox.Top()}, {bbox.Right(), bbox.Top()},
+		{bbox.Left(), bbox.Bottom()}, {bbox.Right(), bbox.Bottom()},
+	} {
+		px, py := toDevice.TransformPoint(float64(corner[0]), float64(corner[1]))
+		minX, minY = min(minX, px), min(minY, py)
+		maxX, maxY = max(maxX, px), max(maxY, py)
+	}
+	area := s.area
+	minX, minY = math.Floor(max(minX, area[0])), math.Floor(max(minY, area[1]))
+	maxX, maxY = math.Ceil(min(maxX, area[0]+area[2])), math.Ceil(min(maxY, area[1]+area[3]))
+	if !(maxX > minX) || !(maxY > minY) {
+		return nil
+	}
+	w, h, scale := boundCell(maxX-minX, maxY-minY)
+	toPixels := translation(-minX, -minY).Mul(Matrix{A: scale, D: scale})
+	fromPixels, ok := toPixels.Invert()
+	if !ok {
+		return nil
+	}
+	pixmap, ok := okage.NewPixmap(uint32(w), uint32(h))
+	if !ok {
+		return nil
+	}
+	pm := pixmap.AsMut()
+	svg.Render(tree, toDevice.Mul(toPixels).transform(), &pm)
+	img := &image.RGBA{Pix: pixmap.Take(), Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}
+	// The pixels map to the device, then to the current user space.
+	s.drawImageMatrix(img, fromPixels.Mul(toUser), true)
+	return nil
 }
 
 // isInvisible reports whether r draws nothing, such as a space or a control

@@ -4,6 +4,8 @@ import (
 	"image"
 	"io"
 	"math"
+	"slices"
+	"sort"
 
 	"github.com/xo/okage"
 
@@ -474,11 +476,11 @@ func (m *Machine) shadingColor(s *shading, c []float64) ([3]float64, bool) {
 	return m.toRGB(s.space, c, 0)
 }
 
-// shadingImage draws a shading into an image that covers the rectangle r
-// of the device space. toDevice maps the shading space onto the device
-// space. background paints the Background of the shading outside of it.
-// It returns the image and the transform from its pixels to the device
-// space.
+// shadingImage draws a shading of type 1, 2 or 3 into an image that covers
+// the rectangle r of the device space. toDevice maps the shading space onto
+// the device space. background paints the Background of the shading
+// outside of it. It returns the image and the transform from its pixels to
+// the device space. okage fills a mesh itself, with meshGradient.
 func (m *Machine) shadingImage(s *shading, toDevice Matrix, r [4]float64, background bool) (*image.RGBA, Matrix, bool) {
 	w, h := r[2]-r[0], r[3]-r[1]
 	if !(w > 0 && h > 0) {
@@ -561,8 +563,6 @@ func (m *Machine) shadingImage(s *shading, toDevice Matrix, r [4]float64, backgr
 				}
 			}
 		}
-	default:
-		m.rasterMesh(s, img, pixToShading)
 	}
 	return img, pixToDev, true
 }
@@ -647,62 +647,6 @@ func radialParam(s *shading, x, y float64) (float64, bool) {
 	return try(t2)
 }
 
-// rasterMesh fills the triangles of a mesh into an image, with the colors
-// of their vertices interpolated.
-func (m *Machine) rasterMesh(s *shading, img *image.RGBA, pixToShading Matrix) {
-	toPix, ok := pixToShading.Invert()
-	if !ok {
-		return
-	}
-	w, h := img.Rect.Dx(), img.Rect.Dy()
-	nc := len(s.tris[0].c)
-	c := make([]float64, nc)
-	for i := 0; i+2 < len(s.tris); i += 3 {
-		if i&1023 == 0 && m.in.Context().Err() != nil {
-			return
-		}
-		var px, py [3]float64
-		for j := range 3 {
-			px[j], py[j] = toPix.Apply(s.tris[i+j].x, s.tris[i+j].y)
-		}
-		minX := int(math.Floor(math.Min(px[0], math.Min(px[1], px[2]))))
-		maxX := int(math.Ceil(math.Max(px[0], math.Max(px[1], px[2]))))
-		minY := int(math.Floor(math.Min(py[0], math.Min(py[1], py[2]))))
-		maxY := int(math.Ceil(math.Max(py[0], math.Max(py[1], py[2]))))
-		minX, minY = max(minX, 0), max(minY, 0)
-		maxX, maxY = min(maxX, w-1), min(maxY, h-1)
-		den := (py[1]-py[2])*(px[0]-px[2]) + (px[2]-px[1])*(py[0]-py[2])
-		if den == 0 {
-			continue
-		}
-		for y := minY; y <= maxY; y++ {
-			fy := float64(y) + 0.5
-			for x := minX; x <= maxX; x++ {
-				fx := float64(x) + 0.5
-				l0 := ((py[1]-py[2])*(fx-px[2]) + (px[2]-px[1])*(fy-py[2])) / den
-				l1 := ((py[2]-py[0])*(fx-px[2]) + (px[0]-px[2])*(fy-py[2])) / den
-				l2 := 1 - l0 - l1
-				const e = -1e-6
-				if l0 < e || l1 < e || l2 < e {
-					continue
-				}
-				for k := range nc {
-					c[k] = l0*s.tris[i].c[k] + l1*s.tris[i+1].c[k] + l2*s.tris[i+2].c[k]
-				}
-				rgb, ok := m.shadingColor(s, c)
-				if !ok {
-					continue
-				}
-				o := y*img.Stride + 4*x
-				img.Pix[o] = uint8(math.Round(clamp01(rgb[0]) * 255))
-				img.Pix[o+1] = uint8(math.Round(clamp01(rgb[1]) * 255))
-				img.Pix[o+2] = uint8(math.Round(clamp01(rgb[2]) * 255))
-				img.Pix[o+3] = 255
-			}
-		}
-	}
-}
-
 // deviceArea returns the rectangle of the device space that a mark can
 // cover: the page, within the bounds of the clip.
 func (m *Machine) deviceArea() [4]float64 {
@@ -727,16 +671,28 @@ func (m *Machine) shadingBounds(s *shading, toDevice Matrix, area [4]float64) [4
 	return [4]float64{math.Max(x0, area[0]), math.Max(y0, area[1]), math.Min(x1, area[2]), math.Min(y1, area[3])}
 }
 
-// shfill paints a shading over the clip, as shfill does.
+// shfill paints a shading over the clip, as shfill does. okage fills a
+// mesh and an axial or a radial shading with no extend itself. shfill draws
+// any other shading as an image.
 func (m *Machine) shfill(s *shading) error {
 	if m.capture != nil && m.capture.intercept() {
 		return nil
 	}
 	toDevice := m.gs.ctm
 	area := m.shadingBounds(s, toDevice, m.deviceArea())
-	img, t, ok := m.shadingImage(s, toDevice, area, false)
-	if !ok {
-		return nil
+	var paint func()
+	if shader, native := m.nativeShader(s, toDevice, false); native {
+		r, ok := okage.RectFromLTRB(float32(area[0]), float32(area[1]), float32(area[2]), float32(area[3]))
+		if shader == nil || !ok {
+			return nil
+		}
+		paint = func() { m.dev.FillPath(okage.PathFromRect(r), okage.FillRuleWinding, shader) }
+	} else {
+		img, t, ok := m.shadingImage(s, toDevice, area, false)
+		if !ok {
+			return nil
+		}
+		paint = func() { m.dev.DrawImage(img, toTransform(t), display.ImageOptions{Opacity: 1, Smooth: true}) }
 	}
 	m.mark()
 	pushed := false
@@ -752,7 +708,7 @@ func (m *Machine) shfill(s *shading) error {
 		m.dev.ClipPath(okagePath(&p), okage.FillRuleWinding)
 		pushed = true
 	}
-	m.dev.DrawImage(img, toTransform(t), display.ImageOptions{Opacity: 1, Smooth: true})
+	paint()
 	if pushed {
 		m.dev.Restore()
 	}
@@ -763,6 +719,9 @@ func (m *Machine) shfill(s *shading) error {
 // the clip.
 func (m *Machine) shadingShader(pat *pattern) okage.Shader {
 	s := pat.shading
+	if shader, native := m.nativeShader(s, pat.matrix, true); native {
+		return shader
+	}
 	area := m.shadingBounds(s, pat.matrix, m.deviceArea())
 	img, t, ok := m.shadingImage(s, pat.matrix, area, true)
 	if !ok {
@@ -773,4 +732,410 @@ func (m *Machine) shadingShader(pat *pattern) okage.Shader {
 		return nil
 	}
 	return okage.NewPattern(pix.AsRef(), okage.SpreadModePad, okage.FilterQualityBilinear, 1, toTransform(t))
+}
+
+// maxMeshTriangles bounds the triangles that a mesh gives to okage, with
+// the triangles that the stops of its function cut. okage keeps about 250
+// bytes for each triangle.
+const maxMeshTriangles = 1 << 18
+
+// maxMeshParts bounds the parts that meshBuilder cuts for one mesh.
+const maxMeshParts = 1 << 22
+
+// The limits of the stops that functionStops places.
+const (
+	// stopTolerance is the largest difference of a component, from 0 to 1,
+	// between the function and the line between two stops.
+	stopTolerance = 0.01
+	// maxStopDepth is the number of times that functionStops can halve an
+	// interval.
+	maxStopDepth = 8
+	// stopIntervals is the number of intervals that functionStops starts
+	// with, so that it does not miss a narrow change of the function.
+	stopIntervals = 4
+)
+
+// nativeShader returns the shader of okage of a shading in the device
+// space, when okage fills the shading itself: a mesh of type 4 to 7, or an
+// axial or a radial shading with no extend at either end. toDevice maps the
+// shading space onto the device space. background paints the Background of
+// the shading under a mesh, over the area of the clip. It returns false for
+// a shading that shadingImage draws, and a nil shader for a mesh that paints
+// nothing.
+func (m *Machine) nativeShader(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
+	switch s.typ {
+	case 2, 3:
+		return m.decalGradient(s, toDevice, background)
+	case 4, 5, 6, 7:
+		return m.meshGradient(s, toDevice, background), true
+	}
+	return nil, false
+}
+
+// decalGradient returns the gradient of okage of an axial or a radial
+// shading with no extend at either end. The gradient has the spread mode
+// okage.SpreadModeDecal, which paints nothing past its ends (okage D55).
+// decalGradient returns false for a shading that extends, for a pattern
+// with a Background, and for a radial shading whose circles do not nest. In
+// that last case, PostScript paints a point with the largest circle in the
+// domain that holds it, and okage does not.
+func (m *Machine) decalGradient(s *shading, toDevice Matrix, background bool) (okage.Shader, bool) {
+	if s.extend[0] || s.extend[1] || background && len(s.bg) >= s.space.n {
+		return nil, false
+	}
+	c := s.coords
+	if s.typ == 3 && !(c[2] >= 0 && c[5] >= 0 && math.Abs(c[5]-c[2])-math.Hypot(c[3]-c[0], c[4]-c[1]) > 1e-6) {
+		return nil, false
+	}
+	stops := m.functionStops(s, s.domain[0], s.domain[1])
+	gradientStops := make([]okage.GradientStop, len(stops))
+	for i, st := range stops {
+		gradientStops[i] = okage.NewGradientStop(float32(st.u), okageColor(st.c))
+	}
+	pt := func(x, y float64) okage.Point { return okage.PointFromXY(float32(x), float32(y)) }
+	var shader okage.Shader
+	var ok bool
+	if s.typ == 2 {
+		shader, ok = okage.NewLinearGradient(pt(c[0], c[1]), pt(c[2], c[3]), gradientStops, okage.SpreadModeDecal, toTransform(toDevice))
+	} else {
+		shader, ok = okage.NewRadialGradient(pt(c[0], c[1]), float32(c[2]), pt(c[3], c[4]), float32(c[5]), gradientStops, okage.SpreadModeDecal, toTransform(toDevice))
+	}
+	return shader, ok
+}
+
+// meshGradient returns the MeshGradient of okage of a mesh, a shading of
+// type 4 to 7 (okage D55). It returns nil when the mesh holds no triangle.
+// toDevice and background are as for nativeShader.
+//
+// A function of the colors is not linear in a triangle. meshGradient thus
+// cuts each triangle at the stops of the function, where the color goes
+// from one linear segment to the next.
+func (m *Machine) meshGradient(s *shading, toDevice Matrix, background bool) okage.Shader {
+	inv, ok := toDevice.Invert()
+	if !ok {
+		return nil
+	}
+	b := &meshBuilder{}
+	if background && len(s.bg) >= s.space.n {
+		if c, ok := m.toRGB(s.space, s.bg, 0); ok {
+			// the corners of the area of the clip, in the shading space
+			area := m.deviceArea()
+			x0, y0 := inv.Apply(area[0], area[1])
+			x1, y1 := inv.Apply(area[2], area[1])
+			x2, y2 := inv.Apply(area[0], area[3])
+			x3, y3 := inv.Apply(area[2], area[3])
+			bg := [4]float64{c[0], c[1], c[2], 1}
+			b.add([3]meshCut{{x0, y0, 0}, {x1, y1, 0}, {x2, y2, 0}}, func(float64) [4]float64 { return bg })
+			b.add([3]meshCut{{x1, y1, 0}, {x3, y3, 0}, {x2, y2, 0}}, func(float64) [4]float64 { return bg })
+		}
+	}
+	if s.fn == nil {
+		linear := s.space.cie == nil && (s.space.family == "DeviceGray" || s.space.family == "DeviceRGB")
+		for i := 0; i+2 < len(s.tris) && len(b.tris) < maxMeshTriangles; i += 3 {
+			if i&1023 == 0 && m.in.Context().Err() != nil {
+				return nil
+			}
+			n := 1
+			if !linear {
+				n = splits(s.tris[i:i+3], toDevice)
+			}
+			m.splitTriangle(b, s, [3]meshVertex(s.tris[i:i+3]), n)
+		}
+	} else if len(s.tris) > 0 {
+		lo, hi := math.Inf(1), math.Inf(-1)
+		for _, v := range s.tris {
+			lo, hi = math.Min(lo, at(v.c, 0)), math.Max(hi, at(v.c, 0))
+		}
+		stops := m.functionStops(s, lo, hi)
+		scale := 0.0
+		if hi > lo {
+			scale = 1 / (hi - lo)
+		}
+		for i := 0; i+2 < len(s.tris) && len(b.tris) < maxMeshTriangles; i += 3 {
+			if i&1023 == 0 && m.in.Context().Err() != nil {
+				return nil
+			}
+			var tri [3]meshCut
+			for j := range tri {
+				v := s.tris[i+j]
+				tri[j] = meshCut{x: v.x, y: v.y, u: (at(v.c, 0) - lo) * scale}
+			}
+			b.cut(tri, stops)
+		}
+	}
+	shader, ok := okage.NewMeshGradient(b.tris, toTransform(toDevice))
+	if !ok {
+		return nil
+	}
+	return shader
+}
+
+// meshSplitSide is the length in pixels of the side of a part of a triangle
+// that splitTriangle makes.
+const meshSplitSide = 16
+
+// maxMeshSplits is the largest number of parts of a side that splits
+// returns.
+const maxMeshSplits = 64
+
+// splits returns the number of parts of each side of a triangle of a mesh
+// whose color space is not linear in RGB, such as DeviceCMYK. Each part is
+// about meshSplitSide pixels long in the device space, so that the color in
+// each part is close to linear.
+func splits(tri []meshVertex, toDevice Matrix) int {
+	var longest float64
+	for j := range 3 {
+		a, b := tri[j], tri[(j+1)%3]
+		dx, dy := toDevice.ApplyDist(b.x-a.x, b.y-a.y)
+		longest = math.Max(longest, math.Hypot(dx, dy))
+	}
+	if !(longest > meshSplitSide) {
+		return 1
+	}
+	return int(math.Min(math.Ceil(longest/meshSplitSide), maxMeshSplits))
+}
+
+// splitTriangle appends a triangle of a mesh to b, split into n*n parts.
+// The components vary linearly in the triangle, and each corner of a part
+// takes the color of its components.
+func (m *Machine) splitTriangle(b *meshBuilder, s *shading, tri [3]meshVertex, n int) {
+	if len(b.tris)+n*n > maxMeshTriangles {
+		n = max(int(math.Sqrt(float64(maxMeshTriangles-len(b.tris)))), 1)
+	}
+	nc := len(tri[0].c)
+	comps := make([]float64, nc)
+	// grid holds the corners of the parts, row j after row j-1, with n+1-j
+	// corners in row j.
+	grid := make([]okage.MeshVertex, 0, (n+1)*(n+2)/2)
+	for j := 0; j <= n; j++ {
+		for i := 0; i+j <= n; i++ {
+			u, v := float64(i)/float64(n), float64(j)/float64(n)
+			w := 1 - u - v
+			x := w*tri[0].x + u*tri[1].x + v*tri[2].x
+			y := w*tri[0].y + u*tri[1].y + v*tri[2].y
+			for k := range comps {
+				comps[k] = w*at(tri[0].c, k) + u*at(tri[1].c, k) + v*at(tri[2].c, k)
+			}
+			var c [4]float64
+			if rgb, ok := m.toRGB(s.space, comps, 0); ok {
+				c = [4]float64{rgb[0], rgb[1], rgb[2], 1}
+			}
+			grid = append(grid, okage.MeshVertex{Point: okage.PointFromXY(float32(x), float32(y)), Color: okageColor(c)})
+		}
+	}
+	// row returns the index of the first corner of row j.
+	row := func(j int) int { return j*(n+1) - j*(j-1)/2 }
+	for j := range n {
+		for i := 0; i+j < n; i++ {
+			a, c, d := row(j)+i, row(j+1)+i, row(j)+i+1
+			b.tris = append(b.tris, okage.MeshTriangle{grid[a], grid[d], grid[c]})
+			if i+j+1 < n {
+				b.tris = append(b.tris, okage.MeshTriangle{grid[d], grid[c+1], grid[c]})
+			}
+		}
+	}
+}
+
+// okageColor returns the color of okage of the components of RGBA, which
+// it clamps to 0..=1.
+func okageColor(c [4]float64) okage.Color {
+	color, _ := okage.ColorFromRGBA(float32(clamp01(c[0])), float32(clamp01(c[1])), float32(clamp01(c[2])), float32(clamp01(c[3])))
+	return color
+}
+
+// shadingStop is a stop of the function of a shading: the parameter u of
+// the stop, from 0 to 1, and the color of RGBA at u.
+type shadingStop struct {
+	u float64
+	c [4]float64
+}
+
+// functionStops returns stops that approximate the colors of the function
+// of a shading from t0, at the parameter 0, to t1, at the parameter 1. The
+// colors between two stops are close to linear. The stops start at the
+// bounds of a stitching function and at stopIntervals equal intervals, and
+// functionStops halves an interval until the colors in it are close to
+// linear. A color that the color space cannot give is transparent.
+func (m *Machine) functionStops(s *shading, t0, t1 float64) []shadingStop {
+	sample := func(u float64) shadingStop {
+		st := shadingStop{u: u}
+		if c, ok := m.shadingColor(s, []float64{t0 + u*(t1-t0)}); ok {
+			st.c = [4]float64{c[0], c[1], c[2], 1}
+		}
+		return st
+	}
+	starts := []float64{0}
+	for i := 1; i < stopIntervals; i++ {
+		starts = append(starts, float64(i)/stopIntervals)
+	}
+	if s.fn.typ == 3 && t1 != t0 {
+		for _, b := range s.fn.bounds {
+			if u := (b - t0) / (t1 - t0); u > 0 && u < 1 {
+				starts = append(starts, u)
+			}
+		}
+	}
+	starts = append(starts, 1)
+	slices.Sort(starts)
+	starts = slices.Compact(starts)
+	stops := []shadingStop{sample(0)}
+	for _, u := range starts[1:] {
+		stops = refineStops(stops, stops[len(stops)-1], sample(u), sample, 0)
+	}
+	return stops
+}
+
+// refineStops appends the stops between a and b, and b, to stops. It
+// halves the interval until the colors in it are close to linear.
+func refineStops(stops []shadingStop, a, b shadingStop, sample func(float64) shadingStop, depth int) []shadingStop {
+	if depth >= maxStopDepth {
+		return append(stops, b)
+	}
+	mid := sample(0.5 * (a.u + b.u))
+	linear := true
+	for _, w := range [3]float64{0.25, 0.5, 0.75} {
+		got := mid
+		if w != 0.5 {
+			got = sample(a.u + w*(b.u-a.u))
+		}
+		for k := range got.c {
+			if math.Abs(got.c[k]-(a.c[k]+w*(b.c[k]-a.c[k]))) > stopTolerance {
+				linear = false
+			}
+		}
+	}
+	if linear {
+		return append(stops, b)
+	}
+	stops = refineStops(stops, a, mid, sample, depth+1)
+	return refineStops(stops, mid, b, sample, depth+1)
+}
+
+// stopsColor returns the color at u on the segment from the stop i to the
+// stop i+1. Out of the stops, it returns the color of the nearest stop.
+func stopsColor(stops []shadingStop, i int, u float64) [4]float64 {
+	switch {
+	case i < 0:
+		return stops[0].c
+	case i+1 >= len(stops):
+		return stops[len(stops)-1].c
+	}
+	a, b := stops[i], stops[i+1]
+	w := b.u - a.u
+	if !(w > 0) {
+		return a.c
+	}
+	f := min(max((u-a.u)/w, 0), 1)
+	var c [4]float64
+	for k := range c {
+		c[k] = a.c[k] + f*(b.c[k]-a.c[k])
+	}
+	return c
+}
+
+// meshBuilder collects the triangles of a MeshGradient.
+type meshBuilder struct {
+	tris []okage.MeshTriangle
+	// cuts holds the values at which cut cuts a triangle, and parts counts
+	// the parts that it cut.
+	cuts  []float64
+	parts int
+}
+
+// meshCut is a corner of a part of a triangle that meshBuilder cuts: its
+// point, and its parameter u.
+type meshCut struct {
+	x, y, u float64
+}
+
+// add appends the triangle of the corners, with the color of u at each
+// corner.
+func (b *meshBuilder) add(tri [3]meshCut, color func(u float64) [4]float64) {
+	if len(b.tris) >= maxMeshTriangles {
+		return
+	}
+	var t okage.MeshTriangle
+	for j, v := range tri {
+		t[j] = okage.MeshVertex{Point: okage.PointFromXY(float32(v.x), float32(v.y)), Color: okageColor(color(v.u))}
+	}
+	b.tris = append(b.tris, t)
+}
+
+// cut appends a triangle whose parameter u varies linearly in it. The color
+// is linear between two stops, so cut cuts the triangle along the lines
+// where u is at a stop, and appends the triangles of each part.
+func (b *meshBuilder) cut(tri [3]meshCut, stops []shadingStop) {
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for i := range tri {
+		tri[i].u = min(max(tri[i].u, 0), 1)
+		if math.IsNaN(tri[i].u) {
+			tri[i].u = 0
+		}
+		lo, hi = math.Min(lo, tri[i].u), math.Max(hi, tri[i].u)
+	}
+	after := func(u float64) int {
+		return sort.Search(len(stops), func(i int) bool { return stops[i].u > u })
+	}
+	b.cuts = append(b.cuts[:0], lo)
+	for i := after(lo); i < len(stops) && stops[i].u < hi; i++ {
+		if stops[i].u > b.cuts[len(b.cuts)-1] {
+			b.cuts = append(b.cuts, stops[i].u)
+		}
+	}
+	b.cuts = append(b.cuts, hi)
+	cuts := b.cuts
+	var buf, scratch [8]meshCut
+	for k := 0; k+1 < len(cuts) && b.parts < maxMeshParts && len(b.tris) < maxMeshTriangles; k++ {
+		b.parts++
+		lower, upper := cuts[k], cuts[k+1]
+		poly, other := append(buf[:0], tri[:]...), scratch[:0]
+		if k > 0 {
+			poly, other = cutPolygon(poly, other, lower, false), poly[:0]
+		}
+		if k+2 < len(cuts) {
+			poly = cutPolygon(poly, other, upper, true)
+		}
+		i := after(0.5*(lower+upper)) - 1
+		color := func(u float64) [4]float64 { return stopsColor(stops, i, u) }
+		for j := 1; j+1 < len(poly); j++ {
+			b.add([3]meshCut{poly[0], poly[j], poly[j+1]}, color)
+		}
+	}
+}
+
+// cutPolygon appends to out the part of the convex polygon in where u is
+// level or more, or where u is level or less when below is true, and
+// returns it. out must not share memory with in.
+//
+// A point on an edge depends only on the two ends of the edge, and not on
+// their order. Two triangles that share an edge thus cut it at the same
+// point, and the triangles meet with no gap.
+func cutPolygon(in, out []meshCut, level float64, below bool) []meshCut {
+	if len(in) == 0 {
+		return out
+	}
+	f := func(v meshCut) float64 {
+		if below {
+			return level - v.u
+		}
+		return v.u - level
+	}
+	prev := in[len(in)-1]
+	fPrev := f(prev)
+	for _, cur := range in {
+		fCur := f(cur)
+		if (fCur >= 0) != (fPrev >= 0) {
+			a, b, fa, fb := prev, cur, fPrev, fCur
+			if b.x < a.x || (b.x == a.x && b.y < a.y) {
+				a, b, fa, fb = b, a, fb, fa
+			}
+			t := fa / (fa - fb)
+			out = append(out, meshCut{x: a.x + t*(b.x-a.x), y: a.y + t*(b.y-a.y), u: level})
+		}
+		if fCur >= 0 {
+			out = append(out, cur)
+		}
+		prev, fPrev = cur, fCur
+	}
+	return out
 }

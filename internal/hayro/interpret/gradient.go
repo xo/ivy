@@ -35,6 +35,11 @@ type SVGGradient struct {
 	Transform kurbo.Affine
 	// Stops are the stops of the gradient, in sRGB.
 	Stops []SVGGradientStop
+	// Decal is true when the gradient paints nothing before its first stop
+	// and after its last stop.
+	//
+	// Port: upstream has no such field. See AsSVGGradient.
+	Decal bool
 }
 
 // SVGGradientKind is SvgGradientKind in hayro-interpret src/gradient.rs. It
@@ -82,6 +87,11 @@ type SVGGradientStop struct {
 // AsSVGGradient is EncodedRadialAxialShading::as_svg_gradient in
 // hayro-interpret src/gradient.rs. It approximates the shading with a
 // gradient like those of SVG, and returns false when no such gradient fits.
+//
+// Port: a shading with no extend at either end and no background gives a
+// gradient with Decal set, and no padding. okage paints nothing past the
+// ends of such a gradient (okage D55). Upstream pads the ends with a short
+// stretch of transparent stops.
 func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern, tolerance float32) (*SVGGradient, bool) {
 	bg := pattern.backgroundColor.Components()
 	var background *[4]float32
@@ -89,7 +99,8 @@ func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern
 		f := pattern.finish(bg)
 		background = &f
 	}
-	rng, ok := s.paddedRange(background != nil)
+	decal := background == nil && !s.extend[0] && !s.extend[1]
+	rng, ok := s.paddedRange(background != nil, decal)
 	if !ok {
 		return nil, false
 	}
@@ -103,16 +114,19 @@ func (s *EncodedRadialAxialShading) AsSVGGradient(pattern *EncodedShadingPattern
 		Kind:      s.gradientKind(rng),
 		Transform: pattern.BaseTransform.Inverse(),
 		Stops:     padStops(stops, rng, background),
+		Decal:     decal,
 	}, true
 }
 
 // paddedRange is EncodedRadialAxialShading::padded_range in hayro-interpret
 // src/gradient.rs. A gradient of SVG pads with its end stops, so an end
 // without an extend gets a short stretch of the background.
-func (s *EncodedRadialAxialShading) paddedRange(hasBackground bool) ([2]float64, bool) {
+//
+// Port: a decal gradient gets no padding. See AsSVGGradient.
+func (s *EncodedRadialAxialShading) paddedRange(hasBackground, decal bool) ([2]float64, bool) {
 	var padding [2]float64
 	for i, e := range s.extend {
-		if !e {
+		if !e && !decal {
 			padding[i] = gradientPadding
 		}
 	}
@@ -150,12 +164,21 @@ func (s *EncodedRadialAxialShading) gradientKind(rng [2]float64) SVGGradientKind
 
 // functionLut is function_lut in hayro-interpret src/gradient.rs.
 func functionLut(function *ShadingFunction, rng [2]float32, pattern *EncodedShadingPattern) *colorLut {
-	return newColorLut(approximateGradientStops(
+	return newColorLut(functionStops(function, rng, pattern))
+}
+
+// functionStops returns the stops that function_lut in hayro-interpret
+// src/gradient.rs puts in its table.
+//
+// Port: upstream has no such function. A meshEmitter cuts the triangles of
+// a mesh at the stops.
+func functionStops(function *ShadingFunction, rng [2]float32, pattern *EncodedShadingPattern) []SVGGradientStop {
+	return approximateGradientStops(
 		func(t float32) [4]float32 { return sampleFunction(function, rng, pattern, t) },
 		normalizedStitchingBounds(function, rng),
 		lutTolerance,
 		pattern.run,
-	))
+	)
 }
 
 // sampleFunction is sample_function in hayro-interpret src/gradient.rs.

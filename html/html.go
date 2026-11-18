@@ -3,7 +3,9 @@
 // An HTMLZ file is a zip archive that calibre writes: index.html, with its
 // images and style sheets, metadata.opf and a cover image. The cover image
 // is the preview, and metadata.opf gives the metadata. An HTML file has no
-// preview, and its head gives the metadata.
+// preview, and its head gives the metadata. An HTMLZ file whose entries
+// ZipCrypto or the AES of WinZip encrypts opens with the password of
+// ivy.Config, or with its function PasswordFunc (D12).
 //
 // The layout of phase 4 puts the document on pages (D10, D15): a page of US
 // Letter for an HTML file, and the page of an ebook, 6 by 9 inches, for an
@@ -109,7 +111,8 @@ var (
 // Open opens an HTML file or an HTMLZ file. A source that starts as a zip
 // archive is an HTMLZ file, and any other source is an HTML file. It returns
 // an error that wraps ivy.ErrFormat if an HTMLZ file holds no HTML document,
-// and one that wraps ivy.ErrLimit if an HTML file is larger than
+// one that wraps ivy.ErrPassword if no password opens an encrypted HTMLZ
+// file, and one that wraps ivy.ErrLimit if an HTML file is larger than
 // Limits.MaxMemory.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
@@ -123,7 +126,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper}
 	var magic [4]byte
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
-		err = d.openHTMLZ(src)
+		err = d.openHTMLZ(ctx, src, o.cfg)
 	} else {
 		err = d.openHTML(src, o.dir)
 	}
@@ -157,12 +160,16 @@ func (d *Document) openHTML(src ivy.Source, dir fs.FS) error {
 	return nil
 }
 
-// openHTMLZ opens an HTMLZ file. It finds the document and reads
+// openHTMLZ opens an HTMLZ file. It asks for the password of an archive
+// that encrypts its entries (D12), finds the document and reads
 // metadata.opf.
-func (d *Document) openHTMLZ(src ivy.Source) error {
+func (d *Document) openHTMLZ(ctx context.Context, src ivy.Source, cfg ivy.Config) error {
 	archive, err := zipdoc.Open(src, d.lim)
 	if err != nil {
 		return err
+	}
+	if err := archive.UnlockSmallest(ctx, cfg); err != nil {
+		return fmt.Errorf("opening htmlz: %w", err)
 	}
 	fsys := archive.FS()
 	d.archive, d.fsys = archive, fsys

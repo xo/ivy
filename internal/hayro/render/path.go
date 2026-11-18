@@ -13,6 +13,7 @@ import (
 	"github.com/xo/okage"
 	"github.com/xo/okage/kurbo"
 
+	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/hayro/interpret"
 	"github.com/xo/ivy/internal/hayro/kurboext"
 )
@@ -105,15 +106,32 @@ func (r *renderer) strokePath(path *kurboext.BezPath, props interpret.DrawProps,
 	r.dev.Save()
 	defer r.dev.Restore()
 	r.dev.Concat(toTransform(props.Transform))
-	if outline := singleSegmentOutline(path, &stroke); outline != nil {
-		r.dev.FillPath(outline, okage.FillRuleWinding, shader)
-		return
+	adjust := strokeAdjust(strokeProps, isText)
+	if !adjust {
+		if outline := singleSegmentOutline(path, &stroke); outline != nil {
+			r.dev.FillPath(outline, okage.FillRuleWinding, shader)
+			return
+		}
 	}
 	p := toPath(path)
 	if p == nil {
 		return
 	}
+	if adjust {
+		display.StrokeAdjusted(r.dev, p, stroke, shader)
+		return
+	}
 	r.dev.StrokePath(p, stroke, shader)
+}
+
+// strokeAdjust reports whether a stroke has the stroke adjustment of the
+// display device: when the entry SA of the graphics state is true. The
+// outlines of text do not. MuPDF and Ghostscript also adjust a stroke only
+// when SA is true. Poppler adjusts every stroke.
+//
+// Port: upstream has no stroke adjustment.
+func strokeAdjust(props *interpret.StrokeProps, isText bool) bool {
+	return props.StrokeAdjust && !isText
 }
 
 // fillPath is Renderer::fill_path in hayro src/path.rs.

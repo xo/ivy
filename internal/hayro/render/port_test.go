@@ -10,9 +10,12 @@
 package render
 
 import (
+	"bytes"
+	"fmt"
 	"image"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xo/okage"
@@ -201,5 +204,60 @@ func TestStrokeProperties(t *testing.T) {
 	stroke = r.strokeProperties(&props, kurbo.AffineScale(4), false)
 	if stroke.LineCap != okage.LineCapSquare || stroke.Width < 0.24 || stroke.Width > 0.26 {
 		t.Errorf("expected a square cap and a width of 0.25, got %+v", stroke)
+	}
+}
+
+// strokePDF returns a PDF file of one page that strokes a line, after the
+// graphics state gs with the entries of extGState.
+func strokePDF(extGState string) []byte {
+	content := "/G0 gs 10 10.5 m 90 10.5 l S"
+	objs := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 20] /Contents 4 0 R " +
+			"/Resources << /ExtGState << /G0 << " + extGState + " >> >> >> >>",
+		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+	}
+	var b bytes.Buffer
+	b.WriteString("%PDF-1.4\n")
+	offsets := make([]int, len(objs))
+	for i, o := range objs {
+		offsets[i] = b.Len()
+		fmt.Fprintf(&b, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	}
+	xref := b.Len()
+	fmt.Fprintf(&b, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
+	for _, off := range offsets {
+		fmt.Fprintf(&b, "%010d 00000 n \n", off)
+	}
+	fmt.Fprintf(&b, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
+	return b.Bytes()
+}
+
+func TestStrokeAdjust(t *testing.T) {
+	for _, tt := range []struct {
+		extGState string
+		want      string
+	}{
+		// a stroke of one line fills its outline without the stroke
+		// adjustment
+		{"/SA true", "stroke adjusted [10 10 90 10] 1"},
+		{"/SA false", "fill [10 10 90 11] Winding"},
+		{"/LW 2", "fill [10 10 90 12] Winding"},
+	} {
+		pdf, err := syntax.NewPdf(strokePDF(tt.extGState))
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := pdf.Pages().Slice()[0]
+		var l display.List
+		w, h := page.RenderDimensions()
+		transform := interpret.TransformToKurbo(page.InitialTransform(true))
+		if err := RenderInto(page, NewRenderCache(), interpret.DefaultInterpreterSettings(), &RenderSettings{}, &l, int(w), int(h), transform); err != nil {
+			t.Fatal(err)
+		}
+		if got := l.String(); !strings.Contains(got, "\n"+tt.want) {
+			t.Errorf("%s: expected %q in the commands, got:\n%s", tt.extGState, tt.want, got)
+		}
 	}
 }

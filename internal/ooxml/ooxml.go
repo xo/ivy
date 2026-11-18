@@ -3,7 +3,8 @@
 //
 // It finds the thumbnail of a package, in docProps/thumbnail.*. A thumbnail
 // in EMF or WMF is drawn with internal/metafile. It reads the core
-// properties of a package, in docProps/core.xml. It opens a package that a
+// properties of a package, in docProps/core.xml, and the extended
+// properties, in docProps/app.xml. It opens a package that a
 // password protects with internal/offcrypto (D12, D24).
 package ooxml
 
@@ -12,10 +13,8 @@ import (
 	"context"
 	"fmt"
 	"iter"
-	"strings"
 
 	"github.com/xo/ivy"
-	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/msole"
 	"github.com/xo/ivy/internal/zipdoc"
 )
@@ -39,13 +38,6 @@ var metafileThumbnails = []string{
 	"docProps/thumbnail.emf",
 	"docProps/thumbnail.wmf",
 }
-
-// The types of the relationships of the parts of the core and the
-// extended properties, in the transitional and the strict forms.
-const (
-	relCore       = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
-	relCoreStrict = "http://schemas.openxmlformats.org/officedocument/2006/relationships/metadata/core-properties"
-)
 
 // Document is an open Office Open XML package.
 type Document struct {
@@ -114,59 +106,4 @@ func (d *Document) Previews(ctx context.Context) iter.Seq2[ivy.Preview, error] {
 			d.cfg.Log().Debug("ooxml: thumbnail left out", "name", name, "err", err)
 		}
 	}
-}
-
-// Describe returns the core properties of the package: the title, the
-// creator, the subject, the language and the dates. A package without them
-// says nothing. The core properties are a help, so a part that is damaged
-// says nothing too, and the fault is logged.
-func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
-	if err := ctx.Err(); err != nil {
-		return ivy.Info{}, fmt.Errorf("describing office open xml: %w", err)
-	}
-	name := "docProps/core.xml"
-	if rels, err := d.Relationships("", d.cfg.Limits); err == nil {
-		for _, r := range rels {
-			if !r.External && (r.Type == relCore || r.Type == relCoreStrict) {
-				name = r.Target
-				break
-			}
-		}
-	}
-	if !d.HasPart(name) {
-		return ivy.Info{}, nil
-	}
-	buf, err := d.ReadPart(name)
-	if err != nil {
-		return ivy.Info{}, err
-	}
-	doc, err := ParseXML(buf, d.cfg.Limits)
-	if err != nil {
-		d.cfg.Log().Debug("ooxml: core properties left out", "err", err)
-		return ivy.Info{}, nil
-	}
-	var info ivy.Info
-	for n := range doc.RootElement().Children() {
-		if !n.IsElement() {
-			continue
-		}
-		text := strings.TrimSpace(ebook.NodeText(n))
-		switch n.TagName().Name() {
-		case "title":
-			info.Title = text
-		case "creator":
-			if text != "" {
-				info.Authors = []string{text}
-			}
-		case "subject":
-			info.Subject = text
-		case "language":
-			info.Language = text
-		case "created":
-			info.Created = ebook.ParseDate(text)
-		case "modified":
-			info.Modified = ebook.ParseDate(text)
-		}
-	}
-	return info, nil
 }

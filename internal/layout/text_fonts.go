@@ -10,8 +10,9 @@
 // them in a FontDatabase of okage, which selects a face for a list of
 // families, a weight, a style and a stretch, and resolves the generic
 // families (okage D46). The fallback for a character that the fonts of the
-// style do not draw is the fallback selector of okage (okage D39). go-text
-// parses the faces, for the shaping and the metrics (D7). The other
+// style do not draw is the fallback selector of okage (okage D39). The
+// database parses each font once with go-text, and gives the faces for the
+// shaping and the metrics, and the character maps (okage D57). The other
 // differences are marked with Port: in the code.
 
 package layout
@@ -20,6 +21,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"fmt"
+	"image/color"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -70,10 +72,17 @@ type FontConfiguration struct {
 	// faceRules holds the unicode-range and the features of the faces that
 	// an @font-face rule loaded.
 	faceRules map[svg.FontID]*faceRule
-	// faces holds the faces of go-text, by font and variations.
+	// faces holds the faces of go-text, by font and variations. A face is
+	// not safe for concurrent use, so the configuration keeps its own faces
+	// of the fonts that the database parses.
 	faces map[faceKey]*font.Face
-	// fonts holds the fonts of go-text that the faces share, by font.
-	fonts map[svg.FontID]*font.Font
+	// colorFonts tells for each font whether it has the table COLR or the
+	// table SVG, which hold color glyphs.
+	colorFonts map[svg.FontID]bool
+	// colorGlyphs holds the color glyphs that the drawing drew, and nil for
+	// a glyph that has none, by colorGlyphKey. It holds at most
+	// maxColorGlyphs glyphs.
+	colorGlyphs map[colorGlyphKey]*svg.Tree
 	// chains holds the faces of the families of a style, by the key of the
 	// font of the style.
 	chains map[string][]svg.FontID
@@ -111,6 +120,19 @@ type faceKey struct {
 	id         svg.FontID
 	variations string
 }
+
+// colorGlyphKey is the key of a color glyph: a font, a glyph, the
+// variations of the font, and the color of the text. The palette is always
+// the default palette, because the port has no font-palette.
+type colorGlyphKey struct {
+	id         svg.FontID
+	glyph      uint32
+	variations string
+	color      color.NRGBA
+}
+
+// maxColorGlyphs bounds the color glyphs that a FontConfiguration keeps.
+const maxColorGlyphs = 256
 
 // fallbackKey is the key of a fallback face: the first face of a chain, the
 // character, and the kind and the language of the East Asian text of the
@@ -166,7 +188,6 @@ func NewFontConfiguration(db *svg.FontDatabase, opts FontConfigurationOptions) *
 		rules:        map[string]bool{},
 		faceRules:    map[svg.FontID]*faceRule{},
 		faces:        map[faceKey]*font.Face{},
-		fonts:        map[svg.FontID]*font.Font{},
 		chains:       map[string][]svg.FontID{},
 		fallbacks:    map[fallbackKey]int{},
 		shaped:       map[shapeKey]*shapedText{},
@@ -802,7 +823,7 @@ func (fc *FontConfiguration) eastAsianSubstitute(name string, lang fontdb.Lang, 
 	}
 	probe := fontdb.Probe(lang)
 	for _, id := range fc.eastAsianChain(kind, lang, q) {
-		if fc.covers(id, fc.face(id, style), probe) {
+		if fc.covers(id, probe) && fc.face(id, style) != nil {
 			return id, true
 		}
 	}
@@ -892,27 +913,105 @@ func (fc *FontConfiguration) queryRange(lo, hi int, name string, q svg.FontQuery
 }
 
 // face returns the face of go-text of a font, with the variations of a
-// style, or nil when the font cannot be parsed.
+// style, or nil when the font cannot be parsed. The face shares the font
+// that the database parses once (okage D57).
 func (fc *FontConfiguration) face(id svg.FontID, style *Style) *font.Face {
 	variations := fontVariations(style)
 	key := faceKey{id, variationsKey(variations)}
 	if f, ok := fc.faces[key]; ok {
 		return f
 	}
-	ft, ok := fc.fonts[id]
-	if !ok {
-		ft = fc.parseFont(id)
-		fc.fonts[id] = ft
-	}
-	var f *font.Face
-	if ft != nil {
-		f = font.NewFace(ft)
-		if len(variations) > 0 {
-			f.SetVariations(variations)
-		}
-	}
+	f := newFace(fc.db, id, variations)
 	fc.faces[key] = f
 	return f
+}
+
+// newFace returns a new face of the font id of db with variations, or nil.
+func newFace(db *svg.FontDatabase, id svg.FontID, variations []svg.FontVariation) (f *font.Face) {
+	defer func() {
+		// Port: a panic in the reader of a font is a font that cannot be
+		// parsed.
+		if r := recover(); r != nil {
+			f = nil
+		}
+	}()
+	f, ok := db.NewFace(id, variations)
+	if !ok {
+		return nil
+	}
+	return f
+}
+
+// colorGlyph returns the color glyph of the table COLR or of the table SVG
+// of the glyph of the font id, with variations and the color of the text,
+// or nil when the glyph has none. The tree is in em units, with the origin
+// of the glyph at (0, 0) on the baseline (okage D57).
+//
+// Port: upstream draws the color glyphs with Cairo.
+func (fc *FontConfiguration) colorGlyph(id svg.FontID, glyph uint32, variations []svg.FontVariation, fg color.NRGBA) *svg.Tree {
+	if !fc.hasColorGlyphs(id) {
+		return nil
+	}
+	key := colorGlyphKey{id, glyph, variationsKey(variations), fg}
+	if tree, ok := fc.colorGlyphs[key]; ok {
+		return tree
+	}
+	tree := colorGlyph(fc.db, id, glyph, svg.ColorGlyphStyle{Variations: variations, Foreground: fg})
+	if fc.colorGlyphs == nil || len(fc.colorGlyphs) >= maxColorGlyphs {
+		fc.colorGlyphs = map[colorGlyphKey]*svg.Tree{}
+	}
+	fc.colorGlyphs[key] = tree
+	return tree
+}
+
+// colorGlyph returns the color glyph of db, or nil.
+func colorGlyph(db *svg.FontDatabase, id svg.FontID, glyph uint32, style svg.ColorGlyphStyle) (tree *svg.Tree) {
+	defer func() {
+		// Port: a panic in the reader of a font is a glyph without color.
+		if recover() != nil {
+			tree = nil
+		}
+	}()
+	tree, ok := db.ColorGlyph(id, svg.GlyphID(glyph), style)
+	if !ok {
+		return nil
+	}
+	return tree
+}
+
+// hasColorGlyphs reports whether the font id has the table COLR or the
+// table SVG. It reads the table directory of the font once, so that the
+// glyphs of the other fonts do not ask for a color glyph.
+func (fc *FontConfiguration) hasColorGlyphs(id svg.FontID) bool {
+	if ok, found := fc.colorFonts[id]; found {
+		return ok
+	}
+	ok := hasColorTables(fc.db, id)
+	if fc.colorFonts == nil {
+		fc.colorFonts = map[svg.FontID]bool{}
+	}
+	fc.colorFonts[id] = ok
+	return ok
+}
+
+// hasColorTables reports whether the font id of db has the table COLR or
+// the table SVG.
+func hasColorTables(db *svg.FontDatabase, id svg.FontID) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	data, index, found := db.FaceData(id)
+	if !found {
+		return false
+	}
+	loaders, err := ot.NewLoaders(bytes.NewReader(data))
+	if err != nil || int(index) >= len(loaders) {
+		return false
+	}
+	ld := loaders[index]
+	return ld.HasTable(ot.MustNewTag("COLR")) || ld.HasTable(ot.MustNewTag("SVG "))
 }
 
 // syntheticBold reports whether the text of a style draws the face id in a
@@ -933,55 +1032,38 @@ func (fc *FontConfiguration) syntheticBold(id svg.FontID, style *Style) bool {
 	return f != nil && len(f.Coords()) == 0
 }
 
-// parseFont parses the font id with go-text, or returns nil.
-func (fc *FontConfiguration) parseFont(id svg.FontID) (ft *font.Font) {
-	defer func() {
-		// Port: a panic in the reader of a font is a font that cannot be
-		// parsed.
-		if r := recover(); r != nil {
-			ft = nil
-		}
-	}()
-	data, index, ok := fc.db.FaceData(id)
-	if !ok {
-		return nil
-	}
-	loaders, err := ot.NewLoaders(bytes.NewReader(data))
-	if err != nil || int(index) >= len(loaders) {
-		return nil
-	}
-	ft, err = font.NewFont(loaders[index])
-	if err != nil {
-		return nil
-	}
-	return ft
-}
-
-// fontVariations returns the variations of a style: the weight, and the
-// axes of font-variation-settings, as get_font_description in
-// weasyprint/text/fonts.py sets them.
-func fontVariations(style *Style) []font.Variation {
+// fontVariations returns the variations of a style: the axes of
+// font-variation-settings, as get_font_description in
+// weasyprint/text/fonts.py sets them, and the axes of the weight, the
+// stretch and the style that svg.AutoFontVariations adds.
+//
+// Port: Pango sets the axis wght of the weight only. The port also sets the
+// axes wdth, ital and slnt, as okage does for the text of SVG (okage D57).
+func fontVariations(style *Style) []svg.FontVariation {
 	if style == nil {
 		return nil
 	}
-	variations := []font.Variation{{Tag: ot.MustNewTag("wght"), Value: float32(fontWeight(style.Get("font_weight")))}}
+	var variations []svg.FontVariation
 	if settings, ok := style.Get("font_variation_settings").(Tuple); ok {
 		for _, item := range settings {
 			pair, ok := item.(Tuple)
 			if !ok || len(pair) != 2 || len(str(pair[0])) != 4 {
 				continue
 			}
-			variations = append(variations, font.Variation{Tag: ot.MustNewTag(str(pair[0])), Value: float32(num(pair[1]))})
+			variations = append(variations, svg.NewFontVariation([4]byte([]byte(str(pair[0]))), float32(num(pair[1]))))
 		}
 	}
-	return variations
+	return svg.AutoFontVariations(variations,
+		uint16(fontWeight(style.Get("font_weight"))),
+		fontStretch(str(style.Get("font_stretch"))),
+		fontStyle(str(style.Get("font_style"))))
 }
 
 // variationsKey returns a key for variations.
-func variationsKey(variations []font.Variation) string {
+func variationsKey(variations []svg.FontVariation) string {
 	var b strings.Builder
 	for _, v := range variations {
-		b.WriteString(v.Tag.String())
+		b.Write(v.Tag[:])
 		b.WriteString(strconv.FormatFloat(float64(v.Value), 'g', -1, 32))
 		b.WriteByte(' ')
 	}
@@ -989,11 +1071,10 @@ func variationsKey(variations []font.Variation) string {
 }
 
 // covers reports whether the font id draws the character r, within the
-// unicode-range of its @font-face rule.
-func (fc *FontConfiguration) covers(id svg.FontID, f *font.Face, r rune) bool {
-	if f == nil {
-		return false
-	}
+// unicode-range of its @font-face rule. It reads the character map that the
+// database keeps for each font file, and it does not parse the face (okage
+// D57).
+func (fc *FontConfiguration) covers(id svg.FontID, r rune) (ok bool) {
 	if rule, ok := fc.faceRules[id]; ok && len(rule.ranges) > 0 {
 		in := false
 		for _, rg := range rule.ranges {
@@ -1006,7 +1087,14 @@ func (fc *FontConfiguration) covers(id svg.FontID, f *font.Face, r rune) bool {
 			return false
 		}
 	}
-	_, ok := f.NominalGlyph(r)
+	defer func() {
+		// Port: a panic in the reader of a font is a font that draws
+		// nothing.
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	_, ok = fc.db.NominalGlyph(id, r)
 	return ok
 }
 
@@ -1036,7 +1124,10 @@ func (fc *FontConfiguration) newFontmap(style *Style) *fontmap {
 // face of okage, then the first face.
 func (m *fontmap) ResolveFace(r rune) *font.Face {
 	for _, id := range m.chain {
-		if f := m.fc.face(id, m.style); m.fc.covers(id, f, r) {
+		if !m.fc.covers(id, r) {
+			continue
+		}
+		if f := m.fc.face(id, m.style); f != nil {
 			m.byFace[f] = id
 			return f
 		}
@@ -1101,7 +1192,7 @@ func (m *fontmap) eastAsianFallback(r rune) (svg.FontID, bool) {
 		Style:   fontStyle(str(m.style.Get("font_style"))),
 	}
 	for _, id := range m.fc.eastAsianChain(m.kind, m.lang, q) {
-		if m.fc.covers(id, m.fc.face(id, m.style), r) {
+		if m.fc.covers(id, r) && m.fc.face(id, m.style) != nil {
 			return id, true
 		}
 	}

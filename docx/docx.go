@@ -152,7 +152,8 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 }
 
 // Describe satisfies the ivy.Describer interface. It reads the core
-// properties of the file, in docProps/core.xml.
+// properties of the file, in docProps/core.xml, and the program that made
+// it, in docProps/app.xml.
 func (d *Document) Describe(ctx context.Context) (info ivy.Info, err error) {
 	defer ebook.Recover("describing docx", &err)
 	return d.doc.Describe(ctx)

@@ -70,6 +70,22 @@ func (a *Archive) Unlock(ctx context.Context, f *zip.File, cfg ivy.Config) error
 	return nil
 }
 
+// UnlockSmallest unlocks the archive with Unlock and its smallest encrypted
+// entry, for a format that does not choose the entry. An archive without
+// encrypted entries needs no password, and UnlockSmallest does nothing.
+func (a *Archive) UnlockSmallest(ctx context.Context, cfg ivy.Config) error {
+	var smallest *zip.File
+	for _, f := range a.zr.File {
+		if Encrypted(f) && !f.FileInfo().IsDir() && (smallest == nil || f.CompressedSize64 < smallest.CompressedSize64) {
+			smallest = f
+		}
+	}
+	if smallest == nil {
+		return nil
+	}
+	return a.Unlock(ctx, smallest, cfg)
+}
+
 // try reads the entry f with password, and keeps the password if the entry
 // decrypts.
 func (a *Archive) try(f *zip.File, password string) error {

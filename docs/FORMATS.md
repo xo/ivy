@@ -189,9 +189,9 @@ D5, most of them do not matter.
 | Feature | Needed by | At review quality |
 | --- | --- | --- |
 | CMYK and ICC profiles | PDF, PSD, EPS, JPEG | ivy converts to RGB before it draws, with the port of moxcms where the file holds an ICC profile (D14). okage needs no change |
-| Knockout groups and the blending of CMYK | PDF | okage composites knockout groups with `Pixmap.Knockout` (okage D56), and ivy does not use it yet. The blending of CMYK is ignored, as hayro ignores it |
-| Isolated groups and soft masks | PDF, XPS | A group draws to a pixmap of its own, then blends. okage has masks of alpha and of luminance, with a backdrop color and a transfer function (okage D56) |
-| Shadings of types 4 to 7, meshes of triangles and of patches | PDF, PostScript | okage fills a mesh of triangles with `MeshGradient` (okage D55). ivy samples the mesh into an image until it uses it |
+| Knockout groups and the blending of CMYK | PDF | ivy composites a knockout group with `Pixmap.Knockout` of okage (okage D56). The blending of CMYK is ignored, as hayro ignores it |
+| Isolated groups and soft masks | PDF, XPS | A group draws to a pixmap of its own, then blends. A group that is not isolated takes its backdrop when an object blends with it, and `Pixmap.RemoveBackdrop` removes the backdrop at its end. The soft masks use `okage.MaskFromLuminance` with the backdrop color, and `Mask.ApplyTransfer` (okage D56) |
+| Shadings of types 4 to 7, meshes of triangles and of patches | PDF, PostScript | okage fills a mesh of triangles with `MeshGradient` (okage D55). ivy splits the patches into triangles, and cuts a triangle where a function of its colors goes from one linear segment to the next |
 | 16-bit and float channels | PSD, TIFF, PDF images | Reduced to 8 bits before the draw |
 | Type 1 and Type 3 fonts | PDF, PostScript | Not okage. The font layer of ivy gives outlines, and okage fills them as paths |
 | Hinting of fonts | all | Ignored |

@@ -1,13 +1,10 @@
 package fontdb
 
 import (
-	"encoding/binary"
 	"strings"
 	"unicode"
 
 	"github.com/xo/okage/svg"
-	gofont "github.com/xo/okage/typesetting/font"
-	"github.com/xo/okage/typesetting/font/opentype/tables"
 
 	"github.com/xo/ivy/internal/font"
 )
@@ -181,68 +178,16 @@ func Covering(db *svg.FontDatabase, first int, r rune) (svg.FontID, bool) {
 	return id, ok
 }
 
-// draws reports whether the face id of db draws r. It reads the cmap table
-// of the face only, which is faster than to read the whole face.
+// draws reports whether the face id of db draws r. It reads the character
+// map that db keeps for each font file, and it does not parse the whole
+// face (okage D57).
 func draws(db *svg.FontDatabase, id svg.FontID, r rune) (ok bool) {
-	data, index, found := db.FaceData(id)
-	if !found {
-		return false
-	}
 	// go-text can panic on a malformed font (D5, D18).
 	defer func() {
 		if recover() != nil {
 			ok = false
 		}
 	}()
-	raw, found := cmapTable(data, index)
-	if !found {
-		return false
-	}
-	table, _, err := tables.ParseCmap(raw)
-	if err != nil {
-		return false
-	}
-	cmap, _, err := gofont.ProcessCmap(table, 0)
-	if err != nil {
-		return false
-	}
-	g, ok := cmap.Lookup(r)
+	g, ok := db.NominalGlyph(id, r)
 	return ok && g != 0
-}
-
-// cmapTable returns the cmap table of the font at index in data, which can
-// be a collection, and false if it has none inside data. It reads the table
-// directory itself, because the loader of go-text reserves the length that
-// the directory gives before it reads a table.
-func cmapTable(data []byte, index uint32) ([]byte, bool) {
-	off := uint64(0)
-	if len(data) >= 12 && string(data[:4]) == "ttcf" {
-		pos := 12 + 4*uint64(index)
-		if index >= binary.BigEndian.Uint32(data[8:]) || pos+4 > uint64(len(data)) {
-			return nil, false
-		}
-		off = uint64(binary.BigEndian.Uint32(data[pos:]))
-	} else if index != 0 {
-		return nil, false
-	}
-	if off+12 > uint64(len(data)) {
-		return nil, false
-	}
-	n := uint64(binary.BigEndian.Uint16(data[off+4:]))
-	for i := range n {
-		rec := off + 12 + 16*i
-		if rec+16 > uint64(len(data)) {
-			return nil, false
-		}
-		if string(data[rec:rec+4]) != "cmap" {
-			continue
-		}
-		start := uint64(binary.BigEndian.Uint32(data[rec+8:]))
-		end := start + uint64(binary.BigEndian.Uint32(data[rec+12:]))
-		if end > uint64(len(data)) {
-			return nil, false
-		}
-		return data[start:end:end], true
-	}
-	return nil, false
 }

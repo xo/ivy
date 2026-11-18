@@ -92,5 +92,7 @@ func FuzzLoad(f *testing.F) {
 		gid, _ := face.Glyph('a')
 		_ = face.Outline(gid)
 		_ = face.Advance(gid)
+		_ = face.VerticalAdvance(gid)
+		_, _, _ = face.VerticalOrigin(gid)
 	})
 }

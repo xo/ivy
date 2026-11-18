@@ -1,6 +1,6 @@
 // Package font is the font layer of D10. It loads the fonts that a document
-// embeds, maps characters to glyphs, and gives the outline and the advance of
-// a glyph.
+// embeds, maps characters to glyphs, and gives the outline of a glyph, its
+// advance, and its vertical advance and origin for vertical text.
 //
 // On 2026-11-16 it reads TrueType, OpenType and CFF fonts with go-text (D7).
 // Type 1 and Type 3, and the substitute of a font that a document names and
@@ -150,6 +150,42 @@ func (f *Face) Advance(gid GID) (adv float32) {
 		}
 	}()
 	return f.face.HorizontalAdvance(opentype.GID(gid)) / f.upem
+}
+
+// VerticalAdvance returns the vertical advance of the glyph, in ems, as a
+// length down the page. It comes from the tables vhea and vmtx, or from the
+// height of the font when the font has no vmtx table. It returns 0 when the
+// font holds no vertical advance for the glyph.
+func (f *Face) VerticalAdvance(gid GID) (adv float32) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// go-text can panic on a malformed font (D5).
+	defer func() {
+		if recover() != nil {
+			adv = 0
+		}
+	}()
+	// go-text gives the vertical advance with y up, so it is negative
+	return max(-f.face.VerticalAdvance(opentype.GID(gid))/f.upem, 0)
+}
+
+// VerticalOrigin returns the vertical origin of the glyph, in ems: the
+// point of the glyph that vertical text puts at the pen. x is half of the
+// horizontal advance, and y is the height above the baseline, with y up. y
+// comes from the VORG table, or from the vmtx and the glyf tables, or else
+// from the height of the glyph. It returns false when the font cannot give
+// the origin.
+func (f *Face) VerticalOrigin(gid GID) (x, y float32, ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// go-text can panic on a malformed font (D5).
+	defer func() {
+		if recover() != nil {
+			x, y, ok = 0, 0, false
+		}
+	}()
+	x, y = f.face.GlyphVOrigin(opentype.GID(gid))
+	return x / f.upem, y / f.upem, true
 }
 
 // Outline returns the outline of the glyph, in ems, with y down, from the

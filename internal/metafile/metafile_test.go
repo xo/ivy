@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"strings"
 	"testing"
 
@@ -142,6 +143,52 @@ func TestClip(t *testing.T) {
 	expect(t, pm, 30, 30, green)
 	expect(t, pm, 50, 50, color.NRGBA{255, 255, 255, 255})
 	expect(t, pm, 70, 50, green)
+}
+
+// TestFarPoints checks that a world transform with a huge scale draws its
+// shapes, which then cover the picture, and that a transform that is not
+// finite draws nothing and does not panic.
+func TestFarPoints(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+	for i := range img.Pix {
+		img.Pix[i] = 0xff
+	}
+	for _, s := range []float32{1e10, 1e12, 1e30, float32(math.Inf(1)), float32(math.NaN())} {
+		draw := func(f func(e *fixture.EMF)) *okage.Pixmap {
+			t.Helper()
+			e := fixture.NewEMF(100, 100)
+			// EMR_SETWORLDTRANSFORM, with the center of the picture at the
+			// origin of the world
+			e.Record(35, s, float32(0), float32(0), s, float32(50), float32(50))
+			f(e)
+			pm, err := render(t, e.Bytes())
+			if err != nil && strings.Contains(err.Error(), "panic") {
+				t.Fatalf("scale %g: %v", s, err)
+			}
+			return pm
+		}
+		fill := draw(func(e *fixture.EMF) {
+			e.Select(e.Brush(red, -1))
+			e.Select(fixture.Stock(8))
+			e.Rectangle(-1, -1, 1, 1)
+		})
+		pen := draw(func(e *fixture.EMF) {
+			e.Select(e.Pen(0, 1, blue))
+			e.Polyline(-1, 0, 1, 0)
+		})
+		draw(func(e *fixture.EMF) {
+			e.Gradient(-1, -1, 1, 1, red, green, true)
+			e.Image(-1, -1, 2, 2, img)
+			e.Select(e.Font(-1, 400, false, "Arial"))
+			e.Text(0, 0, "Hi")
+		})
+		if s == 1e10 || s == 1e12 {
+			for _, p := range [][2]int{{1, 1}, {50, 50}, {98, 98}} {
+				expect(t, fill, p[0], p[1], red)
+				expect(t, pen, p[0], p[1], blue)
+			}
+		}
+	}
 }
 
 func TestHatch(t *testing.T) {

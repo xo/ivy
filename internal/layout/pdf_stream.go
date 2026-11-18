@@ -845,7 +845,11 @@ func (s *stream) addShading(shadingType int, domain [2]float64, coords []float64
 //
 // Port: okage interpolates linearly between the stops of a gradient, so the
 // stops sample the functions whose exponent is not 1. A shading without
-// extend paints its first and its last colors past its domain.
+// extend uses okage.SpreadModeDecal, which paints nothing past the ends of
+// the gradient (okage D55). A radial shading without extend whose circles
+// do not nest paints its first and its last colors past its domain, because
+// okage does not paint a point with the largest circle that holds it, as
+// PDF does.
 func (sh *shading) gradientShader(alpha float64) okage.Shader {
 	t0, t1 := sh.domain[0], sh.domain[1]
 	color := func(v []float64) okage.Color {
@@ -871,14 +875,21 @@ func (sh *shading) gradientShader(alpha float64) okage.Shader {
 	var shader okage.Shader
 	var ok bool
 	c := sh.coords
+	spread := okage.SpreadModePad
 	switch {
 	case sh.shadingType == 2 && len(c) == 4:
+		if !sh.extend {
+			spread = okage.SpreadModeDecal
+		}
 		shader, ok = okage.NewLinearGradient(okage.Point{X: float32(c[0]), Y: float32(c[1])},
-			okage.Point{X: float32(c[2]), Y: float32(c[3])}, stops, okage.SpreadModePad, okage.IdentityTransform())
+			okage.Point{X: float32(c[2]), Y: float32(c[3])}, stops, spread, okage.IdentityTransform())
 	case sh.shadingType == 3 && len(c) == 6:
-		shader, ok = okage.NewRadialGradient(okage.Point{X: float32(c[0]), Y: float32(c[1])}, float32(max(c[2], 0)),
-			okage.Point{X: float32(c[3]), Y: float32(c[4])}, float32(max(c[5], 0)), stops, okage.SpreadModePad,
-			okage.IdentityTransform())
+		r0, r1 := max(c[2], 0), max(c[5], 0)
+		if !sh.extend && math.Abs(r1-r0) > math.Hypot(c[3]-c[0], c[4]-c[1]) {
+			spread = okage.SpreadModeDecal
+		}
+		shader, ok = okage.NewRadialGradient(okage.Point{X: float32(c[0]), Y: float32(c[1])}, float32(r0),
+			okage.Point{X: float32(c[3]), Y: float32(c[4])}, float32(r1), stops, spread, okage.IdentityTransform())
 	}
 	if !ok {
 		return okage.SolidColor(color(sh.function.eval(t1)))

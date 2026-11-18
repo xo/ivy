@@ -21,7 +21,8 @@ import (
 // Port: upstream draws the mask into a Mask of vello_cpu, and keeps it in a
 // cache of the renderer. The port gives the display device a function that
 // draws the content, and the cache key of the mask, so that the device
-// draws the mask once and keeps it.
+// draws the mask once and keeps it. The transfer function goes to the device
+// as a table of the 256 values of a byte.
 func (r *renderer) softMask(mask *interpret.SoftMask) *display.Mask {
 	if mask == nil {
 		return nil
@@ -41,7 +42,12 @@ func (r *renderer) softMask(mask *interpret.SoftMask) *display.Mask {
 		m.Backdrop = okage.ColorFromRGBA8(bg[0], bg[1], bg[2], bg[3])
 	}
 	if tf := mask.TransferFunction(); tf != nil {
-		m.Transfer = tf.ApplyTo
+		var table [256]uint8
+		for i := range table {
+			table[i] = uint8(i)
+		}
+		tf.ApplyTo(table[:])
+		m.Transfer = &table
 	}
 	return m
 }

@@ -26,6 +26,7 @@ import (
 	"image/color"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -285,45 +286,61 @@ func orient(img image.Image, o Orientation) image.Image {
 
 // SVGImage is SVGImage in weasyprint/images.py: an image of SVG data, which
 // the drawing renders with the package svg of okage.
+//
+// Port: upstream keeps the tree of ElementTree. The port keeps the document
+// of roxmltree, which okage parses with svg.FromXMLTree when it draws the
+// image. So the XML of an image is parsed once, and an inline svg element
+// is not written as XML text (okage D58).
 type SVGImage struct {
-	// Data is the SVG data.
-	Data []byte
-	// BaseURL is the URL that the links of the data resolve against.
+	// BaseURL is the URL that the links of the image resolve against.
 	BaseURL string
 
-	// width, height and viewBox are the attributes of the root element,
-	// with false for a missing one.
-	width, height, viewBox       string
-	hasWidth, hasHeight, hasView bool
-	fetcher                      *URLFetcher
-	limits                       ivy.Limits
+	// doc is the XML document of the image. err is the error of an inline
+	// svg element whose document cannot be built, which the drawing logs.
+	doc *roxmltree.Document
+	err error
+	// dims are the attributes width, height and viewBox of the root
+	// element.
+	dims    svg.Dimensions
+	fetcher *URLFetcher
+	limits  ivy.Limits
 }
 
-// newSVGImage is SVGImage.__init__ in weasyprint/images.py. It reads the
-// root element of the data. It fails when the data is not well-formed XML.
+// newSVGImage is SVGImage.__init__ in weasyprint/images.py. It parses the
+// data. It fails when the data is not well-formed XML.
 func newSVGImage(data []byte, baseURL string, fetcher *URLFetcher, limits ivy.Limits) (*SVGImage, error) {
-	options := roxmltree.DefaultParsingOptions()
-	options.NodesLimit = uint32(min(limits.MaxObjects, 1<<31))
-	doc, err := roxmltree.ParseWithOptions(string(data), options)
+	doc, err := roxmltree.ParseWithOptions(string(data), svgParsingOptions(limits))
 	if err != nil {
 		return nil, fmt.Errorf("parsing SVG: %w", err)
 	}
-	root := doc.RootElement()
-	s := &SVGImage{Data: data, BaseURL: baseURL, fetcher: fetcher, limits: limits}
-	s.width, s.hasWidth = root.Attribute(roxmltree.ExpandedNameFromStr("width"))
-	s.height, s.hasHeight = root.Attribute(roxmltree.ExpandedNameFromStr("height"))
-	s.viewBox, s.hasView = root.Attribute(roxmltree.ExpandedNameFromStr("viewBox"))
-	return s, nil
+	return &SVGImage{
+		BaseURL: baseURL,
+		doc:     doc,
+		dims:    svg.NodeDimensions(doc.RootElement()),
+		fetcher: fetcher,
+		limits:  limits,
+	}, nil
 }
 
 // newInlineSVGImage is SVGImage.__init__ for the tree of an <svg> element of
 // the document, which handle_svg of weasyprint/html.py makes.
 func newInlineSVGImage(element *Element, baseURL string, fetcher *URLFetcher, limits ivy.Limits) *SVGImage {
-	s := &SVGImage{Data: serializeSVG(element), BaseURL: baseURL, fetcher: fetcher, limits: limits}
-	s.width, s.hasWidth = element.Get("width")
-	s.height, s.hasHeight = element.Get("height")
-	s.viewBox, s.hasView = element.Get("viewBox")
+	s := &SVGImage{BaseURL: baseURL, fetcher: fetcher, limits: limits}
+	doc, err := buildSVG(element, svgParsingOptions(limits))
+	if err != nil {
+		s.err = fmt.Errorf("building SVG image %s: %w", baseURL, err)
+		return s
+	}
+	s.doc, s.dims = doc, svg.NodeDimensions(doc.RootElement())
 	return s
+}
+
+// svgParsingOptions are the options of roxmltree for an SVG image: the
+// default options, with at most Limits.MaxObjects nodes.
+func svgParsingOptions(limits ivy.Limits) roxmltree.ParsingOptions {
+	options := roxmltree.DefaultParsingOptions()
+	options.NodesLimit = uint32(min(limits.WithDefaults().MaxObjects, 1<<31))
+	return options
 }
 
 // GetIntrinsicSize satisfies Image. It is SVGImage.get_intrinsic_size in
@@ -331,26 +348,19 @@ func newInlineSVGImage(element *Element, baseURL string, fetcher *URLFetcher, li
 // weasyprint/svg/__init__.py.
 func (s *SVGImage) GetIntrinsicSize(_, fontSize float64) IntrinsicSize {
 	var size IntrinsicSize
-	intrinsicWidth := "100%"
-	if s.hasWidth {
-		intrinsicWidth = s.width
-	}
-	if !strings.Contains(intrinsicWidth, "%") {
-		size.Width, size.HasWidth = svgSize(intrinsicWidth, fontSize, 0), true
-	}
-	intrinsicHeight := "100%"
-	if s.hasHeight {
-		intrinsicHeight = s.height
-	}
-	if !strings.Contains(intrinsicHeight, "%") {
-		size.Height, size.HasHeight = svgSize(intrinsicHeight, fontSize, 0), true
-	}
+	size.Width, size.HasWidth = s.intrinsicLength("width", s.dims.Width, s.dims.HasWidth, fontSize)
+	size.Height, size.HasHeight = s.intrinsicLength("height", s.dims.Height, s.dims.HasHeight, fontSize)
 
 	switch {
 	case !size.HasWidth || !size.HasHeight:
-		viewbox := s.getViewbox()
-		if len(viewbox) >= 4 && viewbox[2] != 0 && viewbox[3] != 0 {
-			size.Ratio, size.HasRatio = viewbox[2]/viewbox[3], true
+		// Port: upstream reads the numbers of the viewBox with get_viewbox,
+		// and takes the ratio of any numbers that are not zero. The port
+		// reads the viewBox of svg.NodeDimensions, as okage draws it. A
+		// viewBox that okage does not accept, such as one with a negative
+		// width, gives no ratio.
+		if s.dims.HasViewBox {
+			viewbox := s.dims.ViewBox
+			size.Ratio, size.HasRatio = float64(viewbox.Width())/float64(viewbox.Height()), true
 			if size.HasWidth && size.Width != 0 {
 				size.Height, size.HasHeight = size.Width/size.Ratio, true
 			} else if size.HasHeight && size.Height != 0 {
@@ -365,103 +375,154 @@ func (s *SVGImage) GetIntrinsicSize(_, fontSize float64) IntrinsicSize {
 	return size
 }
 
-// getViewbox is get_viewbox in weasyprint/svg/__init__.py: the numbers of
-// the attribute viewBox of the root element, or nil.
-func (s *SVGImage) getViewbox() []float64 {
-	if !s.hasView || s.viewBox == "" {
-		return nil
-	}
-	var numbers []float64
-	for field := range strings.FieldsSeq(svgNormalize(s.viewBox)) {
-		n, ok := pyFloat(field)
-		if !ok {
-			// Port: upstream raises ValueError.
-			return nil
+// intrinsicLength is the intrinsic width or height of
+// SVG.get_intrinsic_size in weasyprint/svg/__init__.py, from the attribute
+// name of the root element and its length of svg.NodeDimensions. It returns
+// false for a missing attribute or a percentage, which upstream reads as
+// 100%.
+func (s *SVGImage) intrinsicLength(name string, length svg.Length, valid bool, fontSize float64) (float64, bool) {
+	if valid {
+		if length.Unit == svg.LengthUnitPercent {
+			return 0, false
 		}
-		numbers = append(numbers, n)
+		return svgLength(length, fontSize), true
 	}
-	return numbers
+	// Port: svg.NodeDimensions does not read a unit that okage does not
+	// know, such as rem, or text that is not a length, such as auto. Upstream
+	// reads them with size of weasyprint/svg/utils.py, which gives 0 for
+	// text that is not a length. The port does the same with svgSize.
+	if s.doc == nil {
+		return 0, false
+	}
+	value, ok := s.doc.RootElement().Attribute(roxmltree.ExpandedNameFromStr(name))
+	if !ok || strings.Contains(value, "%") {
+		return 0, false
+	}
+	return svgSize(value, fontSize, 0), true
 }
 
-// Tree parses the SVG data with okage, for the drawing. The options set the
+// svgLength is size in weasyprint/svg/utils.py for a length that is not a
+// percentage. It resolves em and ex with the font size of the layout, and
+// assumes that 1em is 2ex, as upstream does.
+func svgLength(length svg.Length, fontSize float64) float64 {
+	unit := ""
+	switch length.Unit {
+	case svg.LengthUnitEm:
+		return fontSize * length.Number
+	case svg.LengthUnitEx:
+		return fontSize * length.Number / 2
+	case svg.LengthUnitPt:
+		unit = "pt"
+	case svg.LengthUnitPc:
+		unit = "pc"
+	case svg.LengthUnitIn:
+		unit = "in"
+	case svg.LengthUnitCm:
+		unit = "cm"
+	case svg.LengthUnitMm:
+		unit = "mm"
+	default:
+		// A number, or a number of pixels.
+		return length.Number
+	}
+	return length.Number * lengthsToPixels[unit]
+}
+
+// Tree parses the SVG image with okage, for the drawing. The options set the
 // fonts and the size, and the fetcher of the document reads the images that
-// the data links to.
+// the image links to.
 func (s *SVGImage) Tree(opts ...svg.Option) (*svg.Tree, error) {
-	tree, err := svg.FromData(s.Data, opts...)
+	if s.err != nil {
+		return nil, s.err
+	}
+	tree, err := svg.FromXMLTree(s.doc, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("parsing SVG image %s: %w", s.BaseURL, err)
 	}
 	return tree, nil
 }
 
-// serializeSVG writes an element of the document tree and its descendants
-// as XML, for the parser of SVG of okage.
-func serializeSVG(element *Element) []byte {
-	var b bytes.Buffer
-	prefixes := map[string]string{nsSVG: "", nsXLink: "xlink", nsXML: "xml"}
-	writeXMLElement(&b, element, prefixes, true, 0)
-	return b.Bytes()
+// buildSVG makes the XML document of an element of the document tree and
+// its descendants with roxmltree.Builder, for the parser of SVG of okage. A
+// name in the Clark notation, {namespace}local, keeps its namespace. A tag
+// without a namespace is an element of HTML, such as in foreignObject, and
+// takes the namespace of XHTML. An element deeper than DefaultMaxTreeDepth
+// is left out, with its descendants.
+func buildSVG(element *Element, options roxmltree.ParsingOptions) (*roxmltree.Document, error) {
+	b := roxmltree.NewBuilder(options)
+	if err := startSVGElement(b, element); err != nil {
+		return nil, err
+	}
+	// The walk uses a stack, so a deep tree does not grow the Go stack.
+	// next is the index of the next child of element.
+	type frame struct {
+		element *Element
+		next    int
+	}
+	stack := []frame{{element: element}}
+	for len(stack) > 0 {
+		top := &stack[len(stack)-1]
+		if top.next == len(top.element.Children) {
+			if err := b.EndElement(); err != nil {
+				return nil, err
+			}
+			tail := top.element.Tail
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				// The tail of the root element is not part of the image.
+				break
+			}
+			if err := b.Text(tail); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		child := top.element.Children[top.next]
+		top.next++
+		if len(stack) > DefaultMaxTreeDepth {
+			if err := b.Text(child.Tail); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := startSVGElement(b, child); err != nil {
+			return nil, err
+		}
+		stack = append(stack, frame{element: child})
+	}
+	return b.Document()
 }
 
-// writeXMLElement writes an element as XML. The names in the Clark notation
-// get the prefixes of their namespaces, which the root element declares.
-func writeXMLElement(b *bytes.Buffer, element *Element, prefixes map[string]string, root bool, depth int) {
-	if depth > DefaultMaxTreeDepth {
-		return
+// startSVGElement starts an element of buildSVG, with its attributes and its
+// text. The parser of HTML keeps the declarations of the namespaces as
+// attributes. They are left out, because each name holds its namespace.
+func startSVGElement(b *roxmltree.Builder, element *Element) error {
+	if err := b.StartElement(expandedName(element.Tag, nsHTML)); err != nil {
+		return err
 	}
-	name := func(clark string) (string, string) {
-		if !strings.HasPrefix(clark, "{") {
-			return clark, ""
-		}
-		namespace, local, _ := strings.Cut(clark[1:], "}")
-		prefix, ok := prefixes[namespace]
-		if !ok {
-			prefix = fmt.Sprintf("ns%d", len(prefixes))
-			prefixes[namespace] = prefix
-			return prefix + ":" + local, fmt.Sprintf(` xmlns:%s="%s"`, prefix, xmlEscape(namespace))
-		}
-		if prefix == "" {
-			return local, ""
-		}
-		return prefix + ":" + local, ""
-	}
-	tag, declaration := name(element.Tag)
-	b.WriteString("<" + tag)
-	if root {
-		b.WriteString(` xmlns="` + nsSVG + `" xmlns:xlink="` + nsXLink + `"`)
-	}
-	if !strings.HasPrefix(element.Tag, "{") {
-		// An element of HTML, such as in <foreignObject>.
-		b.WriteString(` xmlns="` + nsHTML + `"`)
-	}
-	b.WriteString(declaration)
 	for _, attr := range element.Attrib {
-		// The declarations of the namespaces are written above. The parser
-		// of HTML gives them the namespace of xmlns.
 		if attr.Name == "xmlns" || strings.HasPrefix(attr.Name, "xmlns:") ||
 			strings.HasPrefix(attr.Name, "{http://www.w3.org/2000/xmlns/}") {
 			continue
 		}
-		attrName, declaration := name(attr.Name)
-		if attrName == "xmlns" || strings.HasPrefix(attrName, "xmlns:") {
-			continue
+		if err := b.Attribute(expandedName(attr.Name, ""), attr.Value); err != nil {
+			return err
 		}
-		b.WriteString(declaration)
-		b.WriteString(" " + attrName + `="` + xmlEscape(attr.Value) + `"`)
 	}
-	b.WriteString(">")
-	b.WriteString(xmlEscape(element.Text))
-	for _, child := range element.Children {
-		writeXMLElement(b, child, prefixes, false, depth+1)
-		b.WriteString(xmlEscape(child.Tail))
-	}
-	b.WriteString("</" + tag + ">")
+	return b.Text(element.Text)
 }
 
-// xmlEscape escapes the characters of a text or of a value of an attribute
-// of XML.
-func xmlEscape(s string) string {
-	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace(s)
+// expandedName returns the expanded name of a name in the Clark notation. A
+// name without a namespace takes the namespace uri, or no namespace when uri
+// is empty.
+func expandedName(name, uri string) roxmltree.ExpandedName {
+	if rest, ok := strings.CutPrefix(name, "{"); ok {
+		uri, name, _ = strings.Cut(rest, "}")
+	}
+	if uri == "" {
+		return roxmltree.ExpandedNameFromStr(name)
+	}
+	return roxmltree.ExpandedNameFromTuple(uri, name)
 }
 
 // imageLoader holds the arguments of get_image_from_uri in
@@ -1347,7 +1408,7 @@ func (s *SVGImage) draw(st *stream, concreteWidth, concreteHeight float64, _ *St
 	if !(concreteWidth > 0) || !(concreteHeight > 0) {
 		return
 	}
-	data, err := s.sizedData(concreteWidth, concreteHeight)
+	doc, err := s.sizedDocument(concreteWidth, concreteHeight)
 	if err != nil {
 		st.dc.log.error("Failed to render SVG image %s", s.BaseURL)
 		st.dc.log.debug("Error while rendering SVG image: %v", err)
@@ -1365,7 +1426,7 @@ func (s *SVGImage) draw(st *stream, concreteWidth, concreteHeight float64, _ *St
 	if !ok {
 		return
 	}
-	img, toPixels, err := s.render(data, toDevice, st.area, !st.dc.antiAlias, opts)
+	img, toPixels, err := s.render(doc, toDevice, st.area, !st.dc.antiAlias, opts)
 	if err != nil {
 		st.dc.log.error("Failed to render SVG image %s", s.BaseURL)
 		st.dc.log.debug("Error while rendering SVG image: %v", err)
@@ -1382,60 +1443,81 @@ func (s *SVGImage) draw(st *stream, concreteWidth, concreteHeight float64, _ *St
 	st.drawImageMatrix(img, fromPixels.Mul(toUser), true)
 }
 
-// sizedData returns the SVG data with the concrete size on the root
-// element, as set_svg_size and preserve_ratio of upstream size it: a viewBox
-// fills the concrete size as its preserveAspectRatio says, an image without
-// a viewBox and with an intrinsic size is stretched to the concrete size,
-// and another image is drawn at its own scale.
-func (s *SVGImage) sizedData(concreteWidth, concreteHeight float64) ([]byte, error) {
-	options := roxmltree.DefaultParsingOptions()
-	options.NodesLimit = uint32(min(s.limits.WithDefaults().MaxObjects, 1<<31))
-	text := string(s.Data)
-	doc, err := roxmltree.ParseWithOptions(text, options)
-	if err != nil {
-		return nil, fmt.Errorf("parsing SVG: %w", err)
+// sizedDocument returns the document of the SVG image with the concrete
+// size on the root element, as set_svg_size and preserve_ratio of upstream
+// size it: a viewBox fills the concrete size as its preserveAspectRatio
+// says, an image without a viewBox and with an intrinsic size is stretched
+// to the concrete size, and another image is drawn at its own scale.
+//
+// Port: upstream sets the attributes on its tree. The port builds a new
+// document with roxmltree.Builder: the root element with the new
+// attributes, then a copy of each child. A viewBox that okage does not
+// accept counts as missing, as okage draws it.
+func (s *SVGImage) sizedDocument(concreteWidth, concreteHeight float64) (*roxmltree.Document, error) {
+	if s.err != nil {
+		return nil, s.err
 	}
-	root := doc.RootElement()
-	start := root.Range().Start
-	if start < 0 || start >= len(text) || text[start] != '<' {
-		return nil, fmt.Errorf("SVG image %s without a root element: %w", s.BaseURL, ivy.ErrFormat)
+	attributes := [][2]string{
+		{"width", strconv.FormatFloat(concreteWidth, 'g', -1, 64)},
+		{"height", strconv.FormatFloat(concreteHeight, 'g', -1, 64)},
 	}
-	attributes := fmt.Sprintf(` width="%g" height="%g"`, concreteWidth, concreteHeight)
-	remove := []string{"width", "height"}
-	if !s.hasView || len(s.getViewbox()) < 4 {
+	if !s.dims.HasViewBox {
 		// The intrinsic size of upstream, with 12pt for the font size.
 		size := s.GetIntrinsicSize(1, 16)
 		if size.HasWidth && size.HasHeight && size.Width > 0 && size.Height > 0 {
-			attributes += fmt.Sprintf(` viewBox="0 0 %g %g" preserveAspectRatio="none"`, size.Width, size.Height)
-			remove = append(remove, "viewBox", "preserveAspectRatio")
+			viewBox := "0 0 " + strconv.FormatFloat(size.Width, 'g', -1, 64) + " " + strconv.FormatFloat(size.Height, 'g', -1, 64)
+			attributes = append(attributes, [2]string{"viewBox", viewBox}, [2]string{"preserveAspectRatio", "none"})
 		}
 	}
-	b := []byte(text)
-	for attr := range root.Attributes() {
-		if _, ok := attr.Namespace(); ok {
-			continue
-		}
-		for _, name := range remove {
-			if attr.Name() == name {
-				r := attr.Range()
-				for k := r.Start; k < r.End && k < len(b); k++ {
-					b[k] = ' '
-				}
-			}
-		}
+	doc, err := buildSized(s.doc.RootElement(), attributes, svgParsingOptions(s.limits))
+	if err != nil {
+		return nil, fmt.Errorf("sizing SVG image %s: %w", s.BaseURL, err)
 	}
-	// Insert the attributes after the name of the root element.
-	end := start + 1
-	for end < len(b) && !strings.ContainsRune(" \t\r\n/>", rune(b[end])) {
-		end++
-	}
-	out := make([]byte, 0, len(b)+len(attributes))
-	out = append(out, b[:end]...)
-	out = append(out, attributes...)
-	return append(out, b[end:]...), nil
+	return doc, nil
 }
 
-// render renders the SVG data, whose user space maps to the device by
+// buildSized copies the root element of a document into a new document,
+// with attributes in place of the attributes of the same names that have
+// no namespace.
+func buildSized(root roxmltree.Node, attributes [][2]string, options roxmltree.ParsingOptions) (*roxmltree.Document, error) {
+	b := roxmltree.NewBuilder(options)
+	if err := b.StartElement(root.TagName()); err != nil {
+		return nil, err
+	}
+	for ns := range root.Namespaces() {
+		prefix, _ := ns.Name()
+		if err := b.Namespace(prefix, ns.URI()); err != nil {
+			return nil, err
+		}
+	}
+	for _, attr := range attributes {
+		if err := b.Attribute(roxmltree.ExpandedNameFromStr(attr[0]), attr[1]); err != nil {
+			return nil, err
+		}
+	}
+	for attr := range root.Attributes() {
+		name := roxmltree.ExpandedNameFromStr(attr.Name())
+		if uri, ok := attr.Namespace(); ok {
+			name = roxmltree.ExpandedNameFromTuple(uri, attr.Name())
+		} else if slices.ContainsFunc(attributes, func(a [2]string) bool { return a[0] == attr.Name() }) {
+			continue
+		}
+		if err := b.Attribute(name, attr.Value()); err != nil {
+			return nil, err
+		}
+	}
+	for child := range root.Children() {
+		if err := b.Copy(child); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.EndElement(); err != nil {
+		return nil, err
+	}
+	return b.Document()
+}
+
+// render renders the sized document of the SVG image, whose user space maps to the device by
 // toDevice, into an image of the pixels of the device inside area, which
 // is (x, y, width, height) in pixels. It returns the image and the
 // transform from the device to its pixels, or a nil image when the SVG
@@ -1444,7 +1526,7 @@ func (s *SVGImage) sizedData(concreteWidth, concreteHeight float64) ([]byte, err
 // Without antialiasing, the image is rendered at 4 times the resolution of
 // the device with crisp edges, and reduced with aliasDownsample. The image
 // has at most maxCellPixels pixels, as boundCell says.
-func (s *SVGImage) render(data []byte, toDevice Matrix, area [4]float64, aliased bool, opts []svg.Option) (img *image.RGBA, toPixels Matrix, err error) {
+func (s *SVGImage) render(doc *roxmltree.Document, toDevice Matrix, area [4]float64, aliased bool, opts []svg.Option) (img *image.RGBA, toPixels Matrix, err error) {
 	// Port: a panic in the parser or the renderer of okage is an image
 	// that cannot be drawn.
 	defer func() {
@@ -1455,7 +1537,7 @@ func (s *SVGImage) render(data []byte, toDevice Matrix, area [4]float64, aliased
 	if aliased {
 		opts = append(opts, svg.WithShapeRendering(svg.ShapeRenderingCrispEdges))
 	}
-	tree, err := svg.FromData(data, opts...)
+	tree, err := svg.FromXMLTree(doc, opts...)
 	if err != nil {
 		return nil, Matrix{}, fmt.Errorf("parsing SVG image %s: %w", s.BaseURL, err)
 	}

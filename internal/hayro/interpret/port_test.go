@@ -33,6 +33,10 @@ type recorder struct {
 	clips, groups, marked                   int
 	clipDepth, groupDepth, markedDepth      int
 	textures, gradients, decoded            int
+	meshTriangles                           int
+
+	// shadings holds the shading patterns that the recorder painted with.
+	shadings []*ShadingPattern
 
 	// depth counts the nested calls of the recorder, so that the test
 	// stops a recursion that the interpreter does not stop.
@@ -60,6 +64,7 @@ func (r *recorder) paint(p Paint, isStroke bool) {
 			r.leave()
 		}
 	case *ShadingPattern:
+		r.shadings = append(r.shadings, v)
 		encoded := v.Encode()
 		if ra, ok := encoded.ShadingType.(*EncodedRadialAxialShading); ok {
 			if g, ok := ra.AsSVGGradient(encoded, 0.01); ok && len(g.Stops) > 0 {
@@ -71,6 +76,17 @@ func (r *recorder) paint(p Paint, isStroke bool) {
 			r.t.Errorf("texture of %dx%d holds %d bytes", tex.Width, tex.Height, len(tex.Data))
 		}
 		r.textures++
+		encoded.MeshTriangles(kurbo.NewRect(0, 0, 2000, 2000), func(t MeshTriangle) {
+			for _, c := range t.Colors {
+				for _, v := range c {
+					if !(v >= -1e-3 && v <= 1+1e-3) {
+						r.t.Errorf("a triangle of a mesh has the color %v", c)
+						return
+					}
+				}
+			}
+			r.meshTriangles++
+		})
 	case Color:
 		_ = v.ToRGBA()
 	}
@@ -284,7 +300,7 @@ func TestInterpretKinds(t *testing.T) {
 	for name, n := range map[string]int{
 		"paths": rec.paths, "rects": rec.rects, "glyph runs": rec.glyphRuns, "images": rec.images,
 		"clips": rec.clips, "groups": rec.groups, "textures": rec.textures, "gradients": rec.gradients,
-		"decoded images": rec.decoded, "marked contents": rec.marked,
+		"decoded images": rec.decoded, "marked contents": rec.marked, "mesh triangles": rec.meshTriangles,
 	} {
 		if n == 0 {
 			t.Errorf("no %s", name)

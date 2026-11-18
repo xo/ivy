@@ -27,40 +27,37 @@ const (
 	ascent     = 0.95
 )
 
-// faceCache keeps the faces that the charts loaded from the bytes of a
-// database, so that each chart does not read its fonts again.
+// faceCache keeps the faces that the charts took from a database, so that
+// each chart does not make its faces again.
 var faceCache = struct {
 	sync.Mutex
 	m map[faceSource]*font.Face
 }{m: map[faceSource]*font.Face{}}
 
-// faceSource names a face of the bytes of a database.
+// faceSource names a face of a database by its information, which the
+// copies of the database share.
 type faceSource struct {
-	data  *byte
-	size  int
-	index uint32
+	info *svg.FaceInfo
 }
 
 // maxCachedFaces is the number of the faces that faceCache keeps.
 const maxCachedFaces = 64
 
-// loadFace returns the face id of db, or nil.
+// loadFace returns the face id of db, or nil. The face shares the font that
+// db parses once (okage D57).
 func loadFace(db *svg.FontDatabase, id svg.FontID) *font.Face {
-	data, index, ok := db.FaceData(id)
-	if !ok || len(data) == 0 {
+	info, ok := db.Face(id)
+	if !ok {
 		return nil
 	}
-	key := faceSource{data: &data[0], size: len(data), index: index}
+	key := faceSource{info: info}
 	faceCache.Lock()
 	f, ok := faceCache.m[key]
 	faceCache.Unlock()
 	if ok {
 		return f
 	}
-	f, err := font.Load(data, int(index))
-	if err != nil {
-		f = nil
-	}
+	f = newFace(db, id)
 	faceCache.Lock()
 	if len(faceCache.m) >= maxCachedFaces {
 		clear(faceCache.m)
@@ -68,6 +65,21 @@ func loadFace(db *svg.FontDatabase, id svg.FontID) *font.Face {
 	faceCache.m[key] = f
 	faceCache.Unlock()
 	return f
+}
+
+// newFace returns a new face of the font id of db, or nil.
+func newFace(db *svg.FontDatabase, id svg.FontID) (f *font.Face) {
+	defer func() {
+		// go-text can panic on a malformed font (D5, D18).
+		if recover() != nil {
+			f = nil
+		}
+	}()
+	face, ok := db.NewFace(id, nil)
+	if !ok {
+		return nil
+	}
+	return font.FromFace(face)
 }
 
 // texter measures and draws the text of one drawing of a chart.

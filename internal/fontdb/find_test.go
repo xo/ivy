@@ -129,17 +129,24 @@ func TestCovering(t *testing.T) {
 	}
 }
 
-// TestCmapTable checks that cmapTable finds the table cmap inside the data
-// only.
-func TestCmapTable(t *testing.T) {
+// TestDraws checks that draws reads the character map of a face, and that
+// a table cmap that ends past the data draws nothing.
+func TestDraws(t *testing.T) {
+	db := svg.NewFontDatabase()
+	ids := db.LoadFontData(bytes.Clone(goregular.TTF))
+	if len(ids) != 1 {
+		t.Fatalf("expected one face of Go Regular, got: %d", len(ids))
+	}
+	if !draws(db, ids[0], 'a') {
+		t.Error("expected Go Regular to draw 'a'")
+	}
+	if draws(db, ids[0], 'あ') {
+		t.Error("expected Go Regular not to draw 'あ'")
+	}
+	if draws(db, ids[0]+1, 'a') {
+		t.Error("expected no face after Go Regular")
+	}
 	data := bytes.Clone(goregular.TTF)
-	raw, ok := cmapTable(data, 0)
-	if !ok || len(raw) == 0 {
-		t.Fatal("expected the table cmap of Go Regular")
-	}
-	if _, ok := cmapTable(data, 1); ok {
-		t.Error("expected no font 1 in a single font")
-	}
 	n := int(binary.BigEndian.Uint16(data[4:]))
 	for i := range n {
 		rec := 12 + 16*i
@@ -147,13 +154,10 @@ func TestCmapTable(t *testing.T) {
 			binary.BigEndian.PutUint32(data[rec+12:], 0xFFFFFFF0)
 		}
 	}
-	if _, ok := cmapTable(data, 0); ok {
-		t.Error("expected no table cmap that ends past the data")
-	}
-	for _, short := range [][]byte{nil, []byte("ttcf"), []byte("ttcf\x00\x01\x00\x00\x00\x00\x00\x01\xff\xff\xff\xff"), goregular.TTF[:20]} {
-		if _, ok := cmapTable(short, 0); ok {
-			t.Errorf("%q: expected no table cmap", short)
-		}
+	db = svg.NewFontDatabase()
+	ids = db.LoadFontData(data)
+	if len(ids) == 1 && draws(db, ids[0], 'a') {
+		t.Error("expected no character in a table cmap that ends past the data")
 	}
 }
 

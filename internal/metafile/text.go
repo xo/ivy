@@ -1,7 +1,6 @@
 package metafile
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"strings"
@@ -136,7 +135,9 @@ func realize(db *svg.FontDatabase, id svg.FontID) *realFace {
 	return f
 }
 
-// load parses the face id of db. It returns nil if the face cannot be read.
+// load returns the face id of db, with its metrics. The face shares the
+// font that db parses once (okage D57). It returns nil if the face cannot be
+// read.
 func load(db *svg.FontDatabase, id svg.FontID) (f *realFace) {
 	defer func() {
 		// go-text can panic on a malformed font
@@ -145,15 +146,13 @@ func load(db *svg.FontDatabase, id svg.FontID) (f *realFace) {
 		}
 	}()
 	info, ok := db.Face(id)
-	data, index, ok2 := db.FaceData(id)
-	if !ok || !ok2 {
+	if !ok {
 		return nil
 	}
-	parsed, err := gofont.ParseTTC(bytes.NewReader(data))
-	if err != nil || int(index) >= len(parsed) {
+	face, ok := db.NewFace(id, nil)
+	if !ok {
 		return nil
 	}
-	face := parsed[index]
 	upem := float32(face.Upem())
 	if upem <= 0 {
 		upem = 1000
@@ -307,12 +306,6 @@ func (b *backend) DrawText(run gowemf.TextRun, clip gowemf.Clip) error {
 	for i, gid := range gids {
 		if draw[i] {
 			o := run.Origins[i]
-			e := float64(tf.em * max(tf.scaleX, 1))
-			p, q := run.Transform.Apply(o), run.Transform.Apply(gowemf.Point{X: o.X + e, Y: o.Y + e})
-			if !b.near(p.X, p.Y) || !b.near(q.X, q.Y) {
-				// a glyph that is garbage
-				continue
-			}
 			glyphs = append(glyphs, display.Glyph{ID: gid, X: float32(o.X), Y: float32(o.Y)})
 		}
 	}

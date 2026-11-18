@@ -17,11 +17,15 @@ The review command in `test/cmd/review` renders the corpus of
 `test/review/corpus.tsv` beside reference programs. Its runs of 2026-11-17
 found these faults. Each item names a file of the corpus.
 
-1. Draw a stroke of 1 pixel or less as dark as MuPDF and Poppler do.
-   `pdfjs/pdf/a1-plans.pdf` draws its thin lines lighter, because a line
-   across a pixel border spreads over two light pixels. It needs stroke
-   adjustment, which snaps a thin stroke to the pixels. Item 9 of "Using
-   okage v0.11.0" does it. Source: `pdf` and okage.
+1. Draw the thin lines of the plans of `pdfjs/pdf/a1-plans.pdf` as dark as
+   MuPDF does. The lines are not strokes. They are in four JPEG images of
+   2480 by 2630 pixels, and each image has a soft mask in a second JPEG
+   image. At 96 dpi, the mean gray of the pixels where MuPDF draws a line is
+   162 in MuPDF and 188 in ivy. At 300 dpi it is 150 and 167. The lines of
+   ivy are wider and lighter, and about 2 pixels lower. A wall also shows a
+   white seam in ivy. Find whether the cause is the resampling of the
+   image, the soft mask or the place of the image. Source:
+   `internal/hayro/render/image.go`.
 2. Draw the WordArt and the preset shapes of a Word 97 document that `msdoc`
    does not draw yet, the text of a shape in a group, the arrowheads and the
    comments. Move the two readers of Office Drawing of `msdoc` (`picture.go`
@@ -211,71 +215,48 @@ The pages of Visio came on 2026-11-17 (D30).
 
 1. Decode the images of XPS in JPEG XR. No permissive decoder in Go is
    known. D45 keeps this item. Source: phase 2.
-2. Give `internal/font` the vertical metrics of a glyph, its advance and its
-   origin, so that `xps` does not parse a font again for a sideways run.
-   Source: the sideways runs of `xps`, 2026-11-17.
 
 ## Left by phase 1
 
-1. Describe a document of Office Open XML by its docProps/core.xml. The
-   series and the number of ComicInfo.xml get no field of `ivy.Info` (D35).
-   Source: phase 1.
-2. Let `internal/drawingml` read the resolution of a picture with
-   `raster.Resolution`, in place of its own reader. Source: the ImageBrush
-   of `xps`, 2026-11-17.
-3. Open the encrypted entries of the other formats of `zipdoc` with
-   `Archive.Unlock`, as `comic` does. Source: the encrypted comics,
-   2026-11-17.
-4. Check the previews of the maker notes of Olympus with a real ORF file.
+1. Check the previews of the maker notes of Olympus with a real ORF file.
    The tests build the files in memory. Source: `camera`, 2026-11-17.
 
-## Using okage v0.11.0
+## Left by the use of okage v0.11.0
 
-okage v0.11.0 gives what the work for okage asked for, in the decisions
-okage D53 to okage D59. ivy requires it. The CFF fonts of `pdf` take the
-charsets, `seac` and the FontMatrix from it. These changes let ivy use the
-other new parts and remove its own copies.
+ivy uses the parts of okage v0.11.0 that the decisions okage D53 to okage
+D59 added. These items are left.
 
-1. Fill the shadings of types 4 to 7 with `okage.NewMeshGradient` in
-   `internal/hayro/render/paint.go` and `ps/internal/graphics/shading.go`,
-   in place of the sampled texture. A color that a function gives is not
-   linear in the triangle, so the patches split until it is close to linear
-   (okage D55).
-2. Use `okage.SpreadModeDecal` for an axial or a radial shading with no
-   extend at either end, in `internal/hayro/render/paint.go`,
-   `ps/internal/graphics/shading.go` and `gradientShader` of
-   `internal/layout/pdf_stream.go` (okage D55).
-3. Draw a group that is not isolated onto its backdrop, and a knockout
-   group, with `Pixmap.RemoveBackdrop` and `Pixmap.Knockout` in
-   `internal/display/okage.go`. Make the soft masks with
-   `okage.MaskFromLuminance` and `Mask.ApplyTransfer` (okage D56).
-4. Take the parsed fonts, the faces, the cmap lookups and the metrics from
-   the `svg.FontDatabase` of `internal/fontdb`, in `internal/layout`,
-   `internal/fontdb/find.go`, `internal/metafile/text.go` and
-   `internal/chart/text.go`. Map the weight, the stretch and the style with
-   `svg.AutoFontVariations` (okage D57).
-5. Draw the color glyphs of SVG and COLR in `drawFirstLine` of
-   `internal/layout/draw_text.go`, with `FontDatabase.ColorGlyph` (okage
-   D57).
-6. Build an inline `<svg>` and a sized SVG image with `roxmltree.Builder`
-   and `svg.FromXMLTree` in `internal/layout/images.go`, in place of XML
-   text, and read the size with `svg.NodeDimensions` (okage D58).
-7. Remove the check of far points (`near`) in `internal/metafile`. A fill
-   with huge coordinates no longer panics (okage D53).
-8. Fill small glyphs with `Paint.Coverage` set to `okage.Coverage8x8` in
-   `internal/display/okage.go`, in place of `fillFine`, and amend D28
-   (okage D54).
-9. Set `Paint.StrokeAdjust` from the key SA of PDF and from `strokeadjust`
-   of PostScript, and make sure that `pdfjs/pdf/a1-plans.pdf` draws its thin
-   lines as dark as MuPDF does (okage D54).
-10. Remove the fill of a straight solid line in `drawShape` of
-    `msdoc/shape.go`. A thin stroke of a straight line draws now (okage
-    D54).
+1. A mesh shading paints a pixel at its free edge in full, with no
+   antialiasing (okage D55). A mesh that a larger path fills thus grows by
+   up to one pixel. Fill the outline of the mesh, or ask okage for the
+   coverage at the edge. Source: the meshes of `pdf` and `ps`, 2026-11-18.
+2. A radial shading with no extend whose circles do not nest still uses a
+   texture in `pdf` and an image in `ps`. okage paints a point with the
+   largest circle, and PDF paints it with the largest circle in the domain.
+   Source: the decal gradients, 2026-11-18.
+3. An axial or a radial shading with an extend at one end only keeps the
+   padded gradient of hayro in `pdf` and the image in `ps`. In `ps`, a
+   shading with an extend at both ends is also still an image, and okage
+   can fill it with `SpreadModePad`. Source: the decal gradients, 2026-11-18.
 
 ## Work for okage
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
-No item is open. okage v0.11.0 did the items of 2026-11-17.
+
+1. Limit the length of each table to the end of the file in the loader of
+   `typesetting/font/opentype`. The loader makes a buffer of the length that
+   the table directory gives before it reads a table, so a font whose
+   directory gives a length of 4 GB asks for 4 GB. ivy now reads the faces
+   and the character maps of `FontDatabase`, and its own copy of the table
+   cmap and `clampDirectory` of `internal/font` no longer stand in front.
+   The pending go-text commits `23022c67` to `783ec6a7` add
+   `ResourceSlicer`, which reads a font in memory without a copy of a
+   table. Source: `internal/fontdb` and `internal/chart`, 2026-11-18.
+2. Give the thickness of the line through in `FontMetrics`. The layout
+   draws it with that thickness. `FaceMetrics` also differs from the
+   metrics of go-text for some variable fonts, such as Adwaita Sans. ivy
+   keeps the metrics of go-text until the two agree. Source: okage D57,
+   2026-11-18.
 
 ## Work for iv
 

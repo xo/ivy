@@ -575,16 +575,6 @@ func drawShape(b *strings.Builder, s *odShape, r [4]float64, depth int, lw *floa
 			if dash != "" {
 				stroke += `" stroke-dasharray="` + dash
 			}
-			if (s.typ == shapeTypeLine || s.typ == shapeTypeConnect) && dash == "" && (w != 0 || h != 0) {
-				// a solid straight line is the area of its stroke: okage
-				// draws no stroke of less than a pixel whose path has no
-				// width or no height
-				n := width / 2 / math.Hypot(w, h)
-				nx, ny := -h*n, w*n
-				geom = fmt.Sprintf("M%s %s L%s %s L%s %s L%s %s Z", num(nx), num(ny), num(w+nx), num(h+ny),
-					num(w-nx), num(h-ny), num(-nx), num(-ny))
-				fill, stroke = c, "none"
-			}
 		}
 	}
 	if fill == "none" && stroke == "none" {

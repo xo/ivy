@@ -166,6 +166,23 @@ func TestHTMLZ(t *testing.T) {
 	}
 }
 
+func TestHTMLZPassword(t *testing.T) {
+	buf := fixture.EncryptedZip(fixture.WinZipAES2, "secret", htmlz()...)
+	if _, err := Open(t.Context(), bytes.NewReader(buf)); !errors.Is(err, ivy.ErrPassword) {
+		t.Errorf("expected ErrPassword without a password, got: %v", err)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(ivy.Config{Password: "secret"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := d.Describe(t.Context()); err != nil || info.Title != "The Zipped Book" {
+		t.Errorf("expected the title of the metadata, got: %+v, %v", info, err)
+	}
+	if n, err := d.PageCount(t.Context()); err != nil || n < 1 {
+		t.Errorf("expected pages, got: %d, %v", n, err)
+	}
+}
+
 func TestHTMLZWithoutMetadata(t *testing.T) {
 	entries := []fixture.Entry{
 		{Name: "book/b.htm", Data: []byte(`<title>B</title>`)},
@@ -222,7 +239,8 @@ func TestErrors(t *testing.T) {
 func FuzzOpen(f *testing.F) {
 	f.Add([]byte(page))
 	f.Add(fixture.Zip(htmlz()...))
-	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
+	f.Add(fixture.EncryptedZip(fixture.WinZipAES2, "secret", htmlz()...))
+	cfg := ivy.Config{Password: "secret", Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1000}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		check := func(err error) {
 			if err != nil && strings.Contains(err.Error(), "panic:") {

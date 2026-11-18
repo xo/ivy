@@ -72,6 +72,9 @@ func (r *renderer) setPaint(paint interpret.Paint, transform kurbo.Affine, pathB
 			}
 		}
 		bbox = kurboext.RectExpand(bbox)
+		if _, ok := encoded.ShadingType.(*interpret.EncodedMeshShading); ok {
+			return meshGradient(encoded, bbox, inverse), clipPath
+		}
 		w, h := interpret.TextureDimensions(bbox, 1)
 		var data []byte
 		if uint64(w)*uint64(h) <= maxTexturePixels {
@@ -100,6 +103,38 @@ func (r *renderer) setPaint(paint interpret.Paint, transform kurbo.Affine, pathB
 		return okage.NewPattern(pix.AsRef(), spread, okage.FilterQualityBilinear, p.Opacity, toTransform(inverse.Mul(t))), nil
 	}
 	return nil, nil
+}
+
+// meshGradient returns the MeshGradient of okage of a mesh shading, a
+// shading of type 4 to 7, over bbox in the space of the device. inverse
+// maps the space of the device to the user space. It returns nil when the
+// mesh holds no triangle in bbox.
+//
+// Port: upstream samples every shading that is not a gradient into a
+// texture. okage fills the triangles of a mesh with Gouraud shading (okage
+// D55), which is faster and sharp at any scale.
+func meshGradient(encoded *interpret.EncodedShadingPattern, bbox kurbo.Rect, inverse kurbo.Affine) okage.Shader {
+	if !inverse.IsFinite() {
+		return nil
+	}
+	var triangles []okage.MeshTriangle
+	encoded.MeshTriangles(bbox, func(t interpret.MeshTriangle) {
+		var mt okage.MeshTriangle
+		for i := range mt {
+			c := t.Colors[i]
+			color, _ := okage.ColorFromRGBA(clamp01(c[0]), clamp01(c[1]), clamp01(c[2]), clamp01(c[3]))
+			mt[i] = okage.MeshVertex{
+				Point: okage.PointFromXY(float32(t.Points[i].X), float32(t.Points[i].Y)),
+				Color: color,
+			}
+		}
+		triangles = append(triangles, mt)
+	})
+	shader, ok := okage.NewMeshGradient(triangles, toTransform(inverse))
+	if !ok {
+		return nil
+	}
+	return shader
 }
 
 // premultiply returns the 4 bytes of a straight color of RGBA, premultiplied,
@@ -140,11 +175,15 @@ func nativeGradient(native *interpret.SVGGradient, t kurbo.Affine) (okage.Shader
 		return nil, false
 	}
 	pt := func(p kurbo.Point) okage.Point { return okage.PointFromXY(float32(p.X), float32(p.Y)) }
+	spread := okage.SpreadModePad
+	if native.Decal {
+		spread = okage.SpreadModeDecal
+	}
 	switch k := native.Kind.(type) {
 	case interpret.SVGGradientLinear:
-		return okage.NewLinearGradient(pt(k.Start), pt(k.End), stops, okage.SpreadModePad, toTransform(t))
+		return okage.NewLinearGradient(pt(k.Start), pt(k.End), stops, spread, toTransform(t))
 	case interpret.SVGGradientRadial:
-		return okage.NewRadialGradient(pt(k.StartCenter), k.StartRadius, pt(k.EndCenter), k.EndRadius, stops, okage.SpreadModePad, toTransform(t))
+		return okage.NewRadialGradient(pt(k.StartCenter), k.StartRadius, pt(k.EndCenter), k.EndRadius, stops, spread, toTransform(t))
 	}
 	return nil, false
 }

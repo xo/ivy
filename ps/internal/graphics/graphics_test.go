@@ -105,6 +105,21 @@ func check(t *testing.T, program string, points map[[2]int]color.RGBA) {
 	}
 }
 
+// TestMeshCMYK fills a triangle of a mesh in DeviceCMYK, whose colors are
+// not linear in RGB. The colors follow the conversion of the components at
+// each point, and not a line between the colors of the corners.
+func TestMeshCMYK(t *testing.T) {
+	t.Parallel()
+	program := "<< /ShadingType 4 /ColorSpace /DeviceCMYK /DataSource [0 0 0 0 0 0 0 0 100 0 1 1 0 0 0 0 100 0 0 0 0] >> shfill showpage"
+	points := map[[2]int]color.RGBA{}
+	for _, x := range []int{30, 50, 70} {
+		c := (float64(x) + 0.5) / 100
+		rgb := cmykToRGB(c, c, 0, 0)
+		points[[2]int{x, 2}] = color.RGBA{uint8(math.Round(rgb[0] * 255)), uint8(math.Round(rgb[1] * 255)), uint8(math.Round(rgb[2] * 255)), 255}
+	}
+	check(t, program, points)
+}
+
 func TestPaint(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -168,6 +183,15 @@ func TestPaint(t *testing.T) {
 			map[[2]int]color.RGBA{{50, 50}: black, {95, 95}: white}},
 		{"mesh", "<< /ShadingType 4 /ColorSpace /DeviceRGB /DataSource [0 0 0 0 1 0 0 100 0 0 1 0 0 0 100 0 0 1] >> shfill",
 			map[[2]int]color.RGBA{{2, 2}: green, {2, 90}: {0, 25, 230, 255}, {90, 90}: white}},
+		{"axial no extend", "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [25 0 75 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> >> shfill",
+			map[[2]int]color.RGBA{{10, 50}: white, {50, 50}: {125, 0, 130, 255}, {90, 50}: white}},
+		{"mesh function", `<< /ShadingType 4 /ColorSpace /DeviceRGB /Function << /FunctionType 3 /Domain [0 1] /Bounds [0.5] /Encode [0 1 0 1]
+			/Functions [<< /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [1 0 0] /N 1 >> << /FunctionType 2 /Domain [0 1] /C0 [0 0 1] /C1 [0 0 1] /N 1 >>] >>
+			/DataSource [0 0 0 0 0 100 0 1 0 0 100 0 1 100 100 1] >> shfill`,
+			map[[2]int]color.RGBA{{10, 50}: red, {48, 20}: red, {51, 80}: blue, {90, 50}: blue}},
+		{"mesh background", `<< /PatternType 2 /Shading << /ShadingType 4 /ColorSpace /DeviceRGB /Background [0 1 0]
+			/DataSource [0 40 40 1 0 0 0 60 40 1 0 0 0 50 60 1 0 0] >> >> matrix makepattern setpattern 0 0 100 100 rectfill`,
+			map[[2]int]color.RGBA{{5, 5}: green, {95, 95}: green, {50, 52}: red}},
 		{"pattern", `<< /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 20 20] /XStep 20 /YStep 20
 			/PaintProc { pop 1 0 0 setrgbcolor 0 0 10 20 rectfill } >> matrix makepattern setpattern 0 0 100 100 rectfill`,
 			map[[2]int]color.RGBA{{5, 50}: red, {15, 50}: white, {45, 50}: red, {55, 50}: white}},
@@ -527,4 +551,22 @@ func TestComposite(t *testing.T) {
 		CIDFontName currentdict end /CIDFont defineresource pop
 		/GoComp /Identity-H [/GoCID] composefont pop /GoComp 100 selectfont 10 10 moveto <%04x> show showpage`, arr, gid),
 		map[[2]int]color.RGBA{{30, 40}: black, {60, 40}: white})
+}
+
+func TestStrokeAdjust(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		adjust string
+		want   bool
+	}{{"true", true}, {"false", false}} {
+		r := runProgram(t, tt.adjust+" setstrokeadjust 10 50 moveto 90 50 lineto stroke showpage")
+		if r.err != nil || len(r.pages) == 0 {
+			t.Fatalf("%s: expected a page, got %v", tt.adjust, r.err)
+		}
+		var l display.List
+		r.pages[0].List.Replay(&l, 1)
+		if got := strings.Contains(l.String(), "stroke adjusted"); got != tt.want {
+			t.Errorf("%s: expected an adjusted stroke %t, got:\n%s", tt.adjust, tt.want, l.String())
+		}
+	}
 }

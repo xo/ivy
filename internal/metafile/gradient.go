@@ -46,9 +46,6 @@ func (b *backend) FillGradient(mesh []gowemf.GradientTriangle, clip gowemf.Clip)
 			if b.ctx.Err() != nil {
 				return
 			}
-			if !b.near(t.Points[0].X, t.Points[0].Y) || !b.near(t.Points[1].X, t.Points[1].Y) || !b.near(t.Points[2].X, t.Points[2].Y) {
-				continue
-			}
 			g, ok := linearOf(t)
 			if !ok {
 				flush()

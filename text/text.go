@@ -3,7 +3,9 @@
 // A TXTZ file is a zip archive that calibre writes: index.txt, its images,
 // metadata.opf and a cover image. The cover image is the preview, and
 // metadata.opf gives the metadata. A text file has no preview and no
-// metadata.
+// metadata. A TXTZ file whose entries ZipCrypto or the AES of WinZip
+// encrypts opens with the password of ivy.Config, or with its function
+// PasswordFunc (D12).
 //
 // The package converts the text into a document of HTML. A blank line ends a
 // paragraph. A text file joins the lines of a paragraph, which the layout
@@ -145,8 +147,9 @@ var (
 // Open opens a text file or a TXTZ file, and converts the text into a
 // document of HTML. A source that starts as a zip archive is a TXTZ file,
 // and any other source is a text file. It returns an error that wraps
-// ivy.ErrFormat if a TXTZ file holds no text, and one that wraps
-// ivy.ErrLimit if the text or its document of HTML is larger than
+// ivy.ErrFormat if a TXTZ file holds no text, one that wraps
+// ivy.ErrPassword if no password opens an encrypted TXTZ file, and one that
+// wraps ivy.ErrLimit if the text or its document of HTML is larger than
 // Limits.MaxMemory.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
@@ -160,7 +163,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	d = &Document{lim: o.cfg.Limits.WithDefaults(), log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper}
 	var magic [4]byte
 	if n, _ := src.ReadAt(magic[:], 0); n == len(magic) && string(magic[:]) == "PK\x03\x04" {
-		err = d.openTXTZ(src)
+		err = d.openTXTZ(ctx, src, o.cfg)
 	} else {
 		err = d.openText(src)
 	}
@@ -191,11 +194,15 @@ func (d *Document) openText(src ivy.Source) error {
 
 // openTXTZ opens a TXTZ file. It reads metadata.opf, and converts the text
 // into a document of HTML next to the text, so that a link to an image is
-// relative to the same folder.
-func (d *Document) openTXTZ(src ivy.Source) error {
+// relative to the same folder. It asks for the password of an archive that
+// encrypts its entries (D12).
+func (d *Document) openTXTZ(ctx context.Context, src ivy.Source, cfg ivy.Config) error {
 	archive, err := zipdoc.Open(src, d.lim)
 	if err != nil {
 		return err
+	}
+	if err := archive.UnlockSmallest(ctx, cfg); err != nil {
+		return fmt.Errorf("opening txtz: %w", err)
 	}
 	d.archive = archive
 	if f := archive.Find(metadataName); f != nil {

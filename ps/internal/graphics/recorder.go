@@ -22,8 +22,9 @@ type Recorder struct {
 
 // The interfaces that a Recorder implements.
 var (
-	_ display.Device     = (*Recorder)(nil)
-	_ display.TextFiller = (*Recorder)(nil)
+	_ display.Device         = (*Recorder)(nil)
+	_ display.TextFiller     = (*Recorder)(nil)
+	_ display.StrokeAdjuster = (*Recorder)(nil)
 )
 
 // newRecorder returns an empty recorder with the limits of lim.
@@ -108,15 +109,25 @@ const minLinePixels = 0.7
 
 // strokeMin records a stroke whose width is at least minLinePixels of the
 // target. scale is the number of the units of the device space for each
-// unit of the space of the stroke.
-func (r *Recorder) strokeMin(p *okage.Path, stroke okage.Stroke, shader okage.Shader, scale float64) {
+// unit of the space of the stroke. When adjust is true, the stroke has the
+// stroke adjustment of strokeadjust (PLRM 6.5.2).
+func (r *Recorder) strokeMin(p *okage.Path, stroke okage.Stroke, adjust bool, shader okage.Shader, scale float64) {
 	r.recordScaled(func(d display.Device, pixels float64) {
 		st := stroke
 		if px := float64(st.Width) * scale * pixels; st.Width > 0 && px < minLinePixels && scale*pixels > 0 {
 			st.Width = float32(minLinePixels / (scale * pixels))
 		}
+		if adjust {
+			display.StrokeAdjusted(d, p, st, shader)
+			return
+		}
 		d.StrokePath(p, st, shader)
 	})
+}
+
+// StrokeAdjusted satisfies the display.StrokeAdjuster interface.
+func (r *Recorder) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage.Shader) {
+	r.record(func(d display.Device) { display.StrokeAdjusted(d, p, stroke, shader) })
 }
 
 // ClipPath satisfies the display.Device interface.

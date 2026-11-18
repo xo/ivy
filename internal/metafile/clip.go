@@ -142,9 +142,6 @@ func (b *backend) region(d display.Device, r *gowemf.ClipRegion) {
 		b.operand(d, r)
 		return
 	case gowemf.ClipOffset:
-		if !b.near(b.cx+r.Offset.X, b.cy+r.Offset.Y) {
-			return
-		}
 		d.Save()
 		d.Concat(okage.TransformFromTranslate(float32(r.Offset.X), float32(r.Offset.Y)))
 		b.region(d, r.Base)
