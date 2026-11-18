@@ -1,9 +1,12 @@
 package djvu
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"strings"
 
 	"github.com/xo/ivy"
@@ -15,20 +18,24 @@ import (
 // reads to find its INFO chunk, which is the first chunk of a page.
 const infoHead = 64
 
-// bundle is a bundled document, FORM:DJVM, that reads its components from
-// the source when a page needs them. It keeps the directory only, so a
-// large document does not stay whole in memory.
+// bundle is a document of many pages, FORM:DJVM, that reads its components
+// when a page needs them. It keeps the directory only, so a large document
+// does not stay whole in memory. A bundled document reads its components
+// from the source. An indirect document reads each component from the file
+// of the folder files that the directory names (D38).
 type bundle struct {
-	src  ivy.Source
-	lim  ivy.Limits
-	dir  *doc.Dir
-	byID map[string]doc.Component
+	src   ivy.Source
+	files fs.FS
+	lim   ivy.Limits
+	dir   *doc.Dir
+	byID  map[string]doc.Component
 }
 
-// openBundle reads the directory of the bundled document in src, whose
-// FORM:DJVM chunk starts at off, and the INFO chunk of each page. It
-// returns an error that wraps ivy.ErrUnsupported for an indirect document.
-func openBundle(src ivy.Source, off int64, lim ivy.Limits) (*bundle, []*doc.Page, error) {
+// openBundle reads the directory of the document in src, whose FORM:DJVM
+// chunk starts at off, and the INFO chunk of each page. An indirect
+// document reads its components from files. It returns an error that wraps
+// ivy.ErrUnsupported for an indirect document when files is nil.
+func openBundle(src ivy.Source, off int64, files fs.FS, lim ivy.Limits) (*bundle, []*doc.Page, error) {
 	// the DIRM chunk is the first chunk of FORM:DJVM, after its type
 	id, data, err := readChunk(src, off+12, lim)
 	if err != nil {
@@ -41,13 +48,16 @@ func openBundle(src ivy.Source, off int64, lim ivy.Limits) (*bundle, []*doc.Page
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading djvu directory: %w", format(err))
 	}
-	if !dir.Bundled {
-		return nil, nil, fmt.Errorf("indirect djvu document: %w", ivy.ErrUnsupported)
+	if !dir.Bundled && files == nil {
+		return nil, nil, fmt.Errorf("indirect djvu document without a folder: %w", ivy.ErrUnsupported)
 	}
 	if len(dir.Components) > lim.MaxObjects {
 		return nil, nil, fmt.Errorf("djvu of %d components: %w", len(dir.Components), ivy.ErrLimit)
 	}
 	b := &bundle{src: src, lim: lim, dir: dir, byID: make(map[string]doc.Component, len(dir.Components))}
+	if !dir.Bundled {
+		b.files = files
+	}
 	for _, c := range dir.Components {
 		if _, ok := b.byID[c.ID]; !ok {
 			b.byID[c.ID] = c
@@ -91,6 +101,13 @@ func readChunk(src ivy.Source, off int64, lim ivy.Limits) (string, []byte, error
 
 // raw reads the FORM chunk of the component c, with its header.
 func (b *bundle) raw(c doc.Component) ([]byte, error) {
+	if b.files != nil {
+		data, err := b.file(c, -1)
+		if err != nil {
+			return nil, err
+		}
+		return fileChunk(c, data, b.lim)
+	}
 	if c.Offset < 0 || int64(c.Offset) > b.src.Size() {
 		return nil, fmt.Errorf("djvu component %q at %d: %w", c.ID, c.Offset, ivy.ErrFormat)
 	}
@@ -102,6 +119,67 @@ func (b *bundle) raw(c doc.Component) ([]byte, error) {
 	copy(out, id)
 	binary.BigEndian.PutUint32(out[4:], uint32(len(data)))
 	return append(out, data...), nil
+}
+
+// file reads the file of the component c of an indirect document, without
+// the magic AT&T before its FORM chunk. It reads at most n bytes of the
+// chunk, or the whole file if n is negative. It returns an error that wraps
+// ivy.ErrLimit for a whole file larger than Limits.MaxMemory.
+func (b *bundle) file(c doc.Component, n int) ([]byte, error) {
+	// the name comes from the file, so it stays in the folder
+	if !fs.ValidPath(c.Name) || c.Name == "." {
+		return nil, fmt.Errorf("djvu component %q with the file name %q: %w", c.ID, c.Name, ivy.ErrFormat)
+	}
+	f, err := b.files.Open(c.Name)
+	if err != nil {
+		return nil, fmt.Errorf("opening djvu component %q: %w", c.Name, errors.Join(err, ivy.ErrFormat))
+	}
+	// the document only reads the file, so the error of Close does not matter
+	defer func() { _ = f.Close() }()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("reading djvu component %q: %w", c.Name, errors.Join(err, ivy.ErrFormat))
+	}
+	switch {
+	case !st.Mode().IsRegular():
+		return nil, fmt.Errorf("djvu component %q is not a file: %w", c.Name, ivy.ErrFormat)
+	case n < 0 && st.Size() > b.lim.MaxMemory+4:
+		return nil, fmt.Errorf("djvu component %q of %d bytes: %w", c.Name, st.Size(), ivy.ErrLimit)
+	}
+	limit := b.lim.MaxMemory + 4
+	if n >= 0 {
+		limit = int64(n) + 4
+	}
+	// the size of a file can change after Stat
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("reading djvu component %q: %w", c.Name, errors.Join(err, ivy.ErrFormat))
+	case n < 0 && int64(len(data)) > limit:
+		return nil, fmt.Errorf("djvu component %q of more than %d bytes: %w", c.Name, b.lim.MaxMemory, ivy.ErrLimit)
+	}
+	data = bytes.TrimPrefix(data, []byte("AT&T"))
+	if n >= 0 && len(data) > n {
+		data = data[:n]
+	}
+	return data, nil
+}
+
+// fileChunk returns the FORM chunk at the start of data, the file of the
+// component c, with its header. A chunk that runs past the file is cut, as
+// readChunk does.
+func fileChunk(c doc.Component, data []byte, lim ivy.Limits) ([]byte, error) {
+	if len(data) < 8 {
+		return nil, fmt.Errorf("djvu component %q of %d bytes: %w", c.Name, len(data), ivy.ErrFormat)
+	}
+	size := int64(binary.BigEndian.Uint32(data[4:]))
+	if size > lim.MaxMemory {
+		return nil, fmt.Errorf("djvu chunk of %d bytes: %w", size, ivy.ErrLimit)
+	}
+	size = min(size, int64(len(data)-8))
+	data = data[:8+size]
+	binary.BigEndian.PutUint32(data[4:], uint32(size))
+	return data, nil
 }
 
 // form reads the component c, and parses its FORM chunk.
@@ -126,9 +204,17 @@ func (b *bundle) form(c doc.Component) (*iff.Chunk, error) {
 // info reads the INFO chunk of the page c. It reads the start of the page,
 // and the whole page if the INFO chunk is not at its start.
 func (b *bundle) info(c doc.Component) (doc.Info, error) {
-	head := make([]byte, infoHead)
-	n, _ := b.src.ReadAt(head, int64(c.Offset))
-	head = head[:max(n, 0)]
+	var head []byte
+	if b.files != nil {
+		var err error
+		if head, err = b.file(c, infoHead); err != nil {
+			return doc.Info{}, err
+		}
+	} else {
+		head = make([]byte, infoHead)
+		n, _ := b.src.ReadAt(head, int64(c.Offset))
+		head = head[:max(n, 0)]
+	}
 	if len(head) >= 12 && string(head[:4]) == "FORM" && string(head[8:12]) == "DJVU" {
 		// the chunks of the page that the head holds whole
 		for p := 12; p+8 <= len(head); {

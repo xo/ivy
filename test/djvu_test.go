@@ -121,6 +121,72 @@ func TestDJVU(t *testing.T) {
 	}
 }
 
+// TestDJVUIndirect compares the pages of an indirect document with the
+// pages that ddjvu renders from it. djvmcvt of DjVuLibre converts the
+// bundled test files of djvu into indirect documents, and djvu reads their
+// files from the folder of WithDir (D38).
+func TestDJVUIndirect(t *testing.T) {
+	bin, err := exec.LookPath("djvmcvt")
+	if err != nil {
+		t.Fatalf("oracle djvmcvt is not installed: %v", err)
+	}
+	for _, name := range []string{"bundled.djvu", "shared-dict.djvu", "thumbnails.djvu"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			src, err := filepath.Abs(filepath.Join("..", "djvu", "testdata", name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.CommandContext(t.Context(), bin, "-i", src, dir, "index.djvu")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("running djvmcvt: %v: %s", err, out)
+			}
+			path := filepath.Join(dir, "index.djvu")
+			index, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := djvu.Open(t.Context(), bytes.NewReader(index), djvu.WithDir(os.DirFS(dir)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, _ := d.PageCount(t.Context())
+			want, err := djvusedPages(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n != want {
+				t.Fatalf("expected %d pages, got: %d", want, n)
+			}
+			for i := range n {
+				page, err := d.Page(t.Context(), i)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := ivy.RenderImage(t.Context(), page, 50, color.White)
+				if err != nil {
+					t.Fatalf("page %d: %v", i+1, err)
+				}
+				want, err := ddjvuPage(t.Context(), path, i+1, 50)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, want, ok := sameSize(got, want)
+				if !ok {
+					t.Fatalf("page %d: expected a size of %v, got: %v", i+1, want.Bounds().Size(), got.Bounds().Size())
+				}
+				diff := meanDiff(got, want)
+				blurred := meanDiff(blur(got, 2), blur(want, 2))
+				t.Logf("page %d: mean difference %.2f, after a blur of 5 by 5 pixels %.2f", i+1, diff, blurred)
+				if diff > djvuMeanDiff || blurred > djvuBlurredDiff {
+					t.Errorf("page %d: expected the page of ddjvu within %d, and %d blurred, got: %.2f and %.2f",
+						i+1, djvuMeanDiff, djvuBlurredDiff, diff, blurred)
+				}
+			}
+		})
+	}
+}
+
 // patchInfo returns a copy of the single page DjVu file data, with the byte
 // at off in its INFO chunk set to v.
 func patchInfo(t *testing.T, data []byte, off int, v byte) []byte {

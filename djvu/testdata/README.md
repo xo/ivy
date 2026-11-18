@@ -19,7 +19,7 @@ compare the copy with them.
 | `bundled.djvu` | a bundled document of 4 pages, with shared annotations and a title |
 | `pdf2djvu.djvu` | a bundled document of 4 pages that pdf2djvu wrote, with its metadata |
 | `shared-dict.djvu` | a bundled document of 2 pages that share a JB2 dictionary |
-| `indirect/index.djvu` | the index of an indirect document, without the files that it names |
+| `indirect/index.djvu` | the index of an indirect document, without the files that it names. It opens only with `WithDir` (D38) |
 
 `thumbnails.djvu` is `shared-dict.djvu` with a thumbnail for each page. The
 command `djvused -e 'set-thumbnails 64' -s thumbnails.djvu` of DjVuLibre

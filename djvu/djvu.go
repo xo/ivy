@@ -16,9 +16,11 @@
 // The package also opens a standalone IW44 image, FORM:BM44 or FORM:PM44,
 // as a document of one page with one point for each pixel.
 //
-// An indirect document names other files, and a source of ivy has no
-// folder, so Open returns an error that wraps ivy.ErrUnsupported for it.
-// The text layer and the outline are left out.
+// An indirect document keeps its pages and its shared parts in files of
+// their own, which its index names. A source of ivy has no folder, so a
+// program gives it with WithDir (D38). Without it, Open returns an error
+// that wraps ivy.ErrUnsupported for an indirect document. The text layer
+// and the outline are left out.
 package djvu
 
 import (
@@ -27,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io/fs"
 	"iter"
 	"log/slog"
 	"strings"
@@ -56,12 +59,25 @@ type Option func(*options)
 
 type options struct {
 	cfg ivy.Config
+	dir fs.FS
 }
 
 // WithConfig sets the configuration that every format shares.
 func WithConfig(cfg ivy.Config) Option {
 	return func(o *options) {
 		o.cfg = cfg
+	}
+}
+
+// WithDir gives the folder of an indirect document, the folder of its
+// index. The document reads each file that the index names from dir when
+// a page needs it, within the limits of the configuration. A name out of
+// the folder or an absolute path is not read. dir must be safe for
+// concurrent use, because pages render at the same time. Other documents
+// do not read dir (D38).
+func WithDir(dir fs.FS) Option {
+	return func(o *options) {
+		o.dir = dir
 	}
 }
 
@@ -97,10 +113,11 @@ var (
 // Open opens a DjVu document. It reads a single page whole into memory.
 // Of a bundled document, it reads the directory and the INFO chunk of each
 // page, and it reads a page and the components that the page includes from
-// src when the page renders. It decodes the layers of a page when the page
-// renders. It returns an error that wraps ivy.ErrFormat if src is
-// not a DjVu file, and one that wraps ivy.ErrUnsupported for an indirect
-// document.
+// src when the page renders. An indirect document does the same with the
+// files of the folder of WithDir. It decodes the layers of a page when the
+// page renders. It returns an error that wraps ivy.ErrFormat if src is not
+// a DjVu file, and one that wraps ivy.ErrUnsupported for an indirect
+// document without WithDir.
 func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err error) {
 	var o options
 	for _, opt := range opts {
@@ -118,7 +135,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	d = &Document{lim: lim, log: o.cfg.Log()}
 	var pages []*doc.Page
 	if kind == "DJVM" {
-		if d.bundle, pages, err = openBundle(src, off, lim); err != nil {
+		if d.bundle, pages, err = openBundle(src, off, o.dir, lim); err != nil {
 			return nil, err
 		}
 	} else {

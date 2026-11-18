@@ -536,6 +536,9 @@ func FuzzOpen(f *testing.F) {
 		f.Add(testFile(f, name))
 	}
 	f.Add(form("DJVU", chunk("INFO", info2550()), chunk("METa", []byte(`(metadata (title "x"))`))))
+	// an indirect document reads the files of shared-dict.djvu
+	index, files := indirect(f, testFile(f, "shared-dict.djvu"))
+	f.Add(index)
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 64 << 20, MaxPixels: 1 << 24, MaxObjects: 1 << 16, MaxDepth: 16}}
 	// a recovered panic is still a failure, so that the cause is fixed
 	check := func(t *testing.T, err error) {
@@ -544,7 +547,7 @@ func FuzzOpen(f *testing.F) {
 		}
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		d, err := Open(t.Context(), bytes.NewReader(data), WithConfig(cfg))
+		d, err := Open(t.Context(), bytes.NewReader(data), WithConfig(cfg), WithDir(files))
 		check(t, err)
 		if err != nil {
 			return
