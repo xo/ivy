@@ -31,7 +31,7 @@ func ParseXML(buf []byte, lim ivy.Limits) (*roxmltree.Document, error) {
 	lim = lim.WithDefaults()
 	opt := roxmltree.DefaultParsingOptions()
 	opt.AllowDTD = true
-	opt.NodesLimit = uint32(min(lim.MaxObjects, math.MaxUint32))
+	opt.NodesLimit = uint32(min(int64(lim.MaxObjects), math.MaxUint32))
 	text := Text(buf)
 	doc, err := roxmltree.ParseWithOptions(text, opt)
 	entities, declared := false, 0

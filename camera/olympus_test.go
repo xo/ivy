@@ -103,7 +103,7 @@ func TestOlympusMakerNotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range d.Previews(t.Context()) {
-		t.Error("expected no preview")
+	for _, err := range d.Previews(t.Context()) {
+		t.Errorf("expected no preview, got one with the error %v", err)
 	}
 }

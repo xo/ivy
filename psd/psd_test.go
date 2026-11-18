@@ -232,8 +232,10 @@ func FuzzOpen(f *testing.F) {
 			t.Fatal(err)
 		}
 		_, _ = ivy.RenderImage(t.Context(), page, 72, nil)
-		for p := range d.Previews(t.Context()) {
-			_, _ = p.Decode(t.Context())
+		for p, err := range d.Previews(t.Context()) {
+			if err == nil {
+				_, _ = p.Decode(t.Context())
+			}
 		}
 	})
 }

@@ -148,7 +148,7 @@ func ResolveTarget(source, target string) string {
 func ParseXML(buf []byte, lim ivy.Limits) (*roxmltree.Document, error) {
 	lim = lim.WithDefaults()
 	opt := roxmltree.DefaultParsingOptions()
-	opt.NodesLimit = uint32(min(lim.MaxObjects, 1<<31))
+	opt.NodesLimit = uint32(min(int64(lim.MaxObjects), 1<<31))
 	doc, err := roxmltree.ParseWithOptions(xmlText(buf), opt)
 	switch {
 	case errors.Is(err, okage.ErrXMLNodesLimitReached):

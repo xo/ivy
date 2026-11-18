@@ -41,7 +41,9 @@ type anchor struct {
 func readAnchor(n roxmltree.Node) anchor {
 	var a anchor
 	for c := range n.Children() {
-		v := 0
+		// v is an int64, so that an offset in EMU fits on a computer of 32
+		// bits too.
+		var v int64
 		if s := strings.TrimSpace(nodeText(c)); s != "" {
 			for _, r := range s {
 				if r < '0' || r > '9' {
@@ -49,15 +51,15 @@ func readAnchor(n roxmltree.Node) anchor {
 					break
 				}
 				if v < 1<<40 {
-					v = v*10 + int(r-'0')
+					v = v*10 + int64(r-'0')
 				}
 			}
 		}
 		switch local(c) {
 		case "col":
-			a.col = min(v, sheet.MaxCols-1)
+			a.col = int(min(v, sheet.MaxCols-1))
 		case "row":
-			a.row = min(v, sheet.MaxRows-1)
+			a.row = int(min(v, sheet.MaxRows-1))
 		case "colOff":
 			a.dx = float64(v) / emuPerPoint
 		case "rowOff":

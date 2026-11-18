@@ -67,8 +67,8 @@ func TestOpen(t *testing.T) {
 		if info.Title != "Help of Tests" || info.Language != "ru" {
 			t.Errorf("expected the title and the language, got: %+v", info)
 		}
-		for range d.Previews(t.Context()) {
-			t.Error("expected no preview")
+		for _, err := range d.Previews(t.Context()) {
+			t.Errorf("expected no preview, got one with the error %v", err)
 		}
 		src, err := d.source()
 		if err != nil {

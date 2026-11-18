@@ -339,7 +339,7 @@ func newInlineSVGImage(element *Element, baseURL string, fetcher *URLFetcher, li
 // default options, with at most Limits.MaxObjects nodes.
 func svgParsingOptions(limits ivy.Limits) roxmltree.ParsingOptions {
 	options := roxmltree.DefaultParsingOptions()
-	options.NodesLimit = uint32(min(limits.WithDefaults().MaxObjects, 1<<31))
+	options.NodesLimit = uint32(min(int64(limits.WithDefaults().MaxObjects), 1<<31))
 	return options
 }
 

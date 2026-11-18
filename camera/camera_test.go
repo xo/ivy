@@ -190,7 +190,10 @@ func TestCR3(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sizes []image.Point
-	for p := range d.Previews(t.Context()) {
+	for p, err := range d.Previews(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		sizes = append(sizes, p.Size)
 	}
 	if len(sizes) != 2 || sizes[0] != image.Pt(1620, 1080) || sizes[1] != image.Pt(160, 120) {
@@ -272,8 +275,10 @@ func FuzzOpen(f *testing.F) {
 		if err != nil {
 			return
 		}
-		for p := range d.Previews(t.Context()) {
-			_, _ = p.Decode(t.Context())
+		for p, err := range d.Previews(t.Context()) {
+			if err == nil {
+				_, _ = p.Decode(t.Context())
+			}
 		}
 	})
 }

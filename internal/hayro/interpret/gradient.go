@@ -246,12 +246,16 @@ func newColorLut(stops []SVGGradientStop) *colorLut {
 }
 
 // nextPowerOfTwo is usize::next_power_of_two of Rust.
+//
+// Port: Rust panics past the largest power of two of usize. Go returns the
+// power of two below it, 1<<62 on a computer of 64 bits.
 func nextPowerOfTwo(n int) int {
+	const largest = 1 << (bits.UintSize - 2)
 	if n <= 1 {
 		return 1
 	}
-	if n > 1<<62 {
-		return 1 << 62
+	if n > largest {
+		return largest
 	}
 	return 1 << bits.Len(uint(n-1))
 }

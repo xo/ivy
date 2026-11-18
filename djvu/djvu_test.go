@@ -554,7 +554,11 @@ func FuzzOpen(f *testing.F) {
 		}
 		_, err = d.Describe(t.Context())
 		check(t, err)
-		for p := range d.Previews(t.Context()) {
+		for p, err := range d.Previews(t.Context()) {
+			if err != nil {
+				check(t, err)
+				continue
+			}
 			_, err = p.Decode(t.Context())
 			check(t, err)
 		}

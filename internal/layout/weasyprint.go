@@ -107,7 +107,7 @@ func LoadHTML(src Source, path string, opts HTMLOptions) (*HTML, error) {
 	if strings.HasSuffix(lower, ".xhtml") || strings.HasSuffix(lower, ".xht") || strings.HasSuffix(lower, ".xml") {
 		options := roxmltree.DefaultParsingOptions()
 		options.AllowDTD = true
-		options.NodesLimit = uint32(min(limits.MaxObjects, 1<<31))
+		options.NodesLimit = uint32(min(int64(limits.MaxObjects), 1<<31))
 		doc, err := roxmltree.ParseWithOptions(string(response.Body), options)
 		if err != nil {
 			return nil, fmt.Errorf("%w: parsing %s: %w", ivy.ErrFormat, path, err)

@@ -204,7 +204,7 @@ func ParseManifest(buf []byte, lim ivy.Limits) (*Manifest, error) {
 		return nil, fmt.Errorf("manifest: invalid utf-8: %w", ivy.ErrFormat)
 	}
 	opt := roxmltree.DefaultParsingOptions()
-	opt.NodesLimit = uint32(min(lim.MaxObjects, math.MaxUint32))
+	opt.NodesLimit = uint32(min(int64(lim.MaxObjects), math.MaxUint32))
 	doc, err := roxmltree.ParseWithOptions(text, opt)
 	switch {
 	case errors.Is(err, okage.ErrXMLNodesLimitReached):

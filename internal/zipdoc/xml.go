@@ -39,7 +39,7 @@ func ParseXML(buf []byte, lim ivy.Limits) (*roxmltree.Document, error) {
 	// Krita writes a DOCTYPE. The parser loads no outside DTD, and it
 	// bounds the expansion of the entities
 	opt.AllowDTD = true
-	opt.NodesLimit = uint32(min(lim.MaxObjects, 1<<31))
+	opt.NodesLimit = uint32(min(int64(lim.MaxObjects), 1<<31))
 	doc, err := roxmltree.ParseWithOptions(text, opt)
 	switch {
 	case errors.Is(err, okage.ErrXMLNodesLimitReached):

@@ -229,8 +229,8 @@ Git ignores `go.work`. Make it with
 with `GOWORK=off`, before you push, as CI does.
 
 These commands must pass before you stage a change to Go code. They cover
-the scalar build, the SIMD build (D9), the race detector (D11) and the test
-module, which needs the oracles (D13):
+the scalar build, the SIMD build (D9), the race detector (D11), the test
+module, which needs the oracles (D13), and the targets that CI builds:
 
 ```sh
 test -z "$(gofmt -l $(git ls-files -co --exclude-standard '*.go'))"
@@ -240,7 +240,18 @@ GOEXPERIMENT=simd go test -count=1 ./...
 golangci-lint run ./...
 (cd test && go vet ./... && go test -count=1 ./... && golangci-lint run ./...)
 (cd fonts && go vet ./... && go test -count=1 ./... && golangci-lint run ./...)
+for t in freebsd/amd64 linux/386 linux/arm linux/riscv64 linux/s390x \
+  windows/386 js/wasm wasip1/wasm; do
+  CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build ./... || echo "$t failed"
+done
 ```
+
+Run them with the version of golangci-lint that `.github/workflows/test.yml`
+installs. On 2026-11-18 it is v2.15.0. Another version reports other
+issues, and CI then fails on a change that passed here. Install that version
+with `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0`.
+The targets of 32 bits, such as linux/386, fail on a constant that does
+not fit in an `int` of 32 bits, such as `1 << 31` or `math.MaxUint32`.
 
 Before you stage a change to a decoder, run its fuzz test for a minute, such
 as `go test -run '^$' -fuzz FuzzOpen -fuzztime 1m -fuzzminimizetime 2s ./psd`

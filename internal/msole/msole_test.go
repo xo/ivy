@@ -203,8 +203,8 @@ func TestThumbnailErrors(t *testing.T) {
 	// the summary leaves out a thumbnail that it cannot read
 	sum := fixture.Summary{ThumbnailTag: -1, ThumbnailFormat: 2, Thumbnail: []byte{1, 2, 3}}
 	s := ParseSummary(sum.Bytes())
-	for range s.Previews(t.Context(), ivy.Config{}) {
-		t.Error("expected no preview")
+	for _, err := range s.Previews(t.Context(), ivy.Config{}) {
+		t.Errorf("expected no preview, got one with the error %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

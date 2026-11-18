@@ -112,10 +112,16 @@ func TestIndirect(t *testing.T) {
 				t.Errorf("expected the title %q, got: %+v, %v", wantInfo.Title, info, err)
 			}
 			var previews, wantPreviews int
-			for range d.Previews(t.Context()) {
+			for _, err := range d.Previews(t.Context()) {
+				if err != nil {
+					t.Fatal(err)
+				}
 				previews++
 			}
-			for range want.Previews(t.Context()) {
+			for _, err := range want.Previews(t.Context()) {
+				if err != nil {
+					t.Fatal(err)
+				}
 				wantPreviews++
 			}
 			if previews != wantPreviews {
