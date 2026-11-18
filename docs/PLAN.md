@@ -347,6 +347,6 @@ format of each kind before the maintainers commit to phases 3 to 5.
 
 A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
-decisions were consolidated (D4). D22 answers question 3, D23 answers
-question 4, and D25 answers question 5. D33 to D45 answer questions 1
-and 6 to 20. No question is open. The next question is question 21.
+decisions were consolidated (D4). D22 answers question 3, D23 answers question
+4, and D25 answers question 5. D33 to D45 answer questions 1 and 6 to 20. D55
+answers question 21. No question is open. The next question is question 22.

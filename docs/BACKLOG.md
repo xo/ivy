@@ -300,23 +300,13 @@ D59 added. These items are left.
 The measurement of the speed of 2026-11-18 and D47 left these items. Each
 time is for a page at 96 dpi.
 
-1. Lay out the first page of a large sheet without the whole sheet. The
-   cascade now shares the styles of the pseudo-elements of the elements whose
-   styles it shares, and a row leaves out its empty cells at its end.
-   `datasets/csv/world-cities.csv` still needs about 2.3 s and
-   `poi/xlsx/many-merges.xlsx` about 1.5 s before the first page, on a
-   computer that other work shared. The cascade and the boxes still cover each
-   cell of the one HTML document of the sheet: `Matcher.Match` of okage takes
-   about 0.3 to 0.6 µs for each element since okage v0.12.0, and
-   `BuildFormattingStructure` builds the boxes of all the rows.
-   `internal/sheet` cannot cut a large sheet into documents at its page
-   breaks, because the layout makes a row taller when the line of its font is
-   higher than the row, and the fonts come from the program. An exact cut
-   needs the layout to tell where a page starts, for example with a row that a
-   document adds after its last row, to check that this row starts a new page.
-   On 2026-11-18 the maintainers asked for a proposed decision that cuts a
-   sheet at its page breaks, such as with a row that the layout checks.
-   Source: `internal/sheet` and `internal/layout`.
+1. Lay out a long sheet in parts of about 16 pages that end at a probe row, as
+   D55 decides, so that the first page of a large sheet does not wait for the
+   whole sheet. `datasets/csv/world-cities.csv` needs about 1.4 s and
+   `poi/xlsx/many-merges.xlsx` about 1 s before the first page today. A book
+   also keeps the count of a document whose `counter(pages)` is only in its
+   margin boxes (D55, which amends D48). Source: `internal/sheet`,
+   `internal/layout` and D55.
 2. Draw the soft masks of `hayro/pdf/tile-clamp-bug.pdf` faster. A group
    now draws its soft mask only on the pixels that it composites, but in
    this document each group covers almost all of the clip of its band. So

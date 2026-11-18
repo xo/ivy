@@ -67,10 +67,11 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D45 | [The backlog drops ivy.Cache, keeps JPEG XR, and waits on JPEG and SVM](D045-the-backlog-drops-ivy-cache-keeps-jpeg-xr-and-waits-on-jpeg-and-svm.md) | Decided |
 | D46 | [ivy fills small glyphs with the coverage of okage](D046-ivy-fills-small-glyphs-with-the-coverage-of-okage.md) | Decided. Amends D28 |
 | D47 | [A large page renders in bands on goroutines](D047-a-large-page-renders-in-bands-on-goroutines.md) | Decided |
-| D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided |
+| D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided. Amended by D55 |
 | D49 | [A PDF document keeps its decoded images](D049-a-pdf-document-keeps-its-decoded-images.md) | Decided |
 | D50 | [ivy changes okage and magic itself](D050-ivy-changes-okage-and-magic-itself.md) | Decided. Amends D8 |
 | D51 | [msdoc draws its shapes with internal/odraw](D051-msdoc-draws-its-shapes-with-internal-odraw.md) | Decided |
 | D52 | [A line of a word processor can pass the page by its descent](D052-a-line-of-a-word-processor-can-pass-the-page-by-its-descent.md) | Decided |
 | D53 | [A metafile draws glyph indexes through their text](D053-a-metafile-draws-glyph-indexes-through-their-text.md) | Decided |
 | D54 | [The text bodies of a scene share a font configuration](D054-the-text-bodies-of-a-scene-share-a-font-configuration.md) | Decided |
+| D55 | [A long sheet is laid out in parts that end at a probe row](D055-a-long-sheet-is-laid-out-in-parts-that-end-at-a-probe-row.md) | Decided. Amends D48 |

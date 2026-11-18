@@ -1,6 +1,6 @@
 # D48. A book counts its documents at the same time
 
-Status: Decided.
+Status: Decided. Amended by D55.
 
 D47 renders a page in bands and several pages at the same time, but the
 layout of a book stayed serial. `PageCount` of
