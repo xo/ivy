@@ -162,6 +162,35 @@ func TestFontFamily(t *testing.T) {
 	}
 }
 
+// TestMergedWrap checks that a merged cell whose text wraps into more lines
+// than its rows hold keeps the heights of its rows, as Excel does: 45 rows
+// of 15 points fill one page of US Letter.
+func TestMergedWrap(t *testing.T) {
+	wb := &Workbook{Styles: []Style{
+		{Font: Font{Family: "Arial", Size: 10}},
+		{Font: Font{Family: "Arial", Size: 10}, Wrap: true},
+	}}
+	sh := &Sheet{
+		Name: "Merged", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage, FixedRows: true,
+		Merges: []Range{{Row0: 0, Col0: 0, Row1: 1, Col1: 0}},
+		Rows:   []Row{{Index: 0, Cells: []Cell{{Col: 0, Text: strings.Repeat("word ", 40), Style: 1}}}},
+	}
+	for i := 2; i < 45; i++ {
+		sh.Rows = append(sh.Rows, Row{Index: i, Cells: []Cell{{Col: 0, Text: "x"}}})
+	}
+	wb.Sheets = []*Sheet{sh}
+	src, err := wb.Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(document(t, src, 0), `<div class="wc" style="max-height:30pt">word`) {
+		t.Error("expected the text of the merged cell in a block of 30 points")
+	}
+	if n := pageCount(t, src); n != 1 {
+		t.Errorf("expected 1 page, got: %d", n)
+	}
+}
+
 func TestFixedRows(t *testing.T) {
 	wb := &Workbook{Styles: []Style{
 		{Font: Font{Family: "Arial", Size: 10}},
@@ -187,7 +216,7 @@ func TestFixedRows(t *testing.T) {
 	for _, want := range []string{
 		`<td class="s1 c" style="line-height:12.75pt">big</td><td>small</td>`,
 		`<td class="s2 c" style="white-space:pre;overflow-wrap:normal">one two</td>`,
-		`<tr style="height:30pt"><td class="s2 c">one` + "\n" + `two</td>`,
+		`<tr style="height:30pt"><td class="s2 c"><div class="wc" style="max-height:30pt">one` + "\n" + `two</div></td>`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the document:\n%s", want, doc)

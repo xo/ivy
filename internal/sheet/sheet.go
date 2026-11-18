@@ -265,6 +265,11 @@ type Page struct {
 	// ScaleHeaderFooter scales the text of the header and the footer with
 	// the cells, as Excel does unless a sheet asks otherwise.
 	ScaleHeaderFooter bool
+	// HeaderArea and FooterArea are the heights of the areas of the header
+	// and the footer between the margins and the cells, as OpenDocument
+	// has them. With ScaleHeaderFooter, the scale of the cells scales
+	// them too, as LibreOffice does.
+	HeaderArea, FooterArea float64
 	// OverThenDown prints the pages in the order over, then down: the
 	// first rows of each band of columns, then the next rows. Without it,
 	// the pages go down, then over: all the rows of the first band, then

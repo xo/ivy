@@ -401,6 +401,9 @@ func FuzzOpen(f *testing.F) {
 	}
 	f.Add(drawingWorkbook(fixture.PNG(4, 2, color.NRGBA{0, 0, 255, 255})))
 	f.Add(printWorkbook([][]byte{builtinName(namePrintArea, 1, area3d(0, 3, 0, 3))}))
+	f.Add(condWorkbook())
+	chart, _ := chartSheetWorkbook()
+	f.Add(chart)
 	cfg := ivy.Config{
 		Password: loPassword,
 		// the password of the XOR obfuscation, after the password of RC4

@@ -135,3 +135,38 @@ func TestPrintAreaPages(t *testing.T) {
 		t.Errorf("expected the cell A1 out of the print area:\n%s", doc)
 	}
 }
+
+// TestNameBIFF5 checks the records NAME of BIFF5: the print titles of the
+// rows 1 to 2 and of the column A, in the 3D areas of BIFF5, and a print
+// area.
+func TestNameBIFF5(t *testing.T) {
+	area5 := func(r0, r1, c0, c1 int) []byte {
+		b := append([]byte{ptgArea3d}, make([]byte, 10)...)
+		b = append(b, u16(0, 0, r0|0xC000, r1|0xC000)...)
+		return append(b, byte(c0), byte(c1))
+	}
+	name5 := func(kind byte, itab int, rgce []byte) []byte {
+		b := u16(nameBuiltin)
+		b = append(b, 0, 1)
+		b = append(b, u16(len(rgce), 0, itab)...)
+		b = append(b, 0, 0, 0, 0, kind)
+		return append(b, rgce...)
+	}
+	w := &workbook{version: biff5}
+	titles := append(append(area5(0, 1, 0, 255), area5(0, 0x3FFF, 0, 0)...), ptgUnion)
+	w.readName(name5(namePrintTitles, 2, titles))
+	w.readName(name5(namePrintArea, 2, area5(2, 9, 1, 3)))
+	p := w.prints[1]
+	if p == nil {
+		t.Fatal("expected the print names of the second sheet")
+	}
+	if p.rows == nil || *p.rows != (sheet.Span{First: 0, Last: 1}) {
+		t.Errorf("expected the title rows 0 to 1, got: %+v", p.rows)
+	}
+	if p.cols == nil || *p.cols != (sheet.Span{First: 0, Last: 0}) {
+		t.Errorf("expected the title column 0, got: %+v", p.cols)
+	}
+	if want := (sheet.Range{Row0: 2, Col0: 1, Row1: 9, Col1: 3}); len(p.areas) != 1 || p.areas[0] != want {
+		t.Errorf("expected the area %+v, got: %+v", want, p.areas)
+	}
+}

@@ -158,3 +158,24 @@ func TestCondHTML(t *testing.T) {
 		t.Errorf("expected 1 page, got: %d", n)
 	}
 }
+
+// TestCondMerged checks a data bar that hides its value in a merged cell of
+// two rows and two columns, as Excel draws it.
+func TestCondMerged(t *testing.T) {
+	sh := condSheet(CondRule{Kind: "dataBar", Priority: 1, Bar: &DataBar{
+		Min: Threshold{Kind: "num"}, Max: Threshold{Kind: "num", Value: 10}, Color: color.NRGBA{0, 255, 0, 255}, HideValue: true,
+	}})
+	sh.CondFormats[0].Ranges = []Range{{Row0: 4, Col0: 0, Row1: 4, Col1: 0}}
+	sh.Merges = []Range{{Row0: 4, Col0: 0, Row1: 5, Col1: 1}}
+	src, err := (&Workbook{Sheets: []*Sheet{sh}}).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	// the bar of 5 of 10 takes a tenth and half of 8 tenths of the 93
+	// points of the cell, and the height of both rows
+	want := `colspan="2" rowspan="2"><div class="db" style="left:1.5pt;top:1.5pt;width:46.5pt;height:27pt;background-color:#00ff00"></div></td>`
+	if !strings.Contains(doc, want) {
+		t.Errorf("expected %q in the document:\n%s", want, doc)
+	}
+}

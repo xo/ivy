@@ -19,12 +19,15 @@
 //
 // The drawings of a sheet show at their cells: the shapes, the groups, the
 // text boxes with their text, and the pictures in PNG, JPEG, DIB, EMF and
-// WMF, which internal/odraw reads as msppt does. A chart shows as a frame,
-// and a chart sheet shows a frame on a page of its own, in landscape
-// unless its setup says otherwise. The package does not draw the charts
-// and the pictures in PICT. It leaves out the comments, the objects that do
-// not print and the hidden sheets. The print areas and the print titles of
-// a workbook of BIFF8 limit and repeat the cells on the pages.
+// WMF, which internal/odraw reads as msppt does. internal/chart draws the
+// charts of BIFF8, which the package converts into DrawingML, and a chart
+// sheet shows its chart on a page of its own, in landscape unless its setup
+// says otherwise. A chart that the package cannot read shows as a frame.
+// The package does not draw the pictures in PICT. It leaves out the
+// comments, the objects that do not print and the hidden sheets. The print
+// areas and the print titles limit and repeat the cells on the pages. The
+// conditional formats of Excel 97 and of Excel 2007 change the cells, as
+// in xlsx, except the rules that need a formula.
 //
 // A workbook gives its thumbnail and its properties from the stream
 // "\x05SummaryInformation". A workbook that a password protects with RC4,

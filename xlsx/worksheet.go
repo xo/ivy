@@ -13,6 +13,25 @@ import (
 	"github.com/xo/ivy/internal/sheet"
 )
 
+// dataBars14 reads the data bars of Excel 2010 in the extension list of a
+// worksheet, x14:conditionalFormattings, which a rule of a data bar names
+// by its id. A bar of Excel 2010 without a gradient fills its length with
+// one color.
+func dataBars14(n roxmltree.Node, bars map[string]*sheet.DataBar) {
+	for r := range n.Descendants() {
+		if local(r) != "cfRule" || attr(r, "type") != "dataBar" {
+			continue
+		}
+		bar := bars[attr(r, "id")]
+		if bar == nil {
+			continue
+		}
+		if db, ok := child(r, "dataBar"); ok {
+			bar.Gradient = flag(db, "gradient", true)
+		}
+	}
+}
+
 // readWorksheet reads a worksheet part into sh.
 func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	doc, err := b.parsePart(part)
@@ -37,6 +56,9 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	sh.Page.SetPaper(b.cfg.Paper)
 	fit := false
 	rules := 0
+	// bars holds the data bars of the rules, by the id of their extension
+	// of Excel 2010
+	bars := map[string]*sheet.DataBar{}
 	var drawing string
 	for n := range root.Children() {
 		switch local(n) {
@@ -60,7 +82,9 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 				return err
 			}
 		case "conditionalFormatting":
-			b.readCondFormat(sh, n, &rules)
+			b.readCondFormat(sh, n, &rules, bars)
+		case "extLst":
+			dataBars14(n, bars)
 		case "mergeCells":
 			for m := range children(n, "mergeCell") {
 				if r, ok := parseRange(attr(m, "ref")); ok && (r.Row0 != r.Row1 || r.Col0 != r.Col1) {

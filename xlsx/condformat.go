@@ -70,10 +70,11 @@ func (s *styles) dxf(n roxmltree.Node) sheet.Diff {
 	return d
 }
 
-// readCondFormat reads a conditionalFormatting element into sh. The rules
+// readCondFormat reads a conditionalFormatting element into sh, and the ids
+// of the extensions of its data bars into bars. The rules
 // of the type expression and timePeriod need formulas, which ivy does not
 // compute, and are left out.
-func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int) {
+func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int, bars map[string]*sheet.DataBar) {
 	var f sheet.CondFormat
 	for _, ref := range strings.Fields(attr(n, "sqref")) {
 		if r, ok := parseRange(ref); ok && len(f.Ranges) < 64 {
@@ -90,6 +91,15 @@ func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int) {
 		if r, ok := b.condRule(sh, rn); ok {
 			f.Rules = append(f.Rules, r)
 			*rules++
+			if r.Bar != nil && len(bars) < maxCondRules {
+				// the extension of Excel 2010 of the rule
+				for e := range rn.Descendants() {
+					if local(e) == "id" {
+						bars[nodeText(e)] = r.Bar
+						break
+					}
+				}
+			}
 		}
 	}
 	if len(f.Rules) > 0 {

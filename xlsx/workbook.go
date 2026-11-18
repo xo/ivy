@@ -44,6 +44,9 @@ type book struct {
 	objects      int
 	// cells counts the cells of the workbook, within lim.MaxObjects.
 	cells int
+	// sheets holds the sheets that the book read, by their names, for the
+	// number formats of the values of the charts.
+	sheets map[string]*sheet.Sheet
 }
 
 // richText is a shared string: plain text, or runs of rich text.

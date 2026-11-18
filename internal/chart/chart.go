@@ -74,6 +74,12 @@ type Options struct {
 	// font.Substitute that has the same metrics, such as Carlito for
 	// Calibri, then with the sans serif family of the database.
 	Fonts *svg.FontDatabase
+	// SourceFormat returns the number format of the first cell of a
+	// reference of a series, c:f, or "". Excel formats the values of a
+	// series with the format of their cells, and not with the format of
+	// the cache, which can come from another locale. It is nil for a
+	// chart without cells.
+	SourceFormat func(ref string) string
 	// Width and Height are the size of the frame of the chart in points,
 	// or zero. A chart of DrawingML has no size of its own, and the frame
 	// that holds it gives the size.

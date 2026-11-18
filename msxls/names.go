@@ -6,8 +6,8 @@ import (
 
 // This file reads the print areas and the print titles of the sheets: the
 // built-in names Print_Area and Print_Titles, in the records NAME of the
-// globals of a workbook of BIFF8 (MS-XLS 2.4.150). Each name of a sheet
-// holds a formula of areas of cells.
+// globals of a workbook of BIFF8 (MS-XLS 2.4.150), and of BIFF5. Each name
+// of a sheet holds a formula of areas of cells.
 
 // The flag fBuiltin of a record NAME, and the characters of the built-in
 // names that the package reads (MS-XLS 2.4.150).
@@ -39,10 +39,12 @@ type printNames struct {
 	cols  *sheet.Span
 }
 
-// readName reads a record NAME of BIFF8, and keeps the print areas and the
-// print titles of a sheet.
+// readName reads a record NAME of BIFF8 or of BIFF5, and keeps the print
+// areas and the print titles of a sheet. A name of BIFF5 has no byte of
+// flags before its characters, which take one byte each, and its formula
+// has the tokens of BIFF5.
 func (w *workbook) readName(b []byte) {
-	if w.version < biff8 || len(b) < 16 {
+	if len(b) < 15 {
 		return
 	}
 	grbit := le.Uint16(b)
@@ -52,19 +54,30 @@ func (w *workbook) readName(b []byte) {
 	if grbit&nameBuiltin == 0 || itab == 0 || cch != 1 {
 		return
 	}
-	// the name: a byte of flags and one character of 1 or 2 bytes
-	size := 1
-	if b[14]&1 != 0 {
-		size = 2
+	// the name: a byte of flags in BIFF8, and one character of 1 or 2
+	// bytes
+	at, size := 14, 1
+	if w.version >= biff8 {
+		if len(b) < 16 {
+			return
+		}
+		if b[14]&1 != 0 {
+			size = 2
+		}
+		at = 15
 	}
-	if 15+size+cce > len(b) {
+	if at+size+cce > len(b) {
 		return
 	}
-	kind := b[15]
+	kind := b[at]
 	if kind != namePrintArea && kind != namePrintTitles {
 		return
 	}
-	areas := formulaAreas(b[15+size : 15+size+cce])
+	rgce := b[at+size : at+size+cce]
+	areas := formulaAreas(rgce)
+	if w.version < biff8 {
+		areas = formulaAreas5(rgce)
+	}
 	if len(areas) == 0 {
 		return
 	}
@@ -144,6 +157,68 @@ func formulaAreas(rgce []byte) []sheet.Range {
 				return nil
 			}
 			i += 9
+		default:
+			return nil
+		}
+	}
+	return out
+}
+
+// formulaAreas5 returns the areas of the formula rgce of a name of BIFF5,
+// as formulaAreas does for BIFF8. A row of BIFF5 holds the flags of a
+// relative reference in its two high bits, and a column takes one byte. A
+// 3D token names its sheets by itabFirst and itabLast after 10 bytes. Row
+// 16384, the last row of BIFF5, is the last row of a sheet.
+func formulaAreas5(rgce []byte) []sheet.Range {
+	var out []sheet.Range
+	add := func(r0, r1, c0, c1 int) bool {
+		r0, r1 = r0&0x3FFF, r1&0x3FFF
+		if r1 == 0x3FFF {
+			// the last row of BIFF5 stands for every row
+			r1 = maxRow
+		}
+		if r0 > r1 {
+			r0, r1 = r1, r0
+		}
+		if c0 > c1 {
+			c0, c1 = c1, c0
+		}
+		if r1 > maxRow || c1 > maxCol || len(out) >= maxPrintAreas {
+			return false
+		}
+		out = append(out, sheet.Range{Row0: r0, Col0: c0, Row1: r1, Col1: c1})
+		return true
+	}
+	for i := 0; i < len(rgce); {
+		ptg := rgce[i]
+		base := ptg
+		if ptg >= 0x20 && ptg < 0x80 {
+			base = ptg&0x1F | 0x20
+		}
+		switch {
+		case ptg == ptgUnion, ptg == ptgRange, ptg == ptgParen:
+			i++
+		case base == ptgMemFunc:
+			i += 3
+		case base == ptgArea3d && i+21 <= len(rgce):
+			v := rgce[i+15:]
+			if !add(int(le.Uint16(v)), int(le.Uint16(v[2:])), int(v[4]), int(v[5])) {
+				return nil
+			}
+			i += 21
+		case base == ptgRef3d && i+18 <= len(rgce):
+			v := rgce[i+15:]
+			r := int(le.Uint16(v))
+			if !add(r, r, int(v[2]), int(v[2])) {
+				return nil
+			}
+			i += 18
+		case base == ptgArea && i+7 <= len(rgce):
+			v := rgce[i+1:]
+			if !add(int(le.Uint16(v)), int(le.Uint16(v[2:])), int(v[4]), int(v[5])) {
+				return nil
+			}
+			i += 7
 		default:
 			return nil
 		}

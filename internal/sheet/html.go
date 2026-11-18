@@ -364,11 +364,27 @@ func (w *writer) paper() (float64, float64) {
 }
 
 // printable returns the width and the height of the area of the page
-// within its margins, at least an inch each.
+// within its margins, at least an inch each, without the areas of the
+// header and the footer.
 func (w *writer) printable() (float64, float64) {
 	pw, ph := w.paper()
 	p := w.sh.Page
-	return max(72, pw-p.Left-p.Right), max(72, ph-p.Top-p.Bottom)
+	return max(72, pw-p.Left-p.Right), max(72, ph-p.Top-p.Bottom-w.areas())
+}
+
+// areas returns the height of the areas of the header and the footer, at
+// the scale of the cells when they scale with the cells.
+func (w *writer) areas() float64 {
+	p := w.sh.Page
+	return (max(p.HeaderArea, 0) + max(p.FooterArea, 0)) * w.areaScale()
+}
+
+// areaScale returns the scale of the areas of the header and the footer.
+func (w *writer) areaScale() float64 {
+	if w.sh.Page.ScaleHeaderFooter && w.scale > 0 {
+		return w.scale
+	}
+	return 1
 }
 
 // printRange writes the tables of the range r: one for each band of
@@ -538,7 +554,8 @@ func (w *writer) scaleFor(r Range, width float64) (s float64) {
 		}
 		return min(4, max(0.1, s))
 	}
-	pw, ph := w.printable()
+	pw, ph := w.paper()
+	pw, ph = max(72, pw-p.Left-p.Right), max(72, ph-p.Top-p.Bottom)
 	defer func() {
 		// Excel fits the cells at a whole percent
 		s = max(0.1, math.Floor(s*100+1e-9)/100)
@@ -548,8 +565,14 @@ func (w *writer) scaleFor(r Range, width float64) (s float64) {
 		s = min(s, float64(p.FitWidth)*pw/width)
 	}
 	if p.FitHeight > 0 {
-		if h := w.height(r); h > 0 {
-			s = min(s, float64(p.FitHeight)*ph/h)
+		// Each page holds the areas of the header and the footer, at the
+		// scale of the cells when they scale with the cells.
+		n := float64(p.FitHeight)
+		areas := max(p.HeaderArea, 0) + max(p.FooterArea, 0)
+		if h := w.height(r); h > 0 && p.ScaleHeaderFooter {
+			s = min(s, n*ph/(h+n*areas))
+		} else if h > 0 {
+			s = min(s, n*max(ph-areas, 1)/h)
 		}
 	}
 	return s
@@ -733,7 +756,7 @@ func (w *writer) css(b *strings.Builder) {
 	w.styleCSS(b, def, false)
 	b.WriteString("}\n")
 	b.WriteString("td.c{overflow:hidden}\ntd.a{position:relative}\n")
-	b.WriteString("div.cl{position:absolute;left:0;top:0;overflow:hidden}\n")
+	b.WriteString("div.cl{position:absolute;left:0;top:0;overflow:hidden}\ndiv.wc{overflow:hidden}\n")
 	b.WriteString("div.db,img.ic{position:absolute}\nspan.t{position:relative}\n")
 	b.WriteString("span.r{display:inline-block}\n")
 	b.WriteString("span.sl,span.sb{display:inline-block;width:0}\nspan.sl>span,span.sb>span{display:inline-block}\n")
@@ -861,18 +884,20 @@ func borderWidth(bd Border, s float64) float64 {
 func (w *writer) pageRule(b *strings.Builder) {
 	p := w.sh.Page
 	pw, ph := w.paper()
+	top := max(0, p.Top) + max(p.HeaderArea, 0)*w.areaScale()
+	bottom := max(0, p.Bottom) + max(p.FooterArea, 0)*w.areaScale()
 	b.WriteString("@page{size:" + pt(pw) + " " + pt(ph) + ";margin:" +
-		pt(max(0, p.Top)) + " " + pt(max(0, p.Right)) + " " + pt(max(0, p.Bottom)) + " " + pt(max(0, p.Left)) + ";")
+		pt(top) + " " + pt(max(0, p.Right)) + " " + pt(bottom) + " " + pt(max(0, p.Left)) + ";")
 	header, footer := w.sh.Header, w.sh.Footer
 	if header.Empty() && footer.Empty() && w.sh.Name != "" {
 		// The name of the sheet, small and light, tells a reader which
 		// sheet a page shows. It is not ink that a printout has.
 		b.WriteString("@top-left{content:" + quote(w.sh.Name) +
-			";vertical-align:top;padding-top:" + pt(max(0, min(p.Header, p.Top-10))) +
+			";vertical-align:top;padding-top:" + pt(max(0, min(p.Header, top-10))) +
 			";font-family:sans-serif;font-size:8pt;color:#909090}")
 	}
-	w.marginBoxes(b, header, "top", p.Header, p.Top)
-	w.marginBoxes(b, footer, "bottom", p.Footer, p.Bottom)
+	w.marginBoxes(b, header, "top", p.Header, top)
+	w.marginBoxes(b, footer, "bottom", p.Footer, bottom)
 	b.WriteString("}\n")
 }
 
@@ -1214,7 +1239,7 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		clipped := m != nil || st.Wrap || (hasText && cell.Kind != KindText) ||
 			(k+1 < len(band) && text[k+1] && spill != "left") ||
 			(hasText && st.HAlign != "" && st.HAlign != "left" && st.HAlign != "general" && spill == "")
-		marks := res != nil && m == nil && hasText && (res.bar != nil || res.icon != nil)
+		marks := res != nil && hasText && (res.bar != nil || res.icon != nil)
 		if len(imgs) > 0 || marks {
 			class = append(class, "a")
 		}
@@ -1241,6 +1266,9 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			}
 		}
 		wrap := wraps(st)
+		// clipText is the height of the block that holds a text that
+		// wraps in rows that keep their heights, or 0
+		clipText := 0.0
 		if hasText && w.sh.FixedRows {
 			h := w.sh.rowHeight(srcRowp)
 			if rowspan > 1 {
@@ -1257,6 +1285,20 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			if lh := w.lineHeight(cell, st, h, wrap); lh > 0 {
 				inline = append(inline, "line-height:"+pt(lh))
 			}
+			if wrap && st.Rotation == 0 {
+				// Excel keeps the heights of the rows, and cuts the lines
+				// of a text that wraps that they do not hold: the text
+				// goes in a block of their height, with lines that fit
+				size, avail := w.room(cell, st, h)
+				clipText = avail
+				normal := 1.22
+				if eastAsian(cell) {
+					normal = 1.5
+				}
+				if n := w.lines(cell, st, h); n >= 2 && size*w.scale*normal*float64(n) > avail {
+					inline = append(inline, "line-height:"+pt(max(0.1, avail/float64(n))))
+				}
+			}
 		}
 		if len(inline) > 0 {
 			b.WriteString(` style="` + strings.Join(inline, ";") + `"`)
@@ -1264,13 +1306,17 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 		b.WriteString(">")
 		over := false
 		if marks {
-			if w.marks(res, srcRowp, band[k:k+colspan]) {
+			markHeight := w.sh.rowHeight(srcRowp)
+			if rowspan > 1 {
+				markHeight = w.spanHeight(i, m.m.Row1, skipTitles)
+			}
+			if w.marks(res, markHeight, band[k:k+colspan]) {
 				hasText = false
 			} else {
 				// the text goes over the bar, and after the icon
 				b.WriteString(`<span class="t"`)
 				if res.icon != nil {
-					b.WriteString(` style="padding-left:` + pt(iconRoom(w.sh.rowHeight(srcRowp))*w.scale) + `"`)
+					b.WriteString(` style="padding-left:` + pt(iconRoom(markHeight)*w.scale) + `"`)
 				}
 				b.WriteString(">")
 				over = true
@@ -1293,6 +1339,10 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 				b.WriteString(`<span class="s` + side + `"><span>`)
 				w.content(cell, st, wrap)
 				b.WriteString("</span></span>")
+			case clipText > 0:
+				b.WriteString(`<div class="wc" style="max-height:` + pt(clipText) + `">`)
+				w.content(cell, st, wrap)
+				b.WriteString("</div>")
 			default:
 				w.content(cell, st, wrap)
 			}
@@ -1382,15 +1432,14 @@ func iconRoom(h float64) float64 { return iconSize(h) + 1.5 }
 const maxDerived = 4096
 
 // marks writes the data bar and the icon of the conditional formats of a
-// cell of row in the columns cols. It reports whether they hide the text
-// of the cell.
-func (w *writer) marks(res *condResult, row *Row, cols []int) bool {
+// cell of the height h in the columns cols, such as a merged cell. It
+// reports whether they hide the text of the cell.
+func (w *writer) marks(res *condResult, h float64, cols []int) bool {
 	s := w.scale
 	width := 0.0
 	for _, c := range cols {
 		width += w.sh.colWidth(c)
 	}
-	h := w.sh.rowHeight(row)
 	b := &w.body
 	hide := false
 	left := 1.5
@@ -1511,11 +1560,13 @@ func (w *writer) room(cell *Cell, st *Style, h float64) (size, avail float64) {
 }
 
 // lines returns the number of lines of the text of a cell that rows of the
-// height h hold, with lines of 1.22 times the size of the font, as Excel
-// lays out Calibri and MS PGothic.
+// printed height h hold, with lines of 1.22 times the size of the font, as
+// Excel lays out Calibri and MS PGothic. The lines are printed at RowScale
+// too, and the borders of the rows do not count: Excel fits 2 lines of MS
+// PGothic of 11 points in a row of 27 points, twice its default height.
 func (w *writer) lines(cell *Cell, st *Style, h float64) int {
-	size, avail := w.room(cell, st, h)
-	return int(avail / (size * w.scale * 1.22))
+	size, _ := w.room(cell, st, h)
+	return int(h/(size*1.22*RowScale) + 0.01)
 }
 
 // eastAsian reports whether the text of a cell holds a character of the

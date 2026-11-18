@@ -26,8 +26,9 @@ import (
 // A record OBJ after the drawing of each shape gives the type of the
 // object, and a record TXO the text of a shape (MS-XLS 2.4.181 and
 // 2.4.329). Each shape at the top of the drawing, or each group, is an
-// object of the layout at its cells. A chart shows as a frame, since the
-// package does not draw the charts of BIFF8.
+// object of the layout at its cells. A chart is the chart substream after
+// its record OBJ, which chart.go reads. A chart that the package cannot
+// read shows as a frame.
 
 // The records of the drawings.
 const (
@@ -73,6 +74,8 @@ type drawObj struct {
 	// left or top, 2 for centered, 3 for right or bottom, 4 for justified
 	// and 7 for distributed.
 	hAlign, vAlign int
+	// chart holds the records of the chart substream of a chart.
+	chart []record
 }
 
 // drawing is the drawing of a sheet, with the objects of its shapes.
@@ -84,6 +87,7 @@ type drawing struct {
 	ctx  context.Context
 	pics *odraw.Pictures
 	cfg  ivy.Config
+	look *chartLookup
 	// objs maps a shape to its record OBJ.
 	objs  map[*odraw.Shape]*drawObj
 	style *odraw.Style
@@ -91,7 +95,7 @@ type drawing struct {
 
 // drawings adds the drawing objects of raw to the images of sh, and their
 // objects to book.
-func (w *workbook) drawings(ctx context.Context, sh *sheet.Sheet, raw *rawSheet, book *sheet.Workbook, pics *odraw.Pictures, cfg ivy.Config) {
+func (w *workbook) drawings(ctx context.Context, sh *sheet.Sheet, raw *rawSheet, book *sheet.Workbook, pics *odraw.Pictures, look *chartLookup, cfg ivy.Config) {
 	if len(raw.objs) == 0 || len(raw.drawing) < 8 {
 		return
 	}
@@ -105,7 +109,7 @@ func (w *workbook) drawings(ctx context.Context, sh *sheet.Sheet, raw *rawSheet,
 	if od.Root == nil {
 		return
 	}
-	d := &drawing{w: w, sh: sh, raw: raw, book: book, ctx: ctx, pics: pics, cfg: cfg, objs: make(map[*odraw.Shape]*drawObj)}
+	d := &drawing{w: w, sh: sh, raw: raw, book: book, ctx: ctx, pics: pics, cfg: cfg, look: look, objs: make(map[*odraw.Shape]*drawObj)}
 	d.style = &odraw.Style{
 		Scheme:     d.paletteColor,
 		Picture:    d.picture,
@@ -198,6 +202,9 @@ func (d *drawing) add(top *odraw.Shape) {
 	if o.ot == objChart {
 		if img.Width >= 1 && img.Height >= 1 {
 			img.Label = "Chart"
+			if obj := d.w.chartObject(d.look, o.chart, img.Width, img.Height, d.cfg); obj != nil {
+				img.Label, img.Object = "", d.addObject("chart", obj)
+			}
 			d.sh.Images = append(d.sh.Images, img)
 		}
 		return
@@ -226,14 +233,20 @@ func (d *drawing) add(top *odraw.Shape) {
 	if len(obj.figures) == 0 || !(obj.w >= 1 && obj.h >= 1) {
 		return
 	}
-	name := "shape" + strconv.Itoa(len(d.book.Objects)+1)
+	img.DX, img.DY, img.Width, img.Height = img.DX-pad, img.DY-pad, obj.w, obj.h
+	img.Object = d.addObject("shape", obj)
+	d.sh.Images = append(d.sh.Images, img)
+}
+
+// addObject adds an object of the layout to the workbook, and returns its
+// name.
+func (d *drawing) addObject(prefix string, obj layout.Object) string {
+	name := prefix + strconv.Itoa(len(d.book.Objects)+1)
 	if d.book.Objects == nil {
 		d.book.Objects = make(map[string]layout.Object)
 	}
 	d.book.Objects[name] = obj
-	img.DX, img.DY, img.Width, img.Height = img.DX-pad, img.DY-pad, obj.w, obj.h
-	img.Object = name
-	d.sh.Images = append(d.sh.Images, img)
+	return name
 }
 
 // plainPicture sets the path of the image img to the file of the picture

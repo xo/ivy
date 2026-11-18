@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -337,11 +338,12 @@ func (b *book) chartObject(part string, w, h float64) layout.Object {
 	var ch *chart.Chart
 	if err == nil {
 		ch, err = chart.Parse(buf, chart.Options{
-			Theme:  b.theme,
-			Config: b.cfg,
-			Fonts:  fontdb.Of(b.cfg),
-			Width:  w,
-			Height: h,
+			Theme:        b.theme,
+			Config:       b.cfg,
+			Fonts:        fontdb.Of(b.cfg),
+			SourceFormat: b.sourceFormat,
+			Width:        w,
+			Height:       h,
 		})
 	}
 	if err != nil {
@@ -349,6 +351,36 @@ func (b *book) chartObject(part string, w, h float64) layout.Object {
 		return nil
 	}
 	return ch
+}
+
+// sourceFormat returns the number format of the first cell of the
+// reference ref of a chart, such as 'Budget'!$E$9:$F$9, when the cell
+// holds a number of a sheet that the book read, or "".
+func (b *book) sourceFormat(ref string) string {
+	i := strings.LastIndexByte(ref, '!')
+	if i <= 0 {
+		return ""
+	}
+	name := strings.TrimSpace(ref[:i])
+	if len(name) >= 2 && name[0] == '\'' && name[len(name)-1] == '\'' {
+		name = strings.ReplaceAll(name[1:len(name)-1], "''", "'")
+	}
+	sh := b.sheets[name]
+	cell, _, _ := strings.Cut(ref[i+1:], ":")
+	r, ok := parseRange(strings.ReplaceAll(cell, "$", ""))
+	if sh == nil || !ok {
+		return ""
+	}
+	k, found := slices.BinarySearchFunc(sh.Rows, r.Row0, func(row sheet.Row, v int) int { return row.Index - v })
+	if !found {
+		return ""
+	}
+	for _, c := range sh.Rows[k].Cells {
+		if c.Col == r.Col0 && c.Kind == sheet.KindNumber && c.Style >= 0 && c.Style < len(b.styles.codes) {
+			return b.styles.codes[c.Style]
+		}
+	}
+	return ""
 }
 
 // chartTitle returns the text of the title of a chart part, or "".

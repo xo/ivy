@@ -45,7 +45,7 @@ func Parse(buf []byte, opts Options) (c *Chart, err error) {
 	}
 	c = newChart(opts)
 	theme := withOffice(opts.Theme)
-	p := &dmlParser{c: c, theme: theme, colors: &drawingml.Colors{Theme: theme}, budget: min(lim.MaxObjects, maxPoints)}
+	p := &dmlParser{c: c, theme: theme, colors: &drawingml.Colors{Theme: theme}, budget: min(lim.MaxObjects, maxPoints), srcFormat: opts.SourceFormat}
 	c.font = p.fontName("+mn-lt")
 	if txPr, ok := child(root, "txPr"); ok {
 		c.text = p.bodyStyle(txPr).merge(c.text)
@@ -82,6 +82,8 @@ type dmlParser struct {
 	colors *drawingml.Colors
 	// budget is the number of points that the chart can still read.
 	budget int
+	// srcFormat is Options.SourceFormat.
+	srcFormat func(ref string) string
 }
 
 // chart reads c:chart.
@@ -976,6 +978,13 @@ func (p *dmlParser) data(n roxmltree.Node) (strs []string, nums []float64, forma
 			if f, ok := formats[i]; ok {
 				format = f
 				break
+			}
+		}
+	}
+	if ref, ok := child(n, "numRef"); ok && p.srcFormat != nil {
+		if f, ok := child(ref, "f"); ok {
+			if code := p.srcFormat(text(f)); code != "" {
+				format = code
 			}
 		}
 	}

@@ -5,9 +5,11 @@ import (
 	"image/color"
 	"math"
 	"slices"
+	"strconv"
 	"unicode/utf16"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/numfmt"
 	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
@@ -165,6 +167,7 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 	digit := sheet.DigitOf(def, 10)
 	cells := 0
 	book.Files = make(map[string][]byte)
+	look := &chartLookup{ctx: ctx, lim: lim, w: w}
 	for i, bs := range w.sheets {
 		if (bs.kind != 0 && bs.kind != 2) || bs.hidden {
 			continue
@@ -182,7 +185,16 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 		// give its own paper (D32).
 		raw.page.SetPaper(paper)
 		if bs.kind == 2 {
-			book.Sheets = append(book.Sheets, w.chartSheet(raw))
+			sh := w.chartSheet(raw)
+			if obj := w.chartObject(look, raw.chart, sh.Images[0].Width, sh.Images[0].Height, cfg); obj != nil {
+				name := "chart" + strconv.Itoa(len(book.Objects)+1)
+				if book.Objects == nil {
+					book.Objects = make(map[string]layout.Object)
+				}
+				book.Objects[name] = obj
+				sh.Images[0].Label, sh.Images[0].Object = "", name
+			}
+			book.Sheets = append(book.Sheets, sh)
 			continue
 		}
 		cells += len(raw.cells)
@@ -190,7 +202,7 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 		if p := w.prints[i]; p != nil {
 			sh.PrintAreas, sh.TitleRows, sh.TitleCols = p.areas, p.rows, p.cols
 		}
-		w.drawings(ctx, sh, raw, book, pics, cfg)
+		w.drawings(ctx, sh, raw, book, pics, look, cfg)
 		book.Sheets = append(book.Sheets, sh)
 		if cells > lim.MaxObjects {
 			break
@@ -276,14 +288,15 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, sty
 		sh.Rows = append(sh.Rows, row)
 	}
 	w.setup(sh, raw)
+	w.condFormats(sh, raw)
 	if raw.truncated {
 		sh.Note = "The workbook holds more cells than the limit of ivy. The sheet stops at the limit."
 	}
 	return sh
 }
 
-// chartSheet converts a chart sheet into a sheet whose page shows a frame
-// for its chart, which the package does not draw.
+// chartSheet converts a chart sheet into a sheet whose page shows its
+// chart, or a frame when the package cannot read the chart.
 func (w *workbook) chartSheet(raw *rawSheet) *sheet.Sheet {
 	sh := &sheet.Sheet{
 		Name:   raw.name,
@@ -312,7 +325,7 @@ func (w *workbook) toCell(c cell, style int) sheet.Cell {
 	code := w.numberFormatOf(c.xf)
 	switch c.kind {
 	case cellNumber:
-		out.Kind = sheet.KindNumber
+		out.Kind, out.Value = sheet.KindNumber, c.num
 		res := numfmt.Number(code, c.num, w.date1904)
 		out.Text = res.Text
 		if res.Color > 0 && res.Color+7 < len(w.palette) {
@@ -369,6 +382,8 @@ func (w *workbook) setup(sh *sheet.Sheet, raw *rawSheet) {
 		return
 	}
 	flags := le.Uint16(b[10:])
+	// fLeftToRight: the pages go over, then down
+	sh.Page.OverThenDown = flags&0x0001 != 0
 	if flags&0x0004 != 0 {
 		// fNoPls: the paper, the scale and the orientation are not set,
 		// and the sheet keeps the paper of the program, or US Letter

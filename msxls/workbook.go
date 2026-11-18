@@ -53,6 +53,11 @@ type workbook struct {
 	// store is the store of the pictures of the drawings, by their index
 	// from 1.
 	store []odraw.Entry
+	// supBooks says for each record SUPBOOK whether it is the workbook
+	// itself, and xti maps each XTI of the record EXTERNSHEET to the index
+	// of its sheet, or -1 for another workbook.
+	supBooks []bool
+	xti      []int
 }
 
 // readWorkbook reads the globals of the workbook stream wb, and decrypts the
@@ -135,6 +140,14 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 			}
 		case recName:
 			w.readName(rec.data)
+		case recSupBook:
+			// the workbook itself has the marker 0x0401 after the count of
+			// its sheets (MS-XLS 2.4.271)
+			if len(w.supBooks) < 4096 {
+				w.supBooks = append(w.supBooks, len(rec.data) == 4 && le.Uint16(rec.data[2:]) == 0x0401)
+			}
+		case recExternSheet:
+			w.readExternSheet(joined(rec))
 		case recMsoDrawingGroup:
 			// a large group goes on in the records MSODRAWINGGROUP after it
 			if len(group) < maxDrawing {
@@ -147,6 +160,24 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 	}
 	w.store = readStore(group, lim)
 	return w, nil
+}
+
+// readExternSheet reads the record EXTERNSHEET of BIFF8 (MS-XLS 2.4.106):
+// the sheets that the formulas name by an index of XTI.
+func (w *workbook) readExternSheet(b []byte) {
+	if w.version < biff8 || len(b) < 2 {
+		return
+	}
+	n := min(int(le.Uint16(b)), (len(b)-2)/6, 4096)
+	for i := range n {
+		x := b[2+6*i:]
+		book, first := int(le.Uint16(x)), int(le.Uint16(x[2:]))
+		if book < len(w.supBooks) && w.supBooks[book] {
+			w.xti = append(w.xti, first)
+		} else {
+			w.xti = append(w.xti, -1)
+		}
+	}
 }
 
 // readStore reads the store of pictures of the OfficeArtDggContainer of
@@ -307,6 +338,12 @@ type rawSheet struct {
 	// and objs are the records OBJ.
 	drawing []byte
 	objs    []drawObj
+	// chart holds the records of the chart of a chart sheet.
+	chart []record
+	// conds are the conditional formats, and condOpen says that the last
+	// one takes the records CF and CF12 that follow it.
+	conds    []condBlock
+	condOpen bool
 }
 
 // The names of the errors of a cell (MS-XLS 2.5.97).
@@ -346,6 +383,10 @@ func (w *workbook) readSheet(ctx context.Context, bs boundSheet, lim ivy.Limits)
 	depth := 0
 	pendingString := -1
 	count := 0
+	// chart collects the records of a chart substream in the sheet, which
+	// the record OBJ of the chart before it takes
+	var chart []record
+	inChart := false
 	for rec := range records(w.wb, bs.pos) {
 		count++
 		if count%4096 == 0 {
@@ -360,17 +401,29 @@ func (w *workbook) readSheet(ctx context.Context, bs boundSheet, lim ivy.Limits)
 		switch rec.typ {
 		case recBOF:
 			depth++
+			if depth == 2 && len(rec.data) >= 4 && le.Uint16(rec.data[2:]) == bofChart {
+				inChart, chart = true, nil
+			}
 			continue
 		case recEOF:
 			depth--
 			if depth <= 0 {
 				return sh, nil
 			}
+			if depth == 1 && inChart {
+				inChart = false
+				sh.addChart(chart)
+			}
 			continue
 		}
 		if depth != 1 {
-			// a chart inside the sheet
+			if inChart && len(chart) < maxChartRecords {
+				chart = append(chart, rec)
+			}
 			continue
+		}
+		if bs.kind == 2 && len(sh.chart) < maxChartRecords {
+			sh.chart = append(sh.chart, rec)
 		}
 		w.sheetRecord(sh, rec, add, &pendingString)
 	}
@@ -610,6 +663,12 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 		if len(rec.data) >= 30 && !sh.hasHF && allZero(rec.data[12:28]) {
 			sh.hfFlags, sh.hasHF = le.Uint16(rec.data[28:]), true
 		}
+	case recCondFmt, recCondFmt12:
+		sh.condFmt(joined(rec), rec.typ == recCondFmt12)
+	case recCF, recCF12:
+		w.cf(sh, joined(rec), rec.typ == recCF12)
+	case recCFEx:
+		w.cfEx(sh, joined(rec))
 	case recHorizontalPageBreaks, recVerticalPageBreaks:
 		n := int(r.u16())
 		size := 6
@@ -650,6 +709,19 @@ const hfScaleWithDoc = 0x0004
 // clears fHFScaleWithDoc.
 func (sh *rawSheet) scaleHeaderFooter() bool {
 	return !sh.hasHF || sh.hfFlags&hfScaleWithDoc != 0
+}
+
+// addChart gives the records of a chart substream to the last record OBJ
+// of a chart that has none.
+func (sh *rawSheet) addChart(recs []record) {
+	for i := len(sh.objs) - 1; i >= 0; i-- {
+		if o := &sh.objs[i]; o.ot == objChart {
+			if o.chart == nil {
+				o.chart = recs
+			}
+			return
+		}
+	}
 }
 
 // addDrawing adds the segments segs to the stream of the drawing.

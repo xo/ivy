@@ -213,6 +213,10 @@ func (d *Document) workbook(ctx context.Context) (*sheet.Workbook, error) {
 			continue
 		}
 		sh := &sheet.Sheet{Name: ref.name}
+		if b.sheets == nil {
+			b.sheets = map[string]*sheet.Sheet{}
+		}
+		b.sheets[ref.name] = sh
 		if ref.chart {
 			b.readChartSheet(sh, ref.part)
 		} else if err := b.readWorksheet(sh, ref.part, i); err != nil {
