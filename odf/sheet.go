@@ -753,6 +753,9 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 	if y, err := strconv.Atoi(p["scale-to-Y"]); err == nil && y >= 0 {
 		pg.Fit, pg.FitHeight = true, y
 	}
+	// LibreOffice draws the header and the footer at the zoom of the
+	// cells.
+	pg.ScaleHeaderFooter = true
 	sh.Gridlines = strings.Contains(" "+p["print"]+" ", " grid ")
 	pg.CenterH = p["table-centering"] == "horizontal" || p["table-centering"] == "both"
 	pg.CenterV = p["table-centering"] == "vertical" || p["table-centering"] == "both"
@@ -796,10 +799,10 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 		}
 		if kind == "header" {
 			sh.Header = hf
-			pg.Top += height
+			pg.HeaderArea = height
 		} else {
 			sh.Footer = hf
-			pg.Bottom += height
+			pg.FooterArea = height
 		}
 	}
 }

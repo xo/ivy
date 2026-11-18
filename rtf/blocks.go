@@ -9,10 +9,6 @@ import (
 	"github.com/xo/ivy/internal/ebook"
 )
 
-// headerLine is the height of a line of a header, in twips, for the
-// margins of a page whose header does not fit.
-const headerLine = 300
-
 // lineRatios are the heights of a single line of the fonts that documents
 // use most, as a multiple of the font size.
 var lineRatios = map[string]float64{
@@ -185,17 +181,16 @@ func (c *converter) runStyle(p charProps) string {
 		// layout takes a character that the first font does not have from
 		// it
 		s.set("font-family", c.families(p.font, p.fontEA))
-	} else if p.font != c.docFont {
-		family, _ := c.family(p.font)
+	} else if family, _ := c.family(p.font); family != "" {
 		s.set("font-family", family)
 	}
+	// A run states its font and its size, since its paragraph has those of
+	// its mark.
 	size := float64(p.size) / 2
 	if p.vertical != 0 {
 		size *= 0.65
 	}
-	if size != 12 {
-		s.set("font-size", num(size)+"pt")
-	}
+	s.set("font-size", num(size)+"pt")
 	if p.bold {
 		s.set("font-weight", "bold")
 	}
@@ -244,14 +239,18 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	if brk != "" {
 		s.set("break-before", brk)
 	}
-	// The paragraph has the font and the size of \plain, and its runs
-	// state theirs. The mark of the paragraph gives the height of its
-	// lines.
-	family, _ := c.family(c.docFont)
+	// The paragraph has the font and the size of its mark, which give the
+	// least height of its lines, as in Word, and its runs state theirs.
+	family, name := c.family(ch.font)
+	if family == "" {
+		family, _ = c.family(c.docFont)
+	}
 	s.set("font-family", family)
-	s.set("font-size", "12pt")
-	_, name := c.family(ch.font)
 	size := float64(ch.size) / 2
+	if size <= 0 {
+		size = 12
+	}
+	s.set("font-size", num(size)+"pt")
 	if p.left != 0 {
 		s.set("margin-left", pt(p.left))
 	}
@@ -615,13 +614,24 @@ func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, colum
 			if def.vmerge == 'f' {
 				vspan = rowSpan(rows, k, edges[i])
 			}
-			for _, b := range [...]struct {
+			for k, b := range [...]struct {
 				on   bool
 				side string
 			}{{def.top, "top"}, {def.right2, "right"}, {def.bottom, "bottom"}, {def.left, "left"}} {
-				if b.on {
-					cs.set("border-"+b.side, "0.5pt solid black")
+				if !b.on {
+					continue
 				}
+				// \brdrw gives the width of the line, and a line without
+				// it is half a point wide.
+				width := "0.5pt"
+				if w := def.borderWidth[k]; w > 0 {
+					width = pt(w)
+				}
+				color := c.color(def.borderColor[k])
+				if color == "" {
+					color = "black"
+				}
+				cs.set("border-"+b.side, width+" solid "+color)
 			}
 			if v := c.color(def.shading); v != "" {
 				cs.set("background-color", v)
@@ -738,14 +748,15 @@ func (c *converter) closeSection() {
 	}
 	width := min(max(sec.width, 1440), 288000)
 	height := min(max(sec.height, 1440), 288000)
-	// A header that does not fit above the text pushes the text down, by
-	// an estimate of one line.
+	// Word puts the text of a page below its header: the top of the text
+	// is the larger of the top margin and the distance of the header from
+	// the top of the paper plus the height of the header, and the same
+	// holds for the footer at the bottom. The layout makes the margins of
+	// a page larger when its header or its footer needs it.
 	top, bottom := sec.top, sec.bottom
-	if box("header", "headerr", "headerl") != "none" {
-		top = max(top, sec.header+headerLine)
-	}
-	if box("footer", "footerr", "footerl") != "none" {
-		bottom = max(bottom, sec.footer+headerLine)
+	fit := "none"
+	if len(c.running) > 0 {
+		fit = "grow"
 	}
 	margins := func(header, footer string) string {
 		return "@top-center { content: " + header + "; padding-top: " + pt(min(sec.header, sec.top)) + " } " +
@@ -762,7 +773,8 @@ func (c *converter) closeSection() {
 		size = num(min(max(float64(p.Width), 72), 14400)) + "pt " + num(min(max(float64(p.Height), 72), 14400)) + "pt"
 	}
 	c.sheet.WriteString("@page " + name + " { size: " + size +
-		"; margin: " + pt(top) + " " + pt(sec.right) + " " + pt(bottom) + " " + pt(sec.left) + "; " +
+		"; margin: " + pt(top) + " " + pt(sec.right) + " " + pt(bottom) + " " + pt(sec.left) +
+		"; -ivy-margin-box-fit: " + fit + "; " +
 		margins(box("header", "headerr"), box("footer", "footerr")) + " }\n")
 	if _, ok := c.running["headerl"]; ok {
 		c.sheet.WriteString("@page " + name + ":left { " + margins(box("headerl", "header"), box("footerl", "footer")) + " }\n")

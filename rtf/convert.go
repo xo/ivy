@@ -127,8 +127,12 @@ type cellDef struct {
 	pad                       [4]int
 	shading                   int
 	top, bottom, left, right2 bool
-	valign                    byte
-	merged                    bool
+	// borderWidth and borderColor are the width in twips, or 0, and the
+	// index of the color, or 0, of the borders of the cell: top, right,
+	// bottom and left.
+	borderWidth, borderColor [4]int
+	valign                   byte
+	merged                   bool
 	// vmerge is 'f' for the first cell of cells that merge down, \clvmgf,
 	// and 'r' for a cell that the cell above covers, \clvmrg.
 	vmerge byte

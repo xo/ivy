@@ -535,3 +535,25 @@ func TestSheetLandscapeTable(t *testing.T) {
 		t.Errorf("expected no text for the value of an empty paragraph:\n%s", doc)
 	}
 }
+
+// TestSheetScaledHeader checks that the zoom of the cells scales the area
+// and the text of the header, as LibreOffice does
+// (libreoffice/ods/landscape-a4-table.ods).
+func TestSheetScaledHeader(t *testing.T) {
+	book := fixture.ODSBook{
+		Styles: `<style:default-style style:family="table-cell"><style:text-properties fo:font-size="10pt"/></style:default-style>`,
+		AutoStyles: `<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" ` +
+			`fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="0.5in" fo:margin-right="0.5in" style:scale-to="50%"/>` +
+			`<style:header-style><style:header-footer-properties fo:min-height="0.3in" fo:margin-bottom="0.1in"/></style:header-style></style:page-layout>`,
+		MasterStyles: `<style:master-page style:name="Default" style:page-layout-name="pm1">` +
+			`<style:header><text:p>Title</text:p></style:header></style:master-page>`,
+		Body: `<table:table table:name="Results"><table:table-row><table:table-cell office:value-type="string"><text:p>Total</text:p></table:table-cell></table:table-row></table:table>`,
+	}
+	doc := sheetDocs(t, openSheet(t, fixture.ODS(book), ivy.Config{}))[0]
+	// the margin of 36 points and half the header of 21.6 points
+	for _, want := range []string{"margin:46.8pt 36pt 36pt 36pt;", `@top-center{content:"Title";`, "font-size:5pt"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the html:\n%s", want, doc)
+		}
+	}
+}

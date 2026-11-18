@@ -550,6 +550,7 @@ func (c *converter) tableWord(t token) bool {
 		r.header = true
 	case "cellx":
 		cell().right = t.param
+		r.side = 0
 	case "clcbpat":
 		cell().shading = t.param
 	case "clbrdrt":
@@ -586,8 +587,28 @@ func (c *converter) tableWord(t token) bool {
 		cell().vmerge = 'f'
 	case "clvmrg":
 		cell().vmerge = 'r'
-	case "clpadl", "clpadr", "clpadt", "clpadb":
+	case "clpadr", "clpadb":
 		cell().setPad(t.word[5], t.param)
+	case "clpadl":
+		// Word reads \clpadl as the top padding and \clpadt as the left
+		// padding, the reverse of their names. The cells of
+		// libreoffice/rtf/landscape-a4-table.rtf have \clpadt108, and Word
+		// prints them with 5.4 points of padding at the left.
+		cell().setPad('t', t.param)
+	case "clpadt":
+		cell().setPad('l', t.param)
+	case "brdrw", "brdrcf":
+		// the width or the color of the border of a cell that the border
+		// word before it starts
+		i := strings.IndexByte("trbl", r.side)
+		if i < 0 {
+			return false
+		}
+		if t.word == "brdrw" {
+			cell().borderWidth[i] = min(max(t.param, 0), 255)
+		} else {
+			cell().borderColor[i] = t.param
+		}
 	case "trpaddl", "trpaddr", "trpaddt", "trpaddb":
 		r.pad[strings.IndexByte("lrtb", t.word[6])] = min(max(t.param, 0), 14400)
 	default:

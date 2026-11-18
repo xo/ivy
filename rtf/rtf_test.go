@@ -70,7 +70,7 @@ func TestConvert(t *testing.T) {
 		`text-align: center`,
 		`<span style="display: inline-block; min-width: 18pt; text-indent: 0">`,
 		`<span class="fn"><p `,
-		`<span class="fnref"></span><span style="font-size: 10pt"> The note.</span>`,
+		`<span class="fnref"></span><span style="font-family: &quot;Arial&quot;, sans-serif; font-size: 10pt"> The note.</span>`,
 		`<col style="width: 72pt"/>`,
 		`<td style="padding-left: 5.4pt; padding-right: 5.4pt">`,
 		`border-top: 0.5pt solid black`,
@@ -92,7 +92,7 @@ func TestConvert(t *testing.T) {
 	if t.Failed() {
 		t.Log(html)
 	}
-	if want := `@page s1 { size: 360pt 288pt; margin: 54pt 36pt 36pt 36pt; @top-center { content: element(hf1); padding-top: 18pt }`; !strings.Contains(sheet, want) {
+	if want := `@page s1 { size: 360pt 288pt; margin: 54pt 36pt 36pt 36pt; -ivy-margin-box-fit: grow; @top-center { content: element(hf1); padding-top: 18pt }`; !strings.Contains(sheet, want) {
 		t.Errorf("expected the style sheet to hold %q, got:\n%s", want, sheet)
 	}
 }
@@ -142,6 +142,53 @@ func TestPages(t *testing.T) {
 	}
 	if body := inkBox(img, image.Rect(0, 54, 360, 252)); body.Empty() || body.Min.X < 35 {
 		t.Errorf("expected the text inside the margins, got: %v", body)
+	}
+}
+
+// TestTallHeader checks that a header that is taller than the top margin
+// pushes the text of the page below it, as Word does.
+func TestTallHeader(t *testing.T) {
+	// a page of 5 by 4 inches, with a top margin of 0.5 inch and a header
+	// of four lines at 0.25 inch from the top
+	buf := []byte(`{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}\paperw7200\paperh5760\margl720\margr720\margt720\margb720\headery360` +
+		`{\header\pard\fs24 one\par two\par three\par four\par}\pard\fs24 Body\par}`)
+	d, err := Open(t.Context(), bytes.NewReader(buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the header ends at about 18 + 4 * 14 = 74 points
+	header := inkBox(img, image.Rect(0, 0, 360, 80))
+	body := inkBox(img, image.Rect(0, 80, 360, 288))
+	if header.Empty() || body.Empty() || body.Min.Y < header.Max.Y || body.Min.Y > 100 {
+		t.Errorf("expected the text below the header, got the header %v and the text %v", header, body)
+	}
+}
+
+// TestCellWords checks the cells of libreoffice/rtf/landscape-a4-table.rtf:
+// \clpadt is the left padding, as Word reads it, \brdrw gives the width of
+// a border, and a paragraph takes the font size of its mark, which gives
+// the least height of its lines.
+func TestCellWords(t *testing.T) {
+	doc := `{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}` +
+		`\trowd\clbrdrt\brdrs\brdrw30\clpadft3\clpadt108\clpadfr3\clpadr108\cellx1440` +
+		`\pard\plain\intbl\f1\fs20{\fs16 small}\cell\row\pard\plain Body\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	for _, want := range []string{
+		"border-top: 1.5pt solid black",
+		"padding-left: 5.4pt; padding-right: 5.4pt",
+		`<p style="font-family: &quot;Arial&quot;, serif; font-size: 10pt; line-height: 1.15"><span style="font-family: &quot;Arial&quot;, serif; font-size: 8pt">small</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
 	}
 }
 
@@ -280,9 +327,9 @@ func TestEastAsianFont(t *testing.T) {
 		`\pard\plain\f1\dbch\af15 \u12354?\par}`
 	html, _ := convertHTML(t, []byte(doc))
 	for _, want := range []string{
-		`<span lang="zh-TW" style="font-family: &quot;Arial&quot;, &quot;PMingLiU&quot;, sans-serif">標題 text</span>`,
-		`<span style="font-family: &quot;Arial&quot;, sans-serif">Latin only</span>`,
-		`<span lang="ja" style="font-family: &quot;Arial&quot;, &quot;MS Mincho&quot;, sans-serif">あ</span>`,
+		`<span lang="zh-TW" style="font-family: &quot;Arial&quot;, &quot;PMingLiU&quot;, sans-serif; font-size: 12pt">標題 text</span>`,
+		`<span style="font-family: &quot;Arial&quot;, sans-serif; font-size: 12pt">Latin only</span>`,
+		`<span lang="ja" style="font-family: &quot;Arial&quot;, &quot;MS Mincho&quot;, sans-serif; font-size: 12pt">あ</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the xhtml:\n%s", want, html)
@@ -343,9 +390,9 @@ func TestStyleSheet(t *testing.T) {
 		`\pard\plain Plain {\cs10 under}\par}`
 	html, _ := convertHTML(t, []byte(doc))
 	for _, want := range []string{
-		`text-align: center"><span style="font-size: 16pt; font-weight: bold; font-style: italic">Title</span>`,
-		`text-align: right"><span style="font-size: 16pt; font-style: italic">Right</span>`,
-		`<span style="text-decoration-line: underline">under</span>`,
+		`text-align: center"><span style="font-family: &quot;Times New Roman&quot;, serif; font-size: 16pt; font-weight: bold; font-style: italic">Title</span>`,
+		`text-align: right"><span style="font-family: &quot;Times New Roman&quot;, serif; font-size: 16pt; font-style: italic">Right</span>`,
+		`font-size: 12pt; text-decoration-line: underline">under</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the xhtml:\n%s", want, html)

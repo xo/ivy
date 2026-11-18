@@ -119,9 +119,22 @@ var odtLineRatios = map[string]float64{
 	"dejavu sans": 1.1641, "dejavu serif": 1.1641,
 }
 
-// odtLineRatio returns the height of a single line of a font.
-func odtLineRatio(family string) float64 {
-	if r, ok := odtLineRatios[strings.ToLower(family)]; ok {
+// odtTightRatios are the heights of a single line of the fonts of
+// odtLineRatios whose external leading (the line gap of the hhea table)
+// is more than 0, without that leading.
+var odtTightRatios = map[string]float64{
+	"arial": 1.1172, "liberation sans": 1.1172, "helvetica": 1.1172,
+	"times new roman": 1.1074, "liberation serif": 1.1074, "times": 1.1074,
+}
+
+// odtLineRatio returns the height of a single line of a font. tight leaves
+// out the external leading of the font.
+func odtLineRatio(family string, tight bool) float64 {
+	family = strings.ToLower(family)
+	if r, ok := odtTightRatios[family]; ok && tight {
+		return r
+	}
+	if r, ok := odtLineRatios[family]; ok {
 		return r
 	}
 	return 1.17

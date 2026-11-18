@@ -27,8 +27,8 @@ const odtDocumentName = "index.xhtml"
 // master page after this style sheet.
 const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17 }
 body { margin: 0; counter-reset: note }
-p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2 }
-table { border-collapse: collapse; border-spacing: 0 }
+p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; margin-break: discard }
+table { border-collapse: collapse; border-spacing: 0; margin-break: discard }
 td { padding: 0; vertical-align: top; border: none }
 a { color: inherit; text-decoration: none }
 .pg::before { content: counter(page) }
@@ -97,6 +97,18 @@ type odtConverter struct {
 	pageTop float64
 	// started is set after the first block.
 	started bool
+	// part is set while the converter writes a part of a master page,
+	// whose styles are those of styles.xml.
+	part bool
+	// tight is set when the lines leave out the external leading of their
+	// fonts. See readSettings.
+	tight bool
+	// lastBottom is the spacing below the last paragraph, in points,
+	// which the margin above the next paragraph holds, and forced is set
+	// when a page break comes before the next paragraph or table. See
+	// paragraphStyle.
+	lastBottom float64
+	forced     bool
 
 	// counters holds the counters of each list style, by level.
 	counters map[string]*[10]int
@@ -131,17 +143,18 @@ func convertText(ctx context.Context, d *Document) (layout.Source, error) {
 		if err != nil {
 			c.log.Warn("odf: styles left out", "err", err)
 		} else {
-			c.st.read(doc.RootElement())
+			c.st.read(doc.RootElement(), true)
 			c.styles = doc
 		}
 	}
+	c.readSettings()
 	doc, err := c.readXML("content.xml")
 	if err != nil {
 		return layout.Source{}, err
 	}
 	c.content = doc
 	root := doc.RootElement()
-	c.st.read(root)
+	c.st.read(root, false)
 	text, ok := odtFind(root, "body", "text")
 	if !ok {
 		return layout.Source{}, fmt.Errorf("content.xml without office:text: %w", ivy.ErrFormat)
@@ -187,6 +200,35 @@ func odtFind(n roxmltree.Node, names ...string) (roxmltree.Node, bool) {
 		n = next
 	}
 	return n, true
+}
+
+// readSettings reads the settings of the document in settings.xml that
+// change the layout. LibreOffice adds the external leading of a font to the
+// height of its lines when AddExternalLeading is true, which is the
+// default. UnxForceZeroExtLeading, which old files of OpenOffice.org on
+// Unix set, leaves it out, and LibreOffice on Linux follows it.
+func (c *odtConverter) readSettings() {
+	if c.d.archive.Find("settings.xml") == nil {
+		return
+	}
+	doc, err := c.readXML("settings.xml")
+	if err != nil {
+		c.log.Warn("odf: settings left out", "err", err)
+		return
+	}
+	for n := range doc.RootElement().Descendants() {
+		if !n.IsElement() || n.TagName().Name() != "config-item" {
+			continue
+		}
+		text, _ := n.Text()
+		v := strings.TrimSpace(text)
+		switch odtAttr(n, "name") {
+		case "AddExternalLeading":
+			c.tight = c.tight || v == "false"
+		case "UnxForceZeroExtLeading":
+			c.tight = c.tight || v == "true"
+		}
+	}
 }
 
 // readXML reads and parses an entry of the package, decrypted.
@@ -235,9 +277,9 @@ func (c *odtConverter) leave() {
 func (c *odtConverter) blockMaster(n roxmltree.Node) string {
 	switch n.TagName().Name() {
 	case "p", "h":
-		return c.st.inherited("paragraph", odtAttr(n, "style-name"), func(s *odtStyle) string { return s.master })
+		return c.st.inherited("paragraph", c.styleName(n), func(s *odtStyle) string { return s.master })
 	case "table":
-		return c.st.inherited("table", odtAttr(n, "style-name"), func(s *odtStyle) string { return s.master })
+		return c.st.inherited("table", c.styleName(n), func(s *odtStyle) string { return s.master })
 	}
 	return ""
 }
@@ -348,7 +390,7 @@ func (c *odtConverter) block(n roxmltree.Node) {
 
 // section converts a text:section, with its columns.
 func (c *odtConverter) section(n roxmltree.Node) {
-	p := c.st.props("section", odtAttr(n, "style-name"))
+	p := c.st.props("section", c.styleName(n))
 	var s odtCSS
 	if cols, err := strconv.Atoi(p["column-count"]); err == nil && cols > 1 {
 		s.set("columns", strconv.Itoa(min(cols, 16)))
@@ -360,6 +402,12 @@ func (c *odtConverter) section(n roxmltree.Node) {
 		s.set("background-color", v)
 	}
 	c.w.WriteString(`<div style="` + odtAttrText(s.String()) + `">`)
+	if cols, err := strconv.Atoi(p["column-count"]); err == nil && cols > 1 {
+		// The margins of the blocks of columns do not collapse with the
+		// margins around them.
+		c.lastBottom = 0
+		defer func() { c.lastBottom = 0 }()
+	}
 	c.blocks(n)
 	c.w.WriteString("</div>")
 }
@@ -385,6 +433,7 @@ func (c *odtConverter) startSection(master string) {
 		s.set("column-gap", odtPt(pl.columnGap))
 	}
 	c.w.WriteString(`<div class="section" style="` + odtAttrText(s.String()) + `">`)
+	c.lastBottom, c.forced = 0, c.sections > 1
 	if mp != nil && mp.next != "" && mp.next != mp.name {
 		if next, ok := c.st.masters[mp.next]; ok {
 			c.pageRules("@page "+name, next, false)
@@ -495,12 +544,9 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) floa
 	return top
 }
 
-// odtPick returns a if cond is true, else b.
-func odtPick(cond bool, a, b string) string {
-	if cond {
-		return a
-	}
-	return b
+// styleName returns the name of the style of n in the styles.
+func (c *odtConverter) styleName(n roxmltree.Node) string {
+	return c.st.partName(odtAttr(n, "style-name"), c.part)
 }
 
 // headerFooter converts a part of a master page into a running element. It
@@ -514,6 +560,8 @@ func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
 	c.running[key] = name
 	c.w.WriteString(`<div style="position: running(` + name + `)">`)
 	c.nested++
+	part, last := c.part, c.lastBottom
+	c.part, c.lastBottom = true, 0
 	c.blocks(n)
 	c.nested--
 	c.w.WriteString("</div>")
@@ -522,11 +570,12 @@ func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
 	height := 0.0
 	for d := range n.Descendants() {
 		if d.IsElement() && (d.TagName().Name() == "p" || d.TagName().Name() == "h") {
-			p := c.st.props("paragraph", odtAttr(d, "style-name"))
+			p := c.st.props("paragraph", c.styleName(d))
 			family, _ := c.st.font(p)
-			height += odtFontSize(p) * odtLineRatio(family)
+			height += odtFontSize(p) * odtLineRatio(family, c.tight)
 		}
 	}
+	c.part, c.lastBottom = part, last
 	if c.runningHeights == nil {
 		c.runningHeights = map[string]float64{}
 	}

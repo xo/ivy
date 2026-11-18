@@ -17,18 +17,29 @@ import (
 type odtProps map[string]string
 
 // over returns the properties of p with the properties of top over them. A
-// font size in percent is a percent of the size below it.
+// font size in percent is a percent of the size below it: fo:font-size
+// of the size of the Western text, style:font-size-asian of the size of
+// the East Asian text and style:font-size-complex of the size of the
+// complex text.
 func (p odtProps) over(top odtProps) odtProps {
 	out := make(odtProps, len(p)+len(top))
 	maps.Copy(out, p)
 	for k, v := range top {
-		if k == "font-size" && strings.HasSuffix(v, "%") {
+		if suffix, ok := strings.CutPrefix(k, "font-size"); ok && (suffix == "" || suffix == "-asian" || suffix == "-complex") && strings.HasSuffix(v, "%") {
 			pct, err := strconv.ParseFloat(strings.TrimSuffix(v, "%"), 64)
 			if err == nil && pct > 0 {
-				v = strconv.FormatFloat(odtFontSize(p)*pct/100, 'f', 2, 64) + "pt"
+				v = strconv.FormatFloat(odtSizeOf(p, suffix)*pct/100, 'f', 2, 64) + "pt"
 			}
 		}
 		out[k] = v
+	}
+	// style:use-window-font-color gives the automatic color of the text,
+	// which replaces the color below it. A color of top replaces the
+	// automatic color below it.
+	if top["use-window-font-color"] == "true" {
+		delete(out, "color")
+	} else if _, ok := top["color"]; ok {
+		delete(out, "use-window-font-color")
 	}
 	// A font family of top replaces a font face of p: style:font-name
 	// wins only over a font family of its own style.
@@ -44,8 +55,18 @@ func (p odtProps) over(top odtProps) odtProps {
 
 // odtFontSize returns the font size of p in points, or 12.
 func odtFontSize(p odtProps) float64 {
-	if v, ok := odtLength(p["font-size"]); ok && v > 0 && v < 1638 {
+	return odtSizeOf(p, "")
+}
+
+// odtSizeOf returns the font size of p in points of the script of the
+// suffix: "" for the Western text, "-asian" or "-complex". A script
+// without a size of its own takes the size of the Western text, or 12.
+func odtSizeOf(p odtProps, suffix string) float64 {
+	if v, ok := odtLength(p["font-size"+suffix]); ok && v > 0 && v < 1638 {
 		return v
+	}
+	if suffix != "" {
+		return odtSizeOf(p, "")
 	}
 	return 12
 }
@@ -149,7 +170,16 @@ type odtStyles struct {
 	fonts       map[string]string
 	resolved    map[string]odtProps
 	maxDepth    int
+	// partAuto holds the names of the automatic styles of styles.xml. They
+	// are apart from the automatic styles of content.xml, which can have
+	// the same names, and the styles map holds them under their name with
+	// the prefix odtStylesPart.
+	partAuto map[string]bool
 }
+
+// odtStylesPart is the prefix of the name of an automatic style of
+// styles.xml in odtStyles.styles.
+const odtStylesPart = "\x00"
 
 // newODTStyles returns an empty set of styles.
 func newODTStyles(maxDepth int) *odtStyles {
@@ -162,7 +192,17 @@ func newODTStyles(maxDepth int) *odtStyles {
 		fonts:    map[string]string{},
 		resolved: map[string]odtProps{},
 		maxDepth: maxDepth,
+		partAuto: map[string]bool{},
 	}
+}
+
+// partName returns the name of the style name in odtStyles.styles for a
+// reference from styles.xml, which part is set for, or from content.xml.
+func (ts *odtStyles) partName(name string, part bool) string {
+	if part && ts.partAuto[name] {
+		return odtStylesPart + name
+	}
+	return name
 }
 
 // odtAttr returns the attribute of n with the local name name.
@@ -193,8 +233,15 @@ func odtReadProps(n roxmltree.Node) odtProps {
 		if !c.IsElement() || !strings.HasSuffix(c.TagName().Name(), "-properties") {
 			continue
 		}
+		text := c.TagName().Name() == "text-properties"
 		for a := range c.Attributes() {
-			p[a.Name()] = a.Value()
+			name := a.Name()
+			// The background of the text is apart from the background of
+			// the paragraph, the cell or the frame.
+			if text && name == "background-color" {
+				name = "text-background-color"
+			}
+			p[name] = a.Value()
 		}
 		// The columns of a section or of a page.
 		if cols, ok := odtChild(c, "columns"); ok {
@@ -254,8 +301,9 @@ func odtTabStops(n roxmltree.Node) string {
 	return b.String()
 }
 
-// read reads the styles of a document part: styles.xml or content.xml.
-func (ts *odtStyles) read(root roxmltree.Node) {
+// read reads the styles of a document part: styles.xml, which part is set
+// for, or content.xml.
+func (ts *odtStyles) read(root roxmltree.Node, part bool) {
 	for n := range root.Children() {
 		if !n.IsElement() {
 			continue
@@ -272,7 +320,7 @@ func (ts *odtStyles) read(root roxmltree.Node) {
 				}
 			}
 		case "styles", "automatic-styles":
-			ts.readStyles(n, n.TagName().Name() == "automatic-styles")
+			ts.readStyles(n, n.TagName().Name() == "automatic-styles", part)
 		case "master-styles":
 			for m := range n.Children() {
 				if !m.IsElement() || m.TagName().Name() != "master-page" {
@@ -294,8 +342,9 @@ func (ts *odtStyles) read(root roxmltree.Node) {
 }
 
 // readStyles reads the children of office:styles or office:automatic-styles,
-// which auto is set for.
-func (ts *odtStyles) readStyles(n roxmltree.Node, auto bool) {
+// which auto is set for, of styles.xml, which part is set for, or of
+// content.xml.
+func (ts *odtStyles) readStyles(n roxmltree.Node, auto, part bool) {
 	for s := range n.Children() {
 		if !s.IsElement() {
 			continue
@@ -308,6 +357,10 @@ func (ts *odtStyles) readStyles(n roxmltree.Node, auto bool) {
 				name: odtAttr(s, "name"), family: odtAttr(s, "family"), parent: odtAttr(s, "parent-style-name"),
 				listStyle: odtAttr(s, "list-style-name"), master: odtAttr(s, "master-page-name"),
 				props: odtReadProps(s), auto: auto,
+			}
+			if auto && part {
+				ts.partAuto[st.name] = true
+				st.name = odtStylesPart + st.name
 			}
 			ts.styles[st.family+"/"+st.name] = st
 		case "list-style":

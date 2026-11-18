@@ -165,7 +165,7 @@ func odtOwn(p odtProps) []odtDecl {
 	if len(lines) > 0 {
 		out = append(out, odtDecl{"text-decoration-line", strings.Join(lines, " ")})
 	}
-	if v := odtColor(p["background-color"]); v != "" {
+	if v := odtColor(p["text-background-color"]); v != "" {
 		out = append(out, odtDecl{"background-color", v})
 	}
 	if va, _ := odtTextPosition(p["text-position"]); va != "" {
@@ -254,7 +254,7 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 	for _, d := range c.inherited(p) {
 		s.set(d.name, d.value)
 	}
-	boxed := odtBox(&s, p)
+	odtBox(&s, p)
 	right, _ := odtLength(p["margin-right"])
 	if left != 0 {
 		s.set("margin-left", odtPt(left))
@@ -266,19 +266,34 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 		s.set("text-indent", odtPt(indent))
 	}
 	// LibreOffice adds the spacing below a paragraph and the spacing above
-	// the next one. The spacing above is a padding, which does not
-	// collapse with the margin of the spacing below. The spacing below is
-	// a margin, which the bottom of a page cuts, as in LibreOffice.
+	// the next one. Both are margins. The margins of CSS collapse to the
+	// larger one, so the margin above holds the two spacings, which the
+	// spacing below the paragraph before cannot pass. LibreOffice leaves
+	// out the spacing above a paragraph at the top of a page, except on the
+	// first page and after a page break, and the spacing below a paragraph
+	// at the bottom of a page. The layout discards the margins at a break
+	// (margin-break), and keeps them after a page break.
 	top, _ := odtLength(p["margin-top"])
 	bottom, _ := odtLength(p["margin-bottom"])
+	forced := c.forced
+	if v := p["break-before"]; v == "page" || v == "column" {
+		forced = true
+	}
 	if top > 0 {
-		s.set(odtPick(boxed, "margin-top", "padding-top"), odtPt(top))
+		before := c.lastBottom
+		if forced {
+			before = 0
+		}
+		s.set("margin-top", odtPt(top+max(before, 0)))
+		if forced {
+			s.set("margin-break", "keep")
+		}
 	}
 	if bottom > 0 {
 		s.set("margin-bottom", odtPt(bottom))
 	}
 	family, _ := c.st.font(p)
-	ratio := odtLineRatio(family)
+	ratio := odtLineRatio(family, c.tight)
 	size := odtFontSize(p)
 	switch lh := p["line-height"]; {
 	case strings.HasSuffix(lh, "%"):
@@ -364,7 +379,7 @@ func odtTabStopsCSS(stops string, left float64) string {
 
 // paragraph converts a text:p or a text:h element.
 func (c *odtConverter) paragraph(n roxmltree.Node) {
-	name := odtAttr(n, "style-name")
+	name := c.styleName(n)
 	p := c.st.props("paragraph", name)
 	list := c.list
 	c.list = nil
@@ -375,15 +390,22 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		item = c.outlineItem(n)
 	}
 	left, indent := c.indents(name, p, item)
+	if list != nil && list.marker == "" && list.lvl != nil && list.lvl.hasLabelPosition && !list.lvl.labelAlignment && indent < 0 {
+		// In the mode label-width-and-position, the label of a paragraph
+		// without a number, such as a list header, is empty but keeps its
+		// width, text:min-label-width, so its first line starts at the
+		// margin as its other lines.
+		indent = 0
+	}
 	if p["contextual-spacing"] == "true" {
 		// LibreOffice leaves out the spacing between two paragraphs of
 		// the same paragraph style
 		style := c.st.common("paragraph", name)
 		var zero odtProps
-		if prev, ok := odtParagraphNear(n, false); ok && c.st.common("paragraph", odtAttr(prev, "style-name")) == style {
+		if prev, ok := odtParagraphNear(n, false); ok && c.st.common("paragraph", c.styleName(prev)) == style {
 			zero = odtProps{"margin-top": "0pt"}
 		}
-		if next, ok := odtParagraphNear(n, true); ok && c.st.common("paragraph", odtAttr(next, "style-name")) == style {
+		if next, ok := odtParagraphNear(n, true); ok && c.st.common("paragraph", c.styleName(next)) == style {
 			zero = zero.over(odtProps{"margin-bottom": "0pt"})
 		}
 		if zero != nil {
@@ -401,11 +423,29 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		item.marker = ""
 	}
 	c.space = true
-	c.inlines(n, p)
+	if bg := odtColor(p["text-background-color"]); bg != "" {
+		// The background of the text of the paragraph is behind its
+		// text only, and an empty paragraph shows none.
+		var inner strings.Builder
+		w := c.w
+		c.w = &inner
+		c.inlines(n, p)
+		c.w = w
+		if inner.Len() > 0 {
+			c.w.WriteString(`<span style="background-color: ` + bg + `">` + inner.String() + "</span>")
+		}
+	} else {
+		c.inlines(n, p)
+	}
 	if c.w.Len() == mark {
 		c.w.WriteString("<br/>")
 	}
 	c.w.WriteString("</p>")
+	c.lastBottom, _ = odtLength(p["margin-bottom"])
+	c.forced = false
+	if v := p["break-after"]; v == "page" || v == "column" {
+		c.lastBottom, c.forced = 0, true
+	}
 }
 
 // odtParagraphNear returns the paragraph after the paragraph n, or before
@@ -618,13 +658,44 @@ func (c *odtConverter) text(s string, p odtProps) {
 		b.WriteRune(r)
 		c.space = false
 	}
-	if lang := odtAsianLang(p); lang != "" && strings.ContainsFunc(s, fontdb.IsCJK) {
-		c.w.WriteString(`<span lang="` + odtAttrText(lang) + `">`)
-		odtEscape(c.w, b.String(), false)
-		c.w.WriteString("</span>")
+	text := b.String()
+	if !strings.ContainsFunc(text, fontdb.IsCJK) {
+		odtEscape(c.w, text, false)
 		return
 	}
-	odtEscape(c.w, b.String(), false)
+	lang := odtAsianLang(p)
+	if lang != "" {
+		c.w.WriteString(`<span lang="` + odtAttrText(lang) + `">`)
+	}
+	// The East Asian text takes its own size, style:font-size-asian.
+	west, asian := odtFontSize(p), odtSizeOf(p, "-asian")
+	if asian == west {
+		odtEscape(c.w, text, false)
+	} else {
+		if va, scale := odtTextPosition(p["text-position"]); va != "" {
+			asian *= scale
+		}
+		for len(text) > 0 {
+			cjk := strings.IndexFunc(text, fontdb.IsCJK)
+			if cjk < 0 {
+				odtEscape(c.w, text, false)
+				break
+			}
+			odtEscape(c.w, text[:cjk], false)
+			text = text[cjk:]
+			end := strings.IndexFunc(text, func(r rune) bool { return !fontdb.IsCJK(r) })
+			if end < 0 {
+				end = len(text)
+			}
+			c.w.WriteString(`<span style="font-size: ` + odtPt(asian) + `">`)
+			odtEscape(c.w, text[:end], false)
+			c.w.WriteString("</span>")
+			text = text[end:]
+		}
+	}
+	if lang != "" {
+		c.w.WriteString("</span>")
+	}
 }
 
 // odtSafeLink reports whether a link of a document can be a link of the
@@ -652,7 +723,7 @@ func (c *odtConverter) inlines(n roxmltree.Node, p odtProps) {
 		}
 		switch e.TagName().Name() {
 		case "span":
-			sp := p.over(c.st.props("text", odtAttr(e, "style-name")))
+			sp := p.over(c.st.props("text", c.styleName(e)))
 			if sp["display"] == "none" {
 				continue
 			}
@@ -863,11 +934,12 @@ func (c *odtConverter) note(n roxmltree.Node) {
 		return
 	}
 	defer c.leave()
-	space, list := c.space, c.list
+	space, list, last := c.space, c.list, c.lastBottom
 	c.list = nil
 	c.nested++
+	c.lastBottom = 0
 	defer func() {
-		c.space, c.list = space, list
+		c.space, c.list, c.lastBottom = space, list, last
 		c.nested--
 	}()
 	if odtAttr(n, "note-class") == "endnote" {
@@ -898,7 +970,7 @@ func (c *odtConverter) table(n roxmltree.Node) {
 	list := c.list
 	c.list = nil
 	defer func() { c.list = list }()
-	p := c.st.props("table", odtAttr(n, "style-name"))
+	p := c.st.props("table", c.styleName(n))
 	var widths []float64
 	var rows []roxmltree.Node
 	var headerRows int
@@ -930,15 +1002,27 @@ func (c *odtConverter) table(n roxmltree.Node) {
 			s.set("margin-left", odtPt(v))
 		}
 	}
-	for _, side := range [...]string{"top", "bottom"} {
-		if v, ok := odtLength(p["margin-"+side]); ok && v > 0 {
-			s.set("margin-"+side, odtPt(v))
+	// The spacing above the table adds to the spacing below the
+	// paragraph before it, as for a paragraph.
+	if v, ok := odtLength(p["margin-top"]); ok && v > 0 {
+		forced := c.forced || p["break-before"] == "page"
+		if forced {
+			s.set("margin-top", odtPt(v))
+			s.set("margin-break", "keep")
+		} else {
+			s.set("margin-top", odtPt(v+c.lastBottom))
 		}
+	}
+	c.forced = false
+	bottom, ok := odtLength(p["margin-bottom"])
+	if ok && bottom > 0 {
+		s.set("margin-bottom", odtPt(bottom))
 	}
 	if v := odtColor(p["background-color"]); v != "" {
 		s.set("background-color", v)
 	}
 	c.w.WriteString(`<table style="` + odtAttrText(s.String()) + `">`)
+	defer func() { c.lastBottom = max(bottom, 0) }()
 	if total > 0 {
 		c.w.WriteString("<colgroup>")
 		for _, w := range widths {
@@ -982,7 +1066,7 @@ func (c *odtConverter) tableParts(n roxmltree.Node, widths *[]float64, rows *[]r
 			if v, err := strconv.Atoi(odtAttr(e, "number-columns-repeated")); err == nil && v > 1 {
 				repeat = v
 			}
-			w, _ := odtLength(c.st.props("table-column", odtAttr(e, "style-name"))["column-width"])
+			w, _ := odtLength(c.st.props("table-column", c.styleName(e))["column-width"])
 			for range min(repeat, maxTableColumns-len(*widths)) {
 				*widths = append(*widths, max(w, 0))
 			}
@@ -1012,7 +1096,7 @@ func (c *odtConverter) tableParts(n roxmltree.Node, widths *[]float64, rows *[]r
 
 // row converts a table:table-row.
 func (c *odtConverter) row(n roxmltree.Node) {
-	p := c.st.props("table-row", odtAttr(n, "style-name"))
+	p := c.st.props("table-row", c.styleName(n))
 	var s odtCSS
 	if v, ok := odtLength(p["row-height"]); ok && v > 0 {
 		s.set("height", odtPt(v))
@@ -1039,7 +1123,7 @@ func (c *odtConverter) row(n roxmltree.Node) {
 
 // cell converts a table:table-cell.
 func (c *odtConverter) cell(n roxmltree.Node) {
-	p := c.st.props("table-cell", odtAttr(n, "style-name"))
+	p := c.st.props("table-cell", c.styleName(n))
 	var s odtCSS
 	odtBox(&s, p)
 	switch p["vertical-align"] {
@@ -1056,6 +1140,7 @@ func (c *odtConverter) cell(n roxmltree.Node) {
 	}
 	c.w.WriteString(` style="` + odtAttrText(s.String()) + `">`)
 	mark := c.w.Len()
+	c.lastBottom = 0
 	c.blocks(n)
 	if c.w.Len() == mark {
 		c.w.WriteString("<p><br/></p>")
@@ -1074,7 +1159,7 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 	w, h = min(max(w, 0), 14400), min(max(h, 0), 14400)
 	x, _ := odtLength(odtAttr(n, "x"))
 	y, _ := odtLength(odtAttr(n, "y"))
-	g := c.st.props("graphic", odtAttr(n, "style-name"))
+	g := c.st.props("graphic", c.styleName(n))
 	c.place(n, x, y, w, g, func() { c.frameContent(n, w, h, g) })
 }
 
@@ -1170,7 +1255,7 @@ func (c *odtConverter) shape(n roxmltree.Node) {
 	}
 	id := "shape" + strconv.Itoa(len(c.charts)+1)
 	c.charts[id] = sh
-	g := c.st.props("graphic", odtAttr(n, "style-name"))
+	g := c.st.props("graphic", c.styleName(n))
 	src := odtAttrText(layout.ObjectURL(id))
 	inline := odtAttr(n, "anchor-type") == "as-char"
 	c.place(n, sh.X, sh.Y, sh.W, g, func() {
@@ -1214,12 +1299,13 @@ func (c *odtConverter) shape(n roxmltree.Node) {
 			text.set("padding-"+side, odtPt(max(v, 0)+pad))
 		}
 		c.w.WriteString(`<span style="` + odtAttrText(text.String()) + `">`)
-		list := c.list
+		list, last := c.list, c.lastBottom
 		c.list = nil
 		c.nested++
+		c.lastBottom = 0
 		c.blocks(n)
 		c.nested--
-		c.list = list
+		c.list, c.lastBottom = list, last
 		c.w.WriteString("</span></span>")
 	})
 }
@@ -1278,12 +1364,13 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			s.set("min-height", odtPt(h))
 			odtBox(&s, g)
 			c.w.WriteString(`<span style="` + odtAttrText(s.String()) + `">`)
-			list := c.list
+			list, last := c.list, c.lastBottom
 			c.list = nil
 			c.nested++
+			c.lastBottom = 0
 			c.blocks(e)
 			c.nested--
-			c.list = list
+			c.list, c.lastBottom = list, last
 			c.w.WriteString("</span>")
 			return
 		case "object", "object-ole":
