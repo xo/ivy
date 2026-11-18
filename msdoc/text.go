@@ -9,8 +9,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/xo/okage/svg"
+
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/charset"
+	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/msole"
 )
 
@@ -37,12 +40,12 @@ type run struct {
 	text string
 	chp  chp
 	// pic is the picture of the run, when the run is a picture and not
-	// text, and float the picture that floats on the page.
-	pic   *picture
-	float *floating
-	// drawn is a text box or a shape of Office Drawing, note the footnote
-	// or the endnote of a reference, and noteMark is set for the number of
-	// a note at the start of its text.
+	// text.
+	pic *picture
+	// drawn is a picture, a text box or a shape of Office Drawing that
+	// floats on the page, note the footnote or the endnote of a reference,
+	// and noteMark is set for the number of a note at the start of its
+	// text.
 	drawn    *drawn
 	note     *note
 	noteMark bool
@@ -87,6 +90,7 @@ type paragraph struct {
 // parser reads the text and the properties of a document.
 type parser struct {
 	s      *streams
+	cfg    ivy.Config
 	lim    ivy.Limits
 	pieces []piece
 	grpprl [][]byte
@@ -96,15 +100,14 @@ type parser struct {
 	fonts  []font
 	// ansi maps a byte of a compressed piece to its character.
 	ansi [256]rune
-	// pictures holds the pictures by their offset in the stream Data, and
-	// media their files.
+	// pictures holds the pictures by their offset in the stream Data,
+	// media their files, and objects the objects of the shapes of Office
+	// Drawing.
 	pictures map[uint32]*picture
 	media    []media
+	objects  map[string]layout.Object
 	// lists holds the lists of a document of Word 97, or nil.
 	lists *lists
-	// shapes holds the pictures that float on the page, by the character
-	// position of their anchor, once read.
-	shapes map[uint32]floating
 	// page is the page of the section that the conversion writes.
 	page page
 	// notes holds the ranges of the text of the footnotes and of the
@@ -118,21 +121,22 @@ type parser struct {
 	inline       bool
 	endnotes     strings.Builder
 	endnoteCount int
-	// drawing holds the shapes of Office Drawing by their ids, once read,
-	// spas their FSPAs by the characters of their anchors, and txbxs the
-	// ranges of the text of the text boxes by the ids of their shapes,
+	// drawing holds the shapes and the pictures of Office Drawing, once
+	// read, spas their FSPAs by the characters of their anchors, and txbxs
+	// the ranges of the text of the text boxes by the ids of their shapes,
 	// for the main document and for the headers.
-	drawing drawing
+	drawing *drawing
 	spas    [2]map[uint32][]byte
 	txbxs   [2]map[uint32][2]uint32
-	// store holds the entries of the store of the pictures, once read.
-	store [][]byte
+	// fontDB holds the fonts of the WordArt, once read.
+	fontDB *svg.FontDatabase
 }
 
 // newParser reads the piece table, the formatted disk pages, the styles and
 // the fonts of the document.
-func newParser(s *streams, lim ivy.Limits) (*parser, error) {
-	p := &parser{s: s, lim: lim, pictures: map[uint32]*picture{}}
+func newParser(s *streams, cfg ivy.Config) (*parser, error) {
+	lim := cfg.Limits
+	p := &parser{s: s, cfg: cfg, lim: lim, pictures: map[uint32]*picture{}}
 	if s.word6 {
 		return p, p.readWord6()
 	}
@@ -628,16 +632,6 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 			}
 			if c.r == 0x08 && cp.special {
 				// the anchor of a shape of Office Drawing
-				if c.cp < mainEnd {
-					if p.shapes == nil {
-						p.shapes = p.readShapes()
-					}
-					if f, ok := p.shapes[c.cp]; ok {
-						flushRun()
-						cur.runs = append(cur.runs, run{chp: cp, float: &f})
-						continue
-					}
-				}
 				if c.cp < mainEnd || c.cp >= hdrStart && c.cp < hdrEnd {
 					d, err := p.drawnAt(ctx, c.cp, c.cp >= mainEnd)
 					if err != nil {
@@ -669,7 +663,7 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 			}
 			if c.r == 0x01 && cp.special {
 				// a picture of the stream Data
-				if pic := p.picture(cp); pic != nil {
+				if pic := p.picture(ctx, cp); pic != nil {
 					flushRun()
 					cur.runs = append(cur.runs, run{chp: cp, pic: pic})
 				}

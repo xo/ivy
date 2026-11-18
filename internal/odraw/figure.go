@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/xo/okage"
+	"github.com/xo/okage/svg"
 
 	"github.com/xo/ivy/internal/drawingml"
 )
@@ -48,6 +49,9 @@ type Style struct {
 	Background drawingml.RGBA
 	// Log gets the faults of the geometry. It can be nil.
 	Log *slog.Logger
+	// Fonts draws the text of WordArt. A nil Fonts draws a WordArt shape
+	// as the geometry of its type.
+	Fonts *svg.FontDatabase
 }
 
 // RGB returns the opaque color of the bytes r, g and b.
@@ -268,6 +272,35 @@ func (s *Style) Shadow(c Chain) *drawingml.Shadow {
 	}
 }
 
+// Bleed returns the width that a shape with the properties c, in the box
+// r, draws outside the box: its corners when it turns, half its line,
+// its arrowheads and its shadow, and one point more. A format that clips a
+// shape to a box makes the box larger by the bleed on each side.
+func (s *Style) Bleed(c Chain, r Rect) float64 {
+	l := s.Line(c, true)
+	pad := 0.0
+	if rot := Fixed(c.Value(PropRotation, 0)); rot != 0 && !math.IsNaN(rot) {
+		w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
+		ww, hh := w, h
+		if a := math.Mod(math.Abs(rot), 180); a >= 45 && a < 135 {
+			// the shape turns with its sides swapped, as Figure draws it
+			ww, hh = h, w
+		}
+		sin, cos := math.Abs(math.Sin(rot*math.Pi/180)), math.Abs(math.Cos(rot*math.Pi/180))
+		pad = max((ww*cos+hh*sin-w)/2, (ww*sin+hh*cos-h)/2, 0)
+	}
+	if l.Visible() {
+		pad += l.Width / 2
+		if l.Head.Type != "" || l.Tail.Type != "" {
+			pad += 3*l.Width + 3
+		}
+	}
+	if sh := s.Shadow(c); sh != nil {
+		pad += max(math.Abs(sh.DX), math.Abs(sh.DY))
+	}
+	return pad + 1
+}
+
 // Hidden reports whether the properties c hide the shape.
 func Hidden(c Chain) bool {
 	return c.Flag(PropGroupBools, GroupHidden, GroupUseHidden, false)
@@ -317,6 +350,14 @@ func (s *Style) Figure(sh *Shape, c Chain, r Rect) *drawingml.Figure {
 	}
 	var filled bool
 	f.Paths, filled = s.Geometry(sh, c, w, h)
+	if WordArt(sh, c) {
+		if paths, ok := s.wordArt(c, w, h); ok {
+			f.Paths, filled = paths, true
+		} else if s.Fonts != nil {
+			// WordArt without text draws nothing
+			f.Paths = nil
+		}
+	}
 	if filled {
 		f.Fill = s.Fill(c)
 	} else {

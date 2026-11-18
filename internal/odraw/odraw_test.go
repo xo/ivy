@@ -10,6 +10,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // near reports whether a and b differ by less than 0.01.
@@ -274,5 +275,100 @@ func TestTransform(t *testing.T) {
 	var none *Transform
 	if got := none.Apply(Rect{1, 2, 3, 4}); got != (Rect{1, 2, 3, 4}) {
 		t.Errorf("expected the same rectangle, got: %+v", got)
+	}
+}
+
+// TestWordArt checks that the text of a WordArt shape draws as the
+// outlines of its glyphs, and that each line fills its share of the box.
+func TestWordArt(t *testing.T) {
+	var text []byte
+	for _, r := range "Hi\nthere" {
+		text = le.AppendUint16(text, uint16(r))
+	}
+	text = le.AppendUint16(text, 0)
+	var p Props
+	opt := le.AppendUint16(nil, PropGtextUnicode|0x8000)
+	opt = le.AppendUint32(opt, uint32(len(text)))
+	p.Read(append(opt, text...), 1)
+	p.Set(PropFillColor, 0x0000FF)
+	sh := &Shape{Type: SptTextEffectMin, Props: p}
+	c := Chain{&sh.Props}
+	if !WordArt(sh, c) {
+		t.Fatal("expected a WordArt shape")
+	}
+	s := &Style{Fonts: fontdb.Default()}
+	f := s.Figure(sh, c, Rect{Left: 10, Top: 20, Right: 210, Bottom: 120})
+	if f == nil || len(f.Paths) != 2 {
+		t.Fatalf("expected a path for each line, got: %+v", f)
+	}
+	for i, p := range f.Paths {
+		b, _ := p.Path.ComputeTightBounds()
+		top := 50 * float64(i)
+		if !near(float64(b.Left()), 0) || !near(float64(b.Right()), 200) || !near(float64(b.Top()), top) || !near(float64(b.Bottom()), top+50) {
+			t.Errorf("expected line %d to fill its box, got: %v", i, b)
+		}
+	}
+	if !f.Fill.Visible() || f.Fill.Color.R != 1 {
+		t.Errorf("expected the red fill of the shape, got: %+v", f.Fill)
+	}
+	// without fonts, the shape keeps the geometry of its type
+	if f := (&Style{}).Figure(sh, c, Rect{Right: 10, Bottom: 10}); f == nil || len(f.Paths) != 1 {
+		t.Errorf("expected the geometry without fonts, got: %+v", f)
+	}
+}
+
+// TestLineOutline checks that the glyphs of a line follow their advances,
+// and that a line leaves the outlines that the face keeps as they are.
+func TestLineOutline(t *testing.T) {
+	f := (&Style{Fonts: fontdb.Default()}).face("", false, false)
+	if f == nil {
+		t.Fatal("expected a face")
+	}
+	bounds := func(s string) float32 {
+		p, ok := lineOutline(f, s)
+		if !ok {
+			t.Fatalf("expected the outline of %q", s)
+		}
+		b, _ := p.ComputeTightBounds()
+		return b.Right()
+	}
+	one := bounds("l")
+	two := bounds("ll")
+	gid, _ := f.Glyph('l')
+	if !near(float64(two), float64(one+f.Advance(gid))) {
+		t.Errorf("expected the second glyph one advance after the first, got %g and %g", one, two)
+	}
+	if again := bounds("l"); again != one {
+		t.Errorf("expected the same outline again, got %g and %g", one, again)
+	}
+}
+
+// TestAdjust checks that the slant of a parallelogram is a share of its
+// width, 5400 of 21600 by default, as in Office Drawing.
+func TestAdjust(t *testing.T) {
+	for _, c := range []struct {
+		adjust uint32
+		set    bool
+		want   float64
+	}{{0, false, 50}, {10800, true, 100}} {
+		var p Props
+		if c.set {
+			p.Set(PropAdjust1, c.adjust)
+		}
+		sh := &Shape{Type: sptParallelogram, Props: p}
+		paths, _ := (&Style{}).Geometry(sh, Chain{&sh.Props}, 200, 100)
+		if len(paths) == 0 {
+			t.Fatal("expected the parallelogram")
+		}
+		// the top edge starts at the slant
+		x := 200.0
+		for _, pt := range paths[0].Path.Points() {
+			if pt.Y < 0.01 {
+				x = min(x, float64(pt.X))
+			}
+		}
+		if !near(x, c.want) {
+			t.Errorf("expected the slant %g for the adjust value %d, got %g", c.want, c.adjust, x)
+		}
 	}
 }

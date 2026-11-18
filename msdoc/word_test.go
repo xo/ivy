@@ -10,6 +10,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/odraw"
 )
 
 // The tests of this file come from the faults that the visual review found
@@ -30,7 +31,8 @@ func u16s(vs ...uint16) []byte {
 // FIB.
 func testParser(table, data []byte) *parser {
 	s := &streams{table: table, data: data, fib: fib{fcLcb: make([][2]uint32, 100)}}
-	return &parser{s: s, lim: ivy.Limits{}.WithDefaults(), pictures: map[uint32]*picture{}, styles: parseStyles(nil, 0)}
+	cfg := ivy.Config{Limits: ivy.Limits{}.WithDefaults()}
+	return &parser{s: s, cfg: cfg, lim: cfg.Limits, pictures: map[uint32]*picture{}, styles: parseStyles(nil, 0)}
 }
 
 // TestTableRows checks that the rows of a table have the edges, the
@@ -210,33 +212,43 @@ func TestHeaderStories(t *testing.T) {
 	}
 }
 
-// TestInlinePicture checks that the character of a picture gives the
-// picture of the stream Data, at its size (libreoffice/doc/line-numbers.doc).
-func TestInlinePicture(t *testing.T) {
-	png := fixture.PNG(4, 2, color.NRGBA{R: 255, A: 255})
-	// an OfficeArtBlipPNG of one identifier and a tag
-	blip := append(u16s(0x6E0<<4, rtBlipPNG), binary.LittleEndian.AppendUint32(nil, uint32(16+1+len(png)))...)
-	blip = append(blip, make([]byte, 17)...)
-	blip = append(blip, png...)
-	// an OfficeArtFBSE with the blip in it, in a container
-	fbse := make([]byte, 36, 36+len(blip))
-	fbse = append(fbse, blip...)
-	rec := append(u16s(0x0002, rtFBSE), binary.LittleEndian.AppendUint32(nil, uint32(len(fbse)))...)
-	rec = append(rec, fbse...)
-	container := append(u16s(0x000F, 0xF004), binary.LittleEndian.AppendUint32(nil, uint32(len(rec)))...)
-	container = append(container, rec...)
-	picf := make([]byte, picfSize, picfSize+len(container))
-	binary.LittleEndian.PutUint32(picf, uint32(picfSize+len(container)))
+// inlinePicture returns a PICFAndOfficeArtData of a picture of 2 by 1
+// inches at 50% and 100%, whose PICF the records follow.
+func inlinePicture(records ...[]byte) []byte {
+	body := bytes.Join(records, nil)
+	picf := make([]byte, picfSize, picfSize+len(body))
+	binary.LittleEndian.PutUint32(picf, uint32(picfSize+len(body)))
 	binary.LittleEndian.PutUint16(picf[4:], picfSize)
-	// 2 by 1 inches, at 50% and 100%
 	binary.LittleEndian.PutUint16(picf[28:], 2880)
 	binary.LittleEndian.PutUint16(picf[30:], 1440)
 	binary.LittleEndian.PutUint16(picf[32:], 500)
 	binary.LittleEndian.PutUint16(picf[34:], 1000)
-	picf = append(picf, container...)
-	data := append([]byte{0, 0}, picf...)
+	return append(picf, body...)
+}
+
+// TestInlinePicture checks that the character of a picture gives the
+// picture of the stream Data, at its size (libreoffice/doc/line-numbers.doc),
+// and that a picture with a crop draws as an object of internal/odraw.
+func TestInlinePicture(t *testing.T) {
+	png := fixture.PNG(4, 2, color.NRGBA{R: 255, A: 255})
+	// an OfficeArtBlipPNG of one identifier and a tag
+	blip := append(u16s(0x6E0<<4, odraw.RecBlipPNG), binary.LittleEndian.AppendUint32(nil, uint32(16+1+len(png)))...)
+	blip = append(blip, make([]byte, 17)...)
+	blip = append(blip, png...)
+	// an OfficeArtFBSE with the blip in it
+	fbse := make([]byte, 36, 36+len(blip))
+	fbse = append(fbse, blip...)
+	entry := rec(2, 0, odraw.RecFBSE, fbse)
+	// the entry in a container, and the entry after the shape of the
+	// picture, whose pib is the index of the store of the document and
+	// which shows the lower half of the picture
+	half := uint32(0x8000)
+	shape := fsp(1025, odraw.SptPictureFrame, 0xA00, []uint32{odraw.PropPib, 5, odraw.PropCropTop, half})
+	data := append([]byte{0, 0}, inlinePicture(rec(0xF, 0, odraw.RecSpContainer, entry))...)
+	at := uint32(len(data))
+	data = append(data, inlinePicture(shape, entry)...)
 	p := testParser(nil, data)
-	pic := p.picture(chp{special: true, picLocation: 2})
+	pic := p.picture(t.Context(), chp{special: true, picLocation: 2})
 	if pic == nil {
 		t.Fatal("expected a picture")
 	}
@@ -245,6 +257,19 @@ func TestInlinePicture(t *testing.T) {
 	}
 	if len(p.media) != 1 || !bytes.Equal(p.media[0].data, png) || !strings.HasSuffix(p.media[0].name, ".png") {
 		t.Errorf("expected the PNG file in the media, got %d files", len(p.media))
+	}
+	pic = p.picture(t.Context(), chp{special: true, picLocation: at})
+	if pic == nil || !strings.HasPrefix(pic.name, "ivy-object:") || pic.width != 72 || pic.pad != 2 {
+		t.Fatalf("expected the object of the picture, got %+v", pic)
+	}
+	r := renderObject(t, p, pic.name, 1)
+	if got := r.at(38, 38); got != [4]uint8{0xff, 0, 0, 0xff} {
+		t.Errorf("expected the red picture, got %v", got)
+	}
+	var b strings.Builder
+	p.writeRun(&b, run{pic: pic})
+	if want := `style="width: 76.00pt; height: 76.00pt; margin: -2.00pt"`; !strings.Contains(b.String(), want) {
+		t.Errorf("expected %q, got: %s", want, b.String())
 	}
 }
 
@@ -314,8 +339,8 @@ func TestParagraphLines(t *testing.T) {
 		t.Errorf("expected the negative indent at the left:\n%s", html)
 	}
 	b.Reset()
-	f := &floating{pic: &picture{name: "media/1.png", width: 10, height: 10}, wr: 3}
-	p.writeParagraph(&b, paragraph{runs: []run{{float: f}}})
+	f := &drawn{floating: floating{pic: &picture{name: "media/1.png", width: 10, height: 10}, wr: 3}}
+	p.writeParagraph(&b, paragraph{runs: []run{{drawn: f}}})
 	if html := b.String(); !strings.HasSuffix(html, "<br></p>\n") {
 		t.Errorf("expected the line of the mark after the picture:\n%s", html)
 	}

@@ -216,12 +216,12 @@ func (d *drawing) add(top *odraw.Shape) {
 	// The box takes the lines, the arrowheads and the shadows that go past
 	// it, since the layout clips an object to its box.
 	pad := 0.0
-	d.shapes(top, img.Width, img.Height, 0, func(sh *odraw.Shape, r odraw.Rect) {
-		pad = max(pad, d.pad(sh, r))
+	odraw.Boxes(top, odraw.Rect{Right: img.Width, Bottom: img.Height}, func(sh *odraw.Shape, r odraw.Rect) {
+		pad = max(pad, d.style.Bleed(odraw.Chain{&sh.Props}, r))
 	})
 	pad = math.Ceil(min(pad, 1000))
 	obj := &shapeObject{scene: drawingml.NewScene(d.cfg)}
-	d.shapes(top, img.Width, img.Height, pad, func(sh *odraw.Shape, r odraw.Rect) {
+	odraw.Boxes(top, odraw.Rect{Left: pad, Top: pad, Right: pad + img.Width, Bottom: pad + img.Height}, func(sh *odraw.Shape, r odraw.Rect) {
 		if len(obj.figures) < d.cfg.Limits.MaxObjects {
 			if f := d.figure(sh, r); f != nil {
 				obj.figures = append(obj.figures, f)
@@ -293,54 +293,6 @@ func pictureExt(data []byte) string {
 		return ".bmp"
 	}
 	return ""
-}
-
-// shapes calls f for each shape of top that draws, with its box in points
-// in the space of an object of w by h points, plus pad on each side.
-func (d *drawing) shapes(top *odraw.Shape, w, h, pad float64, f func(sh *odraw.Shape, r odraw.Rect)) {
-	box := odraw.Rect{Left: pad, Top: pad, Right: pad + w, Bottom: pad + h}
-	if !top.IsGroup() {
-		f(top, box)
-		return
-	}
-	anchor := func(*odraw.Shape) (odraw.Rect, bool) {
-		return box, true
-	}
-	odraw.Walk(top, nil, anchor, func(sh *odraw.Shape, t *odraw.Transform) {
-		if sh.HasAnchor {
-			f(sh, t.Apply(sh.Anchor))
-		}
-	})
-}
-
-// pad returns the width that the shape sh in the box r draws outside the
-// box: its corners when it turns, half its line, its arrowheads and its
-// shadow.
-func (d *drawing) pad(sh *odraw.Shape, r odraw.Rect) float64 {
-	c := odraw.Chain{&sh.Props}
-	l := d.style.Line(c, true)
-	pad := 0.0
-	if rot := odraw.Fixed(c.Value(odraw.PropRotation, 0)); rot != 0 && !math.IsNaN(rot) {
-		w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
-		ww, hh := w, h
-		if a := math.Mod(math.Abs(rot), 180); a >= 45 && a < 135 {
-			// the shape turns with its sides swapped, as odraw.Figure
-			// draws it
-			ww, hh = h, w
-		}
-		sin, cos := math.Abs(math.Sin(rot*math.Pi/180)), math.Abs(math.Cos(rot*math.Pi/180))
-		pad = max((ww*cos+hh*sin-w)/2, (ww*sin+hh*cos-h)/2, 0)
-	}
-	if l.Visible() {
-		pad += l.Width / 2
-		if l.Head.Type != "" || l.Tail.Type != "" {
-			pad += 3*l.Width + 3
-		}
-	}
-	if s := d.style.Shadow(c); s != nil {
-		pad += max(math.Abs(s.DX), math.Abs(s.DY))
-	}
-	return pad + 1
 }
 
 // figure returns the figure of the shape sh in the box r, with the text of

@@ -7,11 +7,20 @@ import (
 	"testing"
 
 	"github.com/xo/okage"
-	"github.com/xo/okage/svg"
+
+	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/layout"
+	"github.com/xo/ivy/internal/odraw"
 )
 
 // The tests of this file check the text boxes, the shapes of Office
 // Drawing and the notes, with streams that they build in memory.
+
+// The ids of the properties of the shapes of the tests (MS-ODRAW 2.3).
+const (
+	propLTxid = 0x0080
+	spGroup   = 0x0001
+)
 
 // rec returns a record of Office Drawing: its version and instance, its
 // type and its body.
@@ -34,12 +43,12 @@ func fsp(spid uint32, typ uint16, flags uint32, props []uint32, more ...[]byte) 
 		opt = append(opt, u16s(uint16(props[i]))...)
 		opt = binary.LittleEndian.AppendUint32(opt, props[i+1])
 	}
-	body := [][]byte{rec(2, typ, rtFSP, u32s(spid, flags))}
+	body := [][]byte{rec(2, typ, odraw.RecFSP, u32s(spid, flags))}
 	if len(props) > 0 {
-		body = append(body, rec(3, uint16(len(props)/2), rtFOPT, opt))
+		body = append(body, rec(3, uint16(len(props)/2), odraw.RecFOPT, opt))
 	}
 	body = append(body, more...)
-	return rec(0xF, 0, rtSpContainer, body...)
+	return rec(0xF, 0, odraw.RecSpContainer, body...)
 }
 
 // fspa returns an FSPA of the shape spid at the rectangle r in twips, with
@@ -58,19 +67,19 @@ func fspa(spid uint32, r [4]int32, flags uint16) []byte {
 func drawingParser(t *testing.T) *parser {
 	t.Helper()
 	const blue = 0xFFCC99
-	rect := fsp(1025, shapeTypeRect, 0xA00, []uint32{propFillColor, blue, propLineColor, 0})
-	group := rec(0xF, 0, rtSpgrContainer,
-		fsp(1026, 0, fspGroup|0x200, nil, rec(1, 0, rtFSPGR, u32s(0, 0, 200, 100))),
-		fsp(1029, shapeTypeRect, 0xA02, nil, rec(0, 0, rtChildAnchor, u32s(0, 0, 100, 100))),
-		fsp(1030, shapeTypeEllipse, 0xA02, nil, rec(0, 0, rtChildAnchor, u32s(100, 0, 200, 100))),
+	rect := fsp(1025, odraw.SptRectangle, 0xA00, []uint32{odraw.PropFillColor, blue, odraw.PropLineColor, 0})
+	group := rec(0xF, 0, odraw.RecSpgrContainer,
+		fsp(1026, 0, spGroup|0x200, nil, rec(1, 0, odraw.RecFSPGR, u32s(0, 0, 200, 100))),
+		fsp(1029, odraw.SptRectangle, 0xA02, []uint32{odraw.PropFillColor, blue}, rec(0, 0, odraw.RecChildAnchor, u32s(0, 0, 100, 100))),
+		fsp(1030, odraw.SptEllipse, 0xA02, []uint32{odraw.PropFillColor, blue}, rec(0, 0, odraw.RecChildAnchor, u32s(100, 0, 200, 100))),
 	)
 	// no line, and a red fill
-	box := fsp(1027, shapeTypeTextBox, 0xA00, []uint32{propLTxid, 0x10000, propLineBools, 1 << 19, propFillColor, 0x0000FF})
-	line := fsp(1028, shapeTypeLine, 0xA80, []uint32{propLineWidth, 12700})
-	patriarch := fsp(1024, 0, fspGroup|0x4, nil, rec(1, 0, rtFSPGR, make([]byte, 16)))
-	dg := rec(0xF, 0, rtDgContainer, rec(0, 1, 0xF008, u32s(5, 1031)),
-		rec(0xF, 0, rtSpgrContainer, patriarch, rect, group, box, line))
-	dgg := append(rec(0xF, 0, rtDggContainer, rec(0, 0, 0xF006, make([]byte, 16))), 0)
+	box := fsp(1027, odraw.SptTextBox, 0xA00, []uint32{propLTxid, 0x10000, odraw.PropLineBools, 1 << 19, odraw.PropFillColor, 0x0000FF})
+	line := fsp(1028, odraw.SptLine, 0xA80, []uint32{odraw.PropLineWidth, 12700})
+	patriarch := fsp(1024, 0, spGroup|0x4, nil, rec(1, 0, odraw.RecFSPGR, make([]byte, 16)))
+	dg := rec(0xF, 0, odraw.RecDgContainer, rec(0, 1, 0xF008, u32s(5, 1031)),
+		rec(0xF, 0, odraw.RecSpgrContainer, patriarch, rect, group, box, line))
+	dgg := append(rec(0xF, 0, odraw.RecDggContainer, rec(0, 0, 0xF006, make([]byte, 16))), 0)
 	dgg = append(dgg, dg...)
 	// the PlcSpaMom: 5 characters and 4 FSPAs, square wrapping and no
 	// wrapping at the margin
@@ -103,87 +112,111 @@ func drawingParser(t *testing.T) *parser {
 	return p
 }
 
-// TestDrawing checks that the shapes of Office Drawing draw as SVG images,
-// with their fills and lines, and the shapes of a group in the coordinates
-// of the group (poi/doc/with-art-shapes.doc).
+// rendered is an object of the layout that a test drew, at s pixels for a
+// point.
+type rendered struct {
+	pm *okage.Pixmap
+	s  float32
+}
+
+// renderObject draws the object of the layout at the URL url at s pixels
+// for a point.
+func renderObject(t *testing.T, p *parser, url string, s float32) rendered {
+	t.Helper()
+	obj := p.objects[strings.TrimPrefix(url, layout.ObjectScheme+":")]
+	if obj == nil {
+		t.Fatalf("expected the object %q", url)
+	}
+	w, h := obj.Size()
+	pm, ok := okage.NewPixmap(uint32(math.Ceil(w*float64(s))), uint32(math.Ceil(h*float64(s))))
+	if !ok {
+		t.Fatalf("no pixmap of %g by %g points", w, h)
+	}
+	rect, _ := okage.RectFromXYWH(0, 0, float32(w), float32(h))
+	if err := obj.Draw(t.Context(), display.NewOkage(pm, okage.TransformFromScale(s, s)), rect); err != nil {
+		t.Fatal(err)
+	}
+	return rendered{pm: pm, s: s}
+}
+
+// at returns the color of the pixel at x, y points, premultiplied.
+func (r rendered) at(x, y float64) [4]uint8 {
+	c, _ := r.pm.Pixel(uint32(x*float64(r.s)), uint32(y*float64(r.s)))
+	return [4]uint8{c.Red(), c.Green(), c.Blue(), c.Alpha()}
+}
+
+// dark returns the number of pixels that are dark and opaque.
+func (r rendered) dark() int {
+	n := 0
+	data := r.pm.Data()
+	for i := 0; i+4 <= len(data); i += 4 {
+		if data[i+3] > 0x80 && data[i] < 0x60 && data[i+1] < 0x60 && data[i+2] < 0x60 {
+			n++
+		}
+	}
+	return n
+}
+
+// TestDrawing checks that the shapes of Office Drawing draw as objects of
+// the layout, with their fills and lines, and the shapes of a group in the
+// coordinates of the group (poi/doc/with-art-shapes.doc).
 func TestDrawing(t *testing.T) {
 	p := drawingParser(t)
 	d, err := p.drawnAt(t.Context(), 0, false)
 	if err != nil || d == nil || d.text {
 		t.Fatalf("expected the rectangle, got %+v, %v", d, err)
 	}
-	svg := string(p.media[len(p.media)-1].data)
-	for _, want := range []string{`d="M0 0 L144 0 L144 72 L0 72 Z"`, `fill="#99ccff"`, `stroke="#000000" stroke-width="0.75"`} {
-		if !strings.Contains(svg, want) {
-			t.Errorf("expected %q in the svg:\n%s", want, svg)
-		}
+	// the line of 0.75 points takes a bleed of 2 points
+	if d.pic.pad != 2 {
+		t.Errorf("expected a bleed of 2 points, got %g", d.pic.pad)
 	}
 	var b strings.Builder
 	p.writeDrawn(&b, d)
-	if html := b.String(); !strings.Contains(html, `position: absolute; left: 71.15pt; top: -0.85pt`) || !strings.Contains(html, ".svg") {
-		t.Errorf("expected the image at the left of 72 points, got: %s", html)
+	if html := b.String(); !strings.Contains(html, `position: absolute; left: 70pt; top: -2pt`) ||
+		!strings.Contains(html, `src="ivy-object:shape1"`) || !strings.Contains(html, "width: 148pt; height: 76pt") {
+		t.Errorf("expected the object at the left of 72 points, got: %s", html)
+	}
+	r := renderObject(t, p, d.pic.name, 2)
+	if got, want := r.at(74, 38), [4]uint8{0x99, 0xcc, 0xff, 0xff}; got != want {
+		t.Errorf("expected the blue fill in the middle, got %v", got)
+	}
+	if got := r.at(2, 38); got[3] < 0x80 || got[0] > 0x40 {
+		t.Errorf("expected the black line at the left, got %v", got)
 	}
 	if d, err = p.drawnAt(t.Context(), 1, false); err != nil || d == nil {
 		t.Fatalf("expected the group, got %v", err)
 	}
-	svg = string(p.media[len(p.media)-1].data)
-	// the group of 200 by 100 units is 144 by 72 points
-	for _, want := range []string{`d="M0 0 L72 0 L72 72 L0 72 Z"`, `translate(72 0)`, `A36 36 0 1 0 72 36`} {
-		if !strings.Contains(svg, want) {
-			t.Errorf("expected %q in the svg of the group:\n%s", want, svg)
+	// the group of 200 by 100 units is 144 by 72 points: the rectangle
+	// fills its corner, and the ellipse does not
+	r = renderObject(t, p, d.pic.name, 2)
+	for _, c := range []struct {
+		x, y   float64
+		filled bool
+	}{{38, 38, true}, {110, 38, true}, {5, 5, true}, {77, 5, false}} {
+		if got := r.at(c.x, c.y); (got == [4]uint8{0x99, 0xcc, 0xff, 0xff}) != c.filled {
+			t.Errorf("expected the fill at %g, %g to be %v, got %v", c.x, c.y, c.filled, got)
 		}
 	}
-	// a solid line is a stroke of 1 point
+	// a line has no fill
 	if d, err = p.drawnAt(t.Context(), 3, false); err != nil || d == nil {
 		t.Fatalf("expected the line, got %v", err)
 	}
-	data := p.media[len(p.media)-1].data
-	svg = string(data)
-	if !strings.Contains(svg, `d="M0 0 L144 0" fill="none" stroke="#000000" stroke-width="1"`) {
-		t.Errorf("expected the stroke of the line in the svg:\n%s", svg)
+	r = renderObject(t, p, d.pic.name, 2)
+	if got := r.at(d.pic.pad+72, d.pic.pad); got[3] < 0x80 || got[0] > 0x40 {
+		t.Errorf("expected the line, got %v", got)
 	}
-	// the line covers a row of pixels at 96 dpi. At 18 dpi it is a quarter
-	// of a pixel wide on an image of one row, and draws light
-	for _, c := range []struct {
-		s    float32
-		want uint8
-	}{{96.0 / 72, 0xff}, {18.0 / 72, 0x20}} {
-		if a := darkest(t, data, c.s); a < c.want {
-			t.Errorf("expected an alpha of at least %d at the scale %g, got %d", c.want, c.s, a)
-		}
+	if got := r.at(d.pic.pad+72, d.pic.pad+1); got[3] != 0 {
+		t.Errorf("expected nothing beside the line, got %v", got)
 	}
 	if d, _ := p.drawnAt(t.Context(), 4, false); d != nil {
 		t.Errorf("expected no shape at the character 4, got %+v", d)
 	}
 }
 
-// darkest renders the SVG image data at s pixels for each point, and
-// returns the largest alpha of its pixels.
-func darkest(t *testing.T, data []byte, s float32) uint8 {
-	t.Helper()
-	tree, err := svg.FromData(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// the size of the tree is in the pixels of CSS, 96 for each inch
-	k := s * 72 / 96
-	size := tree.Size()
-	pm, ok := okage.NewPixmap(uint32(math.Ceil(float64(size.Width()*k))), uint32(math.Ceil(float64(size.Height()*k))))
-	if !ok {
-		t.Fatal("no pixmap")
-	}
-	mut := pm.AsMut()
-	svg.Render(tree, okage.TransformFromScale(k, k), &mut)
-	var a uint8
-	for i := 3; i < len(pm.Data()); i += 4 {
-		a = max(a, pm.Data()[i])
-	}
-	return a
-}
-
 // TestTextbox checks that a text box writes its text from the part of
 // the text boxes, as a block that floats before the paragraph of its
-// anchor (libreoffice/doc/landscape-a4-certificate.doc).
+// anchor, over the object of its shape
+// (libreoffice/doc/landscape-a4-certificate.doc).
 func TestTextbox(t *testing.T) {
 	p := drawingParser(t)
 	d, err := p.drawnAt(t.Context(), 2, false)
@@ -194,34 +227,41 @@ func TestTextbox(t *testing.T) {
 	var b strings.Builder
 	p.writeParagraph(&b, para)
 	html := b.String()
+	// without a line, the bleed is 1 point, which the padding holds
 	for _, want := range []string{
-		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; width: 144pt; height: 36pt;`,
-		`padding: 3.6pt 7.2pt 3.6pt 7.2pt`, `background-color: #ff0000`, "Box text</span></p>",
+		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; width: 146pt; height: 38pt;`,
+		`padding: 4.6pt 8.2pt 4.6pt 8.2pt; background: url(ivy-object:shape1) no-repeat; background-size: 100% 100%">`,
+		"Box text</span></p>",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the html:\n%s", want, html)
 		}
 	}
-	if strings.Contains(html, "border:") {
-		t.Errorf("expected a text box without a line:\n%s", html)
-	}
 	if !strings.HasPrefix(html, "<div") || !strings.Contains(html, "</div><p>After</p>") {
 		t.Errorf("expected the text box before the paragraph:\n%s", html)
+	}
+	r := renderObject(t, p, d.obj, 2)
+	if got, want := r.at(73, 19), [4]uint8{0xff, 0, 0, 0xff}; got != want {
+		t.Errorf("expected the red fill of the text box, got %v", got)
+	}
+	if n := r.dark(); n != 0 {
+		t.Errorf("expected a text box without a line, got %d dark pixels", n)
 	}
 }
 
 // TestGroupText checks that the text of a shape of a group shows on the
-// image of the group, at the place of the shape, and that a line draws the
+// object of the group, at the place of the shape, and that a line draws the
 // arrowhead at its end.
 func TestGroupText(t *testing.T) {
 	p := drawingParser(t)
-	if _, err := p.drawnAt(t.Context(), 0, false); err != nil {
-		t.Fatal(err)
+	plain, err := p.drawnAt(t.Context(), 3, false)
+	if err != nil || plain == nil {
+		t.Fatalf("expected the line, got %v", err)
 	}
 	// the ellipse of the group holds the text of the text box, and the
 	// line has a triangle at its end
 	p.txbxs[0][1030] = p.txbxs[0][1027]
-	p.drawing[1028].props[propLineEnd] = 1
+	p.drawing.shapes[1028].Props.Set(odraw.PropLineEndArrow, 1)
 	d, err := p.drawnAt(t.Context(), 1, false)
 	if err != nil || d == nil || len(d.texts) != 1 {
 		t.Fatalf("expected the group with one text, got %+v, %v", d, err)
@@ -230,9 +270,9 @@ func TestGroupText(t *testing.T) {
 	p.writeParagraph(&b, paragraph{runs: []run{{drawn: d}, {text: "After"}}})
 	html := b.String()
 	for _, want := range []string{
-		`<div style="position: absolute; left: -0.85pt; top: -0.85pt; width: 145.75pt; height: 73.75pt">`,
-		`display: block; width: 145.75pt; height: 73.75pt`,
-		`position: absolute; left: 72.88pt; top: 0.88pt; width: 72pt; height: 72pt`, "Box text</span></p>",
+		`<div style="position: absolute; left: -2pt; top: -2pt; width: 148pt; height: 76pt">`,
+		`display: block; width: 148pt; height: 76pt`,
+		`position: absolute; left: 74pt; top: 2pt; width: 72pt; height: 72pt`, "Box text</span></p>",
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the html:\n%s", want, html)
@@ -241,12 +281,50 @@ func TestGroupText(t *testing.T) {
 	if !strings.HasPrefix(html, "<div") || !strings.Contains(html, "</div><p>After</p>") {
 		t.Errorf("expected the group before the paragraph:\n%s", html)
 	}
-	if d, err = p.drawnAt(t.Context(), 3, false); err != nil || d == nil {
+	arrow, err := p.drawnAt(t.Context(), 3, false)
+	if err != nil || arrow == nil {
 		t.Fatalf("expected the line, got %v", err)
 	}
-	svg := string(p.media[len(p.media)-1].data)
-	if !strings.Contains(svg, `<path d="M144 0 L141 1.5 L141 -1.5 Z" fill="#000000"/></g>`) {
-		t.Errorf("expected the arrowhead at the end of the line:\n%s", svg)
+	if arrow.pic.pad <= plain.pic.pad {
+		t.Errorf("expected a larger bleed for the arrowhead, got %g and %g", arrow.pic.pad, plain.pic.pad)
+	}
+	if n, m := renderObject(t, p, arrow.pic.name, 4).dark(), renderObject(t, p, plain.pic.name, 4).dark(); n <= m {
+		t.Errorf("expected the arrowhead to draw more than the line, got %d and %d dark pixels", n, m)
+	}
+}
+
+// TestWordArt checks that a shape of WordArt draws the outlines of its
+// text with its fill, and not the box of the shape.
+func TestWordArt(t *testing.T) {
+	p := drawingParser(t)
+	if d, _ := p.drawnAt(t.Context(), 4, false); d != nil {
+		t.Fatalf("expected no shape at the character 4, got %+v", d)
+	}
+	var text []byte
+	for _, r := range "WordArt" {
+		text = binary.LittleEndian.AppendUint16(text, uint16(r))
+	}
+	opt := binary.LittleEndian.AppendUint16(nil, odraw.PropGtextUnicode|0x8000)
+	opt = binary.LittleEndian.AppendUint32(opt, uint32(len(text)))
+	sh := p.drawing.shapes[1025]
+	sh.Type = odraw.SptTextEffectMin
+	sh.Props.Read(append(opt, text...), 1)
+	d, err := p.drawnAt(t.Context(), 0, false)
+	if err != nil || d == nil {
+		t.Fatalf("expected the WordArt, got %+v, %v", d, err)
+	}
+	r := renderObject(t, p, d.pic.name, 1)
+	blue, all := 0, 0
+	data := r.pm.Data()
+	for i := 0; i+4 <= len(data); i += 4 {
+		all++
+		if data[i] == 0x99 && data[i+1] == 0xcc && data[i+2] == 0xff && data[i+3] == 0xff {
+			blue++
+		}
+	}
+	// the glyphs cover a part of the box of 144 by 72 points
+	if blue < 500 || blue > all*3/4 {
+		t.Errorf("expected the blue glyphs to cover a part of the box, got %d of %d pixels", blue, all)
 	}
 }
 

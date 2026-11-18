@@ -41,14 +41,26 @@ func ReadStore(dgg []byte, maxObjects int) []Entry {
 		h, _ := ReadHeader(dgg)
 		end := 8 + int(min(uint64(h.Size), uint64(len(dgg)-8)))
 		if h.Type == RecBStoreContainer {
-			for ch, e := range Children(dgg[8:end]) {
-				if len(out) >= maxObjects {
-					return out
-				}
-				out = append(out, readFBSE(ch, e))
+			out = append(out, ReadEntries(dgg[8:end], maxObjects-len(out))...)
+			if len(out) >= maxObjects {
+				return out
 			}
 		}
 		dgg = dgg[end:]
+	}
+	return out
+}
+
+// ReadEntries reads the OfficeArtFBSE records in b, maxObjects of them at
+// most, such as those after the shape of an inline picture of Word (MS-DOC
+// 2.9.134). A record of another type is an entry that is not OK.
+func ReadEntries(b []byte, maxObjects int) []Entry {
+	var out []Entry
+	for h, e := range Children(b) {
+		if len(out) >= maxObjects {
+			break
+		}
+		out = append(out, readFBSE(h, e))
 	}
 	return out
 }

@@ -109,6 +109,12 @@ func (d *Drawing) readGroup(b []byte, maxObjects, maxDepth int) *Shape {
 	return g
 }
 
+// ReadShape reads the body b of one OfficeArtSpContainer, such as the shape
+// of an inline picture of Word (MS-DOC 2.9.134).
+func ReadShape(b []byte) *Shape {
+	return (&Drawing{}).readShape(b)
+}
+
 // readShape reads an OfficeArtSpContainer.
 func (d *Drawing) readShape(b []byte) *Shape {
 	d.count++
@@ -182,6 +188,24 @@ func Walk(g *Shape, t *Transform, anchor func(sh *Shape) (Rect, bool), f func(sh
 		}
 		f(sh, t)
 	}
+}
+
+// Boxes calls f for each shape of top that is not a group, with its box in
+// the space of the box of top. top is a shape, or a group whose children
+// have their anchors in the units of the group.
+func Boxes(top *Shape, box Rect, f func(sh *Shape, r Rect)) {
+	if !top.IsGroup() {
+		f(top, box)
+		return
+	}
+	anchor := func(*Shape) (Rect, bool) {
+		return box, true
+	}
+	Walk(top, nil, anchor, func(sh *Shape, t *Transform) {
+		if sh.HasAnchor {
+			f(sh, t.Apply(sh.Anchor))
+		}
+	})
 }
 
 // Transform maps the coordinates of a group onto the coordinates of the

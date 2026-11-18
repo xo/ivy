@@ -26,31 +26,26 @@ found these faults. Each item names a file of the corpus.
    whole pixels made the seam darker, but it stretched the images and failed
    the oracle test `image_inline_2`. Source: `internal/hayro/render`,
    2026-11-18.
-2. Draw the WordArt and the preset shapes of a Word 97 document with
-   `internal/odraw`, as D51 decides. The layout places a box whose content is
-   a `display.List`, and `msdoc` gives its shapes, pictures and text boxes to
-   odraw. Move the readers of `msdoc` (`picture.go` and `shape.go`) into
-   odraw. Word does not print the comments in its PDF files, so `msdoc` leaves
-   them out. Source: `msdoc` and D51.
-3. Draw the pictures in PICT of an Excel 97 workbook. Source: `msxls`.
-4. Find the last 3 pixels of drift of `libreoffice/odt/ooo96040-2.odt` by page
+2. Draw the pictures in PICT of an Excel 97 workbook. Source: `msxls`.
+3. Find the last 3 pixels of drift of `libreoffice/odt/ooo96040-2.odt` by page
    8, which move one bullet to page 9 and give 13 pages against 12.
    LibreOffice rounds the ascent and the descent of a font to twips at each
    size, so the lines of Liberation Sans at 10 points are 11.15 points, and
    ivy takes 11.17 points from a ratio. Source: `odf`.
-5. Let the last line of a page of a word processor pass the bottom of the page
-   by up to its descent, as D52 decides, with a property of `css_ivy.go` that
-   `docx`, `msdoc`, `odf` and `rtf` turn on. On page 3 of
-   `poi/docx/illustrative-cases.docx`, three paragraphs after a table pass the
-   bottom by 1.9 points, and the descent of the last line is 2.4 points.
-   Source: `internal/layout` and D52.
-6. Find why Excel in the Windows VM of the review prints
+4. Check whether an empty last line of a table cell can pass the bottom of a
+   page by its descent in Word or LibreOffice. `-ivy-page-overflow` (D52) does
+   not apply to the lines of a table cell, a float, a flex or grid item, an
+   inline block or a column, because their parents check the bottom of the
+   page without the descent. If it can, the row check of `layout_table.go` and
+   the parents of a table must subtract the descent too. Source:
+   `internal/layout` and D52.
+5. Find why Excel in the Windows VM of the review prints
    `poi/xlsx/picture.xlsx`, `poi/xlsx/landscape-a4-tables.xlsx`,
    `poi/xls/landscape-a4-drawing.xls` and
    `poi/xls/landscape-a4-japanese.xls` on US Letter, and export them again.
    Word keeps A4. The review marks the four as faults of the reference.
    Source: `test/cmd/review/vm`.
-7. Find how Excel scales the printed height of a row for a default font
+6. Find how Excel scales the printed height of a row for a default font
    other than Calibri and Arial. With Calibri 11 and Arial 10, Excel prints a
    row at 0.968 of its height. With Century Gothic 9, Excel prints the rows
    of 21 points of `poi/xlsx/landscape-letter-budget.xlsx` at 17.52 points,
@@ -60,7 +55,7 @@ found these faults. Each item names a file of the corpus.
    Neither the digit widths nor the heights of the fonts explain the two
    ratios. A file in the VM with rows of known heights in a few default
    fonts can tell. Source: `internal/sheet`.
-8. Draw a picture that spans rows of a sheet without the marks at its sides
+7. Draw a picture that spans rows of a sheet without the marks at its sides
    where the rows cut it, as the jellyfish of `poi/xls/drawings.xls` shows.
    The inside of the picture has no seam. Each row draws its slice of the
    picture 1 point into the next row, and the smoothed pixels of the left and
@@ -68,76 +63,91 @@ found these faults. Each item names a file of the corpus.
    the edge of each row, without the sides, cuts the marks from about 46 to 17
    grey levels. It doubles the time of a page of pictures, because each slice
    draws the whole picture. Source: `internal/sheet` and the layout.
-9. Reserve the borders of a cell where a row of a table splits across pages,
+8. Reserve the borders of a cell where a row of a table splits across pages,
    as LibreOffice does. LibreOffice draws the top and the bottom border of the
    split cell on both pages. ivy collapses the borders and reserves nothing at
    the split, so on page 15 of `libreoffice/odt/landscape-a4-table.odt` ivy
    fits one line more, and the pages drift by up to 3 lines around pages 20 to
    25. Source: `internal/layout` (layout_table.go).
-10. Compute the defined name of the maximum of the data bar of E4 of
-    `poi/xlsx/landscape-letter-budget.xlsx`, SUM(tblIncome[Amount]). Excel
-    draws the bar at 62 percent, and ivy draws it full. Source: `xlsx`.
-11. Wrap the text on both sides of a picture with square wrapping that is in
+9. Compute the defined name of the maximum of the data bar of E4 of
+   `poi/xlsx/landscape-letter-budget.xlsx`, SUM(tblIncome[Amount]). Excel
+   draws the bar at 62 percent, and ivy draws it full. Source: `xlsx`.
+10. Wrap the text on both sides of a picture with square wrapping that is in
     the middle of the column, as Word does on page 6 of
     `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
     side. Source: `msdoc`.
-12. Draw the picture effects of a Word 97 document: washout, brightness,
+11. Draw the picture effects of a Word 97 document: washout, brightness,
     contrast, grayscale and black and white (pages 4 and 5 of
-    `poi/doc/floating-pictures.doc`). Source: `msdoc`.
-13. Find why the pages of `poi/doc/floating-pictures.doc` drift from page 3: a
+    `poi/doc/floating-pictures.doc`). Source: `internal/odraw`, which draws
+    the pictures of `msdoc`, `msppt` and `msxls`.
+12. Find why the pages of `poi/doc/floating-pictures.doc` drift from page 3: a
     paragraph that Word puts at the top of page 4 is on page 3 in ivy. Source:
     `msdoc` and the layout.
-14. Draw the line numbers of a section (sprmSNLnnMod) of
+13. Draw the line numbers of a section (sprmSNLnnMod) of
     `libreoffice/doc/line-numbers.doc`. Source: `msdoc`.
-15. Wrap the text around a table that floats, and place a table or a frame
+14. Wrap the text around a table that floats, and place a table or a frame
     that floats from the margin or from the page vertically. `msdoc` places a
     table that floats from its paragraph, and a frame only at the center or at
     the right. Source: `msdoc`.
-16. Find why the number of the page in the frame of the footers of
+15. Find why the number of the page in the frame of the footers of
     `libreoffice/doc/line-numbers.doc` is 13 pixels lower than in Word.
     Source: `msdoc`.
-17. Resolve a percent of `fo:font-size` or `style:font-size-asian` of a text
+16. Resolve a percent of `fo:font-size` or `style:font-size-asian` of a text
     style against the size of its paragraph. `odtStyles.props` resolves a text
     style alone, against 12 points. Source: `odf`.
-18. Leave the width of a border out of the content of a cell of `rtf`, as Word
+17. Leave the width of a border out of the content of a cell of `rtf`, as Word
     does. Word draws a border on the line between the cells and keeps the
     whole cell for the padding and the text. ivy takes half of each collapsed
     border from the cell, so the narrow cells of
     `libreoffice/rtf/landscape-a4-table.rtf` wrap "x 2" where Word does not.
     Source: `rtf`.
-19. Draw the path gradient "shape" of DrawingML, and `msofillShadeShape` of
+18. Draw the path gradient "shape" of DrawingML, and `msofillShadeShape` of
     Office Drawing, along the outline of the shape. `internal/drawingml` draws
     them along the box, as "rect". Source: `internal/drawingml`.
-20. Read the parameter of sigma in the high 16 bits of `fillShadeType`. The
+19. Read the parameter of sigma in the high 16 bits of `fillShadeType`. The
     default is 16384. ivy draws every sigma with the curve of the default.
     Source: `internal/odraw`.
-21. Find why PowerPoint ends the path gradient of the background of page 4 of
+20. Find why PowerPoint ends the path gradient of the background of page 4 of
     `poi/ppt/backgrounds.ppt` at about 0.97 of its colors at the far edge, as
     if the box were about 1 inch larger. Source: `msppt`.
-22. Draw the gradients "ellipsoid" and "square" of OpenDocument as an ellipse
+21. Draw the gradients "ellipsoid" and "square" of OpenDocument as an ellipse
     and a square. `odf/internal/drawpage` gives them the paths "circle" and
     "rect", and "circle" no longer stretches with the box. Source: `odf`.
-23. Read the thumbnail in WMF of `poi/pptx/grouping-issues.pptx`. It fails
+22. Read the thumbnail in WMF of `poi/pptx/grouping-issues.pptx`. It fails
     with "bitmap DIB pixel buffer: malformed metafile" at byte 23824. Source:
     `internal/gowemf`.
-24. Excel prints the header row of `poi/xls/landscape-a4-japanese.xls` taller
+23. Excel prints the header row of `poi/xls/landscape-a4-japanese.xls` taller
     than the height in the file, for its wrapped headers. Find whether Excel
     fits the height of a row without fUnsynced again when it opens a file.
     Source: `msxls` and `internal/sheet`.
-25. Align to the left a number whose format is text only, "@", as Excel does,
+24. Align to the left a number whose format is text only, "@", as Excel does,
     such as the postal codes of the sheet Customers1 of
     `poi/xls/conditional-formatting-samples.xls`. Source: `internal/sheet`.
-26. Find why Excel breaks some sheets of
+25. Find why Excel breaks some sheets of
     `poi/xls/conditional-formatting-samples.xls` into other pages than ivy: a
     narrow band of columns on a page of its own (pages 16, 18 and 20), and a
     page that only shows the header (page 10). Source: `internal/sheet`.
-27. Find why the pages of the receipt pictures of
+26. Find why the pages of the receipt pictures of
     `poi/xls/basic-expense-template-2011.xls`, from page 45, start higher in
     ivy than in Excel. Source: `msxls` and `internal/sheet`.
-28. Read the theme of a workbook of Excel 2007 in the record THEME of a `.xls`
+27. Read the theme of a workbook of Excel 2007 in the record THEME of a `.xls`
     file. The charts and the conditional formats of `msxls` take the theme of
     Office 2007. Compare a chart of Excel 97 without the records
     ShapePropsStream with Excel. The corpus has none. Source: `msxls`.
+28. Draw the WordArt that bends its text, such as an arch, a wave or a circle
+    (the types 136 to 175 of MS-ODRAW 2.4.24). `internal/odraw` draws the text
+    of each WordArt straight, and each line fills its share of the box. It
+    also leaves out gtextAlign, gtextSpacing, fKern, fVertical, fSmallcaps and
+    the shadow of geometry text. No file of the corpus has WordArt. Source:
+    `internal/odraw` and D51.
+29. Set `odraw.Style.Fonts` in `msppt` and `msxls`, so that their WordArt
+    draws its text. Without the fonts, a WordArt shape draws the geometry of
+    its type, a rectangle with its fill. Source: `msppt` and `msxls`.
+30. Convert the adjust values of the other preset shapes of Office Drawing to
+    those of ECMA-376. `internal/odraw` converts those of the rounded
+    rectangle, the triangle, the parallelogram and the hexagon. The other
+    presets draw with the defaults of ECMA-376, whatever adjustValue says.
+    Source: `internal/odraw`.
 
 ## Left by the charts
 
@@ -189,12 +199,8 @@ The pages of Visio came on 2026-11-17 (D30).
 2. Read an OpenDocument file of old StarOffice whose password hash has the
    fault of SHA-1 for some lengths. `odf` tries the password in UTF-8, then
    in windows-1252. Source: the encryption of phase 5.
-3. Draw the text of a metafile that names glyphs by index through the text of
-   the record, as D53 decides: the string of EMF+ DrawDriverString, or text in
-   a code page that ivy knows. A record with only indexes draws them in the
-   font of ivy, as before. The layout of EMF+ DrawString, and its vertical
-   format, are close to GDI+, not exact. Source: `internal/metafile`,
-   `internal/gowemf` and D53.
+3. The layout of EMF+ DrawString, and its vertical format, are close to GDI+,
+   not exact. Source: `internal/gowemf`.
 4. Read the headers, the footers, the lists, the pictures and the text boxes
    of a file of Word 6 or Word 95. Source: `msdoc`.
 5. Draw what `msppt` does not draw yet: the WordArt text of the gtext
@@ -219,23 +225,23 @@ The pages of Visio came on 2026-11-17 (D30).
 10. Draw the objects of OpenDocument that only an SVM picture shows, and
     `fo:clip` of the pictures of a text. No permissive decoder of SVM is
     known, and D45 lets it wait. Source: `odf`.
-11. Let the text bodies of one scene of `internal/drawingml` share a
-    `FontConfiguration`, as D54 decides, with a field of `layout.BookOptions`
-    and one mutex for the books of the scene. Each text body parses the fonts
-    again, which is about a quarter of the time of a scene of 30 text bodies.
-    Source: `internal/drawingml`, `internal/layout` and D54.
-12. Compare the custom caps and the arrows of EMF+ lines with GDI+.
+11. Compare the custom caps and the arrows of EMF+ lines with GDI+.
     `internal/gowemf` draws them with a geometry that MS-EMFPLUS does not
     define. Draw the triangle cap and the anchor caps (round, diamond and
     arrow), which gowemf reports. Source: `internal/gowemf`.
-13. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
+12. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
     in OPAQUE mode, and the source of an EMF+ DrawImage of a metafile outside
     the metafile with a tile mode. `internal/gowemf` reports them. The blend
     modes of the raster operations are exact for black and white masks only.
     Source: `internal/metafile` and `internal/gowemf`.
-14. Take a fallback face for the characters that the face of a run of a
+13. Take a fallback face for the characters that the face of a run of a
     metafile lacks, such as Arabic in Carlito. The run draws the empty glyph
     of its face. Source: `internal/metafile`.
+14. Test change 19 of `internal/gowemf` (D53) with a metafile that a program
+    wrote. The corpus of the review has no record that names its glyphs by
+    index, so only synthetic records test the text of the indexes. Add to the
+    corpus an EMF from a printer driver or from Uniscribe, and an EMF+ Dual
+    file with DrawDriverString. Source: D53.
 
 ## Left by phase 4
 

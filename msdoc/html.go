@@ -226,6 +226,7 @@ html {
   font-size: 10pt;
   tab-size: %s;
   -ivy-tab-stops: auto;
+  -ivy-page-overflow: descent;
 }
 p, h1, h2, h3, h4, h5, h6 {
   margin: 0;
@@ -400,7 +401,7 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 			if !p.inline {
 				p.writeDrawn(b, r.drawn)
 			}
-		case r.drawn != nil, r.float != nil:
+		case r.drawn != nil:
 		default:
 			empty = false
 		}
@@ -534,9 +535,6 @@ func (p *parser) tabStops(pp pap, numbered bool) string {
 // or the image of a picture.
 func (p *parser) writeRun(b *strings.Builder, r run) {
 	switch {
-	case r.float != nil:
-		p.writeFloating(b, r.float)
-		return
 	case r.drawn != nil:
 		if !r.drawn.block() {
 			p.writeDrawn(b, r.drawn)
@@ -548,7 +546,12 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	}
 	if r.pic != nil {
 		b.WriteString(`<img src="` + html.EscapeString(r.pic.name) + `" alt=""`)
-		if r.pic.width > 0 {
+		switch pad := r.pic.pad; {
+		case pad > 0:
+			// the object of a shape is larger than the shape by its bleed,
+			// which takes no room in the line
+			fmt.Fprintf(b, ` style="width: %.2fpt; height: %.2fpt; margin: -%.2fpt"`, r.pic.width+2*pad, r.pic.height+2*pad, pad)
+		case r.pic.width > 0:
 			fmt.Fprintf(b, ` style="width: %.2fpt; height: %.2fpt"`, r.pic.width, r.pic.height)
 		}
 		b.WriteString("/>")
@@ -624,15 +627,6 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	b.WriteString(">")
 	b.WriteString(text)
 	b.WriteString("</span>")
-}
-
-// writeFloating writes a picture that floats on the page.
-func (p *parser) writeFloating(b *strings.Builder, f *floating) {
-	style := p.floatStyle(f, f.pic.width, f.pic.height)
-	if f.rot != 0 {
-		style = append(style, "transform: rotate("+num(f.rot)+"deg)")
-	}
-	b.WriteString(`<img src="` + html.EscapeString(f.pic.name) + `" alt="" style="` + strings.Join(style, "; ") + `"/>`)
 }
 
 // floatStyle returns the style of an object of w by h points that floats

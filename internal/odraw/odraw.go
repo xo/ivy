@@ -4,9 +4,10 @@
 // the figures of internal/drawingml that draw them.
 //
 // The format of a file gives what Office Drawing leaves to its client: the
-// anchor of a shape on a slide or on a sheet, the colors of a scheme, and
-// the text of a shape. msppt and msxls read it, each with the anchors and
-// the text of its own format.
+// anchor of a shape on a slide, on a sheet or on a page, the colors of a
+// scheme, and the text of a shape. msppt, msxls and msdoc read it, each
+// with the anchors and the text of its own format (D51). The package draws
+// the text of WordArt itself, from the properties of geometry text.
 package odraw
 
 import (

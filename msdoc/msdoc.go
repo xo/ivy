@@ -18,17 +18,19 @@
 // and the text does not wrap around it. The lists have their numbers and
 // their bullets, with the indents and the tab stops of their levels. A
 // frame at the center or at the right of the column puts its text there.
-// The pictures of the stream Data and the pictures of Office Drawing that
-// float on the page show. The text boxes show with their text, and the
-// rectangles, the ellipses, the lines, the freeforms and the groups of
-// Office Drawing show as SVG images. A line has its arrowheads, and the
-// text of a shape of a group shows on the image of the group. A footnote
-// goes at the foot of its page, and the endnotes go at the end of the
-// document. A run gives its East Asian font after its font, and the
-// language of its East Asian text.
+// The pictures of the stream Data and the shapes of Office Drawing that
+// float on the page show. internal/odraw draws the shapes, as it draws
+// those of msppt and msxls (D51): the preset shapes, the freeforms, the
+// lines with their arrowheads, the groups, the pictures with their crops
+// and turns, and the WordArt. Each shape goes into the layout as a box
+// whose content is a display list. A text box shows its text over the box
+// of its shape, and the text of a shape of a group shows over the box of
+// the group. A footnote goes at the foot of its page, and the endnotes go
+// at the end of the document. A run gives its East Asian font after its
+// font, and the language of its East Asian text.
 //
-// The package leaves out the comments, the WordArt, and the shapes of
-// Office Drawing whose geometry it does not know. The codes of the fields
+// The package leaves out the comments. A WordArt that bends its text,
+// such as an arch, shows its text straight. The codes of the fields
 // are left out, and their results stay, but the page numbers of the fields
 // PAGE and NUMPAGES come from the layout. Of a document of Word 6 or Word
 // 95, the package leaves out the headers, the footers, the footnotes, the
@@ -135,7 +137,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 	if err != nil {
 		return nil, err
 	}
-	p, err := newParser(s, cfg.Limits)
+	p, err := newParser(s, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -263,5 +265,6 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		Documents:   []string{documentName},
 		StyleSheets: []string{d.parser.css(d.parser.firstPage(d.cfg.Paper)), d.parser.sectionCSS(secs)},
 		Title:       d.summary.Info.Title,
+		Objects:     d.parser.objects,
 	}, nil
 }

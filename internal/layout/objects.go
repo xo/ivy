@@ -1,7 +1,8 @@
 // This file is not a port. It adds two kinds of images that upstream does not
 // have, for the Office formats of phase 5 (D24): the metafiles of Windows,
 // EMF and WMF, which internal/metafile draws, and the objects of a Source,
-// which a format draws itself, such as a chart.
+// which a format draws itself, such as a chart. A ListObject is an object
+// whose content is a display list (D51).
 
 package layout
 
@@ -127,6 +128,81 @@ func (o *ObjectImage) GetIntrinsicSize(_, _ float64) IntrinsicSize {
 // concreteHeight) of the current user space.
 func (o *ObjectImage) draw(s *stream, concreteWidth, concreteHeight float64) {
 	s.drawPicture("object "+o.Name, concreteWidth, concreteHeight, o.Object.Draw)
+}
+
+// ListObject is an Object whose content is a display list (D51): a box of
+// a size in points, whose list the layout draws at the place of the box.
+// The list draws in the space of the box, from (0, 0) to its size, with
+// the y axis down. The box records the list once, on its first draw, and
+// replays it on each draw, scaled to the rectangle of the box. The page
+// that holds the box records the replay as it records the rest of the page
+// (D47). A ListObject is safe for concurrent use.
+type ListObject struct {
+	width, height float64
+	record        func(ctx context.Context, dev display.Device) error
+
+	mu   sync.Mutex
+	list *display.List
+	err  error
+}
+
+// NewListObject returns a box of width by height points, whose list record
+// draws onto dev. record must draw the same commands on each call. It
+// returns an *ivy.PartialError when it draws in part.
+func NewListObject(width, height float64, record func(ctx context.Context, dev display.Device) error) *ListObject {
+	return &ListObject{width: width, height: height, record: record}
+}
+
+// Size satisfies the Object interface.
+func (o *ListObject) Size() (float64, float64) {
+	return o.width, o.height
+}
+
+// Draw satisfies the Object interface. It replays the list, scaled from the
+// box onto rect.
+func (o *ListObject) Draw(ctx context.Context, dev display.Device, rect okage.Rect) error {
+	if !(o.width > 0) || !(o.height > 0) {
+		return nil
+	}
+	list, err := o.recorded(ctx)
+	if list == nil {
+		return err
+	}
+	m := okage.TransformFromRow(float32(float64(rect.Width())/o.width), 0, 0, float32(float64(rect.Height())/o.height), rect.X(), rect.Y())
+	if !m.IsFinite() {
+		return err
+	}
+	dev.Save()
+	defer dev.Restore()
+	dev.Concat(m)
+	list.Replay(dev)
+	return err
+}
+
+// recorded returns the list of the box, and records it on the first call.
+// A recording that ctx stops is not kept, so that a later draw records the
+// list again.
+func (o *ListObject) recorded(ctx context.Context) (list *display.List, err error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.list != nil {
+		return o.list, o.err
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			list, err = nil, &ivy.PartialError{Err: fmt.Errorf("recording object: panic: %v: %w", r, ivy.ErrFormat)}
+		}
+	}()
+	list = display.NewRecording()
+	err = o.record(ctx, list)
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("recording object: %w", ctx.Err())
+	}
+	if _, ok := errors.AsType[*ivy.PartialError](err); err != nil && !ok {
+		err = &ivy.PartialError{Err: err}
+	}
+	o.list, o.err = list, err
+	return list, err
 }
 
 // drawPicture records the drawing of a picture of vectors in the rectangle

@@ -91,6 +91,37 @@ func TestObjectImage(t *testing.T) {
 	}
 }
 
+// TestListObject checks that a box whose content is a display list records
+// the list once, and draws it scaled to each place of the box (D51).
+func TestListObject(t *testing.T) {
+	var records atomic.Int32
+	obj := NewListObject(30, 15, func(_ context.Context, dev display.Device) error {
+		records.Add(1)
+		box, _ := okage.RectFromXYWH(0, 0, 30, 15)
+		dev.FillPath(okage.PathFromRect(box), okage.FillRuleWinding, okage.SolidColor(okage.ColorFromRGBA8(255, 0, 0, 255)))
+		return nil
+	})
+	src := Source{
+		FS: fstest.MapFS{"a.html": &fstest.MapFile{Data: []byte(
+			`<p><img src="` + ObjectURL("shape1") + `"/></p>` +
+				`<p><img src="` + ObjectURL("shape1") + `" style="width: 80px; height: 20px"/></p>`,
+		)}},
+		Documents:   []string{"a.html"},
+		StyleSheets: []string{`@page { size: 200px 200px; margin: 0 } body, p { margin: 0 } p { line-height: 0 }`},
+		Objects:     map[string]Object{"shape1": obj},
+	}
+	img := renderSource(t, src)
+	if n := records.Load(); n != 1 {
+		t.Errorf("expected 1 recording of the list, got: %d", n)
+	}
+	// The first box is 30 by 15 points, which is 40 by 20 CSS pixels, and
+	// the second is 80 by 20 CSS pixels below it.
+	box := colorBox(img, color.NRGBA{R: 255, A: 255})
+	if want := image.Rect(0, 0, 80, 40); !near(box, want, 2) {
+		t.Errorf("expected the red of the lists in %v, got: %v", want, box)
+	}
+}
+
 func TestObjectImageNoSize(t *testing.T) {
 	img := (&ObjectImage{Object: &boxObject{}}).GetIntrinsicSize(1, 16)
 	if img.HasWidth || img.HasHeight || img.HasRatio {

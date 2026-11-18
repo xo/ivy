@@ -87,7 +87,7 @@ one of its functions.
 | none | | `tree.go` | 342 | The document tree and its adapter for `cssselect2` |
 | none | | `source.go` | 37 | `Source`, the input of a format |
 | none | | `book.go` | 503 | `Book`, the pages of a whole `Source`. See "The book" |
-| none | | `objects.go` | 156 | The metafiles of Windows and the objects of a `Source`. See "The metafiles and the objects" |
+| none | | `objects.go` | 232 | The metafiles of Windows, the objects of a `Source`, and the boxes of display lists. See "The metafiles and the objects" |
 | none | | `css_ivy.go`, `layout_tabs.go`, `layout_page_fit.go`, `text_autospace.go` | 621 | The properties that ivy adds for the word processors. See "The properties of ivy" |
 | `tests/testing_utils.py` | | `testing_utils_test.go` | 641 | Ported, without `tree_position` |
 | `tests/test_boxes.py` | 1280 | `formatting_structure_build_test.go` | 649 | Ported. The tests that need the layout are in `layout_page_test.go` |
@@ -378,6 +378,16 @@ the device, whose y axis points down. The drawing records a call to
 `Draw`, and the stream makes the call when it replays its commands. An
 error of `Draw` is logged, and the page is drawn in part. The package
 `internal/chart` gives its charts as objects.
+
+`ListObject` is an `Object` whose content is a `display.List` (D51). It
+has a size in points, and a function that draws the list in the space of
+the box. The box records the list once, on its first draw, and replays it
+scaled to the rectangle of the box on each draw. A recording that the
+context stops is not kept. The page records the replay as it records the
+rest of the page (D47). `msdoc` gives each shape of Office Drawing that
+`internal/odraw` draws as such a box: in an `<img>` element, or as the
+`background-image` of the block of a text box. The images of the styles
+load an object through `url()` as the images of the elements do.
 
 ## The layout
 
@@ -673,6 +683,23 @@ style sheet names each one with the prefix `-ivy-`, such as
    follows, and before such a character after one. The space is added in
    one text box only. The property is inherited. It is the space of
    `w:autoSpaceDE` and `w:autoSpaceDN` of Word.
+5. `-ivy-page-overflow` is `none`, the initial value, or `descent`. With
+   `descent`, the last line of a page can pass the bottom of the page by
+   up to its descent, and stays on the page, when the line has no text
+   (D52). A line has no text when its text, and the text of its inline
+   boxes, is only spaces, as the line of an empty paragraph or of a
+   paragraph of spaces. A line with text goes to the next page, as in
+   upstream. Word keeps an empty line on the page in this way, and moves
+   a line with text. The descent is the distance from the baseline of the
+   line to the lowest bottom of its fonts, and at most to the bottom of
+   the line. The fonts are the font of the block and the fonts of the
+   text of the line. A block that ends with such a line passes the bottom
+   of the page by the same amount, and its parent accepts it. The rule
+   holds only for the root box and for its in-flow block descendants.
+   The lines of a table cell, a float, a flex item, a grid item, an inline
+   block or a column keep the rule of upstream, because their parents
+   check the bottom of the page without the descent. The property is
+   inherited. `docx`, `msdoc`, `odf` and `rtf` turn it on.
 
 ## The hooks for the later stages
 
