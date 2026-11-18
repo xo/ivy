@@ -52,7 +52,12 @@ type OkageDevice struct {
 
 	images sync.Map // image.Image -> *okage.Pixmap
 	masks  map[maskKey]*okage.Mask
-	free   []*okage.Pixmap
+	// free holds the layers that a group can use again. Each is
+	// transparent.
+	free []*okage.Pixmap
+	// scratch is the mask that EndGroup composes from the soft mask and
+	// the clip of a group.
+	scratch *okage.Mask
 	// aliased draws the paths and the clips without antialiasing.
 	aliased bool
 }
@@ -61,13 +66,19 @@ type OkageDevice struct {
 type state struct {
 	t    okage.Transform
 	clip *okage.Mask
+	// bounds holds every pixel that clip does not hide: the bounds of the
+	// target when clip is nil. A group draws and composites only inside
+	// the bounds of its clip.
+	bounds image.Rectangle
 }
 
 // group is a group that BeginGroup started.
 type group struct {
 	parent *okage.Pixmap
 	g      Group
+	// mask is the soft mask of the group, of the size of bounds.
 	mask   *okage.Mask
+	bounds image.Rectangle
 	depth  int
 }
 
@@ -75,6 +86,7 @@ type group struct {
 type maskKey struct {
 	key any
 	t   okage.Transform
+	r   image.Rectangle
 }
 
 // The interfaces that an OkageDevice implements.
@@ -86,7 +98,8 @@ var (
 // NewOkage returns a device that draws onto dst, with the transform t from
 // the user space to the pixels of dst.
 func NewOkage(dst *okage.Pixmap, t okage.Transform) *OkageDevice {
-	return &OkageDevice{dst: dst, state: state{t: t}}
+	r := image.Rect(0, 0, int(dst.Width()), int(dst.Height()))
+	return &OkageDevice{dst: dst, state: state{t: t, bounds: r}}
 }
 
 // Save satisfies the Device interface.
@@ -95,9 +108,13 @@ func (d *OkageDevice) Save() {
 }
 
 // Restore satisfies the Device interface. A Restore without a Save does
-// nothing.
+// nothing, and the content of a group cannot restore a state from before
+// the group.
 func (d *OkageDevice) Restore() {
 	if len(d.stack) == 0 {
+		return
+	}
+	if n := len(d.groups); n > 0 && len(d.stack) <= d.groups[n-1].depth+1 {
 		return
 	}
 	d.state = d.stack[len(d.stack)-1]
@@ -149,6 +166,7 @@ func (d *OkageDevice) ClipPath(p *okage.Path, rule okage.FillRule) {
 	if !ok {
 		return
 	}
+	d.state.bounds = d.state.bounds.Intersect(d.pathBounds(p))
 	if p != nil {
 		if d.state.clip == nil {
 			clip.FillPath(p, rule, !d.aliased, d.state.t)
@@ -158,6 +176,26 @@ func (d *OkageDevice) ClipPath(p *okage.Path, rule okage.FillRule) {
 		}
 	}
 	d.state.clip = clip
+}
+
+// pathBounds returns the pixels that a fill of p can cover under the
+// transform of the state, with a margin of a pixel for the antialiasing. An
+// empty path covers no pixel.
+func (d *OkageDevice) pathBounds(p *okage.Path) image.Rectangle {
+	if p == nil {
+		return image.Rectangle{}
+	}
+	b, ok := p.Bounds().Transform(d.state.t)
+	if !ok {
+		return d.state.bounds
+	}
+	l, t := float64(b.Left()), float64(b.Top())
+	r, bt := float64(b.Right()), float64(b.Bottom())
+	const limit = 1 << 30
+	if !(l > -limit && t > -limit && r < limit && bt < limit) {
+		return d.state.bounds
+	}
+	return image.Rect(int(math.Floor(l))-1, int(math.Floor(t))-1, int(math.Ceil(r))+1, int(math.Ceil(bt))+1)
 }
 
 // pixmap returns the pixmap of img. The device keeps the pixmap of each
@@ -402,11 +440,12 @@ func div255(v uint32) uint32 {
 }
 
 // layer returns a transparent pixmap of the size of the target, or nil.
+// EndGroup clears the part of a layer that a group drew before it frees
+// the layer.
 func (d *OkageDevice) layer() *okage.Pixmap {
 	if n := len(d.free); n > 0 {
 		layer := d.free[n-1]
 		d.free = d.free[:n-1]
-		clear(layer.DataMut())
 		return layer
 	}
 	layer, ok := okage.NewPixmap(d.dst.Width(), d.dst.Height())
@@ -422,9 +461,9 @@ func (d *OkageDevice) layer() *okage.Pixmap {
 // which starts transparent: the device draws every group as isolated and
 // as not knockout.
 func (d *OkageDevice) BeginGroup(g Group) {
-	gr := group{parent: d.dst, g: g, depth: len(d.stack)}
-	if g.Mask != nil {
-		gr.mask = d.softMask(g.Mask)
+	gr := group{parent: d.dst, g: g, bounds: d.state.bounds, depth: len(d.stack)}
+	if g.Mask != nil && !gr.bounds.Empty() {
+		gr.mask = d.softMask(g.Mask, gr.bounds)
 	}
 	layer := d.dst
 	if g.Isolated || g.Opacity < 1 || blendMode(g.Blend) != okage.BlendModeSourceOver || g.Mask != nil {
@@ -437,20 +476,22 @@ func (d *OkageDevice) BeginGroup(g Group) {
 	d.dst = layer
 }
 
-// softMask draws the content of m into a mask of the size of the target,
-// or returns the mask that it drew for the same key and transform.
-func (d *OkageDevice) softMask(m *Mask) *okage.Mask {
-	key := maskKey{key: m.Key, t: d.state.t}
+// softMask draws the part of the content of m inside r into a mask of the
+// size of r, or returns the mask that it drew for the same key, transform
+// and r.
+func (d *OkageDevice) softMask(m *Mask, r image.Rectangle) *okage.Mask {
+	key := maskKey{key: m.Key, t: d.state.t, r: r}
 	if m.Key != nil {
 		if mask, ok := d.masks[key]; ok {
 			return mask
 		}
 	}
-	pix, ok := okage.NewPixmap(d.dst.Width(), d.dst.Height())
+	pix, ok := okage.NewPixmap(uint32(r.Dx()), uint32(r.Dy()))
 	if !ok {
 		return nil
 	}
-	child := NewOkage(pix, d.state.t)
+	t := okage.TransformFromTranslate(float32(-r.Min.X), float32(-r.Min.Y)).PreConcat(d.state.t)
+	child := NewOkage(pix, t)
 	child.aliased = d.aliased
 	backdrop := m.Backdrop.Alpha() > 0 && m.Backdrop != okage.ColorBlack
 	if backdrop {
@@ -479,6 +520,8 @@ func (d *OkageDevice) softMask(m *Mask) *okage.Mask {
 // EndGroup satisfies the Device interface. It restores the state of its
 // BeginGroup, and draws the layer onto the parent with the opacity, the
 // blend mode and the soft mask of the group, inside the clip of the parent.
+// It draws only inside the bounds of the clip: outside them the layer is
+// transparent and the clip hides it, so the parent does not change.
 func (d *OkageDevice) EndGroup() {
 	if len(d.groups) == 0 {
 		return
@@ -494,15 +537,66 @@ func (d *OkageDevice) EndGroup() {
 	if layer == g.parent {
 		return
 	}
-	pp := okage.DefaultPixmapPaint()
-	pp.Opacity = g.g.Opacity
-	pp.BlendMode = blendMode(g.g.Blend)
-	mask := d.state.clip
-	if g.mask != nil {
-		mask = intersect(g.mask.Clone(), d.state.clip)
+	r := g.bounds
+	if rect, ok := okage.RectFromLTRB(float32(r.Min.X), float32(r.Min.Y), float32(r.Max.X), float32(r.Max.Y)); ok {
+		mask := d.state.clip
+		if g.mask != nil {
+			mask = d.groupMask(g.mask, r)
+		}
+		// The paint of DrawPixmap of okage, which fills the whole layer.
+		pt := okage.Paint{
+			Shader:     okage.NewPattern(layer.AsRef(), okage.SpreadModePad, okage.FilterQualityNearest, g.g.Opacity, okage.IdentityTransform()),
+			BlendMode:  blendMode(g.g.Blend),
+			Colorspace: okage.ColorSpaceLinear,
+		}
+		d.dst.FillRect(rect, &pt, okage.IdentityTransform(), mask)
 	}
-	d.dst.DrawPixmap(0, 0, layer.AsRef(), &pp, okage.IdentityTransform(), mask)
 	if len(d.free) < maxLayers {
+		clearRect(layer, r)
 		d.free = append(d.free, layer)
+	}
+}
+
+// groupMask returns the mask of the target that is the soft mask m of the
+// bounds r, times the clip of the state. It is right only inside r.
+func (d *OkageDevice) groupMask(m *okage.Mask, r image.Rectangle) *okage.Mask {
+	if d.scratch == nil {
+		s, ok := okage.NewMask(d.dst.Width(), d.dst.Height())
+		if !ok {
+			return d.state.clip
+		}
+		d.scratch = s
+	}
+	w, rw := int(d.dst.Width()), r.Dx()
+	dst, src := d.scratch.DataMut(), m.Data()
+	var clip []byte
+	if d.state.clip != nil {
+		clip = d.state.clip.Data()
+	}
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		row := dst[y*w+r.Min.X : y*w+r.Max.X]
+		mrow := src[(y-r.Min.Y)*rw : (y-r.Min.Y+1)*rw]
+		if clip == nil {
+			copy(row, mrow)
+			continue
+		}
+		crow := clip[y*w+r.Min.X : y*w+r.Max.X]
+		for i := range row {
+			row[i] = uint8((uint32(mrow[i])*uint32(crow[i]) + 127) / 255)
+		}
+	}
+	return d.scratch
+}
+
+// clearRect makes the pixels of p inside r transparent.
+func clearRect(p *okage.Pixmap, r image.Rectangle) {
+	r = r.Intersect(image.Rect(0, 0, int(p.Width()), int(p.Height())))
+	if r.Empty() {
+		return
+	}
+	w := int(p.Width()) * 4
+	data := p.DataMut()
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		clear(data[y*w+r.Min.X*4 : y*w+r.Max.X*4])
 	}
 }

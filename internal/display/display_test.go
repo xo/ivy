@@ -277,6 +277,45 @@ func TestSoftMask(t *testing.T) {
 	}
 }
 
+func TestGroupBounds(t *testing.T) {
+	white := &Mask{
+		Type: okage.MaskTypeLuminance,
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 40, 10), okage.FillRuleWinding, solid(255, 255, 255, 255))
+		},
+	}
+	dst, d := newDevice(t, 40, 10, okage.IdentityTransform())
+	// the first group draws red over the whole target inside a clip of the
+	// left part. The second group reuses the layer of the first, and draws
+	// blue inside a clip of the right part. A Restore too many inside a
+	// group does not drop the clip of the group.
+	for _, g := range []struct {
+		x     float32
+		color okage.Shader
+	}{{0, solid(255, 0, 0, 255)}, {30, solid(0, 0, 255, 255)}} {
+		d.Save()
+		d.ClipPath(rect(g.x, 0, 10, 10), okage.FillRuleWinding)
+		d.BeginGroup(Group{Opacity: 1, Mask: white})
+		d.Restore()
+		d.Restore()
+		d.FillPath(rect(0, 0, 40, 10), okage.FillRuleWinding, g.color)
+		d.EndGroup()
+		d.Restore()
+	}
+	for _, tt := range []struct {
+		x    int
+		want color.NRGBA
+	}{
+		{5, color.NRGBA{255, 0, 0, 255}},
+		{20, color.NRGBA{}},
+		{35, color.NRGBA{0, 0, 255, 255}},
+	} {
+		if c := at(dst, tt.x, 5); c != tt.want {
+			t.Errorf("expected %v at x %d, got: %v", tt.want, tt.x, c)
+		}
+	}
+}
+
 func TestFillTextCoverage(t *testing.T) {
 	// the left edge of a rectangle at 16 positions inside the pixel 1: the
 	// finer coverage of the pixel is near its area, in steps finer than a
