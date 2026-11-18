@@ -52,6 +52,10 @@ type OkageDevice struct {
 	regions [4][]byte
 	// aliased draws the paths and the clips without antialiasing.
 	aliased bool
+	// whole composites each group over the bounds of its clip, as the
+	// device did before it kept the drawn pixels of a group. The tests set
+	// it to compare the pixels of the two.
+	whole bool
 }
 
 // state is the part of the device that Save pushes.
@@ -80,7 +84,12 @@ type group struct {
 	// mask is the soft mask of the group, of the size of bounds.
 	mask   *okage.Mask
 	bounds image.Rectangle
-	depth  int
+	// drawn holds each pixel of the layer that the group alone can cover:
+	// the union of the bounds of the objects and of the nested groups that
+	// drew onto the layer. Outside drawn, the group alone is transparent,
+	// and EndGroup does not composite it there.
+	drawn image.Rectangle
+	depth int
 }
 
 // maskKey identifies a soft mask that a device drew.
@@ -155,15 +164,20 @@ func (d *OkageDevice) paint(shader okage.Shader, shape bool) okage.Paint {
 // group, bounds gives the pixels that the object can cover, and the object
 // replaces the earlier objects of the group there. An object whose bounds
 // are outside the bounds of the clip draws nothing, and draw skips it, so
-// that a band of a page pays only for the objects of the band.
+// that a band of a page pays only for the objects of the band. draw adds the
+// bounds of the object inside the clip to the drawn pixels of the group.
 func (d *OkageDevice) draw(bounds func() image.Rectangle, paint func(dst *okage.Pixmap, shape bool)) {
 	b := bounds()
 	if !b.Overlaps(d.state.bounds) {
 		return
 	}
-	if i := d.top(); i >= 0 && d.groups[i].g.Knockout {
-		d.knockout(&d.groups[i], b, paint)
-		return
+	if i := d.top(); i >= 0 {
+		g := &d.groups[i]
+		g.drawn = g.drawn.Union(b.Intersect(d.state.bounds))
+		if g.g.Knockout {
+			d.knockout(g, b, paint)
+			return
+		}
 	}
 	paint(d.dst, false)
 	if d.alpha != nil {
@@ -643,9 +657,16 @@ func (d *OkageDevice) softMask(m *Mask, r image.Rectangle) *okage.Mask {
 // BeginGroup, and draws the layer onto the parent with the opacity, the
 // blend mode and the soft mask of the group, inside the clip of the parent.
 // For a group that got its backdrop, it first removes the backdrop from the
-// layer. It draws only inside the bounds of the clip: outside them the
-// layer is transparent and the clip hides it, so the parent does not
-// change.
+// layer.
+//
+// EndGroup draws only inside the drawn pixels of the group, when the blend
+// mode of the group keeps the parent under a transparent pixel. Outside
+// them, the group alone is transparent: the layer is transparent, or it
+// holds the backdrop and the alpha of the group alone is 0, so that
+// RemoveBackdrop of okage makes it transparent. So the parent does not
+// change there. For another blend mode, such as DestinationIn, EndGroup
+// draws inside the bounds of the clip, and outside them the clip hides the
+// layer.
 func (d *OkageDevice) EndGroup() {
 	if len(d.groups) == 0 {
 		return
@@ -664,18 +685,25 @@ func (d *OkageDevice) EndGroup() {
 	if i >= 0 {
 		d.alpha = d.groups[i].alpha
 	}
-	r := g.bounds
+	// r holds the pixels that the group composites, and cleared the pixels
+	// of the layer that are not transparent. A layer that holds the
+	// backdrop holds it inside the bounds.
+	blend := blendMode(g.g.Blend)
+	r, cleared := g.drawn.Intersect(g.bounds), g.drawn
+	if d.whole || !keepsParent(blend) {
+		r = g.bounds
+	}
 	if g.alpha != nil {
+		cleared = g.bounds
 		d.removeBackdrop(g.layer, g.parent, g.alpha, r)
 	}
-	blend := blendMode(g.g.Blend)
 	if blend != okage.BlendModeSourceOver && i >= 0 {
 		d.blend(i)
 	}
 	if rect, ok := okage.RectFromLTRB(float32(r.Min.X), float32(r.Min.Y), float32(r.Max.X), float32(r.Max.Y)); ok {
 		mask := d.state.clip
 		if g.mask != nil {
-			mask = d.groupMask(g.mask, r)
+			mask = d.groupMask(g.mask, g.bounds, r)
 		}
 		d.draw(func() image.Rectangle { return r }, func(dst *okage.Pixmap, shape bool) {
 			// The paint of DrawPixmap of okage, which fills the whole
@@ -693,8 +721,34 @@ func (d *OkageDevice) EndGroup() {
 			dst.FillRect(rect, &pt, okage.IdentityTransform(), m)
 		})
 	}
-	d.release(g.layer, r)
-	d.release(g.alpha, r)
+	d.release(g.layer, cleared.Union(r))
+	d.release(g.alpha, cleared.Union(r))
+}
+
+// keepsParent reports whether a transparent pixel drawn with the blend mode
+// leaves the pixel under it the same, in the pipelines of okage. In each of
+// these modes, a source of 0 with an alpha of 0 gives the destination: for
+// example multiply gives s*(1-da) + d*(1-sa) + s*d = d, color burn and color
+// dodge take their branch for s = 0 or s = sa, which gives d, and hue,
+// saturation, color and luminosity set the saturation and the luminosity of
+// a color of 0 to 0. The modes that it leaves out, such as Source,
+// SourceIn, DestinationIn, SourceOut, DestinationAtop and Modulate, clear the
+// destination there.
+func keepsParent(b okage.BlendMode) bool {
+	switch b {
+	case okage.BlendModeDestination, okage.BlendModeSourceOver,
+		okage.BlendModeDestinationOver, okage.BlendModeDestinationOut,
+		okage.BlendModeSourceAtop, okage.BlendModeXor, okage.BlendModePlus,
+		okage.BlendModeScreen, okage.BlendModeOverlay, okage.BlendModeDarken,
+		okage.BlendModeLighten, okage.BlendModeColorDodge,
+		okage.BlendModeColorBurn, okage.BlendModeHardLight,
+		okage.BlendModeSoftLight, okage.BlendModeDifference,
+		okage.BlendModeExclusion, okage.BlendModeMultiply, okage.BlendModeHue,
+		okage.BlendModeSaturation, okage.BlendModeColor,
+		okage.BlendModeLuminosity:
+		return true
+	}
+	return false
 }
 
 // knockout draws one object of the knockout group g, whose layer is the
@@ -797,8 +851,9 @@ func (d *OkageDevice) removeBackdrop(layer, backdrop, alpha *okage.Pixmap, r ima
 }
 
 // groupMask returns the mask of the target that is the soft mask m of the
-// bounds r, times the clip of the state. It is right only inside r.
-func (d *OkageDevice) groupMask(m *okage.Mask, r image.Rectangle) *okage.Mask {
+// bounds mb, times the clip of the state. It is right only inside r, which
+// must be inside mb.
+func (d *OkageDevice) groupMask(m *okage.Mask, mb, r image.Rectangle) *okage.Mask {
 	if d.scratch == nil {
 		s, ok := okage.NewMask(d.dst.Width(), d.dst.Height())
 		if !ok {
@@ -806,7 +861,7 @@ func (d *OkageDevice) groupMask(m *okage.Mask, r image.Rectangle) *okage.Mask {
 		}
 		d.scratch = s
 	}
-	w, rw := int(d.dst.Width()), r.Dx()
+	w, mw := int(d.dst.Width()), mb.Dx()
 	dst, src := d.scratch.DataMut(), m.Data()
 	var clip []byte
 	if d.state.clip != nil {
@@ -814,7 +869,8 @@ func (d *OkageDevice) groupMask(m *okage.Mask, r image.Rectangle) *okage.Mask {
 	}
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		row := dst[y*w+r.Min.X : y*w+r.Max.X]
-		mrow := src[(y-r.Min.Y)*rw : (y-r.Min.Y+1)*rw]
+		i := (y-mb.Min.Y)*mw + r.Min.X - mb.Min.X
+		mrow := src[i : i+r.Dx()]
 		if clip == nil {
 			copy(row, mrow)
 			continue
