@@ -1,6 +1,7 @@
 package odf
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -45,6 +46,15 @@ func odtAttrText(s string) string {
 // odtPt formats a length in points for CSS.
 func odtPt(v float64) string {
 	return odtNum(v) + "pt"
+}
+
+// odtRatio formats a ratio of the height of a line to the size of the
+// font for CSS, with 4 decimals at most.
+func odtRatio(v float64) string {
+	if v != v || v > 1e9 || v < 0 {
+		v = 0
+	}
+	return strconv.FormatFloat(math.Round(v*10000)/10000, 'f', -1, 64)
 }
 
 // odtNum formats a number for CSS, with 2 decimals at most.
@@ -127,10 +137,33 @@ var odtTightRatios = map[string]float64{
 	"times new roman": 1.1074, "liberation serif": 1.1074, "times": 1.1074,
 }
 
-// odtLineRatio returns the height of a single line of a font. tight leaves
-// out the external leading of the font.
-func odtLineRatio(family string, tight bool) float64 {
+// odtFontMetrics are the ascent, the descent and the external leading of
+// some fonts of odtLineRatios, in units of 1/2048 of the size of the font.
+var odtFontMetrics = map[string][3]float64{
+	"arial": {1854, 434, 67}, "liberation sans": {1854, 434, 67}, "helvetica": {1854, 434, 67},
+	"times new roman": {1825, 443, 87}, "liberation serif": {1825, 443, 87}, "times": {1825, 443, 87},
+	"courier new": {1705, 615, 0}, "liberation mono": {1705, 615, 0},
+	"calibri": {1950, 550, 0}, "carlito": {1950, 550, 0},
+	"dejavu sans": {1901, 483, 0}, "dejavu serif": {1901, 483, 0},
+}
+
+// odtLineRatio returns the height of a single line of a font of size
+// points, as a multiple of the size. tight leaves out the external leading
+// of the font. LibreOffice rounds the ascent, the descent and the leading
+// of a font to twips at each size, so a line of Liberation Sans at 10
+// points is 11.15 points high, and not 11.17.
+func odtLineRatio(family string, size float64, tight bool) float64 {
 	family = strings.ToLower(family)
+	if m, ok := odtFontMetrics[family]; ok && size > 0 && size < 1638 {
+		twips := func(v float64) float64 {
+			return math.Round(v / 2048 * size * 20)
+		}
+		h := twips(m[0]) + twips(m[1])
+		if !tight {
+			h += twips(m[2])
+		}
+		return h / 20 / size
+	}
 	if r, ok := odtTightRatios[family]; ok && tight {
 		return r
 	}

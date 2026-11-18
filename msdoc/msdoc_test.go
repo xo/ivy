@@ -85,11 +85,11 @@ func TestOpen(t *testing.T) {
 	}
 	got := htmlOf(t, doc)
 	for _, want := range []string{
-		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, &#34;Microsoft YaHei&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
+		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; line-height: 1.1499; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, &#34;Microsoft YaHei&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
 		`<span style="font-weight: bold; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif">bold text</span>`,
 		`<span style="font-style: italic; font-size: 12pt;`,
 		"Unicode: éè € Ω.",
-		`<p style="text-align: center; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif"><span style="font-size: 20pt;`,
+		`<p style="text-align: center; line-height: 1.1499; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif"><span style="font-size: 20pt;`,
 		"<table ",
 		`<col style="width: 249.3pt"/>`,
 		`border-left: 0.5pt solid #000000`,
@@ -512,5 +512,82 @@ func TestLineSpacing(t *testing.T) {
 		if tt.want != "" && !strings.Contains(got, tt.want) || tt.want == "" && strings.Contains(got, "line-height") {
 			t.Errorf("expected %q for %d, %d, got: %s", tt.want, tt.dya, tt.mult, got)
 		}
+	}
+}
+
+// TestLineHeights checks that the lines of a paragraph have the height of
+// a single line of Word for the font of its mark, with the line gap of the
+// font, and that a run of another font has the height of its own font
+// (poi/doc/floating-pictures.doc and libreoffice/doc/landscape-letter-form.doc).
+func TestLineHeights(t *testing.T) {
+	p := &parser{styles: parseStyles(nil, 0), fonts: []font{{name: "Times New Roman"}, {name: "Noto Sans"}, {name: "Calibri"}}}
+	mark := defaultChp()
+	mark.ftc, mark.hps = 0, 20
+	tnr, noto, calibri := mark, mark, mark
+	noto.ftc, calibri.ftc = 1, 2
+	super := mark
+	super.iss = 1
+	spaced := mark
+	applyChp(&spaced, sprm{op: sprmCDxaSpace, operand: u16s(40)}, &mark)
+	lspd := func(dya, mult uint16) pap {
+		var pp pap
+		applyPap(&pp, sprm{op: sprmPDyaLine, operand: u16s(dya, mult)})
+		return pp
+	}
+	tests := []struct {
+		name string
+		pap  pap
+		runs []run
+		want []string
+		not  []string
+	}{
+		{"single", pap{}, []run{{text: "x", chp: tnr}}, []string{`<p style="line-height: 1.1499;`}, []string{`<span style="font-size: 10pt; line-height`}},
+		{"at least", lspd(360, 0), []run{{text: "x", chp: tnr}}, []string{"line-height: 18pt"}, nil},
+		{"at least small", lspd(100, 0), []run{{text: "x", chp: tnr}}, []string{`<p style="line-height: 1.1499;`}, nil},
+		{"other font", pap{}, []run{{text: "x", chp: noto}}, []string{`<span style="font-size: 10pt; line-height: normal;`}, nil},
+		{"double", lspd(480, 1), []run{{text: "x", chp: calibri}}, []string{`<p style="line-height: 2.300;`, `<span style="font-size: 10pt; line-height: 2.4414;`}, nil},
+		{"superscript", pap{}, []run{{text: "x", chp: super}}, []string{"vertical-align: super; line-height: 0"}, nil},
+		{"spacing", pap{}, []run{{text: "x", chp: spaced}}, []string{"letter-spacing: 2pt"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b strings.Builder
+			p.writeParagraph(&b, paragraph{pap: tt.pap, mark: mark, runs: tt.runs})
+			got := b.String()
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("expected %q, got: %s", want, got)
+				}
+			}
+			for _, not := range tt.not {
+				if strings.Contains(got, not) {
+					t.Errorf("expected no %q, got: %s", not, got)
+				}
+			}
+		})
+	}
+}
+
+// TestPictureLine checks that a line of pictures ends at the bottom of the
+// pictures, as in Word, and that a picture in a line of text stays on the
+// baseline (page 4 of poi/doc/floating-pictures.doc).
+func TestPictureLine(t *testing.T) {
+	p := &parser{styles: parseStyles(nil, 0)}
+	pic := &picture{name: "media/1.png", width: 72, height: 54}
+	for _, tt := range []struct {
+		runs []run
+		want bool
+	}{
+		{[]run{{pic: pic}, {text: " "}, {pic: pic}}, true},
+		{[]run{{text: "Text "}, {pic: pic}}, false},
+	} {
+		var b strings.Builder
+		p.writeParagraph(&b, paragraph{runs: tt.runs})
+		if got := strings.Contains(b.String(), "vertical-align: text-bottom"); got != tt.want {
+			t.Errorf("expected the alignment at the bottom %t, got: %s", tt.want, b.String())
+		}
+	}
+	if p.pictureLine {
+		t.Error("expected the flag to be reset after the paragraph")
 	}
 }

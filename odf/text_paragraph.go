@@ -1,6 +1,7 @@
 package odf
 
 import (
+	"math"
 	"path"
 	"strconv"
 	"strings"
@@ -293,12 +294,15 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 		s.set("margin-bottom", odtPt(bottom))
 	}
 	family, _ := c.st.font(p)
-	ratio := odtLineRatio(family, c.tight)
 	size := odtFontSize(p)
+	ratio := odtLineRatio(family, size, c.tight)
 	switch lh := p["line-height"]; {
 	case strings.HasSuffix(lh, "%"):
 		if pct, err := strconv.ParseFloat(strings.TrimSuffix(lh, "%"), 64); err == nil && pct > 0 {
-			s.set("line-height", odtNum(min(pct/100, 10)*ratio))
+			// LibreOffice takes the percent of the height of a line in
+			// twips, and drops the fraction of a twip
+			h := math.Floor(ratio*size*20*min(pct/100, 10)+1e-6) / 20
+			s.set("line-height", odtRatio(h/size))
 		}
 	default:
 		if v, ok := odtLength(lh); ok && v > 0 {
@@ -308,7 +312,7 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 		} else if v, ok := odtLength(p["line-spacing"]); ok {
 			s.set("line-height", odtPt(max(ratio*size+v, 1)))
 		} else {
-			s.set("line-height", odtNum(ratio))
+			s.set("line-height", odtRatio(ratio))
 		}
 	}
 	switch p["text-align"] {
@@ -723,7 +727,7 @@ func (c *odtConverter) inlines(n roxmltree.Node, p odtProps) {
 		}
 		switch e.TagName().Name() {
 		case "span":
-			sp := p.over(c.st.props("text", c.styleName(e)))
+			sp := c.st.textOver(p, c.styleName(e))
 			if sp["display"] == "none" {
 				continue
 			}

@@ -314,6 +314,57 @@ func (p *parser) fontFamily(ftc, ftcEA int) string {
 	return strings.Join(names, ", ") + ", " + generic
 }
 
+// lineRatios are the heights of a single line of the fonts that documents
+// use most, as a multiple of the size of the font: the ascent, the descent
+// and the line gap of the font, as in the packages docx and rtf.
+var lineRatios = map[string]float64{
+	"calibri": 1.2207, "carlito": 1.2207, "cambria": 1.1719, "caladea": 1.1719,
+	"arial": 1.1499, "liberation sans": 1.1499, "helvetica": 1.1499,
+	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
+	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
+}
+
+// lineRatio returns the height of a single line of the font ftc, as a
+// multiple of its size. known is false for a font that is not in
+// lineRatios, which takes 1.15.
+func (p *parser) lineRatio(ftc int) (ratio float64, known bool) {
+	if ftc >= 0 && ftc < len(p.fonts) {
+		if r, ok := lineRatios[strings.ToLower(p.fonts[ftc].name)]; ok {
+			return r, true
+		}
+	}
+	return 1.15, false
+}
+
+// lineSpacing is the spacing of the lines of a paragraph that the package
+// writes: mult times the height of a single line, and the height of a
+// single line of the font of its mark, ratio, or 0 for a font that is not in
+// lineRatios. mult is 0 for lines of a height in points.
+type lineSpacing struct {
+	mult, ratio float64
+}
+
+// runLineHeight returns the line-height of a run of the font ftc in the
+// current paragraph, or "" for the line-height of the paragraph. Word
+// gives a line the height of the tallest font in it, so a run of another
+// font has the height of a line of its own font.
+func (p *parser) runLineHeight(ftc int) string {
+	sp := p.spacing
+	if sp.mult == 0 || ftc < 0 || ftc >= len(p.fonts) || p.fonts[ftc].name == "" {
+		return ""
+	}
+	ratio, known := p.lineRatio(ftc)
+	switch {
+	case known && ratio != sp.ratio:
+		return strconv.FormatFloat(ratio*sp.mult, 'f', 4, 64)
+	case !known && sp.mult == 1 && sp.ratio != 0:
+		// a font that lineRatios does not hold has the height of its
+		// ascent and its descent
+		return "normal"
+	}
+	return ""
+}
+
 // cssFont quotes the name of a font for CSS.
 func cssFont(name string) string {
 	name = strings.Map(func(r rune) rune {
@@ -346,7 +397,7 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			rows = append(rows, tableRow{cells: cells})
 			cells = nil
 		}
-		writeTable(&b, rows, p.page.left)
+		writeTable(&b, rows, p.page)
 		rows = nil
 	}
 	for _, para := range paras {
@@ -442,12 +493,29 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	if para.pap.after > 0 && para.pap.after < 14400 {
 		style = append(style, "margin-bottom: "+pt(para.pap.after))
 	}
-	switch {
-	case para.pap.lineMult > 0:
-		// a single line of Word is about 1.15 times the size of the font
-		style = append(style, "line-height: "+strconv.FormatFloat(1.15*para.pap.lineMult, 'f', 3, 64))
-	case para.pap.lineExact > 0:
-		style = append(style, "line-height: "+pt(para.pap.lineExact))
+	// a single line of Word has the ascent, the descent and the line gap
+	// of the font of the mark of the paragraph. The layout leaves out the
+	// line gap
+	ratio, known := p.lineRatio(para.mark.ftc)
+	size := 10.0
+	if para.mark.hps > 0 {
+		size = float64(para.mark.hps) / 2
+	}
+	spacing := lineSpacing{mult: 1, ratio: ratio}
+	switch pp := para.pap; {
+	case pp.lineMult > 0:
+		style = append(style, "line-height: "+strconv.FormatFloat(ratio*pp.lineMult, 'f', 3, 64))
+		spacing.mult = pp.lineMult
+	case pp.lineExact > 0:
+		style = append(style, "line-height: "+pt(pp.lineExact))
+		spacing.mult = 0
+	case pp.lineAtLeast > 0 && float64(pp.lineAtLeast)/20 > ratio*size:
+		style = append(style, "line-height: "+pt(pp.lineAtLeast))
+		spacing.mult = 0
+	case known:
+		style = append(style, "line-height: "+strconv.FormatFloat(ratio, 'f', 4, 64))
+	default:
+		spacing.ratio = 0
 	}
 	marker, mc, numbered := p.marker(para.pap.ilfo, para.pap.ilvl, para.mark)
 	if v := p.tabStops(para.pap, numbered && strings.HasSuffix(marker, "\t")); v != "" {
@@ -470,16 +538,39 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	}
 	b.WriteString(">")
 	if numbered {
+		prev := p.spacing
+		p.spacing = spacing
 		p.writeRun(b, run{text: marker, chp: mc})
+		p.spacing = prev
 	}
+	// a footnote writes its paragraphs within this one
+	prevLine, prevSpacing := p.pictureLine, p.spacing
+	p.pictureLine, p.spacing = !numbered && pictureLine(para.runs), spacing
 	for _, r := range para.runs {
 		p.writeRun(b, r)
 	}
+	p.pictureLine, p.spacing = prevLine, prevSpacing
 	if empty {
 		// an empty paragraph has the line of the font of its mark
 		b.WriteString("<br>")
 	}
 	b.WriteString("</" + tag + ">\n")
+}
+
+// pictureLine reports whether the runs of a paragraph hold a picture in
+// the line and no text other than spaces.
+func pictureLine(runs []run) bool {
+	pictures := false
+	for _, r := range runs {
+		switch {
+		case r.pic != nil:
+			pictures = true
+		case r.drawn != nil:
+		case r.note != nil || strings.TrimSpace(r.text) != "":
+			return false
+		}
+	}
+	return pictures
 }
 
 // tabLeaders maps the tlc of a tab stop to the text that fills the tab
@@ -551,6 +642,10 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 			// the object of a shape is larger than the shape by its bleed,
 			// which takes no room in the line
 			fmt.Fprintf(b, ` style="width: %.2fpt; height: %.2fpt; margin: -%.2fpt"`, r.pic.width+2*pad, r.pic.height+2*pad, pad)
+		case r.pic.width > 0 && p.pictureLine:
+			// Word ends a line of pictures at the bottom of the pictures,
+			// without the descent of the text below them
+			fmt.Fprintf(b, ` style="width: %.2fpt; height: %.2fpt; vertical-align: text-bottom"`, r.pic.width, r.pic.height)
 		case r.pic.width > 0:
 			fmt.Fprintf(b, ` style="width: %.2fpt; height: %.2fpt"`, r.pic.width, r.pic.height)
 		}
@@ -587,11 +682,19 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 		}
 		style = append(style, "font-size: "+size)
 	}
+	// Word raises or lowers the text within the line, which does not grow
 	switch c.iss {
 	case 1:
-		style = append(style, "vertical-align: super")
+		style = append(style, "vertical-align: super", "line-height: 0")
 	case 2:
-		style = append(style, "vertical-align: sub")
+		style = append(style, "vertical-align: sub", "line-height: 0")
+	default:
+		if v := p.runLineHeight(c.ftc); v != "" {
+			style = append(style, "line-height: "+v)
+		}
+	}
+	if c.spacing != 0 {
+		style = append(style, "letter-spacing: "+pt(c.spacing))
 	}
 	if c.hasColor {
 		style = append(style, fmt.Sprintf("color: #%06x", c.color))

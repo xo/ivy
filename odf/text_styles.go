@@ -169,7 +169,10 @@ type odtStyles struct {
 	masterOrder []string
 	fonts       map[string]string
 	resolved    map[string]odtProps
-	maxDepth    int
+	// relative holds whether a text style or one of its parents has a
+	// font size in percent, by name.
+	relative map[string]bool
+	maxDepth int
 	// partAuto holds the names of the automatic styles of styles.xml. They
 	// are apart from the automatic styles of content.xml, which can have
 	// the same names, and the styles map holds them under their name with
@@ -191,6 +194,7 @@ func newODTStyles(maxDepth int) *odtStyles {
 		masters:  map[string]*odtMasterPage{},
 		fonts:    map[string]string{},
 		resolved: map[string]odtProps{},
+		relative: map[string]bool{},
 		maxDepth: maxDepth,
 		partAuto: map[string]bool{},
 	}
@@ -507,6 +511,21 @@ func (ts *odtStyles) props(family, name string) odtProps {
 	if ts.defaults[family] == nil {
 		ts.resolved[key] = odtProps{}
 	}
+	chain := ts.chain(family, name)
+	p := ts.defaults[family]
+	if p == nil {
+		p = odtProps{}
+	}
+	for i := len(chain) - 1; i >= 0; i-- {
+		p = p.over(chain[i].props)
+	}
+	ts.resolved[key] = p
+	return p
+}
+
+// chain returns the style name of the family and its parents, from the
+// style to its last parent.
+func (ts *odtStyles) chain(family, name string) []*odtStyle {
 	var chain []*odtStyle
 	seen := map[string]bool{}
 	for n := name; n != "" && len(chain) < ts.maxDepth && !seen[n]; {
@@ -518,14 +537,36 @@ func (ts *odtStyles) props(family, name string) odtProps {
 		chain = append(chain, st)
 		n = st.parent
 	}
-	p := ts.defaults[family]
-	if p == nil {
-		p = odtProps{}
+	return chain
+}
+
+// textOver returns the properties of the text style name over base, the
+// properties of the text around it. A font size in percent of the text
+// style or of its parents is a percent of the size of base, as in
+// LibreOffice.
+func (ts *odtStyles) textOver(base odtProps, name string) odtProps {
+	relative, ok := ts.relative[name]
+	if !ok {
+		for _, st := range ts.chain("text", name) {
+			for _, suffix := range [...]string{"", "-asian", "-complex"} {
+				if strings.HasSuffix(st.props["font-size"+suffix], "%") {
+					relative = true
+				}
+			}
+		}
+		ts.relative[name] = relative
+	}
+	if !relative {
+		return base.over(ts.props("text", name))
+	}
+	chain := ts.chain("text", name)
+	p := base
+	if d := ts.defaults["text"]; d != nil {
+		p = p.over(d)
 	}
 	for i := len(chain) - 1; i >= 0; i-- {
 		p = p.over(chain[i].props)
 	}
-	ts.resolved[key] = p
 	return p
 }
 

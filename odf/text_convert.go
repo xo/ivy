@@ -558,7 +558,10 @@ func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
 	}
 	name := "hf" + strconv.Itoa(len(c.running)+1)
 	c.running[key] = name
-	c.w.WriteString(`<div style="position: running(` + name + `)">`)
+	// the element is a flow root, so that the space before its first
+	// paragraph stays in it, and a footer that the layout aligns at the
+	// bottom of its box does not move down by that space
+	c.w.WriteString(`<div style="position: running(` + name + `); display: flow-root">`)
 	c.nested++
 	part, last := c.part, c.lastBottom
 	c.part, c.lastBottom = true, 0
@@ -572,7 +575,8 @@ func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
 		if d.IsElement() && (d.TagName().Name() == "p" || d.TagName().Name() == "h") {
 			p := c.st.props("paragraph", c.styleName(d))
 			family, _ := c.st.font(p)
-			height += odtFontSize(p) * odtLineRatio(family, c.tight)
+			size := odtFontSize(p)
+			height += size * odtLineRatio(family, size, c.tight)
 		}
 	}
 	c.part, c.lastBottom = part, last

@@ -33,6 +33,7 @@ const (
 	sprmCRgLid1_80    = 0x486E
 	sprmCRgLid1       = 0x4874
 	sprmCCv           = 0x6870
+	sprmCDxaSpace     = 0x8840
 	sprmPIstd         = 0x4600
 	sprmPJc80         = 0x2403
 	sprmPFPageBreak   = 0x2407
@@ -171,6 +172,9 @@ type chp struct {
 	iss byte
 	// hps is the size in half points, or 0.
 	hps int
+	// spacing is the space that the characters add after them, in twips.
+	// A negative value condenses them.
+	spacing int
 	// color and highlight are colors as 0xRRGGBB, valid when hasColor or
 	// hasHighlight is set.
 	color, highlight       uint32
@@ -202,10 +206,10 @@ type pap struct {
 	left, right, first  int // twips
 	before, after       int // twips
 	// lineMult is the spacing of the lines as a multiple of a single
-	// line, and lineExact the exact height of a line in twips. Both are 0
-	// for single lines.
+	// line, lineExact the exact height of a line in twips, and lineAtLeast
+	// the least height of a line in twips. Each is 0 for single lines.
 	lineMult                 float64
-	lineExact                int
+	lineExact, lineAtLeast   int
 	outline                  int
 	hasOutline, hasLeftFirst bool
 	// tap holds the properties of the row, from the mark of the end of a
@@ -358,6 +362,11 @@ func applyChp(c *chp, s sprm, base *chp) {
 		if hps := int(s.value()); hps >= 2 && hps <= 3276 {
 			c.hps = hps
 		}
+	case sprmCDxaSpace:
+		// Word takes up to 1584 points, 31680 twips
+		if v := int(int16(s.value())); abs(v) <= 31680 {
+			c.spacing = v
+		}
 	case sprmCIco:
 		if int(v) < len(icoColors) {
 			c.color, c.hasColor = icoColors[v], v != 0
@@ -433,12 +442,14 @@ func applyPap(p *pap, s sprm) {
 		// an LSPD: dyaLine, then fMultLinespace (MS-DOC 2.9.150)
 		if len(s.operand) == 4 {
 			dya, mult := int(int16(le.Uint16(s.operand))), le.Uint16(s.operand[2:]) != 0
-			p.lineMult, p.lineExact = 0, 0
+			p.lineMult, p.lineExact, p.lineAtLeast = 0, 0, 0
 			switch {
 			case mult && dya > 0 && dya != 240 && dya <= 240*10:
 				p.lineMult = float64(dya) / 240
 			case !mult && dya < 0 && dya > -31680:
 				p.lineExact = -dya
+			case !mult && dya > 0 && dya < 31680:
+				p.lineAtLeast = dya
 			}
 		}
 	case sprmPOutLvl:

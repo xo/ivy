@@ -544,6 +544,10 @@ func (c *converter) writeTable(out *strings.Builder, l *tableLevel) {
 	out.WriteString("</tbody></table>")
 }
 
+// defaultCellPadding is the padding at the left and the right of a cell
+// that gives none, in twips: the padding of td in styleSheet.
+const defaultCellPadding = 108
+
 // rowSpan returns the number of rows from the row k that the cell of the
 // row k whose left edge is x covers: the cell, and the cells of \clvmrg
 // at the same edge in the rows below it.
@@ -614,6 +618,9 @@ func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, colum
 			if def.vmerge == 'f' {
 				vspan = rowSpan(rows, k, edges[i])
 			}
+			// widths holds the width of the border of each side in twips,
+			// in the order top, right, bottom and left, or 0
+			var widths [4]int
 			for k, b := range [...]struct {
 				on   bool
 				side string
@@ -623,15 +630,15 @@ func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, colum
 				}
 				// \brdrw gives the width of the line, and a line without
 				// it is half a point wide.
-				width := "0.5pt"
+				widths[k] = 10
 				if w := def.borderWidth[k]; w > 0 {
-					width = pt(w)
+					widths[k] = w
 				}
 				color := c.color(def.borderColor[k])
 				if color == "" {
 					color = "black"
 				}
-				cs.set("border-"+b.side, width+" solid "+color)
+				cs.set("border-"+b.side, pt(widths[k])+" solid "+color)
 			}
 			if v := c.color(def.shading); v != "" {
 				cs.set("background-color", v)
@@ -649,6 +656,16 @@ func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, colum
 				}
 				if v < 0 && k < 2 {
 					v = r.gap
+				}
+				if k < 2 {
+					// Word draws a border on the line between two cells,
+					// and keeps the whole cell for the padding and the
+					// text. The layout takes half of a collapsed border
+					// from the cell, so the padding gives it back
+					if v < 0 {
+						v = defaultCellPadding
+					}
+					v = max(v-widths[3-2*k]/2, 0)
 				}
 				if v >= 0 {
 					cs.set("padding-"+side, pt(v))
@@ -799,7 +816,10 @@ func (c *converter) endNested(parent, s *state) {
 	c.hfNum++
 	name := "hf" + strconv.Itoa(c.hfNum)
 	c.running[s.kind] = name
-	c.body.out.WriteString(`<div style="position: running(` + name + `)">` + html + `</div>`)
+	// the element is a flow root, so that the space before its first
+	// paragraph stays in it, and a footer that the layout aligns at the
+	// bottom of its box does not move down by that space
+	c.body.out.WriteString(`<div style="position: running(` + name + `); display: flow-root">` + html + `</div>`)
 }
 
 // listText writes the text of the marker of a paragraph of a list, from

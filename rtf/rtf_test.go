@@ -77,7 +77,7 @@ func TestConvert(t *testing.T) {
 		`<a href="https://example.com/">`,
 		`<img src="media/1.png" alt="" style="width: 72pt; height: 36pt"/>`,
 		`break-before: page`,
-		`position: running(hf1)`,
+		`position: running(hf1); display: flow-root`,
 		`Page </span><span class="pg"></span>`,
 	} {
 		if !strings.Contains(html, want) {
@@ -185,6 +185,26 @@ func TestCellWords(t *testing.T) {
 		"border-top: 1.5pt solid black",
 		"padding-left: 5.4pt; padding-right: 5.4pt",
 		`<p style="font-family: &quot;Arial&quot;, serif; font-size: 10pt; line-height: 1.15"><span style="font-family: &quot;Arial&quot;, serif; font-size: 8pt">small</span>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+}
+
+// TestCellBorderPadding checks that a cell keeps its whole width for its
+// padding and its text, as in Word: the padding gives back the half of
+// each side border that the layout takes from the cell, so that the narrow
+// cells of libreoffice/rtf/landscape-a4-table.rtf do not wrap "x 2".
+func TestCellBorderPadding(t *testing.T) {
+	doc := `{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}` +
+		`\trowd\trgaph108\clbrdrl\brdrs\brdrw40\clbrdrr\brdrs\cellx1440\cellx2880` +
+		`\pard\plain\intbl A\cell B\cell\row\pard\plain Body\par}`
+	html, _ := convertHTML(t, []byte(doc))
+	for _, want := range []string{
+		// 108 twips less 20 at the left, and less 5 at the right
+		"border-right: 0.5pt solid black; border-left: 2pt solid black; padding-left: 4.4pt; padding-right: 5.15pt",
+		`<td style="padding-left: 5.4pt; padding-right: 5.4pt">`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the xhtml:\n%s", want, html)

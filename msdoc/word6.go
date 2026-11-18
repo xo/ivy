@@ -30,7 +30,7 @@ var word6Sprms97 = map[byte]uint16{
 	24: sprmPFInTable, 25: sprmPFTtp,
 	71: sprmCFData, 80: sprmCIstd, 85: sprmCFBold, 86: sprmCFItalic, 87: sprmCFStrike,
 	90: sprmCFSmallCaps, 91: sprmCFCaps, 92: sprmCFVanish, 93: sprmCRgFtc0, 94: sprmCKul,
-	98: sprmCIco, 99: sprmCHps, 104: sprmCIss,
+	96: sprmCDxaSpace, 98: sprmCIco, 99: sprmCHps, 104: sprmCIss,
 }
 
 // word6SprmSizes holds the sizes of the operands of the modifiers of the

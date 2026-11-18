@@ -35,6 +35,10 @@ const (
 	sprmTPc               = 0x360D
 	sprmTDxaAbs           = 0x940E
 	sprmTDyaAbs           = 0x940F
+	sprmTDxaFromText      = 0x9410
+	sprmTDyaFromText      = 0x9411
+	sprmTDyaFromTextBot   = 0x941E
+	sprmTDxaFromTextRight = 0x941F
 	sprmTDefTableMaxCells = 63
 )
 
@@ -241,6 +245,9 @@ type tap struct {
 	pcHorz, pcVert int
 	dxaAbs, dyaAbs int
 	floats         bool
+	// fromText holds the distances of a table that floats from the text
+	// around it, in twips, in the order top, right, bottom and left.
+	fromText [4]int
 }
 
 // The positions of a table that floats that the package reads.
@@ -375,7 +382,42 @@ func applyTap(t *tap, s sprm) {
 		t.dxaAbs, t.floats = int(s.value()), true
 	case sprmTDyaAbs:
 		t.dyaAbs, t.floats = int(s.value()), true
+	case sprmTDyaFromText, sprmTDxaFromTextRight, sprmTDyaFromTextBot, sprmTDxaFromText:
+		k := map[uint16]int{sprmTDyaFromText: 0, sprmTDxaFromTextRight: 1, sprmTDyaFromTextBot: 2, sprmTDxaFromText: 3}[s.op]
+		if v := int(s.value()); v >= 0 && v < 14400 {
+			t.fromText[k] = v
+		}
 	}
+}
+
+// floatTable returns the style of a table that floats, of the width at x
+// in a column of the width col, all in twips, with the alignment jc and
+// top the distance from the top of its paragraph, so that the text wraps
+// around it. It returns nil for a table that does not leave half an inch
+// of the column beside it, or that is at the center of the column, which
+// stays a block.
+func floatTable(t *tap, jc, x, width, col, top int) []string {
+	side := "left"
+	switch {
+	case jc == 1:
+		return nil
+	case jc == 2:
+		x, side = col-width, "right"
+	case 2*x+width > col:
+		side = "right"
+	}
+	if max(x, col-x-width) < 720 || width <= 0 || col-width < 720 {
+		return nil
+	}
+	// a table can float into the margin of the page
+	margin := [4]int{top, t.fromText[1], t.fromText[2], t.fromText[3]}
+	if side == "right" {
+		margin[1] = max(col-x-width, -14400)
+	} else {
+		margin[3] = max(x, -14400)
+	}
+	return []string{"float: " + side,
+		"margin: " + pt(margin[0]) + " " + pt(margin[1]) + " " + pt(margin[2]) + " " + pt(margin[3])}
 }
 
 // isTableSprm reports whether op is a modifier of a table that applyTap
@@ -386,7 +428,8 @@ func isTableSprm(op uint16) bool {
 		sprmTDefTableShd80, sprmTDefTableShd, sprmTDefTableShd2nd, sprmTDefTableShd3rd,
 		sprmTVertMerge, sprmTVertAlign, sprmTCellPaddingDflt, sprmTCellPadding,
 		sprmTDxaGapHalf, sprmTDyaRowHeight, sprmTJc, sprmTJc90, sprmTTableHeader,
-		sprmTPc, sprmTDxaAbs, sprmTDyaAbs:
+		sprmTPc, sprmTDxaAbs, sprmTDyaAbs, sprmTDxaFromText, sprmTDyaFromText, sprmTDyaFromTextBot,
+		sprmTDxaFromTextRight:
 		return true
 	}
 	return false
@@ -403,10 +446,11 @@ type tableRow struct {
 // rows make the columns of the table, so that each cell covers the columns
 // between its edges, as in Word, where each row has cells of its own. A
 // cell that the cells above cover becomes part of the cell where they
-// start. A table that floats is a block at its position from the column,
-// and from the top of its paragraph, with left the left margin of the
-// page in twips. The text does not wrap around it.
-func writeTable(b *strings.Builder, rows []tableRow, left int) {
+// start. A table that floats is at its position from the column, and from
+// the top of its paragraph, on the page pg. The text wraps around a table
+// that leaves half an inch of the column beside it, which floats to the
+// side of the column where it is. A wider table is a block.
+func writeTable(b *strings.Builder, rows []tableRow, pg page) {
 	if len(rows) == 0 {
 		return
 	}
@@ -419,7 +463,8 @@ func writeTable(b *strings.Builder, rows []tableRow, left int) {
 	first := rows[0].tap
 	var style []string
 	if len(edges) > 1 {
-		style = append(style, "table-layout: fixed", "width: "+pt(edges[len(edges)-1]-edges[0]))
+		width := edges[len(edges)-1] - edges[0]
+		style = append(style, "table-layout: fixed", "width: "+pt(width))
 		jc, x := first.jc, edges[0]
 		if first.floats {
 			switch first.dxaAbs {
@@ -430,13 +475,24 @@ func writeTable(b *strings.Builder, rows []tableRow, left int) {
 			default:
 				x += first.dxaAbs
 				if first.pcHorz == pcHorzPage {
-					x -= left
+					x -= pg.left
 				}
 			}
+			top := 0
 			if first.pcVert == pcVertParagraph && first.dyaAbs > 0 && first.dyaAbs < 14400 {
+				top = first.dyaAbs
+			}
+			if pg.width == 0 {
+				pg = letter
+			}
+			col := pg.width - pg.left - pg.right
+			if f := floatTable(first, jc, x, width, col, top); f != nil {
+				style = append(style, f...)
+				jc, x = 0, 0
+			} else if top > 0 {
 				// a block of the height of the position, which does not
 				// collapse with the spacing after the paragraph above
-				b.WriteString(`<div style="height: ` + pt(first.dyaAbs) + `"></div>`)
+				b.WriteString(`<div style="height: ` + pt(top) + `"></div>`)
 			}
 		}
 		switch jc {

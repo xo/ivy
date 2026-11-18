@@ -118,7 +118,8 @@ func TestTextConvert(t *testing.T) {
 		`font-family: &quot;Liberation Sans&quot;, sans-serif; font-size: 18pt; font-weight: bold`,
 		`break-after: avoid`,
 		`text-align: center`,
-		`line-height: 1.35`,
+		// 115% of a line of 1.17 times 12 points, in whole twips
+		`line-height: 1.3417`,
 		`margin-bottom: 6pt`,
 		// The white space collapses, and text:s keeps its spaces.
 		`>Centered <span style="font-weight: bold; color: #ff0000">bold red</span>  end<span style="font-size: 6.96pt; vertical-align: super">sup</span>`,
@@ -135,6 +136,8 @@ func TestTextConvert(t *testing.T) {
 		`<img src="media/1.png" alt="" style="width: 72pt; height: 36pt"/>`,
 		`<a href="https://example.com/">link</a><br/>next` + "\t" + `tab`,
 		`Page <span class="pg"></span> of <span class="pgs"></span>`,
+		// the space before the first paragraph stays in a header
+		`<div style="position: running(hf1); display: flow-root">`,
 		`style="page: m2; break-before: page"`,
 	} {
 		if !strings.Contains(html, want) {

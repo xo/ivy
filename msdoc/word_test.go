@@ -66,7 +66,7 @@ func TestTableRows(t *testing.T) {
 	applyTap(first, sprm{op: sprmTDefTableShd80, operand: append([]byte{4}, u16s(0, 1<<10|1)...)})
 	applyTap(first, sprm{op: sprmTDxaGapHalf, operand: u16s(108)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}}, 0)
+	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}}, page{})
 	html := b.String()
 	for _, want := range []string{
 		`margin-left: -5.4pt`, `<col style="width: 144pt"/>`, `<col style="width: 216pt"/>`,
@@ -282,7 +282,7 @@ func TestExactRowHeight(t *testing.T) {
 	applyTap(exact, sprm{op: sprmTDyaRowHeight, operand: u16s(0xFEAC)}) // -340
 	applyTap(least, sprm{op: sprmTDyaRowHeight, operand: u16s(340)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}}, 0)
+	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}}, page{})
 	html := b.String()
 	if !strings.Contains(html, `<div style="display: flow-root; height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
 		t.Errorf("expected the cell of the exact row in a block of its height:\n%s", html)
@@ -399,13 +399,23 @@ func TestFloatingTable(t *testing.T) {
 	} {
 		applyTap(row, s)
 	}
+	// the table leaves less than half an inch beside it, and is a block
 	var w strings.Builder
-	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, 2835)
+	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 2835 + 3000 + 1134, left: 2835, right: 1134})
 	html := w.String()
 	for _, want := range []string{`<div style="height: 11.1pt"></div>`, `margin-left: -83.85pt`} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the table:\n%s", want, html)
 		}
+	}
+	// in a wider column, the text wraps at the right of the table, at
+	// its distance from the text
+	applyTap(row, sprm{op: sprmTDxaFromTextRight, operand: u16s(141)})
+	w.Reset()
+	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 11906, left: 2835, right: 1134})
+	html = w.String()
+	if want := `float: left; margin: 11.1pt 7.05pt 0pt -83.85pt`; !strings.Contains(html, want) || strings.Contains(html, "<div") {
+		t.Errorf("expected %q in the table:\n%s", want, html)
 	}
 }
 

@@ -117,8 +117,14 @@ type parser struct {
 	// writes, and inline is set while it writes a footnote, whose
 	// paragraphs are in a paragraph. endnotes holds the HTML of the
 	// endnotes, and endnoteCount their number.
-	mark         string
-	inline       bool
+	mark   string
+	inline bool
+	// pictureLine is set while it writes a paragraph whose only content is
+	// pictures in the line.
+	pictureLine bool
+	// spacing is the spacing of the lines of the paragraph that it
+	// writes.
+	spacing      lineSpacing
 	endnotes     strings.Builder
 	endnoteCount int
 	// drawing holds the shapes and the pictures of Office Drawing, once

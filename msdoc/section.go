@@ -76,7 +76,11 @@ func (p *parser) docSections(ctx context.Context, paper ivy.Paper) ([]docSection
 			name := "h" + strconv.Itoa(len(names)+1)
 			names[st] = name
 			secs[i].running[k] = name
-			b.WriteString(`<div style="position: running(` + name + `)">`)
+			// the element is a flow root, so that the space before its
+			// first paragraph stays in it. Otherwise the layout aligns a
+			// footer at the bottom without that space, and then adds it
+			// above the paragraph, so that the footer is that much lower
+			b.WriteString(`<div style="position: running(` + name + `); display: flow-root">`)
 			b.WriteString(p.body(paras, nil))
 			b.WriteString("</div>\n")
 		}

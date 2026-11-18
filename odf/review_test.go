@@ -148,15 +148,18 @@ func TestTextTightLeading(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		entries []fixture.Entry
-		want    float64
+		want    string
 	}{
-		{"default", nil, 1.15 * 1.1499},
-		{"tight", []fixture.Entry{{Name: "settings.xml", Data: []byte(settings)}}, 1.15 * 1.1172},
+		// Liberation Sans at 18 points: an ascent of 326 twips, a
+		// descent of 76 and a leading of 12, 115% of which is 476 twips
+		{"default", nil, "1.3222"},
+		// without the leading, 115% of 402 twips is 462 twips
+		{"tight", []fixture.Entry{{Name: "settings.xml", Data: []byte(settings)}}, "1.2833"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			html, _ := odtHTML(t, odtWith(body, "", nil, c.entries...))
-			if p := odtParagraph(t, html, "Heading"); !strings.Contains(p, "line-height: "+odtNum(c.want)+";") {
-				t.Errorf("expected the line height %s, got: %s", odtNum(c.want), p)
+			if p := odtParagraph(t, html, "Heading"); !strings.Contains(p, "line-height: "+c.want+";") {
+				t.Errorf("expected the line height %s, got: %s", c.want, p)
 			}
 		})
 	}
@@ -166,6 +169,22 @@ func TestTextTightLeading(t *testing.T) {
 // spacing below the paragraph before it, and that the layout discards it
 // at the top of a page, except after a page break, as LibreOffice does
 // (libreoffice/odt/ooo96040-2.odt).
+// TestTextPercentSize checks that a font size in percent of a text style,
+// and of its parent, is a percent of the size of its paragraph, as in
+// LibreOffice, and not of 12 points.
+func TestTextPercentSize(t *testing.T) {
+	auto := `<style:style style:name="P9" style:family="paragraph"><style:text-properties fo:font-size="20pt"/></style:style>` +
+		`<style:style style:name="T8" style:family="text"><style:text-properties fo:font-size="80%"/></style:style>` +
+		`<style:style style:name="T9" style:family="text" style:parent-style-name="T8"><style:text-properties fo:font-size="50%"/></style:style>`
+	body := `<text:p text:style-name="P9"><text:span text:style-name="T8">Large</text:span> <text:span text:style-name="T9">Small</text:span></text:p>`
+	html, _ := odtHTML(t, odtWith(body, auto, nil))
+	for _, want := range []string{`font-size: 16pt">Large`, `font-size: 8pt">Small`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the html:\n%s", want, html)
+		}
+	}
+}
+
 func TestTextSpacing(t *testing.T) {
 	const auto = `<style:style style:name="PT" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:margin-top="12pt"/></style:style>` +
 		`<style:style style:name="PB" style:family="paragraph" style:parent-style-name="PT"><style:paragraph-properties fo:break-before="page"/></style:style>`
