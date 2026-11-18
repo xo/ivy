@@ -70,3 +70,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D48 | [A book counts its documents at the same time](D048-a-book-counts-its-documents-at-the-same-time.md) | Decided |
 | D49 | [A PDF document keeps its decoded images](D049-a-pdf-document-keeps-its-decoded-images.md) | Decided |
 | D50 | [ivy changes okage and magic itself](D050-ivy-changes-okage-and-magic-itself.md) | Decided. Amends D8 |
+| D51 | [msdoc draws its shapes with internal/odraw](D051-msdoc-draws-its-shapes-with-internal-odraw.md) | Decided |
+| D52 | [A line of a word processor can pass the page by its descent](D052-a-line-of-a-word-processor-can-pass-the-page-by-its-descent.md) | Decided |
+| D53 | [A metafile draws glyph indexes through their text](D053-a-metafile-draws-glyph-indexes-through-their-text.md) | Decided |
+| D54 | [The text bodies of a scene share a font configuration](D054-the-text-bodies-of-a-scene-share-a-font-configuration.md) | Decided |

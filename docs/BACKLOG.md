@@ -26,27 +26,24 @@ found these faults. Each item names a file of the corpus.
    whole pixels made the seam darker, but it stretched the images and failed
    the oracle test `image_inline_2`. Source: `internal/hayro/render`,
    2026-11-18.
-2. Draw the WordArt and the preset shapes of a Word 97 document that `msdoc`
-   does not draw yet. `msdoc` draws its shapes as SVG images in the HTML of
-   the layout, and `internal/odraw` draws them with `internal/drawingml` on
-   the display list. Decide how `msdoc` can use the shapes of
-   `internal/odraw`, then move the readers of `msdoc` (`picture.go` and
-   `shape.go`) into it. Word does not print the comments in its PDF files, so
-   `msdoc` leaves them out. Source: `msdoc`.
+2. Draw the WordArt and the preset shapes of a Word 97 document with
+   `internal/odraw`, as D51 decides. The layout places a box whose content is
+   a `display.List`, and `msdoc` gives its shapes, pictures and text boxes to
+   odraw. Move the readers of `msdoc` (`picture.go` and `shape.go`) into
+   odraw. Word does not print the comments in its PDF files, so `msdoc` leaves
+   them out. Source: `msdoc` and D51.
 3. Draw the pictures in PICT of an Excel 97 workbook. Source: `msxls`.
 4. Find the last 3 pixels of drift of `libreoffice/odt/ooo96040-2.odt` by page
    8, which move one bullet to page 9 and give 13 pages against 12.
    LibreOffice rounds the ascent and the descent of a font to twips at each
    size, so the lines of Liberation Sans at 10 points are 11.15 points, and
    ivy takes 11.17 points from a ratio. Source: `odf`.
-5. Keep empty paragraphs at the bottom of a page when they do not fit, as Word
-   and LibreOffice do. On page 3 of `poi/docx/illustrative-cases.docx`, three
-   paragraphs after a table (11 points with spaces and tabs, 8 points empty,
-   11 points bold empty) need 34.5 points, and the page has 32.6 points left.
-   Word and LibreOffice keep all three. The overflow of 1.9 points is less
-   than the descent of the last line, 2.4 points. The rule needs a property of
-   the layout for the word processors, or a decision. Source: `docx` and
-   `internal/layout`.
+5. Let the last line of a page of a word processor pass the bottom of the page
+   by up to its descent, as D52 decides, with a property of `css_ivy.go` that
+   `docx`, `msdoc`, `odf` and `rtf` turn on. On page 3 of
+   `poi/docx/illustrative-cases.docx`, three paragraphs after a table pass the
+   bottom by 1.9 points, and the descent of the last line is 2.4 points.
+   Source: `internal/layout` and D52.
 6. Find why Excel in the Windows VM of the review prints
    `poi/xlsx/picture.xlsx`, `poi/xlsx/landscape-a4-tables.xlsx`,
    `poi/xls/landscape-a4-drawing.xls` and
@@ -192,12 +189,12 @@ The pages of Visio came on 2026-11-17 (D30).
 2. Read an OpenDocument file of old StarOffice whose password hash has the
    fault of SHA-1 for some lengths. `odf` tries the password in UTF-8, then
    in windows-1252. Source: the encryption of phase 5.
-3. Draw the text of a metafile that names glyphs by index in a font that ivy
-   replaces. The indexes belong to the font of Windows, such as Arial, and the
-   font of ivy has other indexes. A table of the glyphs of each such font
-   needs a decision of the maintainers. The layout of EMF+ DrawString, and its
-   vertical format, are close to GDI+, not exact. Source: `internal/metafile`
-   and `internal/gowemf`.
+3. Draw the text of a metafile that names glyphs by index through the text of
+   the record, as D53 decides: the string of EMF+ DrawDriverString, or text in
+   a code page that ivy knows. A record with only indexes draws them in the
+   font of ivy, as before. The layout of EMF+ DrawString, and its vertical
+   format, are close to GDI+, not exact. Source: `internal/metafile`,
+   `internal/gowemf` and D53.
 4. Read the headers, the footers, the lists, the pictures and the text boxes
    of a file of Word 6 or Word 95. Source: `msdoc`.
 5. Draw what `msppt` does not draw yet: the WordArt text of the gtext
@@ -223,11 +220,10 @@ The pages of Visio came on 2026-11-17 (D30).
     `fo:clip` of the pictures of a text. No permissive decoder of SVM is
     known, and D45 lets it wait. Source: `odf`.
 11. Let the text bodies of one scene of `internal/drawingml` share a
-    `FontConfiguration`. Each text body parses the fonts again, which is about
-    a quarter of the time of a scene of 30 text bodies. Source:
-    `internal/drawingml` and `internal/layout`. It needs a field of
-    `layout.BookOptions` that takes a shared `FontConfiguration`, and a mutex
-    that the books of a scene share.
+    `FontConfiguration`, as D54 decides, with a field of `layout.BookOptions`
+    and one mutex for the books of the scene. Each text body parses the fonts
+    again, which is about a quarter of the time of a scene of 30 text bodies.
+    Source: `internal/drawingml`, `internal/layout` and D54.
 12. Compare the custom caps and the arrows of EMF+ lines with GDI+.
     `internal/gowemf` draws them with a geometry that MS-EMFPLUS does not
     define. Draw the triangle cap and the anchor caps (round, diamond and
@@ -312,8 +308,9 @@ time is for a page at 96 dpi.
    higher than the row, and the fonts come from the program. An exact cut
    needs the layout to tell where a page starts, for example with a row that a
    document adds after its last row, to check that this row starts a new page.
-   Ask the maintainers before this work starts. Source: `internal/sheet` and
-   `internal/layout`.
+   On 2026-11-18 the maintainers asked for a proposed decision that cuts a
+   sheet at its page breaks, such as with a row that the layout checks.
+   Source: `internal/sheet` and `internal/layout`.
 2. Draw the soft masks of `hayro/pdf/tile-clamp-bug.pdf` faster. A group
    now draws its soft mask only on the pixels that it composites, but in
    this document each group covers almost all of the clip of its band. So
