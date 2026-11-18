@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"math"
 
 	"github.com/xo/okage"
@@ -540,8 +541,10 @@ func (b *backend) DrawImage(im gowemf.ImageDraw, clip gowemf.Clip) error {
 
 // placeImage returns the pixels of the source rectangle of im, and the
 // transform that places them in the user space. It returns false if the
-// rectangle is empty.
-func (b *backend) placeImage(im gowemf.ImageDraw) (image.Image, okage.Transform, bool) {
+// rectangle is empty. The pixels are premultiplied, from the point 0, 0, as
+// a pixmap of okage holds them. Then the device of each band of a page uses
+// them without a conversion.
+func (b *backend) placeImage(im gowemf.ImageDraw) (*image.RGBA, okage.Transform, bool) {
 	img := im.Image
 	if img == nil {
 		return nil, okage.Transform{}, false
@@ -559,7 +562,12 @@ func (b *backend) placeImage(im gowemf.ImageDraw) (image.Image, okage.Transform,
 		}
 		img = sub.SubImage(src)
 	}
-	return img, transform(im.Transform).PreTranslate(float32(src.Min.X), float32(src.Min.Y)), true
+	rgba, ok := img.(*image.RGBA)
+	if !ok || rgba.Rect.Min != (image.Point{}) || rgba.Stride != 4*rgba.Rect.Dx() {
+		rgba = image.NewRGBA(image.Rect(0, 0, src.Dx(), src.Dy()))
+		draw.Draw(rgba, rgba.Rect, img, src.Min, draw.Src)
+	}
+	return rgba, transform(im.Transform).PreTranslate(float32(src.Min.X), float32(src.Min.Y)), true
 }
 
 // shader returns the shader of a paint, or nil if the paint draws nothing.

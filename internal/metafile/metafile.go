@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
+	"sync"
 	"unicode/utf16"
 
 	"github.com/xo/okage"
@@ -82,6 +84,23 @@ type Picture struct {
 	fonts     *fontSet
 	// width and height are the size of the picture in points.
 	width, height float64
+
+	// mu guards recs, the last playbacks of the picture, from the oldest.
+	mu   sync.Mutex
+	recs []*recording
+}
+
+// maxRecordings is the number of the playbacks that a picture keeps.
+const maxRecordings = 4
+
+// recording is a playback of a picture into a rectangle, as a display list.
+// The playback does not depend on the device, so Draw replays it for each
+// later draw into the same rectangle. A sheet draws a picture once for each
+// row that it covers, and a page in bands draws it once for each band.
+type recording struct {
+	dst  okage.Rect
+	list *display.List
+	err  error
 }
 
 // Open reads the framing of the metafile in data, and its size. It reads no
@@ -260,14 +279,49 @@ func (p *Picture) Description() (program, title string) {
 
 // Draw plays the records of the picture onto d, into the rectangle dst of
 // the user space of d. It changes no state of d that outlives the call.
+// Draw records the playback into a display list, and replays the list onto
+// d. A later draw into the same rectangle replays the list again.
 //
 // If Draw leaves out a record that the package cannot draw, or stops at a
 // malformed record after it drew a part, it returns an *ivy.PartialError,
 // and d holds the part. It returns the error of ctx when ctx ends.
-func (p *Picture) Draw(ctx context.Context, d display.Device, dst okage.Rect) (err error) {
+func (p *Picture) Draw(ctx context.Context, d display.Device, dst okage.Rect) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("drawing metafile: %w", err)
 	}
+	rec := p.recording(dst)
+	if rec == nil {
+		list := display.NewRecording()
+		err := p.play(ctx, list, dst)
+		if ctx.Err() != nil {
+			return err
+		}
+		rec = &recording{dst: dst, list: list, err: err}
+		p.mu.Lock()
+		if len(p.recs) >= maxRecordings {
+			p.recs = slices.Delete(p.recs, 0, len(p.recs)-maxRecordings+1)
+		}
+		p.recs = append(p.recs, rec)
+		p.mu.Unlock()
+	}
+	rec.list.Replay(d)
+	return rec.err
+}
+
+// recording returns the playback of the picture into dst, or nil.
+func (p *Picture) recording(dst okage.Rect) *recording {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, rec := range p.recs {
+		if rec.dst == dst {
+			return rec
+		}
+	}
+	return nil
+}
+
+// play plays the records of the picture onto d, into dst.
+func (p *Picture) play(ctx context.Context, d display.Device, dst okage.Rect) (err error) {
 	b := newBackend(ctx, d, dst, p)
 	d.Save()
 	defer func() {

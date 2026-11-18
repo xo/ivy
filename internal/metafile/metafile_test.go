@@ -448,3 +448,48 @@ func TestClipKept(t *testing.T) {
 	expect(t, pm, 70, 70, green)
 	expect(t, pm, 90, 90, color.NRGBA{255, 255, 255, 255})
 }
+
+// TestDrawAgain checks that a second draw into the same rectangle replays
+// the first playback, with its pixels and its error, and that a draw into
+// another rectangle plays the picture again.
+func TestDrawAgain(t *testing.T) {
+	img := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	img.SetNRGBA(0, 0, red)
+	img.SetNRGBA(1, 0, green)
+	// EMR_EXTFLOODFILL makes the draw partial
+	e := fixture.NewEMF(100, 100).Image(0, 0, 100, 100, img).Record(53, 20, 20, color.NRGBA{}, uint32(0))
+	p, err := Open(e.Bytes(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draw := func(dst okage.Rect) (*okage.Pixmap, error) {
+		pm, ok := okage.NewPixmap(100, 100)
+		if !ok {
+			t.Fatal("no pixmap")
+		}
+		pm.Fill(okage.ColorWhite)
+		return pm, p.Draw(t.Context(), display.NewOkage(pm, okage.IdentityTransform()), dst)
+	}
+	whole, _ := okage.RectFromXYWH(0, 0, 100, 100)
+	left, _ := okage.RectFromXYWH(0, 0, 50, 100)
+	first, err1 := draw(whole)
+	second, err2 := draw(whole)
+	if _, ok := errors.AsType[*ivy.PartialError](err1); !ok || !errors.Is(err2, err1) {
+		t.Errorf("errors %v and %v, want the same partial error", err1, err2)
+	}
+	if string(first.Data()) != string(second.Data()) {
+		t.Error("the second draw has other pixels")
+	}
+	expect(t, first, 25, 50, red)
+	expect(t, first, 75, 50, green)
+	if len(p.recs) != 1 {
+		t.Errorf("expected 1 playback, got %d", len(p.recs))
+	}
+	pm, _ := draw(left)
+	expect(t, pm, 12, 50, red)
+	expect(t, pm, 37, 50, green)
+	expect(t, pm, 75, 50, color.NRGBA{255, 255, 255, 255})
+	if len(p.recs) != 2 {
+		t.Errorf("expected 2 playbacks, got %d", len(p.recs))
+	}
+}
