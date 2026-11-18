@@ -145,6 +145,15 @@ func (p *player) color(r Record, ref uint32) (color.NRGBA, error) {
 func (p *player) logicalPalette(r Record, usage uint32) ([]color.NRGBA, error) {
 	switch usage {
 	case 0:
+		// ivy: the selected palette, for a packed DIB without its color
+		// table
+		if pal := p.selectedPalette(); pal != nil && !pal.corrected {
+			out := make([]color.NRGBA, len(pal.entries))
+			for i, e := range pal.entries {
+				out[i] = e.color
+			}
+			return out, nil
+		}
 		return nil, nil
 	case 1:
 		pal := p.selectedPalette()

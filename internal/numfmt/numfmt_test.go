@@ -197,6 +197,23 @@ func TestNotFinite(t *testing.T) {
 	}
 }
 
+func TestAsText(t *testing.T) {
+	for _, tt := range []struct {
+		code string
+		want bool
+	}{
+		{"@", true},
+		{`"Code "@`, true},
+		{"General", false},
+		{"0.00", false},
+		{"0;@", false},
+	} {
+		if got := Number(tt.code, 12209, false).AsText; got != tt.want {
+			t.Errorf("Number(%q).AsText: expected %v, got: %v", tt.code, tt.want, got)
+		}
+	}
+}
+
 func FuzzNumber(f *testing.F) {
 	for _, code := range builtin {
 		f.Add(code, 1234.5)

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/drawingml"
 	"github.com/xo/ivy/internal/odraw"
 	"github.com/xo/ivy/internal/sheet"
 )
@@ -58,6 +59,9 @@ type workbook struct {
 	// of its sheet, or -1 for another workbook.
 	supBooks []bool
 	xti      []int
+	// theme is the theme of the record THEME, or nil for the theme of
+	// Office 2007.
+	theme *drawingml.Theme
 }
 
 // readWorkbook reads the globals of the workbook stream wb, and decrypts the
@@ -82,9 +86,13 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 		w.codePage = 1252
 	}
 	count := 0
-	var group []byte
+	var group, theme []byte
+	inTheme := false
 	for rec := range records(wb, 0) {
 		count++
+		// the records ContinueFrt12 go on with the record before them
+		wasTheme := inTheme
+		inTheme = false
 		if count > lim.MaxObjects {
 			return nil, fmt.Errorf("workbook globals of more than %d records: %w", lim.MaxObjects, ivy.ErrLimit)
 		}
@@ -153,12 +161,25 @@ func readWorkbook(ctx context.Context, wb []byte, cfg ivy.Config) (*workbook, er
 			if len(group) < maxDrawing {
 				group = append(group, joined(rec)...)
 			}
+		case recTheme:
+			// the FrtHeader and dwThemeVersion come before the package
+			if len(rec.data) > 16 {
+				theme = append(theme[:0], rec.data[16:]...)
+				inTheme = true
+			}
+		case recContinueFrt12:
+			if wasTheme && len(rec.data) > 12 && len(theme)+len(rec.data) <= maxTheme {
+				theme = append(theme, rec.data[12:]...)
+				inTheme = true
+			}
 		case recEOF:
 			w.store = readStore(group, lim)
+			w.theme = readTheme(theme, lim)
 			return w, nil
 		}
 	}
 	w.store = readStore(group, lim)
+	w.theme = readTheme(theme, lim)
 	return w, nil
 }
 

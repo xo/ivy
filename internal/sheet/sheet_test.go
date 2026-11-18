@@ -443,6 +443,25 @@ func TestNumberTooWide(t *testing.T) {
 	}
 }
 
+func TestNumberAsText(t *testing.T) {
+	wb := &Workbook{Sheets: []*Sheet{{
+		Name: "Codes", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage,
+		Rows: []Row{{Index: 0, Cells: []Cell{
+			{Col: 0, Text: "12209", Kind: KindNumber, Value: 12209, AsText: true},
+			{Col: 1, Text: "12209", Kind: KindNumber, Value: 12209},
+		}}},
+	}}}
+	src, err := wb.Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	// a number of the format "@" goes to the left, as text
+	if !strings.Contains(doc, `<td class="c">12209</td><td class="n c">12209</td>`) {
+		t.Errorf("expected the number as text on the left:\n%s", doc)
+	}
+}
+
 func TestParseHeaderFooter(t *testing.T) {
 	hf := ParseHeaderFooter(`&CPage &P of &N&&&R&D &T&KFF0000x`)
 	if len(hf.Center) != 5 || hf.Center[2].Text != " of " || hf.Center[3].Kind != FieldPages || hf.Center[4].Text != "&" {

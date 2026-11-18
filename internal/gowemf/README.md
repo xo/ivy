@@ -23,7 +23,7 @@ Each copied file has the same path as in upstream.
 Three files are files of ivy, not of upstream:
 `playback_plus_string.go` draws the EMF+ DrawString record (change 11),
 `playback_glyph_text.go` finds the text of glyph indexes (change 19), and
-`ivy_test.go` holds the tests of the changes 6 to 11, 13 to 17 and 19.
+`ivy_test.go` holds the tests of the changes 6 to 11, 13 to 17, 19 and 20.
 
 The copy leaves out these files of upstream:
 
@@ -169,3 +169,12 @@ Each change is marked in the code with a comment that starts with `ivy:`.
     `playback.go` and `playback_nested.go` find the text before the
     playback, and `playback_text.go` and `playback_plus_text.go` use it.
     The spacing of the record does not change.
+20. `dib.go` reads a packed DIB of 8 bits or less with DIB_RGB_COLORS and
+    no count of colors, whose pixels fill the record without a color
+    table. The DIB takes the colors of the selected logical palette, and
+    an index past the palette is black. PowerPoint writes such a DIB in
+    the WMF thumbnail of a presentation. `playback_fills.go` gives the
+    selected palette to the parser of a DIB with DIB_RGB_COLORS for it.
+    Upstream reads the start of the pixels as the color table, and then
+    finds the pixels too short. Without a selected palette, the DIB stays
+    malformed.

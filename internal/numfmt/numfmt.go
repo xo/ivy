@@ -36,6 +36,9 @@ type Result struct {
 	// [Yellow] 6, [Magenta] 7 and [Cyan] 8. Color n is the color of index
 	// n+7 of the palette of the workbook.
 	Color int
+	// AsText is set when a format of text only, such as "@", shows a
+	// number. Excel aligns such a number to the left, as text.
+	AsText bool
 }
 
 // builtin holds the codes of the built-in formats, by their number, as
@@ -212,7 +215,7 @@ func (f *Format) Number(v float64, date1904 bool) Result {
 	}
 	sec, neg := f.pick(v)
 	if sec == nil {
-		return Result{Text: General(v)}
+		return Result{Text: General(v), AsText: f.textOnly()}
 	}
 	res := Result{Color: sec.color}
 	switch {
@@ -253,10 +256,16 @@ func (f *Format) Text(s string) Result {
 	return Result{Text: b.String(), Color: sec.color}
 }
 
+// textOnly reports whether the format has one section, and the section
+// holds the text placeholder @.
+func (f *Format) textOnly() bool {
+	return len(f.sections) == 1 && f.sections[0].text
+}
+
 // pick returns the section that formats v, and whether the text of the
 // section needs a minus sign.
 func (f *Format) pick(v float64) (*section, bool) {
-	if len(f.sections) == 1 && f.sections[0].text {
+	if f.textOnly() {
 		// a format of text only, such as "@", shows a number as General
 		return nil, false
 	}

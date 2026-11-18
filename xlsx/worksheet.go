@@ -60,6 +60,17 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	// of Excel 2010
 	bars := map[string]*sheet.DataBar{}
 	var drawing string
+	// the thresholds of the conditional formats can name the tables, which
+	// the worksheet lists at its end
+	for n := range root.Children() {
+		if local(n) == "tableParts" {
+			for tp := range children(n, "tablePart") {
+				if r, ok := b.sheetRel(part, attr(tp, "id")); ok {
+					b.readTable(sh, r)
+				}
+			}
+		}
+	}
 	for n := range root.Children() {
 		switch local(n) {
 		case "sheetPr":
@@ -82,7 +93,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 				return err
 			}
 		case "conditionalFormatting":
-			b.readCondFormat(sh, n, &rules, bars)
+			b.readCondFormat(sh, index, n, &rules, bars)
 		case "extLst":
 			dataBars14(n, bars)
 		case "mergeCells":
@@ -445,7 +456,7 @@ func (b *book) setNumber(c *sheet.Cell, v float64, format *numfmt.Format) {
 	c.Kind = sheet.KindNumber
 	c.Value = v
 	res := format.Number(v, b.date1904)
-	c.Text = res.Text
+	c.Text, c.AsText = res.Text, res.AsText
 	c.Color = b.styles.paletteColor(res.Color)
 }
 

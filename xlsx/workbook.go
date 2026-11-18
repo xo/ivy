@@ -35,6 +35,13 @@ type book struct {
 	// sheet in the workbook, for the print areas and the print titles.
 	printAreas  map[int]string
 	printTitles map[int]string
+	// names holds the other defined names, and tables the tables of the
+	// sheets that the book read, by their names in lower case. formulas
+	// holds the values of the formulas of the thresholds of the
+	// conditional formats, by the index of their sheet.
+	names    map[nameKey]string
+	tables   map[string]table
+	formulas map[nameKey]formulaValue
 	// files and chartObjects collect the images, and the charts and the
 	// shapes, and objects counts them. chartParts holds the part of each
 	// chart of chartObjects, by its name.
@@ -209,6 +216,13 @@ func (b *book) readWorkbook() ([]sheetRef, error) {
 					b.printAreas[id] = text
 				case "_xlnm.Print_Titles":
 					b.printTitles[id] = text
+				default:
+					if len(b.names) < b.lim.MaxObjects {
+						if b.names == nil {
+							b.names = make(map[nameKey]string)
+						}
+						b.names[nameKey{id, strings.ToLower(attr(d, "name"))}] = text
+					}
 				}
 			}
 		}

@@ -9,6 +9,7 @@ import (
 	"image/png"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/pict"
 	"github.com/xo/ivy/internal/raster"
 )
 
@@ -95,8 +96,9 @@ func (e Entry) Record(delay []byte) []byte {
 // Data returns the bytes of the picture of an OfficeArtBlip record at the
 // start of b, as a file that internal/drawingml decodes: an EMF or a WMF
 // file, decompressed, a JPEG, PNG or TIFF file, or a BMP file of a DIB
-// (MS-ODRAW 2.2.23). A metafile stays within maxMemory bytes. It returns
-// nil for a picture that it does not read, such as PICT.
+// (MS-ODRAW 2.2.23), or a PNG file of a PICT picture. A metafile stays
+// within maxMemory bytes. It returns nil for a picture that it does not
+// read.
 func Data(b []byte, maxMemory int64) []byte {
 	h, ok := ReadHeader(b)
 	if !ok || uint64(h.Size) > uint64(len(b)-8) {
@@ -110,28 +112,9 @@ func Data(b []byte, maxMemory int64) []byte {
 	}
 	switch h.Type {
 	case RecBlipEMF, RecBlipWMF:
-		// the identifiers and an OfficeArtMetafileHeader of 34 bytes
-		if len(body) < uids+34 {
-			return nil
-		}
-		mh := body[uids:]
-		size := int64(le.Uint32(mh))
-		data := body[uids+34:]
-		if mh[32] == 0xFE {
-			return data
-		}
-		if size <= 0 || size > maxMemory {
-			return nil
-		}
-		zr, err := zlib.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return nil
-		}
-		out, err := raster.ReadAll(zr, size)
-		if err != nil {
-			return nil
-		}
-		return out
+		return metafileData(body[uids:], maxMemory)
+	case RecBlipPICT:
+		return pictFile(metafileData(body[uids:], maxMemory), maxMemory)
 	case RecBlipJPEG, RecBlipJPEGCMYK, RecBlipPNG, RecBlipTIFF:
 		// the identifiers and a tag of one byte
 		if len(body) < uids+1 {
@@ -145,6 +128,50 @@ func Data(b []byte, maxMemory int64) []byte {
 		return BMPFile(body[uids+1:])
 	}
 	return nil
+}
+
+// metafileData returns the picture of the body of a blip of a metafile,
+// after its identifiers: an OfficeArtMetafileHeader of 34 bytes, and the
+// picture, which zlib compresses unless the header says otherwise.
+func metafileData(b []byte, maxMemory int64) []byte {
+	if len(b) < 34 {
+		return nil
+	}
+	size := int64(le.Uint32(b))
+	data := b[34:]
+	if b[32] == 0xFE {
+		return data
+	}
+	if size <= 0 || size > maxMemory {
+		return nil
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil
+	}
+	out, err := raster.ReadAll(zr, size)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// pictFile returns the PICT picture data as a PNG file, with the bitmaps
+// and the images that internal/pict draws, or nil.
+func pictFile(data []byte, maxMemory int64) []byte {
+	if data == nil {
+		return nil
+	}
+	img, err := pict.Decode(data, ivy.Limits{MaxMemory: maxMemory})
+	if err != nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	enc := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := enc.Encode(&buf, img); err != nil {
+		return nil
+	}
+	return buf.Bytes()
 }
 
 // BMPFile returns the DIB dib as a BMP file: a BITMAPFILEHEADER of 14 bytes

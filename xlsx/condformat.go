@@ -74,7 +74,7 @@ func (s *styles) dxf(n roxmltree.Node) sheet.Diff {
 // of the extensions of its data bars into bars. The rules
 // of the type expression and timePeriod need formulas, which ivy does not
 // compute, and are left out.
-func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int, bars map[string]*sheet.DataBar) {
+func (b *book) readCondFormat(sh *sheet.Sheet, index int, n roxmltree.Node, rules *int, bars map[string]*sheet.DataBar) {
 	var f sheet.CondFormat
 	for _, ref := range strings.Fields(attr(n, "sqref")) {
 		if r, ok := parseRange(ref); ok && len(f.Ranges) < 64 {
@@ -88,7 +88,7 @@ func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int, bar
 		if *rules >= maxCondRules {
 			break
 		}
-		if r, ok := b.condRule(sh, rn); ok {
+		if r, ok := b.condRule(sh, index, rn); ok {
 			f.Rules = append(f.Rules, r)
 			*rules++
 			if r.Bar != nil && len(bars) < maxCondRules {
@@ -109,7 +109,7 @@ func (b *book) readCondFormat(sh *sheet.Sheet, n roxmltree.Node, rules *int, bar
 
 // condRule reads a cfRule element. It returns false for a rule that ivy
 // cannot evaluate.
-func (b *book) condRule(sh *sheet.Sheet, n roxmltree.Node) (sheet.CondRule, bool) {
+func (b *book) condRule(sh *sheet.Sheet, index int, n roxmltree.Node) (sheet.CondRule, bool) {
 	r := sheet.CondRule{
 		Kind:         attr(n, "type"),
 		Priority:     integer(n, "priority", 0),
@@ -144,7 +144,7 @@ func (b *book) condRule(sh *sheet.Sheet, n roxmltree.Node) (sheet.CondRule, bool
 		if !ok {
 			return r, false
 		}
-		thresholds := b.thresholds(cs)
+		thresholds := b.thresholds(sh, index, cs)
 		i := 0
 		for c := range children(cs, "color") {
 			if i < len(thresholds) {
@@ -159,7 +159,7 @@ func (b *book) condRule(sh *sheet.Sheet, n roxmltree.Node) (sheet.CondRule, bool
 		if !ok {
 			return r, false
 		}
-		thresholds := b.thresholds(db)
+		thresholds := b.thresholds(sh, index, db)
 		if len(thresholds) < 2 {
 			return r, false
 		}
@@ -181,7 +181,7 @@ func (b *book) condRule(sh *sheet.Sheet, n roxmltree.Node) (sheet.CondRule, bool
 			Name:       attr(is, "iconSet"),
 			Reverse:    flag(is, "reverse", false),
 			HideValue:  !flag(is, "showValue", true),
-			Thresholds: b.thresholds(is),
+			Thresholds: b.thresholds(sh, index, is),
 		}
 		if set.Name == "" {
 			set.Name = "3TrafficLights1"
@@ -193,18 +193,18 @@ func (b *book) condRule(sh *sheet.Sheet, n roxmltree.Node) (sheet.CondRule, bool
 }
 
 // thresholds reads the cfvo elements of a color scale, a data bar or an
-// icon set.
-func (b *book) thresholds(n roxmltree.Node) []sheet.Threshold {
+// icon set of the sheet sh of the index index.
+func (b *book) thresholds(sh *sheet.Sheet, index int, n roxmltree.Node) []sheet.Threshold {
 	var out []sheet.Threshold
 	for c := range children(n, "cfvo") {
 		t := sheet.Threshold{Kind: attr(c, "type"), GTE: flag(c, "gte", true)}
-		v, err := strconv.ParseFloat(strings.TrimSpace(attr(c, "val")), 64)
 		switch t.Kind {
 		case "num", "percent", "percentile":
+			v, ok := b.thresholdValue(sh, index, attr(c, "val"))
 			t.Value = v
-			if err != nil {
-				// a formula, which ivy does not compute: the lowest or
-				// the highest value
+			if !ok {
+				// a formula that ivy does not compute: the lowest or the
+				// highest value
 				t.Kind = ""
 			}
 		case "min", "max":
@@ -221,6 +221,25 @@ func (b *book) thresholds(n roxmltree.Node) []sheet.Threshold {
 		}
 	}
 	return out
+}
+
+// thresholdValue returns the value of the formula f of a threshold of the
+// sheet sh of the index index. It computes each formula of a sheet once.
+func (b *book) thresholdValue(sh *sheet.Sheet, index int, f string) (float64, bool) {
+	f = strings.TrimSpace(f)
+	if v, err := strconv.ParseFloat(f, 64); err == nil {
+		return v, true
+	}
+	key := nameKey{index, f}
+	if v, ok := b.formulas[key]; ok {
+		return v.value, v.ok
+	}
+	v, ok := b.evalNumber(sh, index, f, 0)
+	if b.formulas == nil {
+		b.formulas = make(map[nameKey]formulaValue)
+	}
+	b.formulas[key] = formulaValue{v, ok}
+	return v, ok
 }
 
 // operand reads the formula of a rule of cellIs: a number, a text in

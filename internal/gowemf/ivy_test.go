@@ -460,3 +460,28 @@ func TestPlayGlyphText(t *testing.T) {
 		}
 	}
 }
+
+// TestWMFDIBWithoutColorTable checks that a packed DIB of 8 bits whose
+// pixels fill the record without its color table takes the colors of the
+// selected palette (change 20). Without a selected palette, the DIB stays
+// malformed.
+func TestWMFDIBWithoutColorTable(t *testing.T) {
+	wpal := testRecord(WMF, MetaCreatePalette, 0, cat(words(0x300, 2), []byte{1, 2, 3, 0, 4, 5, 6, 0}))
+	// a BITMAPINFOHEADER of 2 by 1 pixels of 8 bits, without a color
+	// table, and a row of 4 bytes
+	dib := cat(longs(40, 2, 1), words(1, 8), longs(0, 4, 0, 0, 0, 0), []byte{1, 0, 0, 0})
+	blit := testRecord(WMF, MetaDIBStretchBlt, 0, cat(longs(0x00cc0020), words(1, 2, 0, 0, 1, 2, 0, 0), dib))
+	b := record(t, wmfScene(96, 64, 1, wpal, wmfRec(MetaSelectPalette, 0), blit), PlayOptions{})
+	if len(b.images) != 1 {
+		t.Fatal("images", len(b.images))
+	}
+	im := b.images[0].draw.Image
+	for x, want := range []color.NRGBA{{4, 5, 6, 255}, {1, 2, 3, 255}} {
+		if c := color.NRGBAModel.Convert(im.At(x, 0)); c != want {
+			t.Errorf("pixel %d: %v, want %v", x, c, want)
+		}
+	}
+	if _, err := ParsePackedDIB(dib, 0, nil, ImageLimits{}); !errors.Is(err, ErrMalformed) {
+		t.Errorf("without a palette: %v", err)
+	}
+}

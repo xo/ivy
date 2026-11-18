@@ -327,7 +327,7 @@ func (w *workbook) toCell(c cell, style int) sheet.Cell {
 	case cellNumber:
 		out.Kind, out.Value = sheet.KindNumber, c.num
 		res := numfmt.Number(code, c.num, w.date1904)
-		out.Text = res.Text
+		out.Text, out.AsText = res.Text, res.AsText
 		if res.Color > 0 && res.Color+7 < len(w.palette) {
 			out.Color = w.palette[res.Color+7]
 		}

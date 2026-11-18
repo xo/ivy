@@ -217,6 +217,16 @@ func parseDIB(info, pixels []byte, packed bool, usage uint32, logical []color.NR
 	if usage == 2 {
 		count = 0
 	}
+	// ivy: a packed DIB of 8 bits or less whose pixels fill the record
+	// without its color table, as PowerPoint writes in the WMF thumbnail of
+	// a presentation, takes the colors of the selected logical palette.
+	noTable := false
+	if packed && usage == 0 && d.bpp <= 8 && used == 0 && d.compression == 0 && len(logical) > 0 {
+		stride := ((uint64(w)*uint64(d.bpp) + 31) / 32) * 4
+		if uint64(len(info)-pos) == stride*uint64(h) {
+			noTable, count = true, 0
+		}
+	}
 	if count > uint64(len(info)-pos)/uint64(paletteWidth) {
 		return bad("palette length")
 	}
@@ -224,7 +234,14 @@ func parseDIB(info, pixels []byte, packed bool, usage uint32, logical []color.NR
 		return bad("profile overlaps color table")
 	}
 	if d.bpp <= 8 {
-		if usage == 2 {
+		if noTable {
+			// ivy: an index past the logical palette is black
+			d.palette = make([]color.NRGBA, 1<<d.bpp)
+			for i := range d.palette {
+				d.palette[i] = color.NRGBA{A: 255}
+			}
+			copy(d.palette, logical)
+		} else if usage == 2 {
 			if len(logical) == 0 || len(logical) > 256 {
 				return bad("logical palette")
 			}

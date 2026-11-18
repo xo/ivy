@@ -78,8 +78,7 @@ var iconSets = [...]string{
 }
 
 // themeColors are the colors of the theme of Office 2007, the theme of a
-// workbook of Excel 97, by their index in SpreadsheetML, which swaps the
-// dark and the light colors.
+// workbook without a record THEME, by their index in SpreadsheetML.
 var themeColors = [...]uint32{
 	0xFFFFFF, 0x000000, 0xEEECE1, 0x1F497D, 0x4F81BD, 0xC0504D,
 	0x9BBB59, 0x8064A2, 0x4BACC6, 0xF79646, 0x0000FF, 0x800080,
@@ -253,7 +252,7 @@ func (w *workbook) dxfn12(b []byte, at int) (*sheet.Diff, int, bool) {
 	if !ok {
 		return nil, 0, false
 	}
-	xfExt(d, body[n:])
+	w.xfExt(d, body[n:])
 	return d, at + cb, true
 }
 
@@ -370,7 +369,7 @@ func (w *workbook) dxfn(b []byte) (*sheet.Diff, int, bool) {
 
 // xfExt reads the full colors of an XFExtNoFRT, which a DXFN12 ends with
 // (MS-XLS 2.5.283): they replace the colors of the palette.
-func xfExt(d *sheet.Diff, b []byte) {
+func (w *workbook) xfExt(d *sheet.Diff, b []byte) {
 	if d == nil || len(b) < 8 {
 		return
 	}
@@ -385,7 +384,7 @@ func xfExt(d *sheet.Diff, b []byte) {
 			return
 		}
 		data := b[at+4 : at+cb]
-		if c, ok := fullColor(data); ok {
+		if c, ok := w.fullColor(data); ok {
 			switch typ {
 			case 0x05:
 				d.Fill = c
@@ -403,12 +402,12 @@ func xfExt(d *sheet.Diff, b []byte) {
 
 // fullColor reads a FullColorExt (MS-XLS 2.5.155): an RGB color or a color
 // of the theme, with a tint.
-func fullColor(b []byte) (color.NRGBA, bool) {
+func (w *workbook) fullColor(b []byte) (color.NRGBA, bool) {
 	if len(b) < 8 {
 		return color.NRGBA{}, false
 	}
 	tint := float64(int16(le.Uint16(b[2:]))) / 32767
-	return xclr(int(le.Uint16(b)), b[4:8], tint)
+	return w.xclr(int(le.Uint16(b)), b[4:8], tint)
 }
 
 // cfColor reads a CFColor (MS-XLS 2.5.32): the type, the value and the
@@ -421,23 +420,21 @@ func (w *workbook) cfColor(b []byte) (color.NRGBA, bool) {
 	if typ == 1 {
 		return w.color(int(le.Uint32(b[4:]))), true
 	}
-	return xclr(typ, b[4:8], f64(b[8:]))
+	return w.xclr(typ, b[4:8], f64(b[8:]))
 }
 
 // xclr returns the color of the type typ and of the value v: 2 for RGB and
 // 3 for a color of the theme.
-func xclr(typ int, v []byte, tint float64) (color.NRGBA, bool) {
+func (w *workbook) xclr(typ int, v []byte, tint float64) (color.NRGBA, bool) {
 	var c color.NRGBA
 	switch typ {
 	case 2:
 		c = color.NRGBA{v[0], v[1], v[2], 255}
 	case 3:
-		i := int(le.Uint32(v))
-		if i < 0 || i >= len(themeColors) {
+		var ok bool
+		if c, ok = w.themeColor(int(le.Uint32(v))); !ok {
 			return color.NRGBA{}, false
 		}
-		t := themeColors[i]
-		c = color.NRGBA{uint8(t >> 16), uint8(t >> 8), uint8(t), 255}
 	default:
 		return color.NRGBA{}, false
 	}

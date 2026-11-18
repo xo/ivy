@@ -742,7 +742,7 @@ func (w *workbook) chartObject(look *chartLookup, recs []record, width, height f
 	}
 	xml := c.xml(w, look)
 	ch, err := chart.Parse([]byte(xml), chart.Options{
-		Theme:  office2007,
+		Theme:  w.chartTheme(),
 		Config: cfg,
 		Fonts:  fontdb.Of(cfg),
 		Width:  width,

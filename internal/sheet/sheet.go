@@ -175,6 +175,9 @@ type Cell struct {
 	// Value is the number of a cell of KindNumber, which the conditional
 	// formats compare.
 	Value float64
+	// AsText aligns a number of the alignment General to the left, as
+	// text. Excel does so for a number whose format is text only, "@".
+	AsText bool
 	// Color is the color of the section of the format code, such as
 	// [Red], or transparent.
 	Color color.NRGBA

@@ -284,9 +284,11 @@ func TestImageAndChart(t *testing.T) {
 	doc := docs[0]
 	for _, want := range []string{
 		// the image covers 4 rows of 14.52 points and 2 columns of 51.57
-		// points, and each row shows its slice
-		`<td class="a"><div class="cl" style="width:103.13pt;height:15.52pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
-		`<td class="a"><div class="cl" style="width:103.13pt;height:15.52pt"><img style="position:absolute;left:0pt;top:-43.56pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
+		// points, and each row shows its slice, with a strip across the
+		// edge of the row when the image goes on in the next row
+		`<td class="a"><div class="cl" style="width:103.13pt;height:14.52pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div>` +
+			`<div class="cl" style="left:0.75pt;top:13.52pt;width:98.5pt;height:2pt"><img style="position:absolute;left:-0.75pt;top:-13.52pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
+		`<td class="a"><div class="cl" style="width:103.13pt;height:14.52pt"><img style="position:absolute;left:0pt;top:-43.56pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
 		`<img style="position:absolute;left:0pt;top:0pt;width:154.7pt;height:145.2pt" src="ivy-object:chart2" alt="">`,
 		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart: Sales</div>`,
 	} {

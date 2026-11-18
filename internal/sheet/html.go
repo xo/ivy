@@ -1310,10 +1310,10 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 			class = append(class, "s"+strconv.Itoa(style))
 		}
 		if hasText && st.HAlign == "" {
-			switch cell.Kind {
-			case KindNumber:
+			switch {
+			case cell.Kind == KindNumber && !cell.AsText:
 				class = append(class, "n")
-			case KindBool, KindError:
+			case cell.Kind == KindBool, cell.Kind == KindError:
 				class = append(class, "x")
 			}
 		}
@@ -1787,11 +1787,62 @@ func (w *writer) image(p placed) {
 		if p.clipW <= 0 || p.clipH <= 0 {
 			return
 		}
-		// the slice reaches 1 point into the next row, which draws its own
-		// slice over it, so that no seam shows between the rows
-		b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt((p.clipH+1)*s) + `">`)
-		defer b.WriteString("</div>")
+		if img.Object != "" || img.Path == "" {
+			// the slice of a chart or of a frame reaches 1 point into the
+			// next row, which draws its own slice over it, so that no
+			// seam shows between the rows
+			b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt((p.clipH+1)*s) + `">`)
+			w.imageTag(img, pos)
+			b.WriteString("</div>")
+			return
+		}
+		b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt(p.clipH*s) + `">`)
+		w.imageTag(img, pos)
+		b.WriteString("</div>")
+		w.strip(p)
+		return
 	}
+	w.imageTag(img, pos)
+}
+
+// strip draws the picture of the slice p again in a strip of 2 points
+// across the bottom edge of its row, when the picture goes on in the next
+// row. The two rows clip the picture at the same line, and each one draws
+// a part of a pixel on the line, which leaves a light seam. The strip
+// draws the whole pixel. It leaves out stripInset at each side of the
+// picture, whose smoothed pixels would draw twice there and leave a dark
+// mark.
+func (w *writer) strip(p placed) {
+	img := p.img
+	if p.dy+img.Height <= p.clipH+0.01 || !w.spend(2) {
+		return
+	}
+	left := max(0, p.dx) + stripInset
+	right := min(p.clipW, p.dx+img.Width) - stripInset
+	if right <= left {
+		return
+	}
+	s := w.scale
+	top := p.clipH - stripHalf
+	pos := "left:" + pt((p.dx-left)*s) + ";top:" + pt((p.dy-top)*s) + ";width:" + pt(img.Width*s) + ";height:" + pt(img.Height*s)
+	b := &w.body
+	b.WriteString(`<div class="cl" style="left:` + pt(left*s) + ";top:" + pt(top*s) + ";width:" + pt((right-left)*s) +
+		";height:" + pt(2*stripHalf*s) + `">`)
+	w.imageTag(img, pos)
+	b.WriteString("</div>")
+}
+
+// stripHalf is the half height of the strip of a slice of a picture, and
+// stripInset the width that it leaves out at each side of the picture, in
+// points. The inset is a pixel at 96 dots per inch.
+const (
+	stripHalf  = 1
+	stripInset = 0.75
+)
+
+// imageTag writes the element of the image img at the position pos.
+func (w *writer) imageTag(img Image, pos string) {
+	b := &w.body
 	switch {
 	case img.Object != "":
 		b.WriteString(`<img style="position:absolute;` + pos + `" src="` + html.EscapeString(layout.ObjectURL(img.Object)) + `" alt="">`)

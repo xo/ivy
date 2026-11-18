@@ -268,6 +268,11 @@ func (r *odsReader) table(t roxmltree.Node) (*sheet.Sheet, bool) {
 	ts := &odsTable{sh: sh, values: map[[2]int]odsValue{}}
 	r.walk(ts, t, 0)
 	r.applyConds(sh, ts.conds, ts.values)
+	for c := range t.Children() {
+		if odsLocal(c) == "conditional-formats" {
+			r.condFormats(sh, c)
+		}
+	}
 	sh.Cols = append(sh.Cols, ts.colStyles...)
 	for i := range sh.Images {
 		if img := &sh.Images[i]; img.Row < 0 {
@@ -570,8 +575,22 @@ func (r *odsReader) cell(cn roxmltree.Node) (sheet.Cell, bool) {
 	valueType := ebook.Attr(cn, "value-type")
 	switch valueType {
 	case "float", "percentage", "currency", "date", "time", "boolean":
-		// LibreOffice aligns a boolean to the right, as a number
+		// LibreOffice aligns a boolean to the right, as a number. The
+		// conditional formats compare the value of a number, but not of
+		// a date or a time.
 		c.Kind = sheet.KindNumber
+		c.Value = math.NaN()
+		switch valueType {
+		case "boolean":
+			c.Value = 0
+			if ebook.Attr(cn, "boolean-value") == "true" {
+				c.Value = 1
+			}
+		case "float", "percentage", "currency":
+			if v, err := strconv.ParseFloat(ebook.Attr(cn, "value"), 64); err == nil {
+				c.Value = v
+			}
+		}
 	}
 	if len(paras) == 0 && valueType != "" && valueType != "string" {
 		// a cell without a paragraph shows its value. An empty paragraph
