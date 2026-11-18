@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"strings"
 	"testing"
 
@@ -345,5 +346,97 @@ func TestEffects(t *testing.T) {
 	// across the top edge at y = 120
 	if a, b, c := gray(50, 117), gray(50, 120), gray(50, 123); a > 60 || b < 200 || c > 60 {
 		t.Errorf("double line: %d, %d, %d, expected dark, white, dark", a, b, c)
+	}
+}
+
+// renderPaint fills a box of w by h points with the paint and returns the
+// pixels.
+func renderPaint(t *testing.T, pt Paint, w, h int) *okage.Pixmap {
+	t.Helper()
+	s := NewScene(ivy.Config{})
+	box, _ := okage.RectFromXYWH(0, 0, float32(w), float32(h))
+	s.AddFigure(&Figure{
+		Transform: okage.IdentityTransform(), W: float64(w), H: float64(h),
+		Paths: []Path{{Path: okage.PathFromRect(box)}},
+		Fill:  pt, Line: Line{Paint: Paint{Kind: PaintNone}},
+	})
+	pix, _ := okage.NewPixmap(uint32(w), uint32(h))
+	pix.Fill(okage.ColorWhite)
+	if err := s.Render(t.Context(), pix, okage.IdentityTransform()); err != nil {
+		t.Fatal(err)
+	}
+	return pix
+}
+
+// red returns the red of the pixel at x, y.
+func red(pix *okage.Pixmap, x, y uint32) int {
+	p, _ := pix.Pixel(x, y)
+	return int(p.Red())
+}
+
+// TestRectGradient checks that a gradient of the path "rect" from the top
+// left corner has the same color along each side of a rectangle, as page 4
+// of backgrounds.ppt shows in PowerPoint, and not along an ellipse.
+func TestRectGradient(t *testing.T) {
+	g := Gradient{Path: "rect", Focus: Insets{R: 1, B: 1}, Stops: []Stop{{Pos: 0, Color: White}, {Pos: 1, Color: Black}}}
+	pix := renderPaint(t, Paint{Kind: PaintGradient, Gradient: g}, 200, 100)
+	// the points at a quarter of the width, and at a quarter of the height,
+	// below the diagonal
+	for _, p := range [][2]uint32{{50, 10}, {50, 24}, {10, 25}, {30, 25}} {
+		if r := red(pix, p[0], p[1]); r < 185 || r > 195 {
+			t.Errorf("expected the color of a quarter of the way at %v, got %d", p, r)
+		}
+	}
+	if r := red(pix, 199, 50); r > 4 {
+		t.Errorf("expected black at the right edge, got %d", r)
+	}
+}
+
+// TestCircleGradient checks that a gradient of the path "circle" is a
+// circle that reaches the farthest corner, and not an ellipse that
+// stretches with the box, as page 3 of themes.pptx shows in PowerPoint.
+func TestCircleGradient(t *testing.T) {
+	g := Gradient{Path: "circle", Focus: Insets{L: 0.5, T: 0.5, R: 0.5, B: 0.5}, Stops: []Stop{{Pos: 0, Color: White}, {Pos: 1, Color: Black}}}
+	pix := renderPaint(t, Paint{Kind: PaintGradient, Gradient: g}, 300, 100)
+	// the radius is the distance to a corner, 158 points. The right edge is
+	// 150 points from the center, and the bottom edge 50 points.
+	if r := red(pix, 299, 50); r < 6 || r > 20 {
+		t.Errorf("expected almost black at the right edge, got %d", r)
+	}
+	if r := red(pix, 150, 99); r < 170 || r > 180 {
+		t.Errorf("expected light gray at the bottom edge, got %d", r)
+	}
+}
+
+// TestTwoStops checks that a gradient of DrawingML with two stops at 0 and 1
+// mixes in linear light along the curve of sigma, as PowerPoint draws it,
+// and that the other gradients keep their stops.
+func TestTwoStops(t *testing.T) {
+	c := &Colors{Theme: testTheme}
+	stop := func(pos, clr string) string {
+		return `<a:gs pos="` + pos + `">` + clr + `</a:gs>`
+	}
+	black, white := `<a:srgbClr val="000000"/>`, `<a:srgbClr val="FFFFFF"/>`
+	faint := `<a:srgbClr val="FFFFFF"><a:alpha val="20000"/></a:srgbClr>`
+	for _, tc := range []struct {
+		stops string
+		n     int
+	}{
+		{stop("0", black) + stop("100000", white), sigmaSteps + 1},
+		{stop("20000", black) + stop("100000", white), 2},
+		{stop("0", black) + stop("100000", faint), 2},
+		{stop("0", black) + stop("50000", `<a:srgbClr val="FF0000"/>`) + stop("100000", white), 3},
+	} {
+		pt, ok := c.PaintOf(parse(t, `<a:gradFill><a:gsLst>`+tc.stops+`</a:gsLst></a:gradFill>`), nil)
+		if !ok || len(pt.Gradient.Stops) != tc.n {
+			t.Errorf("%s: expected %d stops, got %d", tc.stops, tc.n, len(pt.Gradient.Stops))
+		}
+	}
+	// a quarter of the way, sigma mixes 14 percent of white in linear
+	// light, as the samples of PowerPoint show
+	stops := ShadeStops([]Stop{{Pos: 0, Color: Black}, {Pos: 1, Color: White}}, true, true)
+	q := stops[sigmaSteps/4]
+	if lin := math.Pow(q.Color.R, 2.2); q.Pos != 0.25 || lin < 0.13 || lin > 0.15 {
+		t.Errorf("expected 14 percent of white at 0.25, got %g at %g", lin, q.Pos)
 	}
 }

@@ -37,7 +37,7 @@ const (
 	PropFillToRight        = 0x018F
 	PropFillToBottom       = 0x0190
 	PropFillShadeColors    = 0x0197
-	PropFillShadeType      = 0x0199
+	PropFillShadeType      = 0x019C
 	PropFillBools          = 0x01BF
 	PropLineColor          = 0x01C0
 	PropLineOpacity        = 0x01C1

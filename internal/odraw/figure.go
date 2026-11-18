@@ -24,10 +24,11 @@ const (
 	ColorSysIndex    = 0x10000000
 )
 
-// The flags of the property fillShadeType of MS-ODRAW. The default is a
-// shading with gamma and sigma.
+// The flags of the property fillShadeType of MS-ODRAW (MSOSHADETYPE). The
+// default is a shading with gamma and sigma.
 const (
 	shadeGamma   = 0x1
+	shadeSigma   = 0x2
 	shadeDefault = 0x3
 )
 
@@ -141,7 +142,12 @@ func (s *Style) Fill(c Chain) drawingml.Paint {
 func (s *Style) gradient(c Chain, col, back drawingml.RGBA, alpha float64) drawingml.Paint {
 	col = col.WithAlpha(col.A * alpha)
 	g := drawingml.Gradient{Angle: math.Mod(90-Fixed(c.Value(PropFillAngle, 0))+720, 360)}
-	if stops := s.shadeColors(c); len(stops) >= 2 {
+	// the angle of msofillShadeScale is in the unit square, which the box
+	// of the shape stretches
+	g.Scaled = c.Value(PropFillType, 0) == FillShadeScale
+	stops := s.shadeColors(c)
+	colors := len(stops) >= 2
+	if colors {
 		g.Stops = stops
 	} else {
 		focus := float64(int32(c.Value(PropFillFocus, 0))) / 100
@@ -171,43 +177,14 @@ func (s *Style) gradient(c Chain, col, back drawingml.RGBA, alpha float64) drawi
 		// of a linear one goes from its start to its end: the back color
 		// is at the focus for a focus of 0, as PowerPoint draws it
 	}
-	if c.Value(PropFillShadeType, shadeDefault)&shadeGamma != 0 {
-		g.Stops = gammaStops(g.Stops)
+	if colors {
+		// PowerPoint draws the stops of fillShadeColors linearly, whatever
+		// the shading says
+		return drawingml.Paint{Kind: drawingml.PaintGradient, Gradient: g}
 	}
+	typ := c.Value(PropFillShadeType, shadeDefault)
+	g.Stops = drawingml.ShadeStops(g.Stops, typ&shadeSigma != 0, typ&shadeGamma != 0)
 	return drawingml.Paint{Kind: drawingml.PaintGradient, Gradient: g}
-}
-
-// gammaSteps is the number of the stops that gammaStops puts between two
-// stops.
-const gammaSteps = 8
-
-// gammaStops returns the stops of a gradient whose colors mix in linear
-// light, as the shading of msoshadeGamma does: a gradient from blue to
-// purple stays lighter in its middle than a mix of the values of sRGB. The
-// stops between two stops follow the curve of the mix.
-func gammaStops(stops []drawingml.Stop) []drawingml.Stop {
-	if len(stops) < 2 {
-		return stops
-	}
-	out := make([]drawingml.Stop, 0, (len(stops)-1)*gammaSteps+1)
-	for i := range len(stops) - 1 {
-		a, b := stops[i], stops[i+1]
-		for k := range gammaSteps {
-			t := float64(k) / gammaSteps
-			out = append(out, drawingml.Stop{Pos: a.Pos + (b.Pos-a.Pos)*t, Color: linearMix(a.Color, b.Color, t)})
-		}
-	}
-	return append(out, stops[len(stops)-1])
-}
-
-// linearMix returns the color the fraction t of the way from a to b, mixed
-// in linear light. The alpha mixes as it is.
-func linearMix(a, b drawingml.RGBA, t float64) drawingml.RGBA {
-	mix := func(x, y float64) float64 {
-		lx, ly := math.Pow(Unit(x), 2.2), math.Pow(Unit(y), 2.2)
-		return math.Pow(lx+(ly-lx)*t, 1/2.2)
-	}
-	return drawingml.RGBA{R: mix(a.R, b.R), G: mix(a.G, b.G), B: mix(a.B, b.B), A: a.A + (b.A-a.A)*t}
 }
 
 // shadeColors reads the stops of fillShadeColors, an array of a color and a

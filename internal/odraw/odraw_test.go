@@ -5,11 +5,17 @@ import (
 	"encoding/binary"
 	"image/color"
 	"image/png"
+	"math"
 	"testing"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
 )
+
+// near reports whether a and b differ by less than 0.01.
+func near(a, b float64) bool {
+	return math.Abs(a-b) < 0.01
+}
 
 // record returns a record of Office Drawing of the type typ and the
 // instance inst, with the body.
@@ -129,7 +135,8 @@ func TestStore(t *testing.T) {
 
 // TestPathGradient checks that a gradient from the center starts at the
 // focus with the back color, as page 4 of backgrounds.ppt shows it, and
-// that the colors of a shading mix in linear light.
+// that the colors of the default shading mix in linear light along the
+// curve of sigma.
 func TestPathGradient(t *testing.T) {
 	var s Style
 	var p Props
@@ -138,7 +145,7 @@ func TestPathGradient(t *testing.T) {
 	p.Set(PropFillBackColor, 0xFFFFFF)
 	pt := s.Fill(Chain{&p})
 	g := pt.Gradient
-	if pt.Kind != drawingml.PaintGradient || g.Path != "rect" || len(g.Stops) != gammaSteps+1 {
+	if pt.Kind != drawingml.PaintGradient || g.Path != "rect" || len(g.Stops) < 9 || len(g.Stops)%2 == 0 {
 		t.Fatalf("expected a path gradient, got %+v", pt)
 	}
 	if first, last := g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color; first != drawingml.White || last.NRGBA().R != 0x40 {
@@ -146,8 +153,54 @@ func TestPathGradient(t *testing.T) {
 	}
 	// the middle of white and of 40% gray in linear light is lighter than
 	// the middle of their values
-	if mid := g.Stops[gammaSteps/2].Color.NRGBA().R; mid < 0xb4 {
-		t.Errorf("expected a light middle, got %#x", mid)
+	mid := g.Stops[len(g.Stops)/2]
+	if !near(mid.Pos, 0.5) || mid.Color.NRGBA().R < 0xb4 {
+		t.Errorf("expected a light middle, got %+v", mid)
+	}
+	// sigma changes the color slowly near the stops: a quarter of the way
+	// is less than a quarter of the mix in linear light
+	quarter := g.Stops[len(g.Stops)/4]
+	if lin := math.Pow(quarter.Color.R, 2.2); !near(quarter.Pos, 0.25) || lin < 0.85 || lin > 0.9 {
+		t.Errorf("expected the curve of sigma, got %+v, %g in linear light", quarter, lin)
+	}
+}
+
+// TestShadeType checks the flags of fillShadeType, the angle of a scaled
+// shading, and the stops of fillShadeColors, which mix linearly.
+func TestShadeType(t *testing.T) {
+	var s Style
+	tests := []struct {
+		typ    uint32
+		set    bool
+		stops  int
+		scaled bool
+		colors bool
+	}{
+		{typ: 0, set: true, stops: 2},
+		{typ: 0x40000001, set: true, stops: 9},
+		{typ: 0x40000003, set: true, stops: 33},
+		{set: false, stops: 33, scaled: true},
+		{typ: 0x40000003, set: true, stops: 2, colors: true},
+	}
+	for i, test := range tests {
+		var p Props
+		p.Set(PropFillType, FillShade)
+		if test.scaled {
+			p.Set(PropFillType, FillShadeScale)
+		}
+		p.Set(PropFillColor, 0xFF0000)
+		p.Set(PropFillBackColor, 0x0000FF)
+		if test.set {
+			p.Set(PropFillShadeType, test.typ)
+		}
+		if test.colors {
+			arr := []byte{2, 0, 2, 0, 8, 0, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0, 0, 0, 0, 1, 0}
+			p.Read(append([]byte{0x97, 0x81, byte(len(arr)), 0, 0, 0}, arr...), 1)
+		}
+		g := s.Fill(Chain{&p}).Gradient
+		if len(g.Stops) != test.stops || g.Scaled != test.scaled {
+			t.Errorf("%d: expected %d stops and scaled %t, got %d and %t", i, test.stops, test.scaled, len(g.Stops), g.Scaled)
+		}
 	}
 }
 

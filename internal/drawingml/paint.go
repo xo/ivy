@@ -231,6 +231,10 @@ func (c *Colors) gradient(n roxmltree.Node) Paint {
 	if len(g.Stops) == 0 {
 		return Paint{Kind: PaintNone}
 	}
+	if s := g.Stops; len(s) == 2 && s[0].Pos == 0 && s[1].Pos == 1 && s[0].Color.A == s[1].Color.A {
+		// two colors, as the shading of Office Art draws them
+		g.Stops = ShadeStops(g.Stops, true, true)
+	}
 	return pt
 }
 
@@ -415,7 +419,8 @@ func (g *Gradient) shader(box okage.Rect) (okage.Shader, bool) {
 	w, h := max(float64(box.Width()), 1e-3), max(float64(box.Height()), 1e-3)
 	var sh okage.Shader
 	var ok bool
-	if g.Path == "" {
+	switch g.Path {
+	case "":
 		var p0, p1 okage.Point
 		var t okage.Transform
 		if g.Scaled {
@@ -427,21 +432,18 @@ func (g *Gradient) shader(box okage.Rect) (okage.Shader, bool) {
 			t = okage.TransformFromTranslate(float32(x), float32(y))
 		}
 		sh, ok = okage.NewLinearGradient(p0, p1, stops, okage.SpreadModePad, t)
-	} else {
-		// the first stop is at the focus, and the last one at the edge.
-		// The gradients of the rectangle and of the shape are drawn as an
-		// ellipse.
+	case "circle":
+		// the first stop is at the center of the focus, and the last one
+		// on a circle through the farthest corner of the box, as
+		// PowerPoint draws it. The circle does not stretch with the box.
 		f := g.Focus
-		cx := (f.L + (1 - f.R)) / 2
-		cy := (f.T + (1 - f.B)) / 2
-		// the radius reaches the farthest corner of the unit square
-		r := math.Hypot(max(cx, 1-cx), max(cy, 1-cy))
-		if g.Path != "circle" {
-			r = max(max(cx, 1-cx), max(cy, 1-cy))
-		}
-		t := okage.TransformFromTranslate(float32(x), float32(y)).PreScale(float32(w), float32(h))
-		c := okage.PointFromXY(float32(cx), float32(cy))
-		sh, ok = okage.NewRadialGradient(c, 0, c, float32(r), stops, okage.SpreadModePad, t)
+		cx := (unit(f.L) + 1 - unit(f.R)) / 2
+		cy := (unit(f.T) + 1 - unit(f.B)) / 2
+		r := math.Hypot(max(cx, 1-cx)*w, max(cy, 1-cy)*h)
+		c := okage.PointFromXY(float32(x+cx*w), float32(y+cy*h))
+		sh, ok = okage.NewRadialGradient(c, 0, c, float32(r), stops, okage.SpreadModePad, okage.IdentityTransform())
+	default:
+		sh, ok = g.rectShader(x, y, w, h)
 	}
 	if !ok {
 		return okage.SolidColor(g.Stops[len(g.Stops)-1].Color.Okage()), true
@@ -459,6 +461,159 @@ func linearEnds(angle, w, h float64) (okage.Point, okage.Point) {
 	cx, cy := w/2, h/2
 	return okage.PointFromXY(float32(cx-cos*half), float32(cy-sin*half)),
 		okage.PointFromXY(float32(cx+cos*half), float32(cy+sin*half))
+}
+
+// rectMargin is the size of the band around the box of a gradient of the
+// path "rect", in units of the box, that takes the color of the last stop.
+// A stroke or a path that goes out of the box draws there.
+const rectMargin = 1000
+
+// rectShader returns the shader of a gradient of the path "rect" or
+// "shape" over the box at x, y of the size w by h. The first stop is on the
+// edge of the focus, and the last one on the edge of the box. A stop
+// between them is on the rectangle that is that fraction of the way from
+// the focus to the box. Lines from the corners of the focus to the corners
+// of the box join the four sides, as PowerPoint draws them. The shape of
+// the path "shape" is drawn as its box.
+//
+// In each of the four parts between the focus and the box, the fraction is
+// linear in the distance from the side of the focus. A mesh of triangles
+// with a color at each corner then draws each band between two stops
+// exactly.
+func (g *Gradient) rectShader(x, y, w, h float64) (okage.Shader, bool) {
+	stops := g.Stops
+	if stops[0].Pos > 0 {
+		stops = append([]Stop{{Pos: 0, Color: stops[0].Color}}, stops...)
+	}
+	if last := stops[len(stops)-1]; last.Pos < 1 {
+		stops = append(stops[:len(stops):len(stops)], Stop{Pos: 1, Color: last.Color})
+	}
+	f := g.Focus
+	l, r := unit(f.L), 1-unit(f.R)
+	if l > r {
+		l, r = (l+r)/2, (l+r)/2
+	}
+	t, b := unit(f.T), 1-unit(f.B)
+	if t > b {
+		t, b = (t+b)/2, (t+b)/2
+	}
+	type pt struct{ x, y float64 }
+	at := func(p pt) okage.Point {
+		return okage.PointFromXY(float32(p.x), float32(p.y))
+	}
+	lerp := func(p, q pt, s float64) okage.Point {
+		return at(pt{p.x + (q.x-p.x)*s, p.y + (q.y-p.y)*s})
+	}
+	vertex := func(p okage.Point, c RGBA) okage.MeshVertex {
+		return okage.MeshVertex{Point: p, Color: c.Okage()}
+	}
+	// each side goes from the edge p to the edge q of the focus, and
+	// from the corner P to the corner Q of the box
+	sides := [4][4]pt{
+		{{l, t}, {r, t}, {0, 0}, {1, 0}},
+		{{r, t}, {r, b}, {1, 0}, {1, 1}},
+		{{r, b}, {l, b}, {1, 1}, {0, 1}},
+		{{l, b}, {l, t}, {0, 1}, {0, 0}},
+	}
+	tris := make([]okage.MeshTriangle, 0, 8*len(stops)+10)
+	first, last := stops[0].Color, stops[len(stops)-1].Color
+	// the focus takes the color of the first stop
+	tris = append(tris,
+		okage.MeshTriangle{vertex(at(pt{l, t}), first), vertex(at(pt{r, t}), first), vertex(at(pt{r, b}), first)},
+		okage.MeshTriangle{vertex(at(pt{l, t}), first), vertex(at(pt{r, b}), first), vertex(at(pt{l, b}), first)},
+	)
+	for _, sd := range sides {
+		p, q, cp, cq := sd[0], sd[1], sd[2], sd[3]
+		for i := range len(stops) - 1 {
+			s0, s1 := stops[i], stops[i+1]
+			a0, b0 := lerp(p, cp, s0.Pos), lerp(q, cq, s0.Pos)
+			a1, b1 := lerp(p, cp, s1.Pos), lerp(q, cq, s1.Pos)
+			tris = append(tris,
+				okage.MeshTriangle{vertex(a0, s0.Color), vertex(b0, s0.Color), vertex(b1, s1.Color)},
+				okage.MeshTriangle{vertex(a0, s0.Color), vertex(b1, s1.Color), vertex(a1, s1.Color)},
+			)
+		}
+		// the band out of the box takes the color of the last stop
+		const m = rectMargin
+		op := pt{cp.x + (cp.x-0.5)*2*m, cp.y + (cp.y-0.5)*2*m}
+		oq := pt{cq.x + (cq.x-0.5)*2*m, cq.y + (cq.y-0.5)*2*m}
+		tris = append(tris,
+			okage.MeshTriangle{vertex(at(cp), last), vertex(at(cq), last), vertex(at(oq), last)},
+			okage.MeshTriangle{vertex(at(cp), last), vertex(at(oq), last), vertex(at(op), last)},
+		)
+	}
+	ts := okage.TransformFromTranslate(float32(x), float32(y)).PreScale(float32(w), float32(h))
+	return okage.NewMeshGradient(tris, ts)
+}
+
+// sigmaSteps is the number of the stops that ShadeStops puts between two
+// stops for the curve sigma, and gammaSteps for the mix in linear light
+// alone.
+const (
+	sigmaSteps = 32
+	gammaSteps = 8
+)
+
+// ShadeStops returns the stops of a gradient of Office Art whose colors
+// change between two stops as its shading says. sigma moves the colors
+// along the curve of sigma, which changes slowly near each stop. gamma
+// mixes the colors in linear light, so that a gradient from blue to purple
+// stays lighter in its middle than a mix of the values of sRGB. The stops
+// between two stops follow the curve of the mix.
+//
+// PowerPoint draws a gradient of two colors with both, as the property
+// fillShadeType of MS-ODRAW gives by default. It draws a gradient of
+// DrawingML with two stops at 0 and 1 of the same alpha in the same way.
+// It draws a gradient with other stops, or with two alphas, linearly. The
+// PDF files that PowerPoint exports hold these gradients as sampled
+// functions of 512 samples, and the curve of sigma is the measure of those
+// samples.
+func ShadeStops(stops []Stop, sigma, gamma bool) []Stop {
+	if len(stops) < 2 || !sigma && !gamma {
+		return stops
+	}
+	steps := gammaSteps
+	if sigma {
+		steps = sigmaSteps
+	}
+	out := make([]Stop, 0, (len(stops)-1)*steps+1)
+	for i := range len(stops) - 1 {
+		a, b := stops[i], stops[i+1]
+		for k := range steps {
+			t := float64(k) / float64(steps)
+			m := t
+			if sigma {
+				m = sigmaCurve(t)
+			}
+			c := a.Color.Mix(b.Color, m)
+			if gamma {
+				c = linearMix(a.Color, b.Color, m)
+			}
+			out = append(out, Stop{Pos: a.Pos + (b.Pos-a.Pos)*t, Color: c})
+		}
+	}
+	return append(out, stops[len(stops)-1])
+}
+
+// sigmaCurve returns the fraction of the way from one stop to the next at
+// the fraction t of the distance, for the shading sigma. It is the
+// cumulative normal distribution from two standard deviations below its
+// mean to two above, scaled to go from 0 to 1. The samples of PowerPoint
+// follow it within 1 percent.
+func sigmaCurve(t float64) float64 {
+	phi := func(x float64) float64 { return (1 + math.Erf(x/math.Sqrt2)) / 2 }
+	lo := phi(-2)
+	return unit((phi(4*t-2) - lo) / (1 - 2*lo))
+}
+
+// linearMix returns the color the fraction t of the way from a to b, mixed
+// in linear light with a gamma of 2.2. The alpha mixes as it is.
+func linearMix(a, b RGBA, t float64) RGBA {
+	mix := func(x, y float64) float64 {
+		lx, ly := math.Pow(unit(x), 2.2), math.Pow(unit(y), 2.2)
+		return math.Pow(lx+(ly-lx)*t, 1/2.2)
+	}
+	return RGBA{R: mix(a.R, b.R), G: mix(a.G, b.G), B: mix(a.B, b.B), A: a.A + (b.A-a.A)*t}
 }
 
 // patterns holds the bits of the patterns of DrawingML that are lines, a

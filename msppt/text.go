@@ -74,9 +74,18 @@ func (b *builder) font(i int) (string, bool) {
 	return b.d.doc.fonts[i], true
 }
 
+// defaultKern is the smallest size of the text, in points, that PowerPoint
+// kerns in a .ppt file.
+const defaultKern = 12
+
 // runStyle converts the style of a run.
 func (b *builder) runStyle(c *cf) drawingml.RunStyle {
 	var rs drawingml.RunStyle
+	// a file of PowerPoint 97 has no kerning in its runs. PowerPoint kerns
+	// the text of 12 points and more: the PDF files that it exports from
+	// the .ppt files of the corpus move the pairs such as "To", "Wa" and
+	// "y." of those sizes closer, and not those of 11 points.
+	rs.Kern.Set(defaultKern)
 	if c.size.ok && c.size.v >= 1 && c.size.v <= 4000 {
 		rs.Size.Set(float64(c.size.v))
 	}
