@@ -74,6 +74,9 @@ type odtStyle struct {
 	name, family, parent string
 	listStyle, master    string
 	props                odtProps
+	// auto is set for an automatic style, which LibreOffice reads as the
+	// direct formatting of a paragraph.
+	auto bool
 }
 
 // odtListLevel is a level of a list style.
@@ -87,7 +90,16 @@ type odtListLevel struct {
 	textIndent       float64
 	followedBy       string
 	hasLabelPosition bool
-	props            odtProps
+	// labelAlignment is set for a level of the mode label-alignment,
+	// whose indents the paragraph can override. tabStop is the position of
+	// the tab after the label from the left of the text area, where
+	// hasTabStop is set, and labelAlign is the alignment of the label:
+	// start, center or end.
+	labelAlignment bool
+	tabStop        float64
+	hasTabStop     bool
+	labelAlign     string
+	props          odtProps
 }
 
 // odtPageLayout is a style:page-layout, with the sizes in points.
@@ -260,7 +272,7 @@ func (ts *odtStyles) read(root roxmltree.Node) {
 				}
 			}
 		case "styles", "automatic-styles":
-			ts.readStyles(n)
+			ts.readStyles(n, n.TagName().Name() == "automatic-styles")
 		case "master-styles":
 			for m := range n.Children() {
 				if !m.IsElement() || m.TagName().Name() != "master-page" {
@@ -281,8 +293,9 @@ func (ts *odtStyles) read(root roxmltree.Node) {
 	}
 }
 
-// readStyles reads the children of office:styles or office:automatic-styles.
-func (ts *odtStyles) readStyles(n roxmltree.Node) {
+// readStyles reads the children of office:styles or office:automatic-styles,
+// which auto is set for.
+func (ts *odtStyles) readStyles(n roxmltree.Node, auto bool) {
 	for s := range n.Children() {
 		if !s.IsElement() {
 			continue
@@ -294,7 +307,7 @@ func (ts *odtStyles) readStyles(n roxmltree.Node) {
 			st := &odtStyle{
 				name: odtAttr(s, "name"), family: odtAttr(s, "family"), parent: odtAttr(s, "parent-style-name"),
 				listStyle: odtAttr(s, "list-style-name"), master: odtAttr(s, "master-page-name"),
-				props: odtReadProps(s),
+				props: odtReadProps(s), auto: auto,
 			}
 			ts.styles[st.family+"/"+st.name] = st
 		case "list-style":
@@ -344,12 +357,14 @@ func readODTListStyle(n roxmltree.Node) *[10]*odtListLevel {
 		lvl.suffix = odtAttr(l, "num-suffix")
 		if pr, ok := odtChild(l, "list-level-properties"); ok {
 			if al, ok := odtChild(pr, "list-level-label-alignment"); ok {
-				lvl.hasLabelPosition = true
+				lvl.hasLabelPosition, lvl.labelAlignment = true, true
 				lvl.marginLeft, _ = odtLength(odtAttr(al, "margin-left"))
 				lvl.textIndent, _ = odtLength(odtAttr(al, "text-indent"))
 				if f := odtAttr(al, "label-followed-by"); f != "" {
 					lvl.followedBy = f
 				}
+				lvl.tabStop, lvl.hasTabStop = odtLength(odtAttr(al, "list-tab-stop-position"))
+				lvl.labelAlign = odtAttr(pr, "text-align")
 			} else {
 				before, _ := odtLength(odtAttr(pr, "space-before"))
 				width, _ := odtLength(odtAttr(pr, "min-label-width"))
@@ -459,6 +474,15 @@ func (ts *odtStyles) props(family, name string) odtProps {
 	}
 	ts.resolved[key] = p
 	return p
+}
+
+// common returns the name of the common style of the style name of the
+// family: the parent of an automatic style, or name itself.
+func (ts *odtStyles) common(family, name string) string {
+	if st, ok := ts.styles[family+"/"+name]; ok && st.auto {
+		return st.parent
+	}
+	return name
 }
 
 // inherited returns the attribute of the style name or of its parents,

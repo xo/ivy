@@ -73,6 +73,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 		case "printOptions":
 			sh.Gridlines = flag(n, "gridLines", false)
 			sh.Page.CenterH = flag(n, "horizontalCentered", false)
+			sh.Page.CenterV = flag(n, "verticalCentered", false)
 		case "pageMargins":
 			p := &sh.Page
 			p.Left = margin(n, "left", p.Left)

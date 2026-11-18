@@ -99,7 +99,19 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	default:
 		s.set("display", "block")
 		s.set("position", "absolute")
-		s.set("left", pt(x))
+		switch st["mso-position-horizontal-relative"] {
+		case "", "text", "char":
+			if sec.cols > 1 && st["mso-position-horizontal"] == "" {
+				// The shape is placed from the left of the column of its
+				// anchor, as in Word. The box has no left, so that its
+				// place starts in the column of the line of the anchor.
+				s.set("margin-left", pt(x))
+				break
+			}
+			s.set("left", pt(x))
+		default:
+			s.set("left", pt(x))
+		}
 		switch st["mso-position-vertical-relative"] {
 		case "page":
 			s.set("top", pt(y-sec.top))

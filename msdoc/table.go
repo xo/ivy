@@ -493,8 +493,10 @@ func writeTable(b *strings.Builder, rows []tableRow) {
 				// a row of an exact height does not grow with the text of
 				// its cells, such as the empty paragraph after the text of
 				// a cell. The text that does not fit shows, and is not cut,
-				// so that the shapes that the cell anchors show
-				b.WriteString(`<div style="height: ` + num(h) + `pt">` + html + "</div>")
+				// so that the shapes that the cell anchors show. The block
+				// keeps the space before its first paragraph inside, so
+				// that the space does not make the row taller
+				b.WriteString(`<div style="display: flow-root; height: ` + num(h) + `pt">` + html + "</div>")
 			} else {
 				b.WriteString(html)
 			}

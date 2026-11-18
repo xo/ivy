@@ -61,21 +61,47 @@ found these faults. Each item names a file of the corpus.
     `poi/xls/landscape-a4-japanese.xls` on US Letter, and export them again.
     Word keeps A4. The review marks the four as faults of the reference.
     Source: `test/cmd/review/vm`.
-11. Find how Excel scales the printed height of a row for a font other than
-    Calibri and Arial. Excel prints the rows of 21 points of
-    `poi/xlsx/landscape-letter-budget.xlsx`, in Century Gothic, at 17.52
-    points, where ivy prints them at 0.968 of their height. The file gives 2
-    pages against 1. Source: `internal/sheet`.
-12. Place a VML shape in the column where Word places it. On page 2 of
-    `libreoffice/docx/mixed-orientation.docx`, Word draws the rectangle in
-    column 3, and ivy in column 1, because the columns flow differently.
-    Source: `docx`.
-13. Find why "Division/Program" in the text box of
-    `libreoffice/doc/landscape-letter-form.doc` wraps in ivy and not in
-    Word. Source: `msdoc`.
-14. Draw a picture or an object that spans rows of a sheet without the faint
+11. Find how Excel scales the printed height of a row for a default font
+    other than Calibri and Arial. With Calibri 11 and Arial 10, Excel prints a
+    row at 0.968 of its height. With Century Gothic 9, Excel prints the rows
+    of 21 points of `poi/xlsx/landscape-letter-budget.xlsx` at 17.52 points,
+    0.834. The text and the columns are not scaled, and the file gives 2
+    pages against 1. With Courier New 10, Excel prints the rows of 15 points
+    of `libreoffice/xlsx/smartart-import.xlsx` at 12.72 points, 0.848.
+    Neither the digit widths nor the heights of the fonts explain the two
+    ratios. A file in the VM with rows of known heights in a few default
+    fonts can tell. Source: `internal/sheet`.
+12. Draw a picture or an object that spans rows of a sheet without the faint
     seams where the rows cut it, as the jellyfish of `poi/xls/drawings.xls`
     shows. Source: `internal/sheet`.
+13. Place the text after the bullet of a list of a Word 97 document at the
+    tab stop of its level, as Word does. In
+    `libreoffice/doc/landscape-letter-form.doc`, Word puts the text 18 points
+    after the bullet, at the hanging indent of the LVL. The paragraph has an
+    indent of 9.35 points, and ivy puts the text there. Source: `msdoc`.
+14. Find why the table of `libreoffice/doc/legal-table.doc` starts 22 pixels
+    higher in ivy than in Word. Source: `msdoc`.
+15. Scale the header and the footer of a sheet of OpenDocument with the zoom
+    that fits the sheet on its pages (loext:scale-to-X and loext:scale-to-Y),
+    as LibreOffice does. In `libreoffice/ods/landscape-a4-table.ods`,
+    LibreOffice prints the header at 0.84 of its size, and the cells start
+    higher. Source: `odf` and `internal/sheet`.
+16. Wrap the East Asian text of the cells of
+    `poi/xls/landscape-a4-japanese.xls` as Excel does. Excel shows 2 lines of
+    MS PGothic in rows where ivy keeps 1 line, because `writer.lines` takes
+    lines of 1.22 times the size of the font. Excel also makes the first row
+    taller for its wrapped headers. Source: `internal/sheet`.
+17. Print the rows of the table of `libreoffice/rtf/landscape-a4-table.rtf`
+    as Word does. The first rows of Word are lower, its outer borders are
+    thicker, and Word wraps "x 2" in the narrow cells. Source: `rtf`.
+18. Make the lines of `libreoffice/odt/landscape-a4-table.odt` from page 16
+    match LibreOffice. ivy keeps one line more on a page from page 15, and
+    the pages drift by up to 3 lines around pages 20 to 25. The page count is
+    now right. Source: `odf` and the layout.
+19. Draw the data bar of H4 of `poi/xlsx/landscape-letter-budget.xlsx`
+    without its value, as Excel does. Also format the labels of its chart as
+    "$3,750", where ivy shows "$3 750". Source: `internal/sheet` and
+    `internal/chart`.
 
 ## Left by the charts
 

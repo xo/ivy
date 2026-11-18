@@ -73,7 +73,10 @@ var digitWidths = map[string]float64{
 	"simsun": 0.5, "宋体": 0.5, "nsimsun": 0.5, "新宋体": 0.5,
 	"mingliu": 0.5, "細明體": 0.5, "pmingliu": 0.4697, "新細明體": 0.4697,
 	"malgun gothic": 0.5508, "맑은 고딕": 0.5508,
-	"gulim": 0.5, "굴림": 0.5, "dotum": 0.5, "돋움": 0.5, "batang": 0.5, "바탕": 0.5,
+	// Windows 10 and later do not install Gulim and Dotum by default, and
+	// Excel measures them in Malgun Gothic, the font that replaces them
+	"gulim": 0.5508, "굴림": 0.5508, "dotum": 0.5508, "돋움": 0.5508,
+	"batang": 0.5, "바탕": 0.5,
 }
 
 // The resolutions of the screen, on which Excel measures the widths of the

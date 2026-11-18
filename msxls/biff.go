@@ -58,6 +58,7 @@ const (
 	recPrintGridlines       = 0x002B
 	recWSBool               = 0x0081
 	recHCenter              = 0x0083
+	recVCenter              = 0x0084
 	recPalette              = 0x0092
 	recStandardWidth        = 0x0099
 	recSetup                = 0x00A1

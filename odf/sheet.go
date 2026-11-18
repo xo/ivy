@@ -26,7 +26,7 @@ import (
 // for the layout of D10 with the package sheet.
 //
 // The cells show the text of their text:p elements, which the program
-// that wrote the file formatted. A cell without text shows its value. No
+// that wrote the file formatted. A cell without a text:p shows its value. No
 // formula is computed. The pager reads the widths of the columns and the
 // heights of the rows, the hidden rows and columns, the repeated rows and
 // columns, the merged cells, the styles of the cells with their parents,
@@ -573,8 +573,10 @@ func (r *odsReader) cell(cn roxmltree.Node) (sheet.Cell, bool) {
 		// LibreOffice aligns a boolean to the right, as a number
 		c.Kind = sheet.KindNumber
 	}
-	if c.Text == "" && valueType != "" && valueType != "string" {
-		// a cell without text shows its value
+	if len(paras) == 0 && valueType != "" && valueType != "string" {
+		// a cell without a paragraph shows its value. An empty paragraph
+		// is the text of a value whose format shows nothing, such as a
+		// zero in the format #,###
 		switch valueType {
 		case "date":
 			c.Text = ebook.Attr(cn, "date-value")
@@ -753,6 +755,7 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 	}
 	sh.Gridlines = strings.Contains(" "+p["print"]+" ", " grid ")
 	pg.CenterH = p["table-centering"] == "horizontal" || p["table-centering"] == "both"
+	pg.CenterV = p["table-centering"] == "vertical" || p["table-centering"] == "both"
 	// The header and the footer take their height from the area of the
 	// page: the cells start under them.
 	pg.Header, pg.Footer = pg.Top, pg.Bottom
@@ -765,8 +768,9 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 		if hf.Empty() {
 			continue
 		}
-		// The area is as high as its lines of text, at least its
-		// min-height, then its spacing from the cells.
+		// The area is as high as its lines of text and its spacing from
+		// the cells, and at least its min-height, which holds the
+		// spacing, as in LibreOffice.
 		lines := 1
 		for _, part := range [][]sheet.Field{hf.Left, hf.Center, hf.Right} {
 			n := 1
@@ -780,15 +784,15 @@ func (r *odsReader) pageSetup(sh *sheet.Sheet, name string) {
 			size = 10
 		}
 		height := float64(min(lines, 16)) * size * odsLineHeight
-		if v, ok := odsLength(p[kind+"-min-height"]); ok {
-			height = math.Max(height, v)
-		}
 		spacing := "margin-bottom"
 		if kind == "footer" {
 			spacing = "margin-top"
 		}
 		if v, ok := odsLength(p[kind+"-"+spacing]); ok {
 			height += v
+		}
+		if v, ok := odsLength(p[kind+"-min-height"]); ok {
+			height = math.Max(height, v)
 		}
 		if kind == "header" {
 			sh.Header = hf

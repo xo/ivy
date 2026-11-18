@@ -222,6 +222,12 @@ func (c *converter) startSection(i int) {
 	if s.cols > 1 {
 		style.set("columns", strconv.Itoa(s.cols))
 		style.set("column-gap", pt(s.colSpace))
+		if i+1 >= len(c.sections) || c.sections[i+1].typ != "continuous" {
+			// Word makes the columns of a section the same height only
+			// before a section that continues on the same page. Else the
+			// text fills each column to the bottom of the page.
+			style.set("column-fill", "auto")
+		}
 	}
 	c.w.WriteString(`<div class="section"`)
 	if style.b.Len() > 0 {

@@ -247,6 +247,7 @@ td {
   content: counter(pages);
 }
 body {
+  margin: 0;
   counter-reset: note;
 }
 .fn {
@@ -387,7 +388,8 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		style = append(style, "display: block", "white-space: pre-wrap")
 	}
 	// a text box goes before the paragraph of its anchor, and floats from
-	// there
+	// there. A paragraph that holds only objects that float has the line
+	// of its mark, as in Word
 	empty := true
 	for _, r := range para.runs {
 		switch {
@@ -395,6 +397,7 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 			if !p.inline {
 				p.writeDrawn(b, r.drawn)
 			}
+		case r.drawn != nil, r.float != nil:
 		default:
 			empty = false
 		}
@@ -407,10 +410,12 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	case 3, 4, 5:
 		style = append(style, "text-align: justify")
 	}
-	if para.pap.left > 0 && para.pap.left < 14400 {
+	// a negative indent moves the text into the margin of the page or the
+	// padding of the cell, as in Word
+	if para.pap.left != 0 && abs(para.pap.left) < 14400 {
 		style = append(style, "margin-left: "+pt(para.pap.left))
 	}
-	if para.pap.right > 0 && para.pap.right < 14400 {
+	if para.pap.right != 0 && abs(para.pap.right) < 14400 {
 		style = append(style, "margin-right: "+pt(para.pap.right))
 	}
 	if para.pap.first != 0 && abs(para.pap.first) < 14400 {

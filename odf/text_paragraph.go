@@ -222,20 +222,40 @@ func odtBox(s *odtCSS, p odtProps) bool {
 	return boxed
 }
 
+// indents returns the margin at the left and the indent of the first line
+// of a paragraph of the style name with the properties p, in the item of a
+// list list, which can be nil. The indents of a level of a list apply, but
+// in the mode label-alignment, an indent that the automatic style of the
+// paragraph sets wins, as the direct formatting of LibreOffice does.
+func (c *odtConverter) indents(name string, p odtProps, list *odtList) (left, indent float64) {
+	left, _ = odtLength(p["margin-left"])
+	indent, _ = odtLength(p["text-indent"])
+	if list == nil || list.lvl == nil || !list.lvl.hasLabelPosition {
+		return left, indent
+	}
+	var own odtProps
+	if st, ok := c.st.styles["paragraph/"+name]; ok && st.auto && list.lvl.labelAlignment {
+		own = st.props
+	}
+	if _, ok := own["margin-left"]; !ok {
+		left = list.lvl.marginLeft
+	}
+	if _, ok := own["text-indent"]; !ok {
+		indent = list.lvl.textIndent
+	}
+	return left, indent
+}
+
 // paragraphStyle returns the style attribute of a paragraph with the
-// properties p.
-func (c *odtConverter) paragraphStyle(p odtProps, list *odtList) string {
+// properties p, the margin at the left left and the indent of the first
+// line indent.
+func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 	var s odtCSS
 	for _, d := range c.inherited(p) {
 		s.set(d.name, d.value)
 	}
 	boxed := odtBox(&s, p)
-	left, _ := odtLength(p["margin-left"])
 	right, _ := odtLength(p["margin-right"])
-	indent, _ := odtLength(p["text-indent"])
-	if list != nil && list.lvl != nil && list.lvl.hasLabelPosition {
-		left, indent = list.lvl.marginLeft, list.lvl.textIndent
-	}
 	if left != 0 {
 		s.set("margin-left", odtPt(left))
 	}
@@ -344,7 +364,8 @@ func odtTabStopsCSS(stops string, left float64) string {
 
 // paragraph converts a text:p or a text:h element.
 func (c *odtConverter) paragraph(n roxmltree.Node) {
-	p := c.st.props("paragraph", odtAttr(n, "style-name"))
+	name := odtAttr(n, "style-name")
+	p := c.st.props("paragraph", name)
 	list := c.list
 	c.list = nil
 	defer func() { c.list = list }()
@@ -353,14 +374,30 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 	if item == nil && n.TagName().Name() == "h" {
 		item = c.outlineItem(n)
 	}
-	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, item)) + `">`)
+	left, indent := c.indents(name, p, item)
+	if p["contextual-spacing"] == "true" {
+		// LibreOffice leaves out the spacing between two paragraphs of
+		// the same paragraph style
+		style := c.st.common("paragraph", name)
+		var zero odtProps
+		if prev, ok := odtParagraphNear(n, false); ok && c.st.common("paragraph", odtAttr(prev, "style-name")) == style {
+			zero = odtProps{"margin-top": "0pt"}
+		}
+		if next, ok := odtParagraphNear(n, true); ok && c.st.common("paragraph", odtAttr(next, "style-name")) == style {
+			zero = zero.over(odtProps{"margin-bottom": "0pt"})
+		}
+		if zero != nil {
+			p = p.over(zero)
+		}
+	}
+	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, left, indent)) + `">`)
 	mark := c.w.Len()
 	if c.noteMark {
 		c.noteMark = false
 		c.w.WriteString(`<span class="fnref"></span>`)
 	}
 	if item != nil && item.marker != "" {
-		c.marker(item, p)
+		c.marker(item, p, left, indent)
 		item.marker = ""
 	}
 	c.space = true
@@ -369,6 +406,73 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		c.w.WriteString("<br/>")
 	}
 	c.w.WriteString("</p>")
+}
+
+// odtParagraphNear returns the paragraph after the paragraph n, or before
+// it when next is false, in the same text: a text:p or a text:h, which can
+// be in a list. It returns false when a table or the end of the text, such
+// as the end of a cell, comes first.
+func odtParagraphNear(n roxmltree.Node, next bool) (roxmltree.Node, bool) {
+	sibling := func(e roxmltree.Node) (roxmltree.Node, bool) {
+		if next {
+			return e.NextSiblingElement()
+		}
+		return e.PrevSiblingElement()
+	}
+	cur := n
+	for range 64 {
+		for e, ok := sibling(cur); ok; e, ok = sibling(e) {
+			if p, found := odtParagraphIn(e, next, 0); found {
+				return p, true
+			}
+			if name := e.TagName().Name(); name != "soft-page-break" && !odtListElement(e) {
+				return roxmltree.Node{}, false
+			}
+		}
+		// the paragraphs after the list that holds n
+		parent, ok := cur.Parent()
+		if !ok || !parent.IsElement() || !odtListElement(parent) {
+			break
+		}
+		cur = parent
+	}
+	return roxmltree.Node{}, false
+}
+
+// odtParagraphIn returns e if it is a paragraph, or else the first
+// paragraph of the list e, or its last when next is false.
+func odtParagraphIn(e roxmltree.Node, next bool, depth int) (roxmltree.Node, bool) {
+	switch e.TagName().Name() {
+	case "p", "h":
+		return e, true
+	}
+	if !odtListElement(e) || depth > 64 {
+		return roxmltree.Node{}, false
+	}
+	var last roxmltree.Node
+	found := false
+	for c := range e.Children() {
+		if !c.IsElement() {
+			continue
+		}
+		if p, ok := odtParagraphIn(c, next, depth+1); ok {
+			if next {
+				return p, true
+			}
+			last, found = p, true
+		}
+	}
+	return last, found
+}
+
+// odtListElement reports whether e is a text:list, or an item or a header
+// of one.
+func odtListElement(e roxmltree.Node) bool {
+	switch e.TagName().Name() {
+	case "list", "list-item", "list-header":
+		return true
+	}
+	return false
 }
 
 // odtOutlineKey is the key of the counters of the headings in
@@ -414,31 +518,54 @@ func (c *odtConverter) outlineItem(n roxmltree.Node) *odtList {
 	return &odtList{level: i, marker: marker, lvl: lvl}
 }
 
-// marker writes the marker of the first paragraph of an item of a list.
-func (c *odtConverter) marker(list *odtList, p odtProps) {
+// marker writes the marker of the first paragraph of an item of a list,
+// whose paragraph has the margin left and the indent of its first line
+// indent. A label that follows a tab ends at the tab stop of the level when
+// the stop is after the start of the line, else at the margin.
+func (c *odtConverter) marker(list *odtList, p odtProps, left, indent float64) {
 	var s odtCSS
 	text := list.marker
+	// space is the width from the start of the line to the text after
+	// the label, or 0
+	space := 0.0
 	switch list.lvl.followedBy {
 	case "space":
 		text += " "
 	case "nothing":
 	default:
-		if w := -list.lvl.textIndent; w > 0 {
-			s.set("display", "inline-block")
-			s.set("min-width", odtPt(w))
-			s.set("text-indent", "0")
-		} else {
+		switch {
+		case list.lvl.hasTabStop && list.lvl.tabStop > left+indent:
+			space = list.lvl.tabStop - left - indent
+		case -indent > 0:
+			space = -indent
+		default:
 			text += "\t"
 		}
 	}
-	mp := p.over(list.lvl.props)
-	if v := list.lvl.props["font-name"]; v != "" && list.lvl.bullet != "" {
-		// A bullet of a symbol font holds a character of Unicode, which the
-		// font of the text draws.
-		if fam, _ := c.st.font(odtProps{"font-name": v}); strings.Contains(strings.ToLower(fam), "symbol") || strings.Contains(strings.ToLower(fam), "dings") {
-			mp["font-name"] = p["font-name"]
-		}
+	shift := ""
+	switch list.lvl.labelAlign {
+	case "end", "right":
+		shift = "-100%"
+	case "center":
+		shift = "-50%"
 	}
+	if shift != "" && space > 0 {
+		// The label ends, or has its center, at the start of the line,
+		// and the text after it starts at the stop. The box of the label
+		// has no width, and the label moves to the left as it is drawn.
+		mp := c.markerProps(list, p)
+		c.w.WriteString(`<span style="display: inline-block; width: 0; text-indent: 0"><span style="` +
+			odtAttrText("display: inline-block; transform: translateX("+shift+")"+joinStyle(c.spanStyle(mp, p))) + `">`)
+		odtEscape(c.w, text, false)
+		c.w.WriteString(`</span></span><span style="display: inline-block; width: ` + odtPt(space) + `"></span>`)
+		return
+	}
+	if space > 0 {
+		s.set("display", "inline-block")
+		s.set("min-width", odtPt(space))
+		s.set("text-indent", "0")
+	}
+	mp := c.markerProps(list, p)
 	style := s.String()
 	if span := c.spanStyle(mp, p); span != "" {
 		if style != "" {
@@ -449,6 +576,29 @@ func (c *odtConverter) marker(list *odtList, p odtProps) {
 	c.w.WriteString(`<span style="` + odtAttrText(style) + `">`)
 	odtEscape(c.w, text, false)
 	c.w.WriteString("</span>")
+}
+
+// markerProps returns the properties of the text of the marker of the
+// list item list in a paragraph with the properties p.
+func (c *odtConverter) markerProps(list *odtList, p odtProps) odtProps {
+	mp := p.over(list.lvl.props)
+	if v := list.lvl.props["font-name"]; v != "" && list.lvl.bullet != "" {
+		// A bullet of a symbol font holds a character of Unicode, which the
+		// font of the text draws.
+		if fam, _ := c.st.font(odtProps{"font-name": v}); strings.Contains(strings.ToLower(fam), "symbol") || strings.Contains(strings.ToLower(fam), "dings") {
+			mp["font-name"] = p["font-name"]
+		}
+	}
+	return mp
+}
+
+// joinStyle returns the declarations s after a declaration: "; " and s,
+// or "" when s is empty.
+func joinStyle(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "; " + s
 }
 
 // text writes text with the properties p, with its runs of white space

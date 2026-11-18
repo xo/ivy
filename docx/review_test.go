@@ -385,3 +385,42 @@ func TestVMLShapeNextPage(t *testing.T) {
 		t.Errorf("expected the shape at (164, 153), got %v", box)
 	}
 }
+
+// TestVMLShapeColumn checks that a VML shape is placed from the left of the
+// column of its anchor, and that the columns of the last section are not
+// balanced, as in Word: the rectangle of page 2 of
+// libreoffice/docx/mixed-orientation.docx is in the column where its
+// paragraph ends.
+func TestVMLShapeColumn(t *testing.T) {
+	text := strings.Repeat("The text fills the first column. ", 130)
+	shape := `<w:r><w:pict><v:rect style="position:absolute;margin-left:20pt;margin-top:30pt;width:50pt;height:30pt" fillcolor="#ff0000"/></w:pict></w:r>`
+	section := `<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:cols w:num="2" w:space="720"/></w:sectPr>`
+	body := `<w:p><w:r><w:t>` + text + `</w:t></w:r>` + shape + `</w:p>` + section
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	if !strings.Contains(html, "column-fill: auto") {
+		t.Errorf("expected the columns of the last section to fill in turn:\n%s", html)
+	}
+	d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The second column starts at 72 + 216 + 36 = 324 points.
+	if box := redBox(render(t, d, 0)); box.Min.X < 342 || box.Min.X > 346 || box.Min.Y < 100 || box.Min.Y > 104 {
+		t.Errorf("expected the shape at (344, 102) in the second column, got %v", box)
+	}
+}
+
+// TestBreakBeforeMark checks that a break of a line at the end of a
+// paragraph gives the mark of the paragraph a line of its own, as in Word,
+// and that a break that clears the floats does not (the cells of
+// poi/docx/landscape-letter.docx and aspose/docx/rendering.docx).
+func TestBreakBeforeMark(t *testing.T) {
+	body := `<w:p><w:r><w:t>Text</w:t><w:br/><w:br/></w:r></w:p><w:p><w:r><w:br w:type="textWrapping" w:clear="all"/></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	if !strings.Contains(html, "Text</span><br/><br/><br/></p>") && !strings.Contains(html, "Text<br/><br/><br/></p>") {
+		t.Errorf("expected a third break for the mark of the paragraph:\n%s", html)
+	}
+	if !strings.Contains(html, `<br class="clear"/></p>`) {
+		t.Errorf("expected no break after a break that clears the floats:\n%s", html)
+	}
+}

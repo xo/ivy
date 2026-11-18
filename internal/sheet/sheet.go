@@ -259,8 +259,9 @@ type Page struct {
 	// and FitHeight pages down. A count of 0 sets no bound.
 	Fit                 bool
 	FitWidth, FitHeight int
-	// CenterH centers the cells on the page across.
-	CenterH bool
+	// CenterH centers the cells on the page across, and CenterV centers
+	// them down the page.
+	CenterH, CenterV bool
 	// ScaleHeaderFooter scales the text of the header and the footer with
 	// the cells, as Excel does unless a sheet asks otherwise.
 	ScaleHeaderFooter bool

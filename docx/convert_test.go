@@ -301,7 +301,7 @@ func TestSections(t *testing.T) {
 		}
 	}
 	html, _ := convertHTML(t, fixture.DOCX(body))
-	if !strings.Contains(html, `style="page: s2; break-before: page; columns: 2; column-gap: 18pt"`) {
+	if !strings.Contains(html, `style="page: s2; break-before: page; columns: 2; column-gap: 18pt; column-fill: auto"`) {
 		t.Errorf("expected the second section with two columns, got:\n%s", html)
 	}
 }

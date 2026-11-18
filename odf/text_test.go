@@ -577,3 +577,53 @@ func TestTextTabStops(t *testing.T) {
 		t.Error("expected the dots of the leader before the right stop")
 	}
 }
+
+// TestTextListTabStop checks the labels of the lists of
+// libreoffice/odt/landscape-a4-table.odt: the text after a label starts at
+// the tab stop of the level, a label aligned at the end ends at the start
+// of the line, an indent of the automatic style of the paragraph replaces
+// the indent of the level, and a paragraph of the same style as the next
+// one has no spacing below.
+func TestTextListTabStop(t *testing.T) {
+	const lists = `<text:list-style style:name="L1">` +
+		`<text:list-level-style-number text:level="1" style:num-format="1"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment"><style:list-level-label-alignment text:label-followed-by="listtab" text:list-tab-stop-position="36pt" fo:text-indent="-18pt" fo:margin-left="18pt"/></style:list-level-properties></text:list-level-style-number>` +
+		`</text:list-style><text:list-style style:name="L2">` +
+		`<text:list-level-style-number text:level="1" style:num-format="i"><style:list-level-properties text:list-level-position-and-space-mode="label-alignment" fo:text-align="end"><style:list-level-label-alignment text:label-followed-by="listtab" text:list-tab-stop-position="36pt" fo:text-indent="-18pt" fo:margin-left="18pt"/></style:list-level-properties></text:list-level-style-number>` +
+		`</text:list-style>`
+	const auto = `<style:style style:name="PI" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:margin-left="18pt" fo:text-indent="-11pt"/></style:style>` +
+		`<style:style style:name="PC" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:margin-bottom="6pt" style:contextual-spacing="true"/></style:style>`
+	body := `<text:list text:style-name="L1"><text:list-item><text:p>Head</text:p></text:list-item></text:list>` +
+		`<text:list text:style-name="L2"><text:list-item><text:p text:style-name="PI">Item</text:p></text:list-item></text:list>` +
+		`<text:p text:style-name="PC">One</text:p><text:p text:style-name="PC">Two</text:p><text:p>Three</text:p>`
+	content := strings.Replace(odtContent(body), "</office:automatic-styles>", auto+"</office:automatic-styles>", 1)
+	buf := fixture.Zip(
+		fixture.Entry{Name: "mimetype", Data: []byte(mimePrefix + "text")},
+		fixture.Entry{Name: "content.xml", Data: []byte(content)},
+		fixture.Entry{Name: "styles.xml", Data: []byte(strings.Replace(odtStylesXML, "</office:styles>", lists+"</office:styles>", 1))},
+	)
+	html, _ := odtHTML(t, buf)
+	for _, want := range []string{
+		// the label starts at 0, and the text at the stop of 36 points
+		`<span style="display: inline-block; min-width: 36pt; text-indent: 0`,
+		// the paragraph keeps its own indent, and the label ends at 7
+		// points, where the line starts
+		`margin-left: 18pt; text-indent: -11pt`,
+		`<span style="display: inline-block; width: 0; text-indent: 0"><span style="display: inline-block; transform: translateX(-100%)`,
+		`<span style="display: inline-block; width: 29pt"></span>Item`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the html", want)
+		}
+	}
+	one := html[strings.Index(html, "One")-400 : strings.Index(html, "One")]
+	if strings.Contains(one[strings.LastIndex(one, "<p "):], "margin-bottom") {
+		t.Errorf("expected no spacing below the paragraph before one of the same style:\n%s", one)
+	}
+	two := html[strings.Index(html, "Two")-400 : strings.Index(html, "Two")]
+	if !strings.Contains(two[strings.LastIndex(two, "<p "):], "margin-bottom: 6pt") {
+		t.Errorf("expected the spacing below the last paragraph of the style:\n%s", two)
+	}
+	if t.Failed() {
+		t.Log(html)
+	}
+}

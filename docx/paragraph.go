@@ -197,11 +197,35 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	for i := len(c.open) - 1; i >= 0; i-- {
 		c.w.WriteString("</" + c.open[i].name + ">")
 	}
-	if c.w.Len() == mark0 {
+	switch {
+	case c.w.Len() == mark0:
 		// An empty paragraph takes the height of one line, as in Word.
+		c.w.WriteString("<br/>")
+	case endsWithBreak(c.w.String()[mark0:]):
+		// In Word, the mark of a paragraph after a break of a line is on
+		// a line of its own. In HTML, a break at the end of a block
+		// starts no line.
 		c.w.WriteString("<br/>")
 	}
 	c.w.WriteString("</p>")
+}
+
+// endsWithBreak reports whether the HTML s ends with a break of a line,
+// before the end tags of its inline elements.
+func endsWithBreak(s string) bool {
+	for {
+		i := strings.LastIndex(s, "</")
+		if i < 0 || !strings.HasSuffix(s, ">") {
+			break
+		}
+		switch s[i+2 : len(s)-1] {
+		case "span", "a", "sup", "sub":
+			s = s[:i]
+			continue
+		}
+		break
+	}
+	return strings.HasSuffix(s, "<br/>")
 }
 
 // attrText returns s escaped for an attribute.
@@ -720,6 +744,13 @@ func (c *converter) runContent(r roxmltree.Node, p, base props) {
 			case "column":
 				c.pageBreak("column")
 			default:
+				if v := ooxml.Attr(e, "clear"); v != "" && v != "none" {
+					// A break that clears the floats adds no line for
+					// the mark of the paragraph after it, as in Word.
+					// The class tells it from a break that does.
+					c.w.WriteString(`<br class="clear"/>`)
+					continue
+				}
 				c.w.WriteString("<br/>")
 			}
 		case "cr":

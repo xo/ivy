@@ -258,7 +258,7 @@ func TestExactRowHeight(t *testing.T) {
 	var b strings.Builder
 	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}})
 	html := b.String()
-	if !strings.Contains(html, `<div style="height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
+	if !strings.Contains(html, `<div style="display: flow-root; height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
 		t.Errorf("expected the cell of the exact row in a block of its height:\n%s", html)
 	}
 	if strings.Count(html, "<div") != 1 {
@@ -290,5 +290,35 @@ func TestEastAsianFont(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the html:\n%s", want, html)
 		}
+	}
+}
+
+// TestParagraphLines checks that a negative indent moves the text into
+// the padding of a cell, so that "Division/Program" of the text box of
+// libreoffice/doc/landscape-letter-form.doc stays on one line, and that a
+// paragraph that holds only a picture that floats keeps the line of its
+// mark (libreoffice/doc/landscape-a4-certificate.doc).
+func TestParagraphLines(t *testing.T) {
+	p := testParser(nil, nil)
+	var pp pap
+	for _, s := range []sprm{
+		{op: sprmPDxaLeft80, operand: u16s(0xFF3A)}, // -198
+		{op: sprmPDxaLeft180, operand: u16s(198)},
+	} {
+		applyPap(&pp, s)
+	}
+	var b strings.Builder
+	p.writeParagraph(&b, paragraph{pap: pp, runs: []run{{text: "Division/Program"}}})
+	if html := b.String(); !strings.Contains(html, "margin-left: -9.9pt; text-indent: 9.9pt") {
+		t.Errorf("expected the negative indent at the left:\n%s", html)
+	}
+	b.Reset()
+	f := &floating{pic: &picture{name: "media/1.png", width: 10, height: 10}, wr: 3}
+	p.writeParagraph(&b, paragraph{runs: []run{{float: f}}})
+	if html := b.String(); !strings.HasSuffix(html, "<br></p>\n") {
+		t.Errorf("expected the line of the mark after the picture:\n%s", html)
+	}
+	if css := p.css(letter); !strings.Contains(css, "body {\n  margin: 0;") {
+		t.Errorf("expected a body without the margin of HTML:\n%s", css)
 	}
 }

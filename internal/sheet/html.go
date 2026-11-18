@@ -939,7 +939,11 @@ func (w *writer) table(r Range, band []int) error {
 	for _, c := range band {
 		total += sh.colWidth(c)
 	}
-	b.WriteString(` style="width:` + pt(total*w.scale) + `"`)
+	b.WriteString(` style="width:` + pt(total*w.scale))
+	if top := w.centerTop(r); top > 0 {
+		b.WriteString(";margin-top:" + pt(top))
+	}
+	b.WriteString(`"`)
 	b.WriteString("><colgroup>")
 	for _, c := range band {
 		b.WriteString(`<col style="width:` + pt(sh.colWidth(c)*w.scale) + `">`)
@@ -959,6 +963,32 @@ func (w *writer) table(r Range, band []int) error {
 	err := w.rows(r, band, sh.TitleRows != nil)
 	b.WriteString("</tbody></table>")
 	return err
+}
+
+// centerTop returns the space above the table of the rows of r, in points,
+// that centers the rows down the page, or 0. Only the rows that fit on one
+// page, without a manual break, are centered.
+func (w *writer) centerTop(r Range) float64 {
+	if !w.sh.Page.CenterV {
+		return 0
+	}
+	h := w.height(r)
+	if t := w.sh.TitleRows; t != nil && (t.First < r.Row0 || t.Last > r.Row1) {
+		h += w.height(Range{Row0: max(0, t.First), Row1: min(t.Last, MaxRows-1)})
+	}
+	for i := r.Row0 + 1; i <= r.Row1; i++ {
+		if w.rowBreaks[i] {
+			return 0
+		}
+	}
+	_, ph := w.printable()
+	// the rows leave 2 points for the borders of the table, as rowPages
+	// does
+	free := ph - 2 - h*w.scale
+	if free <= 0 {
+		return 0
+	}
+	return free / 2
 }
 
 // isTitle reports whether the row i is a row of the print titles.

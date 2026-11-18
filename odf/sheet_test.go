@@ -509,3 +509,29 @@ func TestSheetShapes(t *testing.T) {
 		t.Errorf("expected the red rectangle and the red circle, got %d red pixels", red)
 	}
 }
+
+// TestSheetLandscapeTable checks the page of
+// libreoffice/ods/landscape-a4-table.ods: the min-height of the header
+// holds its spacing, a value whose paragraph is empty shows nothing, and
+// the cells are centered down the page.
+func TestSheetLandscapeTable(t *testing.T) {
+	book := fixture.ODSBook{
+		AutoStyles: `<style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="11.693in" fo:page-height="8.268in" style:print-orientation="landscape" ` +
+			`fo:margin-top="0.5in" fo:margin-bottom="0.5in" fo:margin-left="0.5in" fo:margin-right="0.5in" style:table-centering="both"/>` +
+			`<style:header-style><style:header-footer-properties fo:min-height="0.3in" fo:margin-bottom="0.1in"/></style:header-style></style:page-layout>`,
+		MasterStyles: `<style:master-page style:name="Default" style:page-layout-name="pm1">` +
+			`<style:header><text:p><text:sheet-name>???</text:sheet-name></text:p></style:header></style:master-page>`,
+		Body: `<table:table table:name="Results"><table:table-row><table:table-cell office:value-type="string"><text:p>Total</text:p></table:table-cell>` +
+			`<table:table-cell office:value-type="float" office:value="0"><text:p/></table:table-cell>` +
+			`<table:table-cell office:value-type="float" office:value="7"/></table:table-row></table:table>`,
+	}
+	doc := sheetDocs(t, openSheet(t, fixture.ODS(book), ivy.Config{}))[0]
+	for _, want := range []string{"margin:57.6pt 36pt 36pt 36pt;", "margin-top:", ">7</td>"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the html:\n%s", want, doc)
+		}
+	}
+	if strings.Contains(doc, ">0</td>") {
+		t.Errorf("expected no text for the value of an empty paragraph:\n%s", doc)
+	}
+}

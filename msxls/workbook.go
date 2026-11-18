@@ -568,6 +568,8 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 		sh.gridlines = r.u16() != 0
 	case recHCenter:
 		sh.page.CenterH = r.u16() != 0
+	case recVCenter:
+		sh.page.CenterV = r.u16() != 0
 	case recLeftMargin, recRightMargin, recTopMargin, recBottomMargin:
 		v := r.bytes(8)
 		if len(v) < 8 {
