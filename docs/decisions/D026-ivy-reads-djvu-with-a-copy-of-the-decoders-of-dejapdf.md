@@ -1,6 +1,6 @@
 # D26. ivy reads DjVu with a copy of the decoders of dejapdf
 
-Status: Decided.
+Status: Decided. Amended by D38.
 
 DjVu is a format for scanned books. A page holds layers: a mask of the text
 and the line art in JB2, the colors of that mask, and a background picture

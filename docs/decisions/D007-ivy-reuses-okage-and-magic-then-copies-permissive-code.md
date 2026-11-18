@@ -1,6 +1,6 @@
 # D7. ivy reuses okage and magic, then copies permissive code
 
-Status: Decided.
+Status: Decided. Amended by D42.
 
 ivy is mostly self-contained, and it holds no second copy of code that
 another `xo` repository holds.

@@ -22,63 +22,75 @@ found these faults. Each item names a file of the corpus.
    across a pixel border spreads over two light pixels. It needs stroke
    adjustment, which snaps a thin stroke to the pixels. Source: `pdf` and
    okage.
-2. Return the text of PowerPoint 95, which `msppt` refuses with
-   ErrUnsupported. MS-PPT does not describe PowerPoint 95, and PowerPoint
-   2024 does not open `poi/ppt/ppt95.ppt` either. Question 16 of
-   `PLAN.md` asks whether ivy reads it. Source: `msppt`.
-3. Draw the WordArt and the preset shapes of a Word 97 document that
-   `msdoc` does not draw yet, the text of a shape in a group, the arrowheads
-   and the comments. Move the two readers of Office Drawing of `msdoc`
-   (`picture.go` and `shape.go`) into `internal/odraw`. Source: `msdoc`.
-4. Draw the charts of an Excel 97 workbook, which draw as a frame, and the
+2. Draw the WordArt and the preset shapes of a Word 97 document that `msdoc`
+   does not draw yet, the text of a shape in a group, the arrowheads and the
+   comments. Move the two readers of Office Drawing of `msdoc` (`picture.go`
+   and `shape.go`) into `internal/odraw`. Source: `msdoc`.
+3. Draw the charts of an Excel 97 workbook, which draw as a frame, and the
    pictures in PICT. Source: `msxls`.
-5. Number the pages of a workbook across its sheets, as Excel does.
+4. Number the pages of a workbook across its sheets, as Excel does.
    `poi/xls/basic-expense-template-2011.xls` has the page count of Excel,
    66, and Excel prints "Page 40" on the first page of ExpenseTypes, where
    ivy starts again at 1. Source: `internal/sheet`.
-6. Find why the lines of `libreoffice/odt/ooo96040-2.odt` are a little
+5. Find why the lines of `libreoffice/odt/ooo96040-2.odt` are a little
    taller than those of LibreOffice from page 8. The pages drift, and the
    file has 13 pages against 12. Source: `odf` and the layout.
-7. Keep empty paragraphs at the bottom of a page when they do not fit, as
+6. Keep empty paragraphs at the bottom of a page when they do not fit, as
    Word seems to do. On page 3 of `poi/docx/illustrative-cases.docx`, three
-   paragraphs after a table need about 2 points more than the page has
-   left. Word keeps them on page 3. ivy moves one of them to page 4, and the
-   file has 5 pages against 4. The first of them holds spaces and two tabs.
+   paragraphs after a table need about 2 points more than the page has left.
+   Word keeps them on page 3. ivy moves one of them to page 4, and the file
+   has 5 pages against 4. The first of them holds spaces and two tabs.
    Perhaps Word lets a line pass the bottom by its descent. A crafted file
    can tell. Source: `docx` and `internal/layout`.
-8. Decide whether a text file reflows its paragraphs as calibre does.
-   calibre joins the lines of a paragraph, and ivy keeps them. Question 7 of
-   `PLAN.md` asks it. Source: `text`.
-9. Shade a gradient of PowerPoint 97 to 2003 with the sigma curve of
+7. Shade a gradient of PowerPoint 97 to 2003 with the sigma curve of
    `fillShadeType`, if MS-ODRAW gives its formula. ivy mixes the colors in
    linear light, as its gamma flag says. Source: `msppt`.
-10. Kern the runs of a `.ppt` file as PowerPoint does. `internal/drawingml`
-    kerns a run when its size is at least its kern size, as PowerPoint draws
-    Calibri. `msppt` does not set `RunStyle.Kern` yet. Source: `msppt`.
-11. Find why a merged cell whose text wraps into more lines than its rows
-    hold makes its last row taller. Excel keeps the heights of the rows.
-    Source: `internal/sheet` and `internal/layout`.
-12. Find why Excel in the Windows VM of the review prints
+8. Kern the runs of a `.ppt` file as PowerPoint does. `internal/drawingml`
+   kerns a run when its size is at least its kern size, as PowerPoint draws
+   Calibri. `msppt` does not set `RunStyle.Kern` yet. Source: `msppt`.
+9. Find why a merged cell whose text wraps into more lines than its rows
+   hold makes its last row taller. Excel keeps the heights of the rows.
+   Source: `internal/sheet` and `internal/layout`.
+10. Find why Excel in the Windows VM of the review prints
     `poi/xlsx/picture.xlsx`, `poi/xlsx/landscape-a4-tables.xlsx`,
     `poi/xls/landscape-a4-drawing.xls` and
     `poi/xls/landscape-a4-japanese.xls` on US Letter, and export them again.
     Word keeps A4. The review marks the four as faults of the reference.
     Source: `test/cmd/review/vm`.
-13. Find how Excel scales the printed height of a row for a font other than
+11. Find how Excel scales the printed height of a row for a font other than
     Calibri and Arial. Excel prints the rows of 21 points of
     `poi/xlsx/landscape-letter-budget.xlsx`, in Century Gothic, at 17.52
     points, where ivy prints them at 0.968 of their height. The file gives 2
     pages against 1. Source: `internal/sheet`.
-14. Place a VML shape in the column where Word places it. On page 2 of
+12. Place a VML shape in the column where Word places it. On page 2 of
     `libreoffice/docx/mixed-orientation.docx`, Word draws the rectangle in
     column 3, and ivy in column 1, because the columns flow differently.
     Source: `docx`.
-15. Find why "Division/Program" in the text box of
+13. Find why "Division/Program" in the text box of
     `libreoffice/doc/landscape-letter-form.doc` wraps in ivy and not in
     Word. Source: `msdoc`.
-16. Draw a picture or an object that spans rows of a sheet without the
-    faint seams where the rows cut it, as the jellyfish of
-    `poi/xls/drawings.xls` shows. Source: `internal/sheet`.
+14. Draw a picture or an object that spans rows of a sheet without the faint
+    seams where the rows cut it, as the jellyfish of `poi/xls/drawings.xls`
+    shows. Source: `internal/sheet`.
+
+## Left by the decisions of 2026-11-18
+
+The maintainers answered the open questions on 2026-11-18, in D33 to D45.
+These items carry out the decisions that ask for code.
+
+1. Join the lines of a paragraph of a text file, and keep the breaks of the
+   lines that start with a space or a tab (D34). Source: `text`.
+2. Add `Publisher` and `Identifier` to `ivy.Info`, and fill them in `epub`,
+   `mobi` and `comic` (D35). Source: the package `ivy`.
+3. Add `csv.WithSeparator` (D36). Source: `csv`.
+4. Open an indirect DjVu document with `djvu.WithDir` (D38). Source: `djvu`.
+5. Give `ErrLimit` in `pdf.Open` for a file larger than `Limits.MaxMemory`
+   (D39). Source: `pdf`.
+6. Delete the `TestMain` of `msppt` and `msxls` that sets
+   `-test.fuzzminimizetime` (D41). Source: `msppt` and `msxls`.
+7. Lay out the whole document before a page when it uses `counter(pages)`, a
+   target counter or a box with `position: fixed`, and all the documents of
+   a book when one uses `counter(pages)` (D43). Source: `internal/layout`.
 
 ## Left by the charts
 
@@ -123,11 +135,8 @@ The pages of Visio came on 2026-11-17 (D30).
 ## Left by phase 6
 
 1. Read the text layer (TXTa and TXTz), the outline (NAVM) and the links of
-   the annotations of DjVu, when the API has a capability for them.
-   Question 11 of `PLAN.md` asks it. Source: phase 6.
-2. Open an indirect DjVu document when a program can give a folder, as D22
-   does for Markdown. This needs a decision. Question 12 of `PLAN.md` asks
-   it. Source: D26.
+   the annotations of DjVu, when the API has a capability for them. D37
+   waits for one capability for every format. Source: phase 6.
 
 ## Left by phase 5
 
@@ -142,8 +151,8 @@ The pages of Visio came on 2026-11-17 (D30).
    `internal/metafile` draws the other raster operations and mix modes as
    blend modes, which are exact for black and white masks only. Source:
    `internal/metafile`.
-4. Draw the text of a metafile that names glyphs by index in a font that
-   ivy replaces, and the vertical text of EMF+ DrawString. The layout of
+4. Draw the text of a metafile that names glyphs by index in a font that ivy
+   replaces, and the vertical text of EMF+ DrawString. The layout of
    DrawString is close to GDI+, not exact. Source: `internal/metafile` and
    `internal/gowemf`.
 5. Draw the end cap of an EMF+ line apart from its start cap, and its custom
@@ -152,16 +161,15 @@ The pages of Visio came on 2026-11-17 (D30).
    `internal/metafile`.
 6. Shape the text of complex scripts in a metafile. Bidi mirroring covers
    brackets only. Source: `internal/metafile`.
-7. Read the headers, the footers, the lists, the pictures and the text
-   boxes of a file of Word 6 or Word 95. Source: `msdoc`.
+7. Read the headers, the footers, the lists, the pictures and the text boxes
+   of a file of Word 6 or Word 95. Source: `msdoc`.
 8. Draw what `msppt` does not draw yet: the WordArt text of the gtext
    properties, the pictures in PICT and the pictures of a file that a
    password protects, picture bullets, vertical text, autofit, notes,
    comments, charts and OLE objects other than their pictures. Source:
    `msppt`.
-9. Read the NAME records of BIFF5, and the charts of a `.xls` file.
-   `msxls` reads the print areas and the print titles of BIFF8. Source:
-   `msxls`.
+9. Read the NAME records of BIFF5, and the charts of a `.xls` file. `msxls`
+   reads the print areas and the print titles of BIFF8. Source: `msxls`.
 10. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
     the test module. Source: `msdoc`, `msxls` and `msppt`.
 11. Lay out a long sheet in parts, so that page 0 does not wait for the
@@ -171,55 +179,36 @@ The pages of Visio came on 2026-11-17 (D30).
     stay right. Source: `internal/sheet` and `internal/layout`.
 12. Fill the conditional formats of `msxls` from its CF and CF12 records,
     its print order from its SETUP record, and `Cell.Value` of its numbers,
-    as `xlsx` does. Draw the color scales, the data bars and the icon sets of
-    the spreadsheets of `odf` (calcext), and their annotations. Source:
+    as `xlsx` does. Draw the color scales, the data bars and the icon sets
+    of the spreadsheets of `odf` (calcext), and their annotations. Source:
     `msxls` and `odf`.
-13. Read the dates of a CSV file. An option for the separator of `csv`
-    changes the API, so it is a decision first (D11). Question 9 of
-    `PLAN.md` asks it. Source: `csv`.
-14. Draw the glow, the soft edge, the inner shadow and the reflection of
+13. Draw the glow, the soft edge, the inner shadow and the reflection of
     DrawingML. Find which side of a line the thick line of `thickThin` and
     `thinThick` takes. Source: `internal/drawingml`.
-15. Draw the objects of OpenDocument that only an SVM picture shows, and
+14. Draw the objects of OpenDocument that only an SVM picture shows, and
     `fo:clip` of the pictures of a text. No permissive decoder of SVM is
-    known. Question 20 of `PLAN.md` asks about it. Source: `odf`.
-16. Push the body of a page of `rtf` and `msdoc` below a header that is
+    known, and D45 lets it wait. Source: `odf`.
+15. Push the body of a page of `rtf` and `msdoc` below a header that is
     taller than its space, with `-ivy-margin-box-fit: grow` of the layout,
     as `docx` and `odf` do. They estimate the height of the header. Source:
     `rtf` and `msdoc`.
-17. Let the text bodies of one scene of `internal/drawingml` share a
+16. Let the text bodies of one scene of `internal/drawingml` share a
     `FontConfiguration`. Each text body parses the fonts again, which is
     about a quarter of the time of a scene of 30 text bodies. Source:
     `internal/drawingml` and `internal/layout`.
 
 ## Left by phase 4
 
-1. Read the HTML of `mobi` (`rewriteTags` of `mobi6.go`) and of `chm`
-   (`metaPlace` of `charset.go`) without a scan of its bytes, if D7 covers
-   them. They change text at byte positions, which a tree cannot do.
-   Question 18 of `PLAN.md` asks it. Source: `mobi` and `chm`.
-2. Return the publisher and the identifier of a book. `internal/ebook` reads
-   them, and `ivy.Info` has no field for them. A new field changes the API,
-   so it is a decision first (D11). Question 8 of `PLAN.md` asks it.
-   Source: the package `epub`.
-3. Read the NCX and the guide of a MOBI file, and the table of contents
-   of an EPUB, when the API has a capability for a table of contents.
-   Question 11 of `PLAN.md` asks it. Source: the packages `mobi` and
-   `epub`.
-4. Bound the time of the selector matcher of okage. A `:has()` selector
+1. Read the NCX and the guide of a MOBI file, and the table of contents of
+   an EPUB, when the API has a capability for a table of contents (D37).
+   Source: the packages `mobi` and `epub`.
+2. Bound the time of the selector matcher of okage. A `:has()` selector
    costs time in the square of the number of elements. Source: stage A of
    the layout.
-5. Count `counter(pages)` across the documents of a book. `counter(page)`
-   goes on across them, and the total needs the whole book laid out.
-   Question 19 of `PLAN.md` asks about it. Source: stage D of the layout.
-6. Give a page that a program asks for early the fixed boxes and the
-   target counters of the later pages. `Document.Page` lays out only the
-   pages up to the one that a program asks for. Question 19 of `PLAN.md`
-   asks about it. Source: stage C of the layout.
-7. Draw the color glyphs of SVG and COLR. The layout draws the bitmap
-   glyphs of sbix, CBDT, EBDT and bdat. okage draws SVG and COLR glyphs
-   inside `svg`, and does not export it. Source: stage D of the layout.
-8. Read the profiles of colors when the layout draws, with
+3. Draw the color glyphs of SVG and COLR. The layout draws the bitmap glyphs
+   of sbix, CBDT, EBDT and bdat. okage draws SVG and COLR glyphs inside
+   `svg`, and does not export it. Source: stage D of the layout.
+4. Read the profiles of colors when the layout draws, with
    `internal/moxcms`. DeviceCMYK, Lab and `@color-profile` become sRGB
    without a profile. Source: stage D of the layout.
 
@@ -227,20 +216,19 @@ The pages of Visio came on 2026-11-17 (D30).
 
 1. Decode a JPEG that `image/jpeg` refuses: truncated, of 12 bits, or with
    arithmetic coding (D17). It needs a copy of `image/jpeg` or a port of
-   zune-jpeg. Question 15 of `PLAN.md` asks which. Source: the port of
-   hayro-syntax.
+   zune-jpeg, and D45 lets it wait. Source: the port of hayro-syntax.
 2. If the maintainers decide again on hinting (D19), the measurement can run
    again: a small Rust program renders each page with hayro in
-   `upstream/hayro`, with `RenderSettings.hinting` on and off, and a small Go
-   program counts the pixels of ink that differ. Source: D19.
+   `upstream/hayro`, with `RenderSettings.hinting` on and off, and a small
+   Go program counts the pixels of ink that differ. Source: D19.
 3. Draw a group that is not isolated onto its backdrop, and draw a knockout
    group. The device of okage draws each group as isolated, and not as
    knockout. hayro does the same. Source: the port of the crate hayro.
 4. Read a PDF file through the `io.ReaderAt` of its source. `pdf.Open` reads
-   the whole file into memory, up to its size, without a check against
+   the whole file into memory, and D39 refuses a file larger than
    `Limits.MaxMemory`. The port works on one `[]byte`, so a reader that
-   pages needs a rewrite of its reader and its xref layer. Question 14 of
-   `PLAN.md` asks it. Source: the package `pdf`.
+   pages needs a rewrite of its reader and its xref layer. Source: the
+   package `pdf`.
 5. Compare the pages of ivy with the pages of hayro in the test module. On
    2026-11-16, a scratch program rendered the 63 test files of
    `internal/hayro/interpret` with hayro, and ivy matched each page within a
@@ -249,8 +237,8 @@ The pages of Visio came on 2026-11-17 (D30).
 
 ## Left by phase 2
 
-1. Decode the images of XPS in JPEG XR. No permissive decoder in Go is known.
-   Question 13 of `PLAN.md` asks whether to keep this item. Source: phase 2.
+1. Decode the images of XPS in JPEG XR. No permissive decoder in Go is
+   known. D45 keeps this item. Source: phase 2.
 2. Give `internal/font` the vertical metrics of a glyph, its advance and its
    origin, so that `xps` does not parse a font again for a sideways run.
    Source: the sideways runs of `xps`, 2026-11-17.
@@ -258,18 +246,15 @@ The pages of Visio came on 2026-11-17 (D30).
 ## Left by phase 1
 
 1. Describe a document of Office Open XML by its docProps/core.xml. The
-   publisher, the series and the number of ComicInfo.xml need fields of
-   `ivy.Info`, which question 8 of `PLAN.md` asks about. Source: phase 1.
-2. Give `ivy.Cache` a way for a format package to store and load a value, for
-   the fonts of phase 2. Question 10 of `PLAN.md` asks whether it is still
-   needed. Source: phase 1.
-3. Let `internal/drawingml` read the resolution of a picture with
-   `raster.Resolution`, in place of its own reader. Source: the ImageBrush of
-   `xps`, 2026-11-17.
-4. Open the encrypted entries of the other formats of `zipdoc` with
+   series and the number of ComicInfo.xml get no field of `ivy.Info` (D35).
+   Source: phase 1.
+2. Let `internal/drawingml` read the resolution of a picture with
+   `raster.Resolution`, in place of its own reader. Source: the ImageBrush
+   of `xps`, 2026-11-17.
+3. Open the encrypted entries of the other formats of `zipdoc` with
    `Archive.Unlock`, as `comic` does. Source: the encrypted comics,
    2026-11-17.
-5. Check the previews of the maker notes of Olympus with a real ORF file.
+4. Check the previews of the maker notes of Olympus with a real ORF file.
    The tests build the files in memory. Source: `camera`, 2026-11-17.
 
 ## Work for okage

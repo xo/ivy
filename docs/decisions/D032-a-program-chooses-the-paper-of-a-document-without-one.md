@@ -1,6 +1,6 @@
 # D32. A program chooses the paper of a document without one
 
-Status: Decided.
+Status: Decided. Amended by D33.
 
 A file of Word, Excel or OpenDocument gives the size and the orientation of
 its pages, and ivy uses them. A text file, a Markdown file, a CSV file, an

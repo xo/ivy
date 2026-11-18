@@ -26,7 +26,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D4 | [Each decision is a file of its own](D004-each-decision-is-a-file-of-its-own.md) | Decided |
 | D5 | [A rendering is good enough for a quick review](D005-a-rendering-is-good-enough-for-a-quick-review.md) | Decided |
 | D6 | [Each decoder and each encoder is a package of its own](D006-each-decoder-and-each-encoder-is-a-package-of-its-own.md) | Decided |
-| D7 | [ivy reuses okage and magic, then copies permissive code](D007-ivy-reuses-okage-and-magic-then-copies-permissive-code.md) | Decided |
+| D7 | [ivy reuses okage and magic, then copies permissive code](D007-ivy-reuses-okage-and-magic-then-copies-permissive-code.md) | Decided. Amended by D42 |
 | D8 | [okage draws, and magic identifies and decompresses](D008-okage-draws-and-magic-identifies-and-decompresses.md) | Decided |
 | D9 | [ivy uses generics and the features of Go 1.27](D009-ivy-uses-generics-and-the-features-of-go-1-27.md) | Decided |
 | D10 | [The formats share four layers](D010-the-formats-share-four-layers.md) | Decided |
@@ -45,10 +45,23 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D23 | [A program can ask for the fonts of the system](D023-a-program-can-ask-for-the-fonts-of-the-system.md) | Decided |
 | D24 | [Phase 5 copies gowemf and draws charts with zuzu](D024-phase-5-copies-gowemf-and-draws-charts-with-zuzu.md) | Decided. Amended by D27 |
 | D25 | [ivy derives the keys of OpenDocument with Argon2id](D025-ivy-derives-the-keys-of-opendocument-with-argon2id.md) | Decided |
-| D26 | [ivy reads DjVu with a copy of the decoders of dejapdf](D026-ivy-reads-djvu-with-a-copy-of-the-decoders-of-dejapdf.md) | Decided |
+| D26 | [ivy reads DjVu with a copy of the decoders of dejapdf](D026-ivy-reads-djvu-with-a-copy-of-the-decoders-of-dejapdf.md) | Decided. Amended by D38 |
 | D27 | [ivy draws the charts of Office itself](D027-ivy-draws-the-charts-of-office-itself.md) | Decided. Amends D24 |
 | D28 | [ivy reads fonts with the typesetting of okage, and fills small glyphs finely](D028-ivy-reads-fonts-with-the-typesetting-of-okage-and-fills-small-glyphs-finely.md) | Decided |
 | D29 | [ivy interprets PostScript](D029-ivy-interprets-postscript.md) | Decided |
 | D30 | [vsdx draws the pages of Visio](D030-vsdx-draws-the-pages-of-visio.md) | Decided |
 | D31 | [pdf can render another page box](D031-pdf-can-render-another-page-box.md) | Decided |
-| D32 | [A program chooses the paper of a document without one](D032-a-program-chooses-the-paper-of-a-document-without-one.md) | Decided |
+| D32 | [A program chooses the paper of a document without one](D032-a-program-chooses-the-paper-of-a-document-without-one.md) | Decided. Amended by D33 |
+| D33 | [An ebook takes the paper of the configuration](D033-an-ebook-takes-the-paper-of-the-configuration.md) | Decided. Amends D32 |
+| D34 | [A text file joins the lines of a paragraph](D034-a-text-file-joins-the-lines-of-a-paragraph.md) | Decided |
+| D35 | [ivy.Info has the publisher and the identifier](D035-ivy-info-has-the-publisher-and-the-identifier.md) | Decided |
+| D36 | [csv has an option for its separator, and does not guess dates](D036-csv-has-an-option-for-its-separator-and-does-not-guess-dates.md) | Decided |
+| D37 | [The text and the outline of a document wait for one capability](D037-the-text-and-the-outline-of-a-document-wait-for-one-capability.md) | Decided |
+| D38 | [An indirect DjVu document opens from a folder that a program gives](D038-an-indirect-djvu-document-opens-from-a-folder-that-a-program-gives.md) | Decided. Amends D26 |
+| D39 | [pdf refuses a file larger than the memory limit](D039-pdf-refuses-a-file-larger-than-the-memory-limit.md) | Decided |
+| D40 | [msppt does not read PowerPoint 95](D040-msppt-does-not-read-powerpoint-95.md) | Decided |
+| D41 | [A fuzz test makes an input smaller for 2 seconds at most](D041-a-fuzz-test-makes-an-input-smaller-for-2-seconds-at-most.md) | Decided |
+| D42 | [A rewrite of the bytes of HTML is not a second reader of HTML](D042-a-rewrite-of-the-bytes-of-html-is-not-a-second-reader-of-html.md) | Decided. Amends D7 |
+| D43 | [The layout lays out the whole document when a page needs the later pages](D043-the-layout-lays-out-the-whole-document-when-a-page-needs-the-later-pages.md) | Decided |
+| D44 | [ivy does not aim at TinyGo](D044-ivy-does-not-aim-at-tinygo.md) | Decided |
+| D45 | [The backlog drops ivy.Cache, keeps JPEG XR, and waits on JPEG and SVM](D045-the-backlog-drops-ivy-cache-keeps-jpeg-xr-and-waits-on-jpeg-and-svm.md) | Decided |
