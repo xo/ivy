@@ -142,3 +142,117 @@ func TestGroupDrawn(t *testing.T) {
 		}
 	}
 }
+
+// maskScene draws onto d groups with soft masks, the blend mode and the
+// opacity, each on a small part of a clip. The masks hold gradients, an
+// image and a group with a mask of its own. Three groups then use a mask
+// with a key on other pixels. maskScene returns the number of times that
+// the content of the mask with the key drew.
+func maskScene(t *testing.T, d Device, blend okage.BlendMode, opacity float32) int {
+	t.Helper()
+	stops := []okage.GradientStop{
+		okage.NewGradientStop(0, okage.ColorFromRGBA8(255, 255, 255, 255)),
+		okage.NewGradientStop(0.6, okage.ColorFromRGBA8(90, 30, 200, 160)),
+		okage.NewGradientStop(1, okage.ColorFromRGBA8(0, 0, 0, 40)),
+	}
+	linear, ok := okage.NewLinearGradient(okage.PointFromXY(3.3, 1.7), okage.PointFromXY(43.1, 29.9), stops, okage.SpreadModeReflect, okage.IdentityTransform())
+	if !ok {
+		t.Fatal("expected a gradient")
+	}
+	radial, ok := okage.NewRadialGradient(okage.PointFromXY(19.2, 11.4), 2.1, okage.PointFromXY(21.7, 13.1), 17.3, stops, okage.SpreadModePad, okage.IdentityTransform())
+	if !ok {
+		t.Fatal("expected a gradient")
+	}
+	inner := &Mask{
+		Type: okage.MaskTypeLuminance,
+		Content: func(d Device) {
+			d.FillPath(rect(0, 0, 48, 32), okage.FillRuleWinding, radial)
+		},
+	}
+	masks := []*Mask{
+		{
+			Type: okage.MaskTypeLuminance,
+			Content: func(d Device) {
+				d.FillPath(rect(0, 0, 48, 32), okage.FillRuleWinding, linear)
+			},
+		},
+		{
+			Type: okage.MaskTypeAlpha,
+			Content: func(d Device) {
+				d.FillPath(rect(1.5, 0.5, 44, 30), okage.FillRuleEvenOdd, radial)
+				d.DrawImage(groupImage(), okage.TransformFromRow(9.3, 0.4, -0.7, 7.1, 2.2, 1.9), ImageOptions{Opacity: 0.8, Smooth: true})
+			},
+		},
+		{
+			Type:     okage.MaskTypeLuminance,
+			Backdrop: okage.ColorFromRGBA8(60, 60, 60, 255),
+			Content: func(d Device) {
+				d.FillPath(rect(0, 0, 48, 32), okage.FillRuleWinding, linear)
+				d.BeginGroup(Group{Opacity: 0.8, Blend: okage.BlendModeMultiply, Mask: inner})
+				d.FillPath(rect(4.4, 3.6, 36.2, 22.5), okage.FillRuleWinding, solid(250, 240, 10, 255))
+				d.EndGroup()
+			},
+		},
+	}
+	var keyed int
+	shared := &Mask{
+		Type: okage.MaskTypeLuminance,
+		Content: func(d Device) {
+			keyed++
+			d.FillPath(rect(0, 0, 48, 32), okage.FillRuleWinding, radial)
+		},
+		Key: "shared",
+	}
+	d.FillPath(rect(0, 0, 48, 32), okage.FillRuleWinding, solid(255, 220, 0, 255))
+	d.FillPath(rect(0, 9.5, 48, 8), okage.FillRuleWinding, solid(0, 60, 255, 100))
+	d.Save()
+	d.ClipPath(rect(1.3, 0.7, 44.2, 29.1), okage.FillRuleWinding)
+	for i, m := range masks {
+		x := 11 * float32(i)
+		d.BeginGroup(Group{Opacity: opacity, Blend: blend, Mask: m})
+		d.FillPath(rect(3.7+x, 4.2, 7.9, 6.6), okage.FillRuleWinding, solid(255, 0, 0, 200))
+		d.FillPath(rect(5.1+x, 15.3, 4.4, 9.2), okage.FillRuleWinding, linear)
+		d.EndGroup()
+	}
+	// the first group draws the shared mask on its pixels, the second on
+	// the bounds of the clip, and the third takes it from the cache
+	for _, x := range []float32{2.6, 30.4, 17.2} {
+		d.BeginGroup(Group{Opacity: opacity, Blend: blend, Mask: shared})
+		d.FillPath(rect(x, 20.1, 9.3, 6.2), okage.FillRuleWinding, solid(0, 160, 40, 220))
+		d.EndGroup()
+	}
+	d.Restore()
+	return keyed
+}
+
+func TestGroupMaskArea(t *testing.T) {
+	// a group draws its soft mask only on the pixels that it composites,
+	// and the pixels must stay the same as when it draws the mask on the
+	// bounds of its clip, under a transform that does not move the pixels
+	// by whole numbers
+	tr := okage.TransformFromRow(1.37, 0.05, -0.08, 1.21, 0.29, 0.61)
+	for _, blend := range []okage.BlendMode{okage.BlendModeSourceOver, okage.BlendModeMultiply, okage.BlendModeDestinationIn} {
+		for _, opacity := range []float32{1, 0.6} {
+			name := fmt.Sprintf("%v opacity %v", blend, opacity)
+			want, d := newDevice(t, 64, 44, tr)
+			d.whole = true
+			if n := maskScene(t, d, blend, opacity); n != 1 {
+				t.Errorf("%s: expected the shared mask drawn once on the bounds of the clip, got %d", name, n)
+			}
+			got, d := newDevice(t, 64, 44, tr)
+			n := maskScene(t, d, blend, opacity)
+			if !bytes.Equal(got.Data(), want.Data()) {
+				t.Errorf("%s: expected the same pixels as the mask on the bounds of the clip", name)
+			}
+			// a blend mode that clears the parent composites on the
+			// bounds of the clip, and draws the mask there once
+			draws := 2
+			if !keepsParent(blend) {
+				draws = 1
+			}
+			if n != draws {
+				t.Errorf("%s: expected the shared mask drawn %d times, got %d", name, draws, n)
+			}
+		}
+	}
+}

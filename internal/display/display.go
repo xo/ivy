@@ -100,7 +100,9 @@ type Mask struct {
 	// of the mask becomes Transfer[v].
 	Transfer *[256]uint8
 	// Content draws the content of the mask onto d. The user space of d is
-	// the user space at BeginGroup.
+	// the user space at BeginGroup. A device can call Content at BeginGroup
+	// or at EndGroup, and more than once, so each call must draw the same
+	// content.
 	Content func(d Device)
 	// Key identifies the content, or is nil. A device can reuse the mask that
 	// it drew for an earlier mask with the same key and the same transform.
