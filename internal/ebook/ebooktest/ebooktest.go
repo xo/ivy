@@ -127,7 +127,7 @@ func check(t *testing.T, err error) {
 	if _, ok := errors.AsType[*ivy.PartialError](err); ok {
 		return
 	}
-	for _, want := range []error{ivy.ErrFormat, ivy.ErrLimit, ivy.ErrDRM, ivy.ErrPageRange, ivy.ErrUnsupported} {
+	for _, want := range []error{ivy.ErrFormat, ivy.ErrLimit, ivy.ErrDRM, ivy.ErrPassword, ivy.ErrPageRange, ivy.ErrUnsupported} {
 		if errors.Is(err, want) {
 			return
 		}
