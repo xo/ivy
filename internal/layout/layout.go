@@ -287,6 +287,9 @@ type Document struct {
 
 	// part is the state of a part of a long document, or nil (D55).
 	part *partState
+
+	// galleyPlan is the plan of the galley of the lines, or nil (D57).
+	galleyPlan *galleyPlan
 }
 
 // NewDocument returns the layout of a document: the HTML document, the box
@@ -336,6 +339,9 @@ func (d *Document) Page(ctx context.Context, i int) (page *Box, err error) {
 		return nil, fmt.Errorf("%w: page %d", ErrNoPage, i)
 	}
 	err = d.run(ctx, func() {
+		if d.part == nil && !d.complete && (i >= len(d.pages)+galleyAhead || currentGalleyOptions().Early) {
+			d.startGalley(ctx)
+		}
 		page = d.page(i)
 	})
 	if err == nil && page == nil {
@@ -353,6 +359,7 @@ func (d *Document) Count(ctx context.Context) (n int, err error) {
 			n = last - first
 			return
 		}
+		d.startGalley(ctx)
 		d.completeLayout()
 		n = len(d.pages)
 	})
@@ -394,9 +401,13 @@ func (d *Document) run(ctx context.Context, f func()) (err error) {
 			// The layout stopped in the middle of a page, so the document
 			// cannot go on.
 			d.err = err
+			d.stopGalley()
 		}
 	}()
 	f()
+	if d.complete {
+		d.stopGalley()
+	}
 	return nil
 }
 
@@ -998,6 +1009,10 @@ type layoutContext struct {
 	// of the line that the layout places, from which the tab stops of
 	// -ivy-tab-stops are measured. Upstream has no tab stops.
 	tabOrigin float64
+
+	// lines is the state of the layout of the lines that the port adds:
+	// the lines at a height of 0 and the galley (D57).
+	lines lineState
 
 	// pageOverflowBox is the box whose layout starts next, when it can
 	// pass the bottom of the page by the descent of its last line, by

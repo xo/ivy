@@ -15,6 +15,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/layout"
 )
 
 // page is an HTML file with a head.
@@ -237,6 +238,8 @@ func TestErrors(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
+	// Small parts of the galley make the fuzzer reach its code (D57).
+	defer layout.SetGalleyOptions(layout.GalleyOptions{OneBlock: true, MaxParts: 4, Wait: true, Early: true})()
 	f.Add([]byte(page))
 	f.Add(fixture.Zip(htmlz()...))
 	f.Add(fixture.EncryptedZip(fixture.WinZipAES2, "secret", htmlz()...))

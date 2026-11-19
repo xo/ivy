@@ -344,6 +344,7 @@ func (b *Book) load(ctx context.Context, bd *bookDocument, page bool) (bool, err
 func (b *Book) keepLoaded(bd *bookDocument) {
 	b.loaded = append(b.loaded, bd)
 	if len(b.loaded) > maxLoadedDocuments {
+		b.loaded[0].doc.stopGalley()
 		b.loaded[0].doc = nil
 		b.loaded = b.loaded[1:]
 	}
@@ -574,9 +575,17 @@ func (b *Book) partsTo(i, n int) []*bookDocument {
 }
 
 // build reads a document of the book, computes its styles and builds its
-// boxes.
+// boxes. A large document gets the plan of its galley, which builds it
+// again on other goroutines (D57).
 func (b *Book) build(bd *bookDocument) (doc *Document, err error) {
-	return b.buildWith(bd.path, bd.before, bd.part, b.fc)
+	path, before, part := bd.path, bd.before, bd.part
+	doc, err = b.buildWith(path, before, part, b.fc)
+	if err == nil {
+		doc.prepareGalley(func(fc *FontConfiguration) (*Document, error) {
+			return b.buildWith(path, before, part, fc)
+		})
+	}
+	return doc, err
 }
 
 // buildWith reads the document path, with before pages before it, as the
@@ -726,6 +735,7 @@ func cmpErr(err, def error) error {
 
 // unload drops the layout of a document.
 func (b *Book) unload(bd *bookDocument) {
+	bd.doc.stopGalley()
 	bd.doc = nil
 	for i, l := range b.loaded {
 		if l == bd {

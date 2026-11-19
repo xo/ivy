@@ -85,6 +85,10 @@ type FontConfiguration struct {
 	// faceRules holds the unicode-range and the features of the faces that
 	// an @font-face rule loaded.
 	faceRules map[svg.FontID]*faceRule
+	// loaded holds the key of each @font-face rule that loaded faces, and
+	// the number of its faces, in the order of the loads. The galley
+	// compares the faces of two configurations with it (D57).
+	loaded []string
 	// faces holds the faces of go-text, by font and variations. A face is
 	// not safe for concurrent use, so the configuration keeps its own faces
 	// of the fonts that the database parses.
@@ -369,6 +373,7 @@ func (fc *FontConfiguration) AddFontFace(ruleDescriptors map[string]Value, urlFe
 			fc.faceRules[id] = rule
 		}
 		fc.rules[configDigest] = true
+		fc.loaded = append(fc.loaded, fmt.Sprintf("%s:%d", configDigest, len(ids)))
 		// The new faces change the faces of the families.
 		clear(fc.chains)
 		clear(fc.fallbacks)

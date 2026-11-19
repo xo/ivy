@@ -15,6 +15,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/layout"
 )
 
 // sample is a Markdown file with the parts that the style sheet styles.
@@ -256,6 +257,8 @@ func TestCanceled(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
+	// Small parts of the galley make the fuzzer reach its code (D57).
+	defer layout.SetGalleyOptions(layout.GalleyOptions{OneBlock: true, MaxParts: 4, Wait: true, Early: true})()
 	f.Add([]byte(sample))
 	f.Add([]byte("> > - [ ] *a* **b** ~~c~~ [^1]\n\n[^1]: x\n\n|a|b|\n|-|-|\n|1|2|\n"))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 10000, MaxDepth: 16}}

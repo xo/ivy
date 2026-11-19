@@ -1025,6 +1025,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	pageWidth(page, lc, cbWidth)
 	pageHeight(page, lc, cbHeight)
 	grow.apply(page)
+	lc.galleyPage(page)
 	initialContainingBlock := page
 	var previousResumeAt skipStack
 	if blank {

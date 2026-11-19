@@ -140,7 +140,7 @@ func iterLineBoxes(lc *layoutContext, box *Box, positionY, bottomSpace float64, 
 		}
 		for {
 			lc.spend(1)
-			line, resumeAt := getNextLinebox(
+			line, resumeAt := layoutLine(
 				lc, box, positionY, bottomSpace, skip, containingBlock,
 				absoluteBoxes, fixedBoxes, firstLetterStyle, firstLineStyle)
 			firstLineStyle = nil
