@@ -9,8 +9,12 @@
 // pixels. A page that a program implements itself goes into the file as one
 // image that ivy.RenderImage draws.
 //
-// In this version, the glyphs of the text are paths, so a reader cannot
-// search or copy the text of the file (D58, phase 7a).
+// A run of glyphs whose format knows its text goes into the file as text
+// of an embedded subset of its font, so a reader can search and copy it.
+// The glyphs of a font whose license forbids a subset, of a font that the
+// writer cannot read or subset, and of a run without text go into the file
+// as paths. In this version, the glyphs of a PDF or PostScript file are
+// paths (D58, phase 7b).
 package pdfenc
 
 import (
@@ -21,6 +25,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"maps"
 	"math"
 	"time"
 
@@ -29,6 +34,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/font"
 )
 
 // DefaultRasterDPI is the default of WithRasterDPI.
@@ -162,13 +168,13 @@ func Encode(ctx context.Context, w io.Writer, d ivy.Document, opts ...Option) er
 		}
 		pages[i] = p
 	}
-	e := newEncoder(o)
+	e := newEncoder(o, nil)
 	for i, p := range pages {
 		if err := e.page(ctx, p, numbers[i]); err != nil {
 			return err
 		}
 	}
-	return e.finish(w)
+	return e.finish(ctx, w)
 }
 
 // EncodePages writes pages to w as one PDF file, as Encode does, such as
@@ -178,7 +184,7 @@ func Encode(ctx context.Context, w io.Writer, d ivy.Document, opts ...Option) er
 func EncodePages(ctx context.Context, w io.Writer, pages iter.Seq2[ivy.Page, error], opts ...Option) error {
 	o := newOptions(opts)
 	o.outline = false
-	e := newEncoder(o)
+	e := newEncoder(o, nil)
 	if o.hasPages {
 		var all []ivy.Page
 		for p, err := range pages {
@@ -200,7 +206,7 @@ func EncodePages(ctx context.Context, w io.Writer, pages iter.Seq2[ivy.Page, err
 				return err
 			}
 		}
-		return e.finish(w)
+		return e.finish(ctx, w)
 	}
 	n := 0
 	for p, err := range pages {
@@ -212,7 +218,7 @@ func EncodePages(ctx context.Context, w io.Writer, pages iter.Seq2[ivy.Page, err
 		}
 		n++
 	}
-	return e.finish(w)
+	return e.finish(ctx, w)
 }
 
 // encoder holds the document that the pages go into, and what the pages
@@ -230,6 +236,14 @@ type encoder struct {
 
 	images map[imageKey]*pdf.Image
 	masks  map[maskKey]*pdf.Mask
+	// fonts holds the font of each source of a face, and nil for a source
+	// whose glyphs are paths. blocked holds the sources whose subset an
+	// earlier attempt did not make.
+	fonts   map[font.SourceKey]*embedded
+	blocked map[font.SourceKey]bool
+	// drawn holds the pages of the file, which a second attempt draws
+	// again.
+	drawn []drawnPage
 	// bytes counts the bytes that the writer holds: the pixels of the
 	// images, and the commands of the pages.
 	bytes int64
@@ -237,15 +251,24 @@ type encoder struct {
 	err error
 }
 
-// newEncoder returns an encoder with an empty document.
-func newEncoder(o options) *encoder {
+// drawnPage is a page of the file, number n of its document from 0.
+type drawnPage struct {
+	p ivy.Page
+	n int
+}
+
+// newEncoder returns an encoder with an empty document. The glyphs of the
+// fonts of blocked are paths.
+func newEncoder(o options, blocked map[font.SourceKey]bool) *encoder {
 	return &encoder{
-		o:      o,
-		lim:    o.cfg.Limits,
-		log:    o.cfg.Log(),
-		doc:    pdf.NewDocument(),
-		images: map[imageKey]*pdf.Image{},
-		masks:  map[maskKey]*pdf.Mask{},
+		o:       o,
+		lim:     o.cfg.Limits,
+		log:     o.cfg.Log(),
+		doc:     pdf.NewDocument(),
+		images:  map[imageKey]*pdf.Image{},
+		masks:   map[maskKey]*pdf.Mask{},
+		fonts:   map[font.SourceKey]*embedded{},
+		blocked: blocked,
 	}
 }
 
@@ -277,6 +300,7 @@ func (e *encoder) page(ctx context.Context, p ivy.Page, n int) error {
 	if !ok || math.IsInf(float64(w), 0) || math.IsInf(float64(h), 0) {
 		return fmt.Errorf("encoding pdf: page %d of %gx%g points: %w", n+1, w, h, ivy.ErrFormat)
 	}
+	e.drawn = append(e.drawn, drawnPage{p: p, n: n})
 	page := e.doc.StartPage(settings)
 	s := page.Surface()
 	dev := newDevice(e, s, w, h)
@@ -328,13 +352,20 @@ func drawPage(ctx context.Context, p ivy.Page, dev *device, dpi float32) error {
 	return err
 }
 
-// finish writes the file to w, with the metadata.
-func (e *encoder) finish(w io.Writer) error {
+// finish writes the file to w, with the metadata. When the writer fails
+// and a font cannot give its subset, finish draws the pages again onto a
+// new encoder, with the glyphs of that font as paths (D58).
+func (e *encoder) finish(ctx context.Context, w io.Writer) error {
 	if e.o.hasInfo {
 		e.doc.SetMetadata(metadata(e.o.info))
 	}
 	ew := &errWriter{w: w}
-	if err := e.doc.Finish(ew); err != nil {
+	if err := finishDocument(e.doc, ew); err != nil {
+		if ew.err == nil {
+			if failed := e.failedFonts(); len(failed) > 0 {
+				return e.again(ctx, w, failed)
+			}
+		}
 		switch {
 		case ew.err != nil:
 			return fmt.Errorf("encoding pdf: %w", ew.err)
@@ -348,6 +379,31 @@ func (e *encoder) finish(w io.Writer) error {
 		return &ivy.PartialError{Err: fmt.Errorf("encoding pdf: %w", errors.Join(e.partial...))}
 	}
 	return nil
+}
+
+// finishDocument writes doc to w. A panic of the writer, such as on a
+// font from a stranger, is an error (D5).
+func finishDocument(doc *pdf.Document, w io.Writer) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("writing the file: %v: %w", r, ivy.ErrFormat)
+		}
+	}()
+	return doc.Finish(w) //nolint:wrapcheck // finish wraps the error of the writer
+}
+
+// again draws the pages of e onto a new encoder whose fonts of failed, and
+// of the fonts that e blocked, are paths, and writes the file to w.
+func (e *encoder) again(ctx context.Context, w io.Writer, failed map[font.SourceKey]bool) error {
+	blocked := maps.Clone(failed)
+	maps.Copy(blocked, e.blocked)
+	next := newEncoder(e.o, blocked)
+	for _, d := range e.drawn {
+		if err := next.page(ctx, d.p, d.n); err != nil {
+			return err
+		}
+	}
+	return next.finish(ctx, w)
 }
 
 // errWriter keeps the error of its writer, so that Encode tells an error of

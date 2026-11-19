@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -326,6 +327,47 @@ func TestParseColor(t *testing.T) {
 	for _, bad := range []string{"red", "#12", "sc#1", "ContextColor"} {
 		if _, err := parseColor(bad); err == nil {
 			t.Errorf("%q: expected an error", bad)
+		}
+	}
+}
+
+// TestGlyphRunText checks the text of a run and the clusters of its glyphs
+// from the cluster map of the Indices (D58).
+func TestGlyphRunText(t *testing.T) {
+	d, err := Open(t.Context(), bytes.NewReader(pkgFile("", fixture.Entry{Name: "font.ttf", Data: goregular.TTF})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &renderer{ctx: t.Context(), doc: d, part: "/Documents/Pages/1.fpage", dev: &display.List{}}
+	tests := []struct {
+		indices, text string
+		want          [][2]int
+	}{
+		{"", "aé", [][2]int{{0, 1}, {1, 3}}},
+		// a cluster of two characters and one glyph, then a glyph from the
+		// text
+		{"(2:1)5,100;", "fié", [][2]int{{0, 2}, {2, 4}}},
+		// one character and two glyphs
+		{"(1:2)5;6;7", "éb", [][2]int{{0, 2}, {0, 2}, {2, 3}}},
+		// a map past the end of the text
+		{"(9:1)5;6", "ab", [][2]int{{0, 2}, {2, 2}}},
+	}
+	for _, test := range tests {
+		n := mustParse(t, `<Glyphs FontUri="/font.ttf" FontRenderingEmSize="10" OriginX="0" OriginY="0" Indices="`+
+			test.indices+`" UnicodeString="`+test.text+`"/>`)
+		run, err := r.glyphRun(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Text != test.text || !run.TextRanges() {
+			t.Errorf("%q: expected the text %q with valid ranges, got %q", test.indices, test.text, run.Text)
+		}
+		var got [][2]int
+		for _, g := range run.Glyphs {
+			got = append(got, [2]int{g.Start, g.End})
+		}
+		if !slices.Equal(got, test.want) {
+			t.Errorf("%q: expected the ranges %v, got %v", test.indices, test.want, got)
 		}
 	}
 }

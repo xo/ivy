@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"image"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/xo/ivy/internal/font"
 	"github.com/xo/okage"
@@ -174,12 +175,38 @@ type GlyphRun struct {
 	// Transform is applied to each glyph, at the scale of the size, before
 	// its position, such as a skew for a slanted face.
 	Transform okage.Transform
+	// Text is the text of the run, or empty when the format does not know
+	// it. A writer of PDF gives it to a reader that searches or copies the
+	// text (D58). The okage device ignores it.
+	Text string
 }
 
 // Glyph is one glyph of a run.
 type Glyph struct {
 	ID   font.GID
 	X, Y float32
+	// Start and End are the bytes of the Text of the run that the cluster
+	// of the glyph covers. The glyphs of one cluster have the same range.
+	// Both are 0 when the run has no text.
+	Start, End int
+}
+
+// TextRanges reports whether the run has a text of valid UTF-8, and
+// whether the range of each glyph is a range of the text that starts and
+// ends at the bounds of its characters.
+func (run GlyphRun) TextRanges() bool {
+	if run.Text == "" || !utf8.ValidString(run.Text) {
+		return false
+	}
+	boundary := func(i int) bool {
+		return i == len(run.Text) || (i >= 0 && i < len(run.Text) && utf8.RuneStart(run.Text[i]))
+	}
+	for _, g := range run.Glyphs {
+		if g.Start < 0 || g.Start > g.End || g.End > len(run.Text) || !boundary(g.Start) || !boundary(g.End) {
+			return false
+		}
+	}
+	return true
 }
 
 // Path returns the outlines of the run as one path, or nil if no glyph has an

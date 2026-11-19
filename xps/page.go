@@ -515,7 +515,16 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 	if sideways {
 		run.Transform = sidewaysTurn.PreConcat(run.Transform)
 	}
-	text := []rune(strings.TrimPrefix(attr(n, "UnicodeString"), "{}"))
+	str := strings.TrimPrefix(attr(n, "UnicodeString"), "{}")
+	text := []rune(str)
+	// offsets holds the byte of str where each character starts, and the
+	// length of str at its end, for the clusters of the text (D58)
+	offsets := make([]int, 0, len(text)+1)
+	for i := range str {
+		offsets = append(offsets, i)
+	}
+	offsets = append(offsets, len(str))
+	run.Text = str
 	rtl := number(attr(n, "BidiLevel"), 0)
 	direction := float32(1)
 	if int(rtl)%2 == 1 {
@@ -527,8 +536,10 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 		entries = strings.Split(indices, ";")
 	}
 	// pos is the next character of the text, and left is the number of
-	// glyphs of the current cluster that are still to come
+	// glyphs of the current cluster that are still to come. start and end
+	// are the bytes of the text of the current cluster.
 	pos, left := 0, 0
+	start, end := 0, 0
 	for i := 0; i < len(entries) || pos < len(text); i++ {
 		if i >= r.doc.lim.MaxObjects {
 			return run, fmt.Errorf("glyph run of more than %d glyphs: %w", r.doc.lim.MaxObjects, ivy.ErrLimit)
@@ -550,7 +561,11 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 		// glyphs of the cluster take none
 		if left == 0 {
 			left = glyphs
-			pos += chars
+			start = offsets[pos]
+			// the map of a cluster can count more characters than the
+			// text has
+			pos += min(chars, len(text)-pos)
+			end = offsets[pos]
 		}
 		left--
 		advance := face.Advance(gid) * size
@@ -576,7 +591,7 @@ func (r *renderer) glyphRun(n roxmltree.Node) (display.GlyphRun, error) {
 			gx -= advance
 		}
 		if haveGID {
-			run.Glyphs = append(run.Glyphs, display.Glyph{ID: gid, X: gx + dx, Y: y - v + dy})
+			run.Glyphs = append(run.Glyphs, display.Glyph{ID: gid, X: gx + dx, Y: y - v + dy, Start: start, End: end})
 		}
 		x += direction * advance
 	}

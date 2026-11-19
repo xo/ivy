@@ -32,11 +32,17 @@ type Face struct {
 	// bitmaps holds the bitmaps that Bitmap decoded, and nil for a glyph
 	// without one.
 	bitmaps map[GID]*Bitmap
+	// src is the font file of the face, and hasSrc is false when the face
+	// does not know it.
+	src    Source
+	hasSrc bool
 }
 
 // Load reads the font in data, which is TrueType, OpenType or CFF in an
 // OpenType wrapper. For a collection, index selects the font. It returns an
-// error that wraps ivy.ErrFormat if data is not such a font.
+// error that wraps ivy.ErrFormat if data is not such a font. The face keeps
+// data as its Source, with the length of each table cut to the end of
+// data.
 func Load(data []byte, index int) (f *Face, err error) {
 	data, err = clampDirectory(data)
 	if err != nil {
@@ -61,7 +67,13 @@ func Load(data []byte, index int) (f *Face, err error) {
 	if upem <= 0 {
 		upem = 1000
 	}
-	return &Face{face: face, upem: upem, outlines: make(map[GID]*okage.Path)}, nil
+	return &Face{
+		face:     face,
+		upem:     upem,
+		outlines: make(map[GID]*okage.Path),
+		src:      Source{Data: data, Index: index},
+		hasSrc:   true,
+	}, nil
 }
 
 // FromFace returns the font of a face of go-text that is already parsed,
@@ -74,6 +86,21 @@ func FromFace(face *gofont.Face) *Face {
 		upem = 1000
 	}
 	return &Face{face: face, upem: upem, outlines: make(map[GID]*okage.Path)}
+}
+
+// FromFaceSource returns the font of a face of go-text, as FromFace does,
+// and keeps src, the font file of the face, for a writer that embeds it
+// (D58).
+func FromFaceSource(face *gofont.Face, src Source) *Face {
+	f := FromFace(face)
+	f.src, f.hasSrc = src, len(src.Data) > 0
+	return f
+}
+
+// Source returns the font file of the face. It returns false when the face
+// does not know it, such as a face of FromFace.
+func (f *Face) Source() (Source, bool) {
+	return f.src, f.hasSrc
 }
 
 // clampDirectory returns data, with the length of each table of each font cut

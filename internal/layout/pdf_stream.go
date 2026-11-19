@@ -25,6 +25,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/display"
 	ivyfont "github.com/xo/ivy/internal/font"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // The bounds of the drawing.
@@ -107,15 +108,22 @@ func (dc *drawContext) fail(err error) {
 	}
 }
 
-// face returns the font of the glyphs of a face of go-text.
-func (dc *drawContext) face(f *gofont.Face) *ivyfont.Face {
+// face returns the font of the glyphs of a face of go-text, the face id of
+// db at the coordinates of variations. The font keeps the bytes of the face
+// for a writer of PDF (D58).
+func (dc *drawContext) face(f *gofont.Face, db *svg.FontDatabase, id svg.FontID, variations []svg.FontVariation) *ivyfont.Face {
 	if f == nil {
 		return nil
 	}
 	if face, ok := dc.faces[f]; ok {
 		return face
 	}
-	face := ivyfont.FromFace(f)
+	var face *ivyfont.Face
+	if src, ok := fontdb.Source(db, id, variations); ok {
+		face = ivyfont.FromFaceSource(f, src)
+	} else {
+		face = ivyfont.FromFace(f)
+	}
 	dc.faces[f] = face
 	return face
 }

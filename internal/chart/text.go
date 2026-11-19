@@ -12,6 +12,7 @@ import (
 
 	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/font"
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // This file measures and draws the text of a chart. The text is a run of
@@ -75,11 +76,7 @@ func newFace(db *svg.FontDatabase, id svg.FontID) (f *font.Face) {
 			f = nil
 		}
 	}()
-	face, ok := db.NewFace(id, nil)
-	if !ok {
-		return nil
-	}
-	return font.FromFace(face)
+	return fontdb.NewFace(db, id, nil)
 }
 
 // texter measures and draws the text of one drawing of a chart.
@@ -194,10 +191,13 @@ func (t *texter) fallback(bold bool) *font.Face {
 	return t.faceOf(t.db.FamilyName(svg.FontFamily{Kind: svg.FontFamilySansSerif}), bold)
 }
 
-// run is a part of a line of text in one face.
+// run is a part of a line of text in one face. The range of each glyph is
+// a range of the bytes of the line, and start and end are the bytes of the
+// line that the run covers.
 type run struct {
-	face   *font.Face
-	glyphs []display.Glyph
+	face       *font.Face
+	glyphs     []display.Glyph
+	start, end int
 }
 
 // shape returns the runs of a line of text at the size of st, from x = 0
@@ -210,7 +210,9 @@ func (t *texter) shape(s string, st textStyle) ([]run, float64) {
 	}
 	var runs []run
 	x := float32(0)
-	for _, r := range s {
+	for i, r := range s {
+		_, n := utf8.DecodeRuneInString(s[i:])
+		next := i + n
 		if r == '\t' {
 			r = ' '
 		}
@@ -224,10 +226,11 @@ func (t *texter) shape(s string, st textStyle) ([]run, float64) {
 			}
 		}
 		if len(runs) == 0 || runs[len(runs)-1].face != face {
-			runs = append(runs, run{face: face})
+			runs = append(runs, run{face: face, start: i})
 		}
 		last := &runs[len(runs)-1]
-		last.glyphs = append(last.glyphs, display.Glyph{ID: gid, X: x})
+		last.glyphs = append(last.glyphs, display.Glyph{ID: gid, X: x, Start: i, End: next})
+		last.end = next
 		x += face.Advance(gid) * size
 	}
 	return runs, float64(x)
@@ -291,10 +294,12 @@ func (t *texter) draw(dev display.Device, b block, x, y float64, ha, va int, ang
 		for _, r := range runs {
 			glyphs := make([]display.Glyph, len(r.glyphs))
 			for j, g := range r.glyphs {
-				glyphs[j] = display.Glyph{ID: g.ID, X: g.X + float32(lx), Y: float32(base)}
+				glyphs[j] = display.Glyph{ID: g.ID, X: g.X + float32(lx), Y: float32(base),
+					Start: g.Start - r.start, End: g.End - r.start}
 			}
+			// the run gives its text to a writer of PDF (D58)
 			dev.FillGlyphs(display.GlyphRun{Face: r.face, Size: float32(b.st.size), Glyphs: glyphs,
-				Transform: okage.IdentityTransform()}, shader)
+				Transform: okage.IdentityTransform(), Text: line[r.start:r.end]}, shader)
 		}
 	}
 }

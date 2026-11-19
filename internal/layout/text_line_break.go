@@ -853,8 +853,8 @@ type Glyph struct {
 	// Advance is the advance of the glyph, with the spacing, in pixels.
 	Advance float64
 	// Cluster is the byte of the text where the cluster of the glyph
-	// starts.
-	Cluster int
+	// starts, and ClusterEnd the byte where it ends.
+	Cluster, ClusterEnd int
 }
 
 // GlyphRuns returns the glyphs of the line, run by run, from left to right.
@@ -894,7 +894,7 @@ func (line *TextLine) GlyphRuns() []GlyphRun {
 			}
 			gr.Glyphs = append(gr.Glyphs, Glyph{
 				ID: g.id, X: x + g.xOffset*l.fontSize, Y: -g.yOffset * l.fontSize,
-				Advance: advance, Cluster: int(c.start),
+				Advance: advance, Cluster: int(c.start), ClusterEnd: int(c.end),
 			})
 			x += advance
 			lastCluster = gc

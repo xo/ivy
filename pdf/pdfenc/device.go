@@ -282,14 +282,18 @@ func (d *device) FillText(p *okage.Path, rule okage.FillRule, shader okage.Shade
 	d.fill(p, rule, shader)
 }
 
-// FillGlyphs satisfies the display.Device interface. The glyphs fill as
-// paths, with the nonzero rule (D58, phase 7a).
+// FillGlyphs satisfies the display.Device interface. A run with a text
+// fills as text of an embedded font, where the font allows it (D58). Other
+// runs fill as paths, with the nonzero rule.
 func (d *device) FillGlyphs(run display.GlyphRun, shader okage.Shader) {
 	if d.rec != nil {
 		d.rec.FillGlyphs(run, shader)
 		return
 	}
-	if d.skip() || run.Face == nil {
+	if d.skip() || run.Face == nil || shader == nil {
+		return
+	}
+	if d.text(run, shader) {
 		return
 	}
 	d.fill(run.Path(), okage.FillRuleWinding, shader)

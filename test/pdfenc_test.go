@@ -33,7 +33,10 @@ const viewerDiff = 8
 // inch, and compares each one with ivy.RenderImage of the source page. Each
 // must match within a mean difference of 8. For a source that is a PDF file,
 // a page of a viewer also passes when the viewer draws the source file
-// within 8 of the written file.
+// within 8 of the written file. For a file that embeds a font, a page of a
+// viewer also passes when it matches at 288 dots for each inch, scaled down
+// to 72, as fineDiff says. The test also reads the text of each page and
+// the fonts of the file, as textPage and pdfFonts say.
 //
 // The files of the corpus are in the cache of the review, which
 // test/cmd/review fetches. IVY_REVIEW_CACHE names the folder of the cache,
@@ -129,6 +132,14 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 			t.Logf("qpdf --check warns: %s", lastLines(string(msg), 5))
 		}
 	}
+	fonts, badFonts, err := pdfFonts(ctx, out)
+	if err != nil {
+		t.Error(err)
+	}
+	for _, f := range badFonts {
+		t.Errorf("pdffonts: expected each font embedded and a subset, got: %s", f)
+	}
+	t.Logf("pdfenc fonts: %d", fonts)
 	knockout := bytes.Contains(buf.Bytes(), []byte("/K true"))
 	adjust := bytes.Contains(buf.Bytes(), []byte("/SA true"))
 	written, err := pdf.Open(ctx, bytes.NewReader(buf.Bytes()))
@@ -156,6 +167,7 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 		}
 		ivyDiff := cropDiff(got, want)
 		line := fmt.Sprintf("pdfenc: page %d drawer=%t ivy=%.2f", num+1, drawer, ivyDiff)
+		textPage(t, out, src, i+1, num+1)
 		why, differs := pdfencDiffers[strings.TrimPrefix(t.Name(), "TestPDFEnc/")]
 		switch {
 		case ivyDiff >= 0 && ivyDiff <= viewerDiff:
@@ -166,7 +178,7 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 		}
 		images := map[string]image.Image{"source": want, "ivy": got}
 		for _, v := range viewers {
-			img, err := v.render(ctx, out, i+1, false)
+			img, err := v.render(ctx, out, i+1, false, 72)
 			if err != nil {
 				t.Errorf("page %d: %v", num+1, err)
 				continue
@@ -176,13 +188,20 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 			line += fmt.Sprintf(" %s=%.2f", v.name, diff)
 			same := -1.0
 			if isPDF {
-				if orig, err := v.render(ctx, path, num+1, true); err == nil {
+				if orig, err := v.render(ctx, path, num+1, true, 72); err == nil {
 					same = cropDiff(img, orig)
 					line += fmt.Sprintf(" %s-source=%.2f", v.name, same)
 				}
 			}
+			fine := -1.0
+			if !(diff >= 0 && diff <= viewerDiff) && fonts > 0 {
+				fine = fineDiff(ctx, v, out, i+1, src)
+				line += fmt.Sprintf(" %s-fine=%.2f", v.name, fine)
+			}
 			switch {
 			case diff >= 0 && diff <= viewerDiff:
+			case fine >= 0 && fine <= viewerDiff:
+				t.Logf("page %d: %s places the glyphs of the fonts on the pixels at 72 dots for each inch", num+1, v.name)
 			case same >= 0 && same <= viewerDiff:
 				t.Logf("page %d: %s draws the source file as differently", num+1, v.name)
 			case v.name == "mupdf" && adjust:
@@ -211,21 +230,66 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 	}
 }
 
-// viewer renders page n, from 1, of the PDF file at path at 72 dots for
+// fineScale is the scale of the resolution of fineDiff.
+const fineScale = 4
+
+// fineDiff renders page n, from 1, of the PDF file at path through v, and
+// src, at 4 times 72 dots for each inch. It scales both down to 72 dots
+// for each inch, and returns their mean difference, or -1. A viewer puts
+// each glyph of a font on the grid of the pixels, and a small text then
+// differs from its paths by up to half a pixel at 72 dots for each inch. At
+// the finer resolution, the glyphs differ only where the paths differ.
+func fineDiff(ctx context.Context, v viewer, path string, n int, src ivy.Page) float64 {
+	img, err := v.render(ctx, path, n, false, 72*fineScale)
+	if err != nil {
+		return -1
+	}
+	// a page that draws in part gives its image and an error
+	want, _ := ivy.RenderImage(ctx, src, 72*fineScale, color.White)
+	if want == nil {
+		return -1
+	}
+	return cropDiff(scaleDown(img, fineScale), scaleDown(want, fineScale))
+}
+
+// scaleDown returns img scaled down by f, with the mean of each square of
+// f by f pixels over white.
+func scaleDown(img image.Image, f int) image.Image {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx()/f, b.Dy()/f))
+	for y := range out.Rect.Dy() {
+		for x := range out.Rect.Dx() {
+			var sum [3]float64
+			for dy := range f {
+				for dx := range f {
+					c := overWhite(img.At(b.Min.X+x*f+dx, b.Min.Y+y*f+dy))
+					for i := range sum {
+						sum[i] += c[i]
+					}
+				}
+			}
+			n := float64(f * f)
+			out.Set(x, y, color.RGBA{R: uint8(sum[0]/n + 0.5), G: uint8(sum[1]/n + 0.5), B: uint8(sum[2]/n + 0.5), A: 255})
+		}
+	}
+	return out
+}
+
+// viewer renders page n, from 1, of the PDF file at path at dpi dots for
 // each inch. source is true for a source file of the corpus, whose crop box
 // is the page, as in ivy.
 type viewer struct {
 	name   string
-	render func(ctx context.Context, path string, n int, source bool) (image.Image, error)
+	render func(ctx context.Context, path string, n int, source bool, dpi int) (image.Image, error)
 }
 
 // viewers are MuPDF and Poppler.
 var viewers = []viewer{
-	{name: "mupdf", render: func(ctx context.Context, path string, n int, _ bool) (image.Image, error) {
-		return mutoolPage(ctx, path, n)
+	{name: "mupdf", render: func(ctx context.Context, path string, n int, _ bool, dpi int) (image.Image, error) {
+		return mutoolPage(ctx, path, n, dpi)
 	}},
-	{name: "poppler", render: func(ctx context.Context, path string, n int, source bool) (image.Image, error) {
-		args := []string{"-png", "-r", "72", "-f", strconv.Itoa(n), "-l", strconv.Itoa(n), "-singlefile"}
+	{name: "poppler", render: func(ctx context.Context, path string, n int, source bool, dpi int) (image.Image, error) {
+		args := []string{"-png", "-r", strconv.Itoa(dpi), "-f", strconv.Itoa(n), "-l", strconv.Itoa(n), "-singlefile"}
 		if source {
 			args = append(args, "-cropbox")
 		}
@@ -249,11 +313,8 @@ var pdfencDiffers = map[string]string{
 	"idpf/epub/accessible-epub-3.epub":                pictureDiffers,
 	"libreoffice/odp/slide-tile-background.odp":       pictureDiffers,
 	"ripgrep-all/fb2/wasteland.fb2":                   pictureDiffers,
-	"gutenberg/txt/pg24264.txt":                       textDiffers,
 	"pdfjs/pdf/text-cjk-nonembedded.pdf":              textDiffers,
 	"pdfjs/pdf/text-office-nonembedded.pdf":           textDiffers,
-	"poi/xls/landscape-a4-drawing.xls":                textDiffers,
-	"poi/xls/landscape-a4-japanese.xls":               textDiffers,
 	"poi/ppt/backgrounds.ppt":                         "Poppler draws the tiles of the background at another phase than ivy and MuPDF",
 	"repo/pdf/font-type3-widths-with-matrix.pdf": "the glyphs are stencil masks, which the file holds as soft masks, and ivy and the viewers " +
 		"scale a soft mask down in another way than a stencil mask. The pages are the same at 300 dots for each inch",
@@ -263,16 +324,16 @@ var pdfencDiffers = map[string]string{
 const (
 	scanDiffers    = "Poppler scales the scan of the page down with another filter, and its text is darker"
 	pictureDiffers = "a picture of fine detail, which the viewer scales down with another filter"
-	textDiffers    = "small dense text: the glyphs are paths in phase 7a, and Poppler fills them with another " +
+	textDiffers    = "small dense text: the glyphs of a PDF file stay paths (D58), and Poppler fills them with another " +
 		"anti-aliasing than the 8 by 8 coverage of the text of ivy (D46)"
 )
 
 // mutoolPage renders page n, from 1, of the PDF file at path with mutool
-// draw at 72 dots for each inch.
-func mutoolPage(ctx context.Context, path string, n int) (image.Image, error) {
+// draw at dpi dots for each inch.
+func mutoolPage(ctx context.Context, path string, n, dpi int) (image.Image, error) {
 	out := path + "." + strconv.Itoa(n) + ".png"
 	defer func() { _ = os.Remove(out) }()
-	cmd := exec.CommandContext(ctx, "mutool", "draw", "-q", "-r", "72", "-F", "png", "-o", out, path, strconv.Itoa(n))
+	cmd := exec.CommandContext(ctx, "mutool", "draw", "-q", "-r", strconv.Itoa(dpi), "-F", "png", "-o", out, path, strconv.Itoa(n))
 	if msg, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("running mutool: %w: %s", err, msg)
 	}

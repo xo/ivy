@@ -59,6 +59,23 @@ func (p *program) num() float32 {
 	return float32(b) - 20
 }
 
+// text returns the text of a run of glyphs: letters, a character of two
+// bytes, and sometimes a byte that is not valid UTF-8.
+func (p *program) text() string {
+	var b []byte
+	for range int(p.byte() % 6) {
+		switch c := p.byte(); c % 8 {
+		case 6:
+			b = append(b, "é"...)
+		case 7:
+			b = append(b, c)
+		default:
+			b = append(b, 'a'+c%26)
+		}
+	}
+	return string(b)
+}
+
 // unit returns a number from 0 to 1.
 func (p *program) unit() float32 {
 	return float32(p.byte()) / 255
@@ -228,9 +245,14 @@ func (p *program) run(d display.Device, n int) {
 		case 9:
 			display.FillText(d, p.path(), okage.FillRuleWinding, p.shader())
 		case 10:
-			run := display.GlyphRun{Face: p.face, Size: p.num(), Transform: p.transform()}
+			run := display.GlyphRun{Face: p.face, Size: p.num(), Transform: p.transform(), Text: p.text()}
 			for range int(p.byte() % 4) {
-				run.Glyphs = append(run.Glyphs, display.Glyph{ID: font.GID(p.byte()), X: p.num(), Y: p.num()})
+				g := display.Glyph{ID: font.GID(p.byte()), X: p.num(), Y: p.num()}
+				g.Start, g.End = int(p.byte())%(len(run.Text)+2), int(p.byte())%(len(run.Text)+2)
+				if p.byte() == 255 {
+					g.ID = 1 << 17
+				}
+				run.Glyphs = append(run.Glyphs, g)
 			}
 			d.FillGlyphs(run, p.shader())
 		case 11, 12:
@@ -259,6 +281,7 @@ func FuzzEncode(f *testing.F) {
 	f.Add([]byte{11, 128, 3, 1, 1, 0, 0, 30, 30, 1, 3, 0, 1, 10, 10, 40, 1, 0, 2, 200, 200, 0, 0, 0, 255, 13})
 	f.Add([]byte{6, 4, 10, 10, 0, 100, 10, 0, 100, 100, 3, 0, 7, 3, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 5, 5, 255, 0})
 	f.Add([]byte{12, 200, 23, 0, 0, 1, 2, 3, 0, 4, 0, 1, 5, 5, 60, 60, 0, 2, 3, 4, 255, 14, 5, 2, 1, 1, 2, 2, 60, 1, 2, 0, 2, 3, 1, 9, 9})
+	f.Add([]byte{10, 44, 1, 20, 20, 3, 0, 1, 2, 3, 40, 60, 120, 0, 1, 0, 41, 80, 120, 1, 2, 0, 42, 100, 120, 2, 3, 0, 0, 0, 0, 0, 0, 255})
 	face, err := font.Load(goregular.TTF, 0)
 	if err != nil {
 		f.Fatal(err)

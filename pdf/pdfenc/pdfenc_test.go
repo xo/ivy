@@ -2,7 +2,9 @@ package pdfenc
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
+	"encoding/binary"
 	"errors"
 	"image"
 	"image/color"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xo/okage"
 	"golang.org/x/image/font/gofont/goregular"
@@ -162,8 +165,10 @@ type scene struct {
 	name string
 	draw func(t *testing.T, d display.Device)
 	diff float64
-	// want lists strings that the written file holds.
-	want []string
+	// want lists strings that the written file holds, and notWant the
+	// strings that it does not hold. The streams of the file count
+	// inflated.
+	want, notWant []string
 	// clear renders the scene over a transparent background, for the
 	// raster fallback, which draws a part without its backdrop.
 	clear bool
@@ -299,7 +304,114 @@ func scenes() []scene {
 				x += face.Advance(gid) * 24
 			}
 			d.FillGlyphs(run, solid(0, 0, 0, 255))
-		}, diff: 2},
+		}, diff: 2, notWant: []string{"/FontFile2"}},
+		{name: "text", draw: func(t *testing.T, d display.Device) {
+			d.FillGlyphs(textRun(t, goregular.TTF, "Hello, PDF", 10, 100, okage.IdentityTransform()), solid(0, 0, 0, 255))
+		}, diff: 2, want: []string{"/Type0", "/FontFile2", "/ToUnicode", "+GoRegular", "<0048>"}},
+		{name: "text transform", draw: func(t *testing.T, d display.Device) {
+			// a slant, a width and a turn, as the faces of XPS and the
+			// metafiles draw them
+			slant := okage.TransformFromRow(1, 0, -0.36397, 1, 0, 0)
+			d.FillGlyphs(textRun(t, goregular.TTF, "Slanted", 10, 40, slant), solid(0, 0, 0, 255))
+			wide := okage.TransformFromScale(1.5, 1)
+			d.FillGlyphs(textRun(t, goregular.TTF, "Wide", 10, 80, wide), solid(0, 0, 160, 255))
+			turn := okage.TransformFromRow(0, -1, 1, 0, 0, 0)
+			d.FillGlyphs(textRun(t, goregular.TTF, "Up", 150, 180, turn), solid(160, 0, 0, 255))
+			d.Save()
+			d.Concat(okage.TransformFromRotate(10))
+			d.FillGlyphs(textRun(t, goregular.TTF, "Turned", 40, 120, okage.IdentityTransform()), solid(0, 120, 0, 255))
+			d.Restore()
+		}, diff: 2, want: []string{"/ToUnicode"}},
+		{name: "text gradient", draw: func(t *testing.T, d display.Device) {
+			lin, _ := okage.NewLinearGradient(okage.PointFromXY(10, 0), okage.PointFromXY(190, 0), stops(), okage.SpreadModePad, okage.IdentityTransform())
+			run := textRun(t, goregular.TTF, "Gradient", 10, 100, okage.TransformFromScale(1.2, 1))
+			run.Size = 36
+			d.FillGlyphs(run, lin)
+		}, diff: 2, want: []string{"/ToUnicode", "/ShadingType"}},
+		{name: "text clusters", draw: func(t *testing.T, d display.Device) {
+			// two glyphs of one cluster, and one glyph of two characters
+			run := textRun(t, goregular.TTF, "ab", 10, 100, okage.IdentityTransform())
+			run.Text = "a\u0301bc"
+			run.Glyphs[0].Start, run.Glyphs[0].End = 0, 3
+			run.Glyphs = append(run.Glyphs[:1], run.Glyphs...)
+			run.Glyphs[2].Start, run.Glyphs[2].End = 3, 5
+			d.FillGlyphs(run, solid(0, 0, 0, 255))
+		}, diff: 2, want: []string{"/ActualText"}},
+		{name: "text bad range", draw: func(t *testing.T, d display.Device) {
+			run := textRun(t, goregular.TTF, "Ranges", 10, 100, okage.IdentityTransform())
+			run.Text = "\u00e9"
+			run.Glyphs[0].End = 1
+			d.FillGlyphs(run, solid(0, 0, 0, 255))
+		}, diff: 2, notWant: []string{"/FontFile2"}},
+		{name: "text restricted", draw: func(t *testing.T, d display.Device) {
+			data := bytes.Clone(goregular.TTF)
+			setFSType(t, data, 0x0002)
+			d.FillGlyphs(textRun(t, data, "Restricted", 10, 100, okage.IdentityTransform()), solid(0, 0, 0, 255))
+		}, diff: 2, notWant: []string{"/FontFile2"}},
+	}
+}
+
+// textRun returns a run of the glyphs of s in the font data, at 24 points,
+// from x, y, with its text.
+func textRun(t *testing.T, data []byte, s string, x, y float32, tr okage.Transform) display.GlyphRun {
+	t.Helper()
+	face, err := font.Load(data, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := display.GlyphRun{Face: face, Size: 24, Transform: tr, Text: s}
+	sx, _ := tr.GetScale()
+	for i, r := range s {
+		gid, _ := face.Glyph(r)
+		run.Glyphs = append(run.Glyphs, display.Glyph{ID: gid, X: x, Y: y, Start: i, End: i + utf8.RuneLen(r)})
+		x += face.Advance(gid) * 24 * max(sx, 1)
+	}
+	return run
+}
+
+// setFSType sets the field fsType of the table OS/2 of the font data to v.
+func setFSType(t *testing.T, data []byte, v uint16) {
+	t.Helper()
+	off := tableOffset(t, data, "OS/2")
+	binary.BigEndian.PutUint16(data[off+8:], v)
+}
+
+// tableOffset returns the offset of the table tag of the font data.
+func tableOffset(t *testing.T, data []byte, tag string) int {
+	t.Helper()
+	n := int(binary.BigEndian.Uint16(data[4:]))
+	for i := range n {
+		rec := 12 + 16*i
+		if string(data[rec:rec+4]) == tag {
+			return int(binary.BigEndian.Uint32(data[rec+8:]))
+		}
+	}
+	t.Fatalf("expected the table %s", tag)
+	return 0
+}
+
+// inflated returns the bytes of the file, with the inflated data of each
+// stream of the file after them.
+func inflated(t *testing.T, data []byte) []byte {
+	t.Helper()
+	all := bytes.Clone(data)
+	rest := data
+	for {
+		_, after, ok := bytes.Cut(rest, []byte("stream\n"))
+		if !ok {
+			return all
+		}
+		body, next, ok := bytes.Cut(after, []byte("endstream"))
+		if !ok {
+			return all
+		}
+		rest = next
+		r, err := zlib.NewReader(bytes.NewReader(body))
+		if err != nil {
+			continue
+		}
+		b, _ := io.ReadAll(r)
+		all = append(all, b...)
 	}
 }
 
@@ -336,9 +448,15 @@ func TestScenes(t *testing.T) {
 	for _, sc := range scenes() {
 		t.Run(sc.name, func(t *testing.T) {
 			data, src := encodeScene(t, sc, WithRasterDPI(144))
+			all := inflated(t, data)
 			for _, s := range sc.want {
-				if !bytes.Contains(data, []byte(s)) {
+				if !bytes.Contains(all, []byte(s)) {
 					t.Errorf("expected the file to hold %q", s)
+				}
+			}
+			for _, s := range sc.notWant {
+				if bytes.Contains(all, []byte(s)) {
+					t.Errorf("expected the file not to hold %q", s)
 				}
 			}
 			got := openPage(t, data, 0)
@@ -618,6 +736,42 @@ func TestSaveRestore(t *testing.T) {
 	var buf bytes.Buffer
 	if err := Encode(t.Context(), &buf, &document{pages: []ivy.Page{&scenePage{w: 100, h: 100, draw: draw}}}); err != nil {
 		t.Fatal(err)
+	}
+	openPage(t, buf.Bytes(), 0)
+}
+
+// TestTextSubsetFails draws text with a font whose subset the writer
+// cannot make: the location of a glyph points past the table glyf. Encode
+// draws the pages again with the glyphs of that font as paths (D58).
+func TestTextSubsetFails(t *testing.T) {
+	data := bytes.Clone(goregular.TTF)
+	head := tableOffset(t, data, "head")
+	loca := tableOffset(t, data, "loca")
+	face, err := font.Load(goregular.TTF, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, _ := face.Glyph('A')
+	if binary.BigEndian.Uint16(data[head+50:]) == 0 {
+		binary.BigEndian.PutUint16(data[loca+2*int(gid)+2:], 0xFFFF)
+	} else {
+		binary.BigEndian.PutUint32(data[loca+4*int(gid)+4:], 0x7FFFFFF0)
+	}
+	draws := 0
+	page := &scenePage{w: 200, h: 200, draw: func(d display.Device) {
+		draws++
+		d.FillGlyphs(textRun(t, data, "BAD", 10, 100, okage.IdentityTransform()), solid(0, 0, 0, 255))
+		d.FillGlyphs(textRun(t, goregular.TTF, "Good", 10, 150, okage.IdentityTransform()), solid(0, 0, 0, 255))
+	}}
+	var buf bytes.Buffer
+	if err := Encode(t.Context(), &buf, &document{pages: []ivy.Page{page}}); err != nil {
+		t.Fatal(err)
+	}
+	if draws != 2 {
+		t.Errorf("expected the page drawn twice, got: %d", draws)
+	}
+	if n := bytes.Count(buf.Bytes(), []byte("/FontFile2")); n != 1 {
+		t.Errorf("expected one embedded font, got: %d", n)
 	}
 	openPage(t, buf.Bytes(), 0)
 }

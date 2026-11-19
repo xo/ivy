@@ -5,7 +5,9 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/svg"
@@ -187,7 +189,11 @@ func load(db *svg.FontDatabase, id svg.FontID) (f *realFace) {
 	if f.strike <= 0 {
 		f.strike = 0.25
 	}
-	f.face = font.FromFace(face)
+	if src, ok := fontdb.Source(db, id, nil); ok {
+		f.face = font.FromFaceSource(face, src)
+	} else {
+		f.face = font.FromFace(face)
+	}
 	if sf, ok := db.NewFace(id, nil); ok {
 		f.shapeMu, f.shapeFace, f.shaper = new(sync.Mutex), sf, new(shaping.HarfbuzzShaper)
 	}
@@ -262,6 +268,30 @@ func (tf textFont) glyphs(run gowemf.TextRun) ([]font.GID, []float64, []bool) {
 	return gids, adv, draw
 }
 
+// runText returns the text of the UTF-16 units of a run in UTF-8, and the
+// byte of the text where each unit starts, with the length of the text at
+// the end. The second unit of a surrogate pair starts at the end of the
+// pair. A lone surrogate is U+FFFD.
+func runText(units []uint16) (string, []int) {
+	b := make([]byte, 0, len(units))
+	offsets := make([]int, len(units)+1)
+	for i := 0; i < len(units); i++ {
+		offsets[i] = len(b)
+		r := rune(units[i])
+		if utf16.IsSurrogate(r) && i+1 < len(units) {
+			if p := utf16.DecodeRune(r, rune(units[i+1])); p != unicode.ReplacementChar {
+				b = utf8.AppendRune(b, p)
+				offsets[i+1] = len(b)
+				i++
+				continue
+			}
+		}
+		b = utf8.AppendRune(b, r)
+	}
+	offsets[len(units)] = len(b)
+	return string(b), offsets
+}
+
 // mirrors are the characters that bidirectional text mirrors at an odd
 // level, the brackets of the Bidi_Mirrored property.
 var mirrors = map[rune]rune{
@@ -315,15 +345,41 @@ func (b *backend) DrawText(run gowemf.TextRun, clip gowemf.Clip) error {
 		b.skip("glyph indexes of font " + run.Font.FaceName)
 		return nil
 	}
+	// text is the text of the run for a writer of PDF, and offsets holds
+	// the byte of text where each element starts (D58). A run of glyph
+	// indexes has no text.
+	var text string
+	var offsets []int
+	if !run.Glyphs {
+		text, offsets = runText(run.Text)
+	}
+	// rangeOf returns the bytes of text from the element i to the element
+	// end
+	rangeOf := func(i, end int) (int, int) {
+		if offsets == nil {
+			return 0, 0
+		}
+		return offsets[i], offsets[end]
+	}
 	var glyphs []display.Glyph
 	if shaped, ok := tf.shape(run); ok {
 		// the glyphs of a cluster are placed from the origin of its first
-		// element
+		// element, and the cluster covers the elements up to the next
+		// element with glyphs
 		for i, cluster := range shaped.glyphs {
+			if len(cluster) == 0 {
+				continue
+			}
+			end := i + 1
+			for end < len(shaped.glyphs) && len(shaped.glyphs[end]) == 0 {
+				end++
+			}
+			start, stop := rangeOf(i, end)
 			o := run.Origins[i]
 			for _, g := range cluster {
 				g.X += float32(o.X)
 				g.Y += float32(o.Y)
+				g.Start, g.End = start, stop
 				glyphs = append(glyphs, g)
 			}
 		}
@@ -333,7 +389,8 @@ func (b *backend) DrawText(run gowemf.TextRun, clip gowemf.Clip) error {
 		for i, gid := range gids {
 			if draw[i] {
 				o := run.Origins[i]
-				glyphs = append(glyphs, display.Glyph{ID: gid, X: float32(o.X), Y: float32(o.Y)})
+				start, end := rangeOf(i, i+1)
+				glyphs = append(glyphs, display.Glyph{ID: gid, X: float32(o.X), Y: float32(o.Y), Start: start, End: end})
 			}
 		}
 	}
@@ -350,7 +407,7 @@ func (b *backend) DrawText(run gowemf.TextRun, clip gowemf.Clip) error {
 		b.d.Save()
 		defer b.d.Restore()
 		b.d.Concat(transform(run.Transform))
-		b.d.FillGlyphs(display.GlyphRun{Face: tf.face, Size: tf.em, Glyphs: glyphs, Transform: glyph}, shader)
+		b.d.FillGlyphs(display.GlyphRun{Face: tf.face, Size: tf.em, Glyphs: glyphs, Transform: glyph, Text: text}, shader)
 		var width float64
 		for _, a := range run.Advances {
 			width += a

@@ -183,10 +183,13 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		if !run.HasFont || fc == nil {
 			continue
 		}
-		face := s.dc.face(fc.face(run.Font, style))
+		face := s.dc.face(fc.face(run.Font, style), fc.db, run.Font, variations)
 		if face == nil {
 			continue
 		}
+		// lo and hi are the bytes of the text that the clusters of the
+		// glyphs cover.
+		lo, hi := len(layout.Text), 0
 		glyphs := make([]display.Glyph, 0, len(run.Glyphs))
 		var bitmaps []glyphBitmap
 		var colors []glyphTree
@@ -219,7 +222,11 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 					continue
 				}
 			}
-			glyphs = append(glyphs, display.Glyph{ID: g.ID, X: float32(x + g.X), Y: float32(y + g.Y)})
+			start, end := min(g.Cluster, len(layout.Text)), min(g.ClusterEnd, len(layout.Text))
+			if start < end {
+				lo, hi = min(lo, start), max(hi, end)
+			}
+			glyphs = append(glyphs, display.Glyph{ID: g.ID, X: float32(x + g.X), Y: float32(y + g.Y), Start: start, End: end})
 		}
 		for _, c := range colors {
 			if err := s.drawColorGlyph(c.tree, c.x, c.y, run.Size); err != nil {
@@ -235,6 +242,10 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 			Glyphs:    glyphs,
 			Transform: okage.IdentityTransform(),
 		}
+		// Port: upstream gives Cairo the text and the clusters of the run of
+		// Pango, and Cairo writes them into the PDF file. The run takes the
+		// text that its clusters cover, for a writer of PDF (D58).
+		setRunText(&glyphRun, layout.Text, lo, hi)
 		if fc.syntheticBold(run.Font, style) {
 			// Port: upstream has no synthetic bold, see syntheticBold.
 			// The stroke grows the outlines by a 48th of an em on each
@@ -243,6 +254,27 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 			continue
 		}
 		s.fillGlyphs(glyphRun)
+	}
+}
+
+// setRunText gives run the bytes lo to hi of text, and makes the range of
+// each glyph a range of them. A glyph with a range outside lo to hi gets
+// the empty range at lo. The run gets no text when lo is not before hi.
+func setRunText(run *display.GlyphRun, text string, lo, hi int) {
+	if lo >= hi {
+		for i := range run.Glyphs {
+			run.Glyphs[i].Start, run.Glyphs[i].End = 0, 0
+		}
+		return
+	}
+	run.Text = text[lo:hi]
+	for i := range run.Glyphs {
+		g := &run.Glyphs[i]
+		if g.Start < lo || g.End > hi || g.Start > g.End {
+			g.Start, g.End = lo, lo
+		}
+		g.Start -= lo
+		g.End -= lo
 	}
 }
 
