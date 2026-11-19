@@ -322,6 +322,14 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 	var floatChildren []*Box
 	waitingFloatsY := line.PositionY + line.Height
 	for _, waitingFloat := range waitingFloats {
+		if lc.isPageFloat(waitingFloat) {
+			// Port: upstream has no -ivy-float-position, see
+			// inlineOutOfFlowLayout.
+			if newPageFloat := lc.flowPageFloat(waitingFloat, containingBlock, waitingFloatsY, absoluteBoxes, fixedBoxes); newPageFloat != nil {
+				floatChildren = append(floatChildren, newPageFloat)
+			}
+			continue
+		}
 		waitingFloat.PositionY = waitingFloatsY
 		newWaitingFloat, waitingFloatResumeAt := floatLayout(
 			lc, waitingFloat, containingBlock, absoluteBoxes, fixedBoxes,
@@ -779,6 +787,16 @@ func inlineOutOfFlowLayout(lc *layoutContext, box, containingBlock *Box, index i
 			appendBoxes(absoluteBoxes, placeholder)
 		} else {
 			appendBoxes(fixedBoxes, placeholder)
+		}
+
+	case lc.isPageFloat(child):
+		// Port: upstream has no -ivy-float-position. The line places a page
+		// float after its layout, as a float that waits, so that the
+		// float is above the flow only when it covers a line before. The
+		// line skips a page float that the page placed before its flow
+		// (D60).
+		if !lc.pageFloatSkipped(child) {
+			appendBoxes(waitingFloats, child)
 		}
 
 	case child.IsFloated():

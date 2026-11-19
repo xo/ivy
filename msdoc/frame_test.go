@@ -1,6 +1,10 @@
 package msdoc
 
 import (
+	"bytes"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -98,46 +102,63 @@ func TestFramePosition(t *testing.T) {
 		return pap{framed: true, pcHorz: pcHorz, pcVert: pcVert, dxaAbs: dxaAbs, dyaAbs: dyaAbs, dxaWidth: width, wr: wr}
 	}
 	for _, tt := range []struct {
-		name    string
-		pp      pap
-		pageTop bool
-		want    string
+		name string
+		pp   pap
+		want string
 	}{
 		// 2 inches wide at 1 inch from the column, below 10 points of
 		// its paragraph: the text wraps at its right
-		{"paragraph", frame(0, pcVertParagraph, 1440, 200, 2880, 0), false,
+		{"paragraph", frame(0, pcVertParagraph, 1440, 200, 2880, 0),
 			`<div style="width: 144pt; float: left; margin: 10pt 0pt 0pt 72pt">`},
 		// at 1 inch from the page, which is at the left margin
-		{"page", frame(pcHorzPage, pcVertParagraph, 1800, 0, 2880, 0), false,
+		{"page", frame(pcHorzPage, pcVertParagraph, 1800, 0, 2880, 0),
 			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt">`},
 		// at the right of the column
-		{"right", frame(0, pcVertParagraph, dxaAbsRight, 0, 2880, 0), false,
+		{"right", frame(0, pcVertParagraph, dxaAbsRight, 0, 2880, 0),
 			`<div style="width: 144pt; float: right; margin: 0pt 0pt 0pt 0pt">`},
-		// 2 inches below the top of the margin, at the top of a page
-		{"margin top", frame(0, 0, 0, 2880, 2880, 0), true,
-			`<div style="width: 144pt; float: left; margin: 144pt 0pt 0pt 0pt">`},
-		// another frame stays at its paragraph
-		{"margin", frame(0, 0, 0, 2880, 2880, 0), false,
-			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt">`},
-		// 3 inches below the top of the page, which is 2 inches below the
-		// top margin of 1 inch
-		{"page top", frame(0, pcVertPage, 0, 4320, 2880, 0), true,
-			`<div style="width: 144pt; float: left; margin: 144pt 0pt 0pt 0pt">`},
+		// 2 inches below the top of the margin: a page float (D60)
+		{"margin", frame(0, 0, 0, 2880, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin 144pt">`},
+		// 3 inches below the top of the page
+		{"page top", frame(0, pcVertPage, 0, 4320, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: page 216pt">`},
+		// the special values of the position
+		{"margin top", frame(0, 0, 0, dyaAbsTop, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin top">`},
+		{"page center", frame(0, pcVertPage, 0, dyaAbsCenter, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: page center">`},
+		{"margin bottom", frame(0, 0, 0, dyaAbsBottom, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin bottom">`},
+		{"inside", frame(0, 0, 0, dyaAbsInside, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin top">`},
+		{"outside", frame(0, 0, 0, dyaAbsOutside, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin bottom">`},
+		// above and below the text at a position from the margin: a page
+		// float with a margin to the right side of the column of 6
+		// inches
+		{"margin top and bottom", frame(0, 0, 1440, 2880, 2880, wrTopBottom),
+			`<div style="width: 144pt; float: left; margin: 0pt 216pt 0pt 72pt; -ivy-float-position: margin 144pt">`},
+		// at the center of the column
+		{"margin center", frame(0, 0, dxaAbsCenter, 2880, 2880, 0),
+			`<div style="width: 144pt; float: left; margin: 0pt 144pt 0pt 144pt; -ivy-float-position: margin 144pt">`},
+		// of the width of its text: the width of the column
+		{"margin auto", frame(0, 0, 0, 2880, 0, 0),
+			`<div style="width: 432pt; float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin 144pt">`},
 		// no text beside the frame: a block at its position
-		{"top and bottom", frame(0, pcVertParagraph, 1440, 200, 2880, wrTopBottom), false,
+		{"top and bottom", frame(0, pcVertParagraph, 1440, 200, 2880, wrTopBottom),
 			`<div style="height: 10pt"></div><div style="width: 144pt; margin-left: 72pt">`},
 		// the text as if the frame were not there: on the page
-		{"none", frame(0, pcVertPage, 1440, 4320, 2880, wrNone), false,
+		{"none", frame(0, pcVertPage, 1440, 4320, 2880, wrNone),
 			`<div style="width: 144pt; position: absolute; left: 72pt; top: 144pt">`},
 		// a frame of the width of its text is a block
-		{"auto", frame(0, pcVertParagraph, 720, 0, 0, 0), false,
+		{"auto", frame(0, pcVertParagraph, 720, 0, 0, 0),
 			`<div style="margin-left: 36pt">`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := testParser(nil, nil)
 			p.page = letter
 			var b strings.Builder
-			p.writeFrame(&b, tt.pp, "<p>x</p>", tt.pageTop)
+			p.writeFrame(&b, tt.pp, "<p>x</p>")
 			if html := b.String(); !strings.HasPrefix(html, tt.want) {
 				t.Errorf("expected %q:\n%s", tt.want, html)
 			}
@@ -146,8 +167,7 @@ func TestFramePosition(t *testing.T) {
 }
 
 // TestFrameParagraphs checks that the paragraphs of the same frame share a
-// block, and that a frame at the top of a page is at its position from the
-// margin.
+// block, and that the block is at its position from the margin.
 func TestFrameParagraphs(t *testing.T) {
 	p := testParser(nil, nil)
 	p.page = letter
@@ -159,7 +179,55 @@ func TestFrameParagraphs(t *testing.T) {
 	if n := strings.Count(html, "<div"); n != 1 {
 		t.Errorf("got %d blocks, want 1:\n%s", n, html)
 	}
-	if want := "margin: 72pt 0pt 0pt 0pt"; !strings.Contains(html, want) {
+	if want := "-ivy-float-position: margin 72pt"; !strings.Contains(html, want) {
 		t.Errorf("expected %q:\n%s", want, html)
+	}
+}
+
+// TestPageFloatFiles checks the position on the page of the floats of the
+// files of D60, which LibreOffice wrote from the .docx files of the tests
+// of docx: the tables from sprmTPc and sprmTDyaAbs, and the frames and the
+// picture, which LibreOffice wrote as shapes, from their places from the
+// margin (D60).
+func TestPageFloatFiles(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		want []string
+	}{
+		{"t-late", []string{"-ivy-float-position: margin 72pt"}},
+		{"t-page2", []string{"-ivy-float-position: margin 72pt"}},
+		{"f-late", []string{"-ivy-float-position: margin 70.25pt"}},
+		{"s-late", []string{"-ivy-float-position: margin 72pt"}},
+		{"f-bottom", []string{"-ivy-float-position: margin 502.55pt"}},
+		{"t-bottom", []string{"-ivy-float-position: margin bottom"}},
+		{"t-two", []string{"-ivy-float-position: margin 72pt", "-ivy-float-position: margin 72pt"}},
+		{"t-loop3", []string{"-ivy-float-position: margin 0pt"}},
+		{"t-loop2", []string{"-ivy-float-position: margin 0pt"}},
+		{"t-nofit", []string{"-ivy-float-position: page 684pt"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			buf, err := os.ReadFile(filepath.Join("testdata", "float-"+tt.name+".doc"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := Open(t.Context(), bytes.NewReader(buf))
+			if err != nil {
+				t.Fatal(err)
+			}
+			src, err := d.source(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := fs.ReadFile(src.FS, src.Documents[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(b), "-ivy-float-position"); got != len(tt.want) || !strings.Contains(string(b), tt.want[0]) {
+				t.Errorf("got %d positions, want %q", got, tt.want)
+			}
+			if n, err := d.PageCount(t.Context()); err != nil || n < 2 {
+				t.Errorf("got %d pages, %v", n, err)
+			}
+		})
 	}
 }

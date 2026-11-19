@@ -1175,6 +1175,32 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 	c.place(n, x, y, w, g, func() { c.frameContent(n, w, h, g) })
 }
 
+// odtFloatPosition returns the value of -ivy-float-position of a frame with
+// wrap at y points from the top of its area, from the graphic properties g:
+// the page for style:vertical-rel page, and the page area for page-content
+// (D60). It returns "" for a frame of another vertical-rel, which floats
+// at its paragraph.
+func odtFloatPosition(g odtProps, y float64) string {
+	area := ""
+	switch g["vertical-rel"] {
+	case "page":
+		area = "page "
+	case "page-content":
+		area = "margin "
+	default:
+		return ""
+	}
+	switch g["vertical-pos"] {
+	case "top":
+		return area + "top"
+	case "middle":
+		return area + "center"
+	case "bottom":
+		return area + "bottom"
+	}
+	return area + odtPt(y)
+}
+
 // place writes the box of a frame or a shape n, of the width w, at the
 // position (x, y) from its anchor, with the graphic properties g. content
 // writes what the box holds.
@@ -1213,6 +1239,9 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 			side = "right"
 		}
 		s.set("float", side)
+		if p := odtFloatPosition(g, y); p != "" {
+			s.set("-ivy-float-position", p)
+		}
 	}
 	if !inline {
 		s.set("width", odtPt(w))

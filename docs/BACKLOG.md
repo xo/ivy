@@ -58,12 +58,17 @@ found these faults. Each item names a file of the corpus.
    the middle of the column, as Word does on page 6 of
    `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
    side. Source: `msdoc`.
-7. Place a table or a frame of `msdoc` and `docx`, and a shape with wrap, that
-   floats from the margin or from the page vertically, as D60 decides with the
-   property `-ivy-float-position`. `msdoc` now uses the position only for a
-   block that starts a page, `docx` does not read `w:tblpPr` or `w:framePr`,
-   and `odf` does not read `style:vertical-rel`. No file of the corpus has
-   such a float. Source: `msdoc`, `docx`, `odf` and the layout, D60.
+7. Measure the page floats of D60 in Word, with the files `float-*.docx` of
+   `docx/testdata` and `float-*.doc` of `msdoc/testdata`. LibreOffice 26.8
+   places the floats of these files within 0.05 inch of ivy, except for two
+   files. In `float-t-loop2`, LibreOffice moves the anchor with the table to
+   page 2, and ivy keeps the table on page 1, as D60 decides. In
+   `float-t-nofit`, LibreOffice cuts the table at the bottom of the paper,
+   and ivy moves it up until it fits. These parts of D60 are not built yet:
+   the frames of `rtf`, the frames of `odf` that are anchored to the page
+   with wrap, which stay absolute, and `w:tblOverlap` and `allowOverlap` of
+   `docx`. The meaning of inside and outside on the vertical axis is not
+   measured. Source: `msdoc`, `docx`, `odf` and the layout, D60.
 8. Compare the path gradient "shape" of a focus out of the shape with
    PowerPoint. ivy puts the first stop where the ray from the focus enters the
    shape, and the last stop where the ray leaves it. On slide 4 of
@@ -157,6 +162,16 @@ found these faults. Each item names a file of the corpus.
     COM in the Windows VM of the review, but Word 2024 stopped when the script
     saved or exported the document, so these pictures have no reference.
     Source: `internal/odraw`, 2026-11-19.
+25. Lay out a line beside a float whose top is inside the line. The layout
+    tries the line at the height of its strut, and it lays out the line at the
+    full width of the column when the float is below that height. When the
+    line is then taller than its strut and touches the float, the layout
+    moves the line below the float. In `odf/testdata/float-f-late.odt`, the
+    paragraphs have a strut of Calibri of 11 points and text of 12 points, so
+    the text after the second paragraph goes below the frame, and LibreOffice
+    puts it beside the frame. A float of CSS starts at the top of a line, so
+    it is rare there. A page float of D60 can start anywhere. Source:
+    `internal/layout` (layout_inline.go), D60.
 
 ## Left by the charts
 

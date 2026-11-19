@@ -391,6 +391,15 @@ func blockOutOfFlowLayout(lc *layoutContext, box *Box, index int, child *Box, ne
 			*fixedBoxes = append(*fixedBoxes, placeholder)
 		}
 
+	case lc.isPageFloat(child):
+		// Port: upstream has no -ivy-float-position. A page float has its
+		// place on the page, and it does not break the page (D60).
+		newChild = lc.flowPageFloat(child, box, child.PositionY, absoluteBoxes, fixedBoxes)
+		if newChild != nil {
+			newChild.index = index
+			*newChildren = append(*newChildren, newChild)
+		}
+
 	case child.IsFloated():
 		// Float child layout.
 		// Check for forced break-before on the float.

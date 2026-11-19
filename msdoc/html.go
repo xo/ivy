@@ -489,13 +489,9 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 		cells []string
 		cell  strings.Builder
 		// frame holds the paragraphs of the frame of the properties
-		// framePap. pageTop is set while nothing of a page of the main
-		// document is written, and tableTop and frameTop are set for a
-		// table and a frame that start a page.
-		frame              strings.Builder
-		framePap           *pap
-		pageTop            = section != nil
-		tableTop, frameTop bool
+		// framePap.
+		frame    strings.Builder
+		framePap *pap
 	)
 	closeTable := func() {
 		if cell.Len() > 0 {
@@ -506,12 +502,12 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			rows = append(rows, tableRow{cells: cells})
 			cells = nil
 		}
-		writeTable(&b, rows, p.page, tableTop)
+		writeTable(&b, rows, p.page)
 		rows = nil
 	}
 	closeFrame := func() {
 		if framePap != nil {
-			p.writeFrame(&b, *framePap, frame.String(), frameTop)
+			p.writeFrame(&b, *framePap, frame.String())
 			frame.Reset()
 			framePap = nil
 		}
@@ -525,14 +521,6 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 		if section != nil && len(cells) == 0 && cell.Len() == 0 {
 			section(&b, para, closeBlocks)
 		}
-		if para.pageBreak || para.pap.pageBreak {
-			pageTop = section != nil
-		}
-		if len(rows) == 0 && len(cells) == 0 && cell.Len() == 0 {
-			tableTop = pageTop
-		}
-		top := pageTop
-		pageTop = false
 		if !para.pap.inTable {
 			closeTable()
 			if !para.pap.framed {
@@ -546,7 +534,7 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			}
 			if framePap == nil {
 				pp := para.pap
-				framePap, frameTop = &pp, top
+				framePap = &pp
 				if para.pageBreak || para.pap.pageBreak {
 					// a block that floats does not break the page, so
 					// the page breaks before the frame
@@ -962,7 +950,10 @@ func joinsBorder(a, b run) bool {
 // on the page. An object that text wraps around floats to the side of the
 // column where it is, an object above and below text is a block, and an
 // object that text does not wrap is placed on the page, as the package
-// docx does.
+// docx does. An object at a position from the margin or from the page,
+// with text around it or above and below it, floats at that position
+// (D60). An object above and below text then has a margin to the right
+// side of the column, so that no line fits beside it.
 func (p *parser) floatStyle(f *floating, w, h float64) []string {
 	pg := p.page
 	if pg.width == 0 {
@@ -983,14 +974,23 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 		// an inch beside it
 		wr = 1
 	}
-	var style []string
-	switch wr {
+	var position string
+	switch f.by {
+	case 0:
+		position = "-ivy-float-position: margin " + num(y) + "pt"
 	case 1:
+		position = "-ivy-float-position: page " + num(float64(f.top)/20) + "pt"
+	}
+	var style []string
+	switch {
+	case wr == 1 && position != "":
+		style = append(style, "float: left", "margin-left: "+num(x)+"pt", "margin-right: "+num(max(col-x-w, 0))+"pt", position)
+	case wr == 1:
 		style = append(style, "display: block", "margin-left: "+num(max(x, 0))+"pt")
 		if f.by == 2 && y > 0 {
 			style = append(style, "margin-top: "+num(y)+"pt")
 		}
-	case 3:
+	case wr == 3:
 		style = append(style, "position: absolute", "left: "+num(x)+"pt")
 		if f.by == 2 {
 			style = append(style, "margin-top: "+num(y)+"pt")
@@ -1006,7 +1006,10 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 		} else {
 			style = append(style, "float: left", "margin-left: "+num(max(x, 0))+"pt", "margin-right: 9pt")
 		}
-		if f.by == 2 && y > 0 {
+		switch {
+		case position != "":
+			style = append(style, position)
+		case f.by == 2 && y > 0:
 			style = append(style, "margin-top: "+num(y)+"pt")
 		}
 	}

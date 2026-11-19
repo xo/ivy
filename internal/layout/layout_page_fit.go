@@ -39,6 +39,8 @@ type pageState struct {
 	reportedFootnotes []*Box
 	renderedNotes     []*Box
 	running           map[string][]*Box
+	// names holds the names of the running elements before the page.
+	names map[string]bool
 	// makers is the number of page makers, next the page maker after the
 	// page, or nil, and data a copy of the page maker of the page.
 	makers int
@@ -55,6 +57,7 @@ func (lc *layoutContext) savePageState(i int) *pageState {
 		reportedFootnotes: slices.Clone(lc.reportedFootnotes),
 		renderedNotes:     slices.Clone(lc.renderedNotes),
 		running:           map[string][]*Box{},
+		names:             make(map[string]bool, len(lc.runningElements)),
 		makers:            len(lc.pageMaker),
 		data:              *lc.pageMaker[i],
 	}
@@ -62,6 +65,7 @@ func (lc *layoutContext) savePageState(i int) *pageState {
 		s.next = lc.pageMaker[i+1]
 	}
 	for name, pages := range lc.runningElements {
+		s.names[name] = true
 		if boxes, ok := pages[i+1]; ok {
 			s.running[name] = slices.Clone(boxes)
 		}
@@ -79,6 +83,13 @@ func (s *pageState) restore(lc *layoutContext, i int) {
 	lc.reportedFootnotes = slices.Clone(s.reportedFootnotes)
 	lc.renderedNotes = slices.Clone(s.renderedNotes)
 	for name, pages := range lc.runningElements {
+		// A name that the page added goes away, so that the page made
+		// again sees the same running elements before its flow. Else it
+		// counts them as changed, and the pages make it once more.
+		if !s.names[name] {
+			delete(lc.runningElements, name)
+			continue
+		}
 		delete(pages, i+1)
 		if boxes, ok := s.running[name]; ok {
 			pages[i+1] = slices.Clone(boxes)
@@ -100,9 +111,16 @@ func (s *pageState) restore(lc *layoutContext, i int) {
 // margin boxes at the top or at the bottom is taller than the margin, the
 // page is made again with larger margins. A margin grows to at most 40% of
 // the height of the page.
+//
+// Port: upstream has no -ivy-float-position. The page floats of the page
+// can make the page again, see makePageFloats. The galley stops its parts
+// before the part of the last line that the page took only when the page
+// is complete, as a page made again can take the lines of these parts
+// (D57, D60).
 func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, skipStack) {
+	defer lc.galleyPageDone()
 	state := lc.savePageState(index)
-	page, resumeAt := makePageGrown(index, lc, rootBox, html, pageGrowth{})
+	page, resumeAt := makePageFloats(index, lc, rootBox, html, pageGrowth{}, state)
 	if !isStr(page.Style.Get("margin_box_fit"), "grow") || index+1 >= len(lc.pageMaker) {
 		return page, resumeAt
 	}
@@ -111,6 +129,25 @@ func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, ski
 		return page, resumeAt
 	}
 	state.restore(lc, index)
+	return makePageFloats(index, lc, rootBox, html, grow, state)
+}
+
+// makePageFloats is makePageGrown, which it calls once or twice. When the
+// flow of the page places a page float of -ivy-float-position above the
+// flow, the float covers content that the page placed before it. The page
+// is then made again from the state before the page, with these floats
+// placed before the flow. A page float that the second layout places
+// above the flow stays where it is, so a page has at most two layouts
+// here (D60).
+func makePageFloats(index int, lc *layoutContext, rootBox *Box, html *HTML, grow pageGrowth, state *pageState) (*Box, skipStack) {
+	lc.startPageFloats(nil)
+	page, resumeAt := makePageGrown(index, lc, rootBox, html, grow)
+	above := lc.pageFloats.above
+	if len(above) == 0 {
+		return page, resumeAt
+	}
+	state.restore(lc, index)
+	lc.startPageFloats(above)
 	return makePageGrown(index, lc, rootBox, html, grow)
 }
 

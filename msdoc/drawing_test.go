@@ -216,7 +216,8 @@ func TestDrawing(t *testing.T) {
 // TestTextbox checks that a text box writes its text from the part of
 // the text boxes, as a block that floats before the paragraph of its
 // anchor, over the object of its shape
-// (libreoffice/doc/landscape-a4-certificate.doc).
+// (libreoffice/doc/landscape-a4-certificate.doc). Its place is from the
+// margin, so it floats at its position from the top of the margin (D60).
 func TestTextbox(t *testing.T) {
 	p := drawingParser(t)
 	d, err := p.drawnAt(t.Context(), 2, false)
@@ -229,7 +230,7 @@ func TestTextbox(t *testing.T) {
 	html := b.String()
 	// without a line, the bleed is 1 point, which the padding holds
 	for _, want := range []string{
-		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; width: 146pt; height: 38pt;`,
+		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; -ivy-float-position: margin -1pt; width: 146pt; height: 38pt;`,
 		`padding: 4.6pt 8.2pt 4.6pt 8.2pt; background: url(ivy-object:shape1) no-repeat; background-size: 100% 100%">`,
 		"Box text</span></p>",
 	} {
@@ -336,13 +337,52 @@ func TestFullWidthFloat(t *testing.T) {
 	p := testParser(nil, nil)
 	p.page = letter
 	col := float64(letter.width-letter.left-letter.right) / 20
-	got := strings.Join(p.floatStyle(&floating{wr: 2}, col-10, 20), "; ")
+	got := strings.Join(p.floatStyle(&floating{wr: 2, by: 2}, col-10, 20), "; ")
 	if !strings.HasPrefix(got, "display: block") {
 		t.Errorf("expected a block, got %q", got)
 	}
-	got = strings.Join(p.floatStyle(&floating{wr: 2}, col/2, 20), "; ")
+	got = strings.Join(p.floatStyle(&floating{wr: 2, by: 2}, col/2, 20), "; ")
 	if !strings.HasPrefix(got, "float: left") {
 		t.Errorf("expected a float, got %q", got)
+	}
+}
+
+// TestPageFloatShape checks that an object at a position from the margin
+// or from the page floats at that position, and that an object above and
+// below the text has a margin to the right side of the column (D60).
+func TestPageFloatShape(t *testing.T) {
+	p := testParser(nil, nil)
+	p.page = letter
+	col := float64(letter.width-letter.left-letter.right) / 20
+	for _, tt := range []struct {
+		name string
+		f    floating
+		w    float64
+		want string
+	}{
+		{"margin", floating{wr: 2, by: 0, left: 1440, top: 2880}, 144,
+			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: margin 144pt; width: 144pt; height: 20pt"},
+		{"page", floating{wr: 2, by: 1, left: 1440, top: 2880}, 144,
+			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: page 144pt; width: 144pt; height: 20pt"},
+		{"right", floating{wr: 4, by: 0, left: 5760, top: 0}, 144,
+			"float: right; margin-right: 0pt; margin-left: 9pt; -ivy-float-position: margin 0pt; width: 144pt; height: 20pt"},
+		{"top and bottom", floating{wr: 1, by: 0, left: 1440, top: 720}, 144,
+			"float: left; margin-left: 72pt; margin-right: 216pt; -ivy-float-position: margin 36pt; width: 144pt; height: 20pt"},
+		// an object that leaves less than half an inch beside it puts the
+		// text below it
+		{"full width", floating{wr: 2, by: 1, top: 1440}, col - 10,
+			"float: left; margin-left: 0pt; margin-right: 10pt; -ivy-float-position: page 72pt; width: 422pt; height: 20pt"},
+		// the paragraph and no wrap stay as they are
+		{"paragraph", floating{wr: 2, by: 2, top: 200}, 144,
+			"float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 10pt; width: 144pt; height: 20pt"},
+		{"none", floating{wr: 3, by: 0, top: 200}, 144,
+			"position: absolute; left: 0pt; top: 10pt; width: 144pt; height: 20pt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := strings.Join(p.floatStyle(&tt.f, tt.w, 20), "; "); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

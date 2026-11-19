@@ -123,22 +123,8 @@ func (c *converter) table(t roxmltree.Node) {
 	if total > 0 {
 		s.set("table-layout", "fixed")
 	}
-	switch tp["jc"] {
-	case "center":
-		s.set("margin-left", "auto")
-		s.set("margin-right", "auto")
-	case "right", "end":
-		s.set("margin-left", "auto")
-	default:
-		// The text of the first cell lines up with the text around the
-		// table, so the table starts a cell margin to the left.
-		ind := tp.num("tblInd", 0)/20 - tp.num("mar.left", 108)/20
-		if tp["tblInd.type"] != "dxa" && tp["tblInd.type"] != "" {
-			ind = -tp.num("mar.left", 108) / 20
-		}
-		if ind != 0 {
-			s.set("margin-left", pt(ind))
-		}
+	if !c.floatTable(&s, t, tp, total) {
+		c.alignTable(&s, tp)
 	}
 	if v, ok := hexColor(tp["shd"]); ok {
 		s.set("background-color", v)
@@ -172,6 +158,66 @@ func (c *converter) table(t roxmltree.Node) {
 	} else {
 		c.w.WriteString("</tbody></table>")
 	}
+}
+
+// alignTable sets the alignment of a table of the properties tp in its
+// column.
+func (c *converter) alignTable(s *css, tp props) {
+	switch tp["jc"] {
+	case "center":
+		s.set("margin-left", "auto")
+		s.set("margin-right", "auto")
+	case "right", "end":
+		s.set("margin-left", "auto")
+	default:
+		// The text of the first cell lines up with the text around the
+		// table, so the table starts a cell margin to the left.
+		ind := tp.num("tblInd", 0)/20 - tp.num("mar.left", 108)/20
+		if tp["tblInd.type"] != "dxa" && tp["tblInd.type"] != "" {
+			ind = -tp.num("mar.left", 108) / 20
+		}
+		if ind != 0 {
+			s.set("margin-left", pt(ind))
+		}
+	}
+}
+
+// floatTable sets the declarations of the table t of the properties tp,
+// whose grid is total points wide, when its w:tblpPr places it at a
+// position from the margin or from the page, in the body of a section of
+// one column, and reports whether it did (D60). The text wraps around the
+// table. A table at a position from its paragraph stays a block in the
+// flow.
+func (c *converter) floatTable(s *css, t roxmltree.Node, tp props, total float64) bool {
+	pr, ok := child(t, "tblPr")
+	if !ok || c.margin != "" {
+		return false
+	}
+	pp, ok := child(pr, "tblpPr")
+	if !ok {
+		return false
+	}
+	sec := c.sections[c.section]
+	y := number(attrOf(pp, "tblpY"), 0) / 20
+	position := floatPosition(attrOf(pp, "vertAnchor"), attrOf(pp, "tblpYSpec"), y)
+	if position == "" || sec.cols > 1 {
+		return false
+	}
+	colWidth := sec.width - sec.left - sec.right - sec.gutter
+	w := total
+	if tw := tp.num("tblW", 0); tp["tblW.type"] == "dxa" && tw > 0 {
+		w = tw / 20
+	}
+	x := anchorX(attrOf(pp, "horzAnchor"), attrOf(pp, "tblpXSpec"), number(attrOf(pp, "tblpX"), 0)/20, w, colWidth, sec)
+	// The text of the first cell lines up with the place of the table, so
+	// the table starts a cell margin to the left, as a table in the flow.
+	x -= tp.num("mar.left", 108) / 20
+	var dist [4]float64
+	for i, name := range [...]string{"topFromText", "rightFromText", "bottomFromText", "leftFromText"} {
+		dist[i] = min(max(number(attrOf(pp, name), 0)/20, 0), 720)
+	}
+	pageFloatCSS(s, x, w, colWidth, dist, true, position)
+	return true
 }
 
 // attrOf returns the attribute of n with the local name name.

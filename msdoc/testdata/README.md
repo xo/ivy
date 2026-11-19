@@ -15,3 +15,22 @@ test document", and its author is "Ivy Tester".
 | --- | --- |
 | `text.doc` | the document in the clear |
 | `rc4_password.doc` | the same document, which RC4 encrypts with the password `secret` |
+
+LibreOffice 26.8 wrote the files `float-*.doc` from the files `float-*.docx`
+of `docx/testdata`, with `soffice --headless --convert-to "doc:MS Word 97"`.
+They hold the page floats of D60. LibreOffice writes each table with
+sprmTPc and sprmTDyaAbs, and each frame and the picture as a shape, with its
+place from the margin. `docx/testdata/README.md` describes the floats.
+
+| File | The float |
+| --- | --- |
+| `float-t-late.doc` | a table 1 inch below the top of the margin, anchored before P12 |
+| `float-t-page2.doc` | the same table, anchored before P26, on page 2 |
+| `float-f-late.doc` | a frame 1 inch below the top of the margin, anchored after P11 |
+| `float-s-late.doc` | a picture 1 inch below the top of the margin, anchored in P12 |
+| `float-f-bottom.doc` | the frame at the bottom of the margin, anchored after P01 |
+| `float-t-bottom.doc` | the table at the bottom of the margin, anchored before P02 |
+| `float-t-two.doc` | two tables at the same place |
+| `float-t-loop3.doc` | a table of 12 rows at the top of the margin, anchored before P10 |
+| `float-t-loop2.doc` | the same table, anchored before P12 |
+| `float-t-nofit.doc` | a table of 6 rows 9.5 inches below the top of the page, anchored before P06 |

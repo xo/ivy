@@ -277,6 +277,10 @@ const (
 	dxaAbsInside    = -12
 	dxaAbsOutside   = -16
 	dyaAbsTop       = -4
+	dyaAbsCenter    = -8
+	dyaAbsBottom    = -12
+	dyaAbsInside    = -16
+	dyaAbsOutside   = -20
 )
 
 // cellRange returns the cells from first to lim of the row, within its
@@ -442,30 +446,60 @@ func floatBlock(fromText [4]int, jc, x, width, col, top int) []string {
 		"margin: " + pt(margin[0]) + " " + pt(margin[1]) + " " + pt(margin[2]) + " " + pt(margin[3])}
 }
 
-// blockTop returns the distance in twips of a table or a frame that floats
-// from the top of its paragraph, from its position dyaAbs from the
-// margin, the page or the paragraph, as pcVert says, on the page pg. The
-// layout places a float at the line of its paragraph, so a position from
-// the margin or from the page holds only for a block that starts the page,
-// pageTop, whose paragraph is at the top of the margin. Another block stays
-// at its paragraph. A position above the margin, or a position of a
-// special value other than the top, such as the center or the bottom,
-// which needs the height of the block, stays at the top.
-func blockTop(pcVert, dyaAbs int, pg page, pageTop bool) int {
-	y := dyaAbs
-	switch {
-	case pcVert == pcVertParagraph:
-	case !pageTop:
-		return 0
-	case dyaAbs == dyaAbsTop:
-		y = 0
-	case pcVert == pcVertPage:
-		y -= pg.top
-	}
-	if y <= 0 || y >= 14400 {
+// paragraphTop returns the distance in twips of a table or a frame that
+// floats from the top of its paragraph, from its position dyaAbs. A
+// position above the paragraph, or of a special value, stays at the top.
+func paragraphTop(dyaAbs int) int {
+	if dyaAbs <= 0 || dyaAbs >= 14400 {
 		return 0
 	}
-	return y
+	return dyaAbs
+}
+
+// floatPosition returns the declaration of -ivy-float-position of a table
+// or a frame at dyaAbs from the margin or from the page, as pcVert says
+// (D60). The special values put it at the top, the center or the bottom of
+// the margin or of the page. The package puts inside at the top and
+// outside at the bottom, which is not measured.
+func floatPosition(pcVert, dyaAbs int) string {
+	area := "margin "
+	if pcVert == pcVertPage {
+		area = "page "
+	}
+	position := pt(max(min(dyaAbs, 31680), -31680))
+	switch dyaAbs {
+	case dyaAbsTop, dyaAbsInside:
+		position = "top"
+	case dyaAbsCenter:
+		position = "center"
+	case dyaAbsBottom, dyaAbsOutside:
+		position = "bottom"
+	}
+	return "-ivy-float-position: " + area + position
+}
+
+// pageFloat returns the style of a table or a frame that floats at its
+// position dyaAbs from the margin or from the page, as pcVert says. The
+// arguments up to col are those of floatBlock. The text wraps around the
+// block, wrap, when floatBlock gives a float. Else the block floats at the
+// left with a margin to the right side of the column, so that no line fits
+// beside it (D60).
+func pageFloat(fromText [4]int, jc, x, width, col, pcVert, dyaAbs int, wrap bool) []string {
+	var style []string
+	if wrap {
+		style = floatBlock(fromText, jc, x, width, col, fromText[0])
+	}
+	if style == nil {
+		switch jc {
+		case 1:
+			x = (col - width) / 2
+		case 2:
+			x = col - width
+		}
+		style = []string{"float: left", "margin: " + pt(fromText[0]) + " " + pt(min(max(col-x-width, 0), 14400)) + " " +
+			pt(fromText[2]) + " " + pt(max(min(x, 14400), -14400))}
+	}
+	return append(style, floatPosition(pcVert, dyaAbs))
 }
 
 // The wrapping of the text around a frame that the package reads, the wr
@@ -486,15 +520,16 @@ func sameFrame(a, b pap) bool {
 // writeFrame writes the paragraphs of a frame, inner, as a block of the
 // frame properties pp, on the page of the section. Word places a frame at
 // dxaAbs from the column, the margin or the page, and at dyaAbs from its
-// paragraph, or from the margin or the page when it starts the page,
-// pageTop, see blockTop. A frame of a width that leaves half an inch of
-// the column beside it floats, so that the text wraps around it, unless
-// its wr puts no text beside it. A frame that the text does not see is
-// placed on the page, as a shape is. Another frame is a block. A frame of
-// the width of its text takes the width of the column, and the alignment
-// of its text puts the text at the center or at the right, see
-// writeParagraph.
-func (p *parser) writeFrame(b *strings.Builder, pp pap, inner string, pageTop bool) {
+// paragraph, the margin or the page. A frame at a position from the margin
+// or from the page floats there, see pageFloat. A frame of the width of
+// its text then takes the width of the column. A frame at its paragraph
+// of a width that leaves half an inch of the column beside it floats, so
+// that the text wraps around it, unless its wr puts no text beside it. A
+// frame that the text does not see is placed on the page, as a shape is.
+// Another frame is a block. A frame of the width of its text takes the
+// width of the column, and the alignment of its text puts the text at the
+// center or at the right, see writeParagraph.
+func (p *parser) writeFrame(b *strings.Builder, pp pap, inner string) {
 	pg := p.page
 	if pg.width == 0 {
 		pg = letter
@@ -518,8 +553,8 @@ func (p *parser) writeFrame(b *strings.Builder, pp pap, inner string, pageTop bo
 	if width > 0 {
 		style = append(style, "width: "+pt(width))
 	}
-	switch pp.wr {
-	case wrNone:
+	switch {
+	case pp.wr == wrNone:
 		if width > 0 && jc != 0 {
 			x = (col - width) / 2 * jc
 		} else if jc != 0 {
@@ -543,8 +578,15 @@ func (p *parser) writeFrame(b *strings.Builder, pp pap, inner string, pageTop bo
 			}
 			style = append(style, "top: "+pt(y))
 		}
+	case pp.pcVert != pcVertParagraph:
+		fromText := [4]int{pp.fromText[0], pp.fromText[1], pp.fromText[0], pp.fromText[1]}
+		if width <= 0 {
+			jc, x, width = 0, 0, col
+			style = append(style, "width: "+pt(col))
+		}
+		style = append(style, pageFloat(fromText, jc, x, width, col, pp.pcVert, pp.dyaAbs, pp.wr != wrTopBottom)...)
 	default:
-		top := blockTop(pp.pcVert, pp.dyaAbs, pg, pageTop)
+		top := paragraphTop(pp.dyaAbs)
 		if width > 0 && pp.wr != wrTopBottom {
 			fromText := [4]int{pp.fromText[0], pp.fromText[1], pp.fromText[0], pp.fromText[1]}
 			if f := floatBlock(fromText, jc, x, width, col, top); f != nil {
@@ -601,12 +643,12 @@ type tableRow struct {
 // between its edges, as in Word, where each row has cells of its own. A
 // cell that the cells above cover becomes part of the cell where they
 // start. A table that floats is at its position from the column, the
-// margin or the page, and from the top of its paragraph, on the page pg.
-// It is at its position from the top of the margin or of the page only
-// when it starts the page, pageTop, see blockTop. The text wraps around a
-// table that leaves half an inch of the column beside it, which floats to
-// the side of the column where it is. A wider table is a block.
-func writeTable(b *strings.Builder, rows []tableRow, pg page, pageTop bool) {
+// margin or the page, and from the top of its paragraph, the margin or the
+// page, on the page pg. A table at a position from the margin or from the
+// page floats there, see pageFloat. At its paragraph, the text wraps
+// around a table that leaves half an inch of the column beside it, which
+// floats to the side of the column where it is. A wider table is a block.
+func writeTable(b *strings.Builder, rows []tableRow, pg page) {
 	if len(rows) == 0 {
 		return
 	}
@@ -638,9 +680,12 @@ func writeTable(b *strings.Builder, rows []tableRow, pg page, pageTop bool) {
 					x -= pg.left
 				}
 			}
-			top := blockTop(first.pcVert, first.dyaAbs, pg, pageTop)
+			top := paragraphTop(first.dyaAbs)
 			col := pg.width - pg.left - pg.right
-			if f := floatBlock(first.fromText, jc, x, width, col, top); f != nil {
+			if first.pcVert != pcVertParagraph {
+				style = append(style, pageFloat(first.fromText, jc, x, width, col, first.pcVert, first.dyaAbs, true)...)
+				jc, x = 0, 0
+			} else if f := floatBlock(first.fromText, jc, x, width, col, top); f != nil {
 				style = append(style, f...)
 				jc, x = 0, 0
 			} else if top > 0 {

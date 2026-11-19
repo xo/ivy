@@ -20,6 +20,9 @@
 //   - -ivy-page-top-space leaves out the space before the first block of
 //     a page or of a column after a break that is not forced, see
 //     layoutContext.discardsSpaceBefore (D56).
+//   - -ivy-float-position places a float of the flow of the page at a
+//     vertical position from the top of the page or of the page area, see
+//     layout_page_float.go (D60).
 
 package layout
 
@@ -39,6 +42,7 @@ var ivyProperties = map[string]bool{
 	"line-numbers":   true,
 	"line-multiple":  true,
 	"page-top-space": true,
+	"float-position": true,
 }
 
 // validateMarginBoxFit validates -ivy-margin-box-fit: 'none' or 'grow'.
@@ -133,3 +137,54 @@ func validateLineMultiple(tokens []tinycss2.Node, _ string) (Value, error) {
 var validatePageTopSpace = singleKeyword(func(keyword string) bool {
 	return keyword == "keep" || keyword == "discard"
 })
+
+// validateFloatPosition validates -ivy-float-position: 'auto', or 'page'
+// or 'margin' and a length, 'top', 'center' or 'bottom', in any order,
+// such as 'margin 1in' or 'bottom page'. The value is a tuple of the
+// keyword of the area and of the length or the keyword of the position.
+// The length can be negative. The property is not inherited (D60).
+func validateFloatPosition(tokens []tinycss2.Node, _ string) (Value, error) {
+	if getSingleKeyword(tokens) == "auto" {
+		return String("auto"), nil
+	}
+	if len(tokens) != 2 {
+		return nil, nil
+	}
+	var area, position Value
+	for _, token := range tokens {
+		switch keyword := getKeyword(token); {
+		case in(keyword, "page", "margin"):
+			if area != nil {
+				return nil, nil
+			}
+			area = String(keyword)
+		case in(keyword, "top", "center", "bottom"):
+			if position != nil {
+				return nil, nil
+			}
+			position = String(keyword)
+		default:
+			length, ok := getLength(token, true, false).(Dimension)
+			if !ok || position != nil {
+				return nil, nil
+			}
+			position = length
+		}
+	}
+	if area == nil || position == nil {
+		return nil, nil
+	}
+	return Tuple{area, position}, nil
+}
+
+// computeFloatPosition computes -ivy-float-position: a length in pixels.
+func computeFloatPosition(style *Style, name string, value Value) Value {
+	t, ok := value.(Tuple)
+	if !ok || len(t) != 2 {
+		return value
+	}
+	if d, ok := t[1].(Dimension); ok {
+		return Tuple{t[0], Float(toPixels(d, style, name, -1))}
+	}
+	return value
+}

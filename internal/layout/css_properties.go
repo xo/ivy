@@ -300,6 +300,7 @@ var InitialValues = map[string]Value{
 	"line_numbers":   String("none"),
 	"line_multiple":  String("none"),
 	"page_top_space": String("keep"),
+	"float_position": String("auto"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -382,6 +383,9 @@ var Inherited = map[string]bool{
 // weasyprint/css/properties.py, the properties of a table that go to its
 // wrapper box. See https://www.w3.org/TR/CSS21/tables.html#model. Only the
 // properties that are not inherited are listed.
+//
+// Port: upstream has no -ivy-float-position. It goes to the wrapper, which
+// floats (D60).
 var TableWrapperBoxProperties = map[string]bool{
 	"bottom":              true,
 	"break_after":         true,
@@ -391,6 +395,7 @@ var TableWrapperBoxProperties = map[string]bool{
 	"counter_reset":       true,
 	"counter_set":         true,
 	"float":               true,
+	"float_position":      true,
 	"left":                true,
 	"margin_block_end":    true,
 	"margin_block_start":  true,

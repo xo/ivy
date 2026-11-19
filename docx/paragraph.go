@@ -55,11 +55,93 @@ func (c *converter) blocks(n roxmltree.Node, tc *cellStyle) {
 	}
 	defer c.leave()
 	last, skip := cellEnd(n)
+	frame := ""
 	for e := range n.Children() {
-		if e.IsElement() && (!skip || e.ID() != last) {
-			c.block(e, tc)
+		if !e.IsElement() || skip && e.ID() == last {
+			continue
 		}
+		c.openFrame(e, tc, &frame)
+		c.block(e, tc)
 	}
+	c.closeFrame(&frame)
+}
+
+// openFrame opens the frame of the block e, and closes the frame of the
+// blocks before when e is not in it. frame is the key of the open frame,
+// or "". The paragraphs of the same frame share a block, see frameOf.
+func (c *converter) openFrame(e roxmltree.Node, tc *cellStyle, frame *string) {
+	key, style := "", ""
+	if tc == nil && e.TagName().Name() == "p" {
+		key, style = c.frameOf(e)
+	}
+	if key == *frame {
+		return
+	}
+	c.closeFrame(frame)
+	if key != "" {
+		c.w.WriteString(`<div style="` + attrText(style) + `">`)
+	}
+	*frame = key
+}
+
+// closeFrame closes the frame of the key frame, when it is not "".
+func (c *converter) closeFrame(frame *string) {
+	if *frame != "" {
+		c.w.WriteString("</div>")
+		*frame = ""
+	}
+}
+
+// frameOf returns the key and the style of the frame of the paragraph p,
+// from the w:framePr of its properties, or "" for a paragraph that is not
+// in such a frame. The paragraphs of the same key share the frame. Only a
+// frame at a position from the margin or from the page, with text around
+// it or above and below it, in the body of a section of one column, is a
+// frame here. It floats at its position, see pageFloatCSS (D60). A frame
+// of the width of its text takes the width of the column. A frame of a
+// drop cap stays a paragraph.
+func (c *converter) frameOf(p roxmltree.Node) (key, style string) {
+	ppr, ok := child(p, "pPr")
+	if !ok || c.margin != "" {
+		return "", ""
+	}
+	fp, ok := child(ppr, "framePr")
+	if !ok {
+		return "", ""
+	}
+	attr := func(name string) string { return attrOf(fp, name) }
+	if d := attr("dropCap"); d != "" && d != "none" || attr("wrap") == "none" {
+		return "", ""
+	}
+	sec := c.sections[c.section]
+	position := floatPosition(attr("vAnchor"), attr("yAlign"), number(attr("y"), 0)/20)
+	if position == "" || sec.cols > 1 {
+		return "", ""
+	}
+	colWidth := sec.width - sec.left - sec.right - sec.gutter
+	w := min(max(number(attr("w"), 0)/20, 0), maxDrawingSize)
+	if w == 0 {
+		w = colWidth
+	}
+	x := anchorX(attr("hAnchor"), attr("xAlign"), number(attr("x"), 0)/20, w, colWidth, sec)
+	h := min(max(number(attr("h"), 0)/20, 0), maxDrawingSize)
+	hs := min(max(number(attr("hSpace"), 0)/20, 0), 720)
+	vs := min(max(number(attr("vSpace"), 0)/20, 0), 720)
+	var s css
+	s.set("width", pt(w))
+	switch {
+	case h > 0 && attr("hRule") == "exact":
+		s.set("height", pt(h))
+	case h > 0:
+		s.set("min-height", pt(h))
+	}
+	pageFloatCSS(&s, x, w, colWidth, [4]float64{vs, hs, vs, hs}, attr("wrap") != "notBeside", position)
+	var k strings.Builder
+	for _, name := range [...]string{"w", "h", "hRule", "wrap", "vAnchor", "hAnchor", "x", "xAlign", "y", "yAlign", "hSpace", "vSpace"} {
+		k.WriteString(attr(name))
+		k.WriteByte(0)
+	}
+	return k.String(), s.String()
 }
 
 // cellEnd returns the empty paragraph that ends the cell n after a table,

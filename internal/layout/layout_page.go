@@ -163,6 +163,10 @@ type pageMaker struct {
 	// lineNumbers is the state of -ivy-line-numbers at the start of the
 	// page. Upstream has no line numbers.
 	lineNumbers lineNumberState
+	// pageFloats are the boxes of the page floats of -ivy-float-position
+	// that the pages before placed (D60). The flow of the page skips them.
+	// Upstream has no such property.
+	pageFloats []*Box
 }
 
 // pageGroup is an item of the page groups of upstream, [name, index,
@@ -1026,6 +1030,8 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	pageHeight(page, lc, cbHeight)
 	grow.apply(page)
 	lc.galleyPage(page)
+	lc.pageFloats.page = page
+	lc.pageFloats.done = pageData.pageFloats
 	initialContainingBlock := page
 	var previousResumeAt skipStack
 	if blank {
@@ -1168,6 +1174,12 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	for _, contextBox := range excludedShapesOrder {
 		lc.setExcludedShapesFor(contextBox, excludedShapes[contextBox])
 	}
+	// Port: upstream has no -ivy-float-position. The page floats that cover
+	// content of the first layout of the page are placed before the flow,
+	// after the floats that the previous page cut. They do not make the
+	// page less empty, so that the flow breaks as in the first layout
+	// (D60).
+	outOfFlowBoxes = append(outOfFlowBoxes, lc.placePageFloatsBefore(&positionedBoxes, &positionedBoxes)...)
 
 	// Display in-flow content.
 	initialRootBox := rootBox
@@ -1186,6 +1198,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	// Port: upstream has no -ivy-page-overflow. The root box can pass the
 	// bottom of the page by the descent of its last line.
 	lc.pageOverflowBox = rootBox
+	lc.pageFloats.flow = true
 	result := blockLevelLayout(lc, rootBox, 0, pageData.resumeAt, initialContainingBlock,
 		pageIsEmpty, &positionedBoxes, &positionedBoxes, adjoiningMargins,
 		nil, nil, false, noMaxLines)
@@ -1229,6 +1242,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 		}
 	}
 	rootBox.Children = append(outOfFlowBoxes, rootBox.Children...)
+	pageFloats := lc.finishPageFloats(rootBox)
 	runningElements := runningElementsOfPage(lc, pageNumber)
 	if !runningElementsEqual(previousRunningElements, runningElements) {
 		for name, previousRunnings := range previousRunningElements {
@@ -1299,16 +1313,19 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			pageGroups:     pageGroups,
 			contentChanged: contentChanged,
 			lineNumbers:    lineNumbers,
+			pageFloats:     pageFloats,
 		}
 		if newPage {
 			lc.pageMaker = append(lc.pageMaker, data)
 		} else {
 			lc.pageMaker[index+1] = data
 		}
-	} else if next := lc.pageMaker[index+1]; next.lineNumbers != lineNumbers {
+	} else if next := lc.pageMaker[index+1]; next.lineNumbers != lineNumbers || !slices.Equal(next.pageFloats, pageFloats) {
 		// Port: the next page starts at the same place, but with other
-		// numbers of its lines, so it is made again.
+		// numbers of its lines or with other page floats before it, so it
+		// is made again.
 		next.lineNumbers = lineNumbers
+		next.pageFloats = pageFloats
 		next.contentChanged = true
 	}
 

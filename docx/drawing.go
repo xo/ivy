@@ -324,10 +324,82 @@ func readPosition(n roxmltree.Node) position {
 	return p
 }
 
+// floatPosition returns the value of -ivy-float-position of a drawing at y
+// points from the top of the margin or of the page, as relative says, or at
+// the alignment align (D60). It returns "" for a drawing at its paragraph
+// or at its line. The package puts inside at the top and outside at the
+// bottom, which is not measured.
+func floatPosition(relative, align string, y float64) string {
+	area := ""
+	switch relative {
+	case "page":
+		area = "page "
+	case "margin":
+		area = "margin "
+	default:
+		return ""
+	}
+	switch align {
+	case "top", "inside":
+		return area + "top"
+	case "center":
+		return area + "center"
+	case "bottom", "outside":
+		return area + "bottom"
+	}
+	return area + pt(y)
+}
+
+// pageFloatCSS sets the declarations of a table or a frame of the width w at
+// x points in a column of colWidth points, which floats at position, with
+// the distances dist from the text at the top, the right, the bottom and
+// the left (D60). It floats to the side of the column where it is. When it
+// leaves less than half an inch of the column beside it, or when wrap is
+// false, it floats at the left with a margin to the right side of the
+// column, so that no line fits beside it.
+func pageFloatCSS(s *css, x, w, colWidth float64, dist [4]float64, wrap bool, position string) {
+	x = min(max(x, -maxDrawingSize), maxDrawingSize)
+	rest := colWidth - x - w
+	switch {
+	case !wrap || max(x, rest) < 36 || colWidth-w < 36:
+		s.set("float", "left")
+		s.set("margin", pt(dist[0])+" "+pt(max(rest, 0))+" "+pt(dist[2])+" "+pt(x))
+	case x+w/2 > colWidth/2:
+		s.set("float", "right")
+		s.set("margin", pt(dist[0])+" "+pt(rest)+" "+pt(dist[2])+" "+pt(dist[3]))
+	default:
+		s.set("float", "left")
+		s.set("margin", pt(dist[0])+" "+pt(dist[1])+" "+pt(dist[2])+" "+pt(x))
+	}
+	s.set("-ivy-float-position", position)
+}
+
+// anchorX returns the place in points from the left of the column of a
+// table or a frame of the width w at x points from the column, the margin
+// or the page, as anchor says, or at the alignment align, in a column of
+// colWidth points of the section sec.
+func anchorX(anchor, align string, x, w, colWidth float64, sec *section) float64 {
+	if anchor == "page" {
+		x -= sec.left + sec.gutter
+	}
+	switch align {
+	case "left", "inside":
+		x = 0
+	case "center":
+		x = (colWidth - w) / 2
+	case "right", "outside":
+		x = colWidth - w
+	}
+	return x
+}
+
 // anchorDrawing converts a wp:anchor element. A drawing that text wraps
 // around floats to the side of the column where it is. A drawing that text
 // does not wrap is placed on the page. A drawing above and below text is a
-// block.
+// block. A drawing with text around it or above and below it, at a
+// position from the margin or from the page, floats at that position, in a
+// section of one column (D60). A drawing above and below text then has a
+// margin to the right side of the column, so that no line fits beside it.
 func (c *converter) anchorDrawing(n roxmltree.Node) {
 	w, h := extent(n)
 	g, ok := child(n, "graphic")
@@ -368,9 +440,20 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	}
 	distL, distR := emu(n, "distL"), emu(n, "distR")
 	distT, distB := emu(n, "distT"), emu(n, "distB")
+	position := ""
+	if c.margin == "" && sec.cols <= 1 {
+		position = floatPosition(pv.relative, pv.align, pv.offset)
+	}
 	var s css
-	switch wrap {
-	case "wrapSquare", "wrapTight", "wrapThrough":
+	switch {
+	case wrap == "wrapTopAndBottom" && position != "":
+		s.set("float", "left")
+		s.set("margin-left", pt(x))
+		s.set("margin-right", pt(max(colWidth-x-w, 0)))
+		s.set("margin-top", pt(distT))
+		s.set("margin-bottom", pt(distB))
+		s.set("-ivy-float-position", position)
+	case wrap == "wrapSquare" || wrap == "wrapTight" || wrap == "wrapThrough":
 		if x+w/2 > colWidth/2 {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
@@ -381,10 +464,14 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 			s.set("margin-right", pt(distR))
 		}
 		s.set("margin-bottom", pt(distB))
-		if (pv.relative == "paragraph" || pv.relative == "line") && pv.offset > 0 {
+		switch {
+		case position != "":
+			s.set("margin-top", pt(distT))
+			s.set("-ivy-float-position", position)
+		case (pv.relative == "paragraph" || pv.relative == "line") && pv.offset > 0:
 			s.set("margin-top", pt(pv.offset))
 		}
-	case "wrapTopAndBottom":
+	case wrap == "wrapTopAndBottom":
 		s.set("display", "block")
 		s.set("margin-left", pt(max(x, 0)))
 		s.set("margin-top", pt(distT))

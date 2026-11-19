@@ -75,6 +75,12 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		// does not wrap around it.
 		wrap = ""
 	}
+	// A shape with text around it or above and below it, at a position
+	// from the margin or from the page, floats at that position (D60).
+	position := ""
+	if c.margin == "" {
+		position = floatPosition(st["mso-position-vertical-relative"], st["mso-position-vertical"], y)
+	}
 	var s css
 	switch wrap {
 	case "square", "tight", "through":
@@ -87,10 +93,20 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			s.set("margin-left", pt(max(x, 0)))
 			s.set("margin-right", "9pt")
 		}
-		if y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin" {
+		switch {
+		case position != "":
+			s.set("-ivy-float-position", position)
+		case y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin":
 			s.set("margin-top", pt(y))
 		}
 	case "topAndBottom":
+		if position != "" {
+			s.set("float", "left")
+			s.set("margin-left", pt(x))
+			s.set("margin-right", pt(max(colWidth-x-w, 0)))
+			s.set("-ivy-float-position", position)
+			break
+		}
 		s.set("display", "block")
 		s.set("margin-left", pt(max(x, 0)))
 		if y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin" {

@@ -15,3 +15,8 @@ a short text, through its API:
 
 LibreOffice writes no thumbnail into an encrypted file. The tests encrypt a
 thumbnail with the fixture of `internal/fixture`.
+
+LibreOffice 26.8 wrote the files `float-f-late.odt` and `float-f-bottom.odt`
+from the files of the same names of `docx/testdata`, with `soffice --headless
+--convert-to odt`. They hold a frame with `style:vertical-rel` page-content
+and wrap, 1 inch below the top of the margin or at its bottom (D60).

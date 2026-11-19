@@ -66,7 +66,7 @@ func TestTableRows(t *testing.T) {
 	applyTap(first, sprm{op: sprmTDefTableShd80, operand: append([]byte{4}, u16s(0, 1<<10|1)...)})
 	applyTap(first, sprm{op: sprmTDxaGapHalf, operand: u16s(108)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}}, page{}, false)
+	writeTable(&b, []tableRow{{cells: []string{"A1", "B1"}, tap: first}, {cells: []string{"A2", "B2"}, tap: second}}, page{})
 	html := b.String()
 	for _, want := range []string{
 		`margin-left: -5.4pt`, `<col style="width: 144pt"/>`, `<col style="width: 216pt"/>`,
@@ -282,7 +282,7 @@ func TestExactRowHeight(t *testing.T) {
 	applyTap(exact, sprm{op: sprmTDyaRowHeight, operand: u16s(0xFEAC)}) // -340
 	applyTap(least, sprm{op: sprmTDyaRowHeight, operand: u16s(340)})
 	var b strings.Builder
-	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}}, page{}, false)
+	writeTable(&b, []tableRow{{cells: []string{"<p>Jan 2009</p><p><br></p>"}, tap: exact}, {cells: []string{"B"}, tap: least}}, page{})
 	html := b.String()
 	if !strings.Contains(html, `<div style="display: flow-root; height: 17pt"><p>Jan 2009</p><p><br></p></div>`) {
 		t.Errorf("expected the cell of the exact row in a block of its height:\n%s", html)
@@ -401,7 +401,7 @@ func TestFloatingTable(t *testing.T) {
 	}
 	// the table leaves less than half an inch beside it, and is a block
 	var w strings.Builder
-	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 2835 + 3000 + 1134, left: 2835, right: 1134}, false)
+	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 2835 + 3000 + 1134, left: 2835, right: 1134})
 	html := w.String()
 	for _, want := range []string{`<div style="height: 11.1pt"></div>`, `margin-left: -83.85pt`} {
 		if !strings.Contains(html, want) {
@@ -412,10 +412,55 @@ func TestFloatingTable(t *testing.T) {
 	// its distance from the text
 	applyTap(row, sprm{op: sprmTDxaFromTextRight, operand: u16s(141)})
 	w.Reset()
-	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 11906, left: 2835, right: 1134}, false)
+	writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: 11906, left: 2835, right: 1134})
 	html = w.String()
 	if want := `float: left; margin: 11.1pt 7.05pt 0pt -83.85pt`; !strings.Contains(html, want) || strings.Contains(html, "<div") {
 		t.Errorf("expected %q in the table:\n%s", want, html)
+	}
+}
+
+// TestPageFloatTable checks that a table at a position from the margin or
+// from the page floats at that position, for each position of sprmTPc and
+// sprmTDyaAbs, and that a table too wide for text beside it fills the
+// column with its margin (D60).
+func TestPageFloatTable(t *testing.T) {
+	def := append(u16s(0), 1)
+	def = append(def, u16s(0, 2880)...)
+	binary.LittleEndian.PutUint16(def, uint16(len(def)-1))
+	for _, tt := range []struct {
+		name   string
+		pc     byte
+		dyaAbs uint16
+		width  int
+		want   string
+	}{
+		{"margin", 0x00, 1440, 11906, "float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: margin 72pt"},
+		{"page", 0x10, 1440, 11906, "float: left; margin: 0pt 0pt 0pt 0pt; -ivy-float-position: page 72pt"},
+		{"top", 0x00, 0xFFFC, 11906, "-ivy-float-position: margin top"},
+		{"center", 0x10, 0xFFF8, 11906, "-ivy-float-position: page center"},
+		{"bottom", 0x00, 0xFFF4, 11906, "-ivy-float-position: margin bottom"},
+		{"inside", 0x00, 0xFFF0, 11906, "-ivy-float-position: margin top"},
+		{"outside", 0x00, 0xFFEC, 11906, "-ivy-float-position: margin bottom"},
+		// a column of 3000 twips leaves no half inch beside the table
+		{"narrow", 0x00, 1440, 2835 + 3000 + 1134, "float: left; margin: 0pt 6pt 0pt 0pt; -ivy-float-position: margin 72pt"},
+		// the paragraph keeps the position as a margin
+		{"paragraph", 0x20, 200, 11906, "float: left; margin: 10pt 0pt 0pt 0pt\""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			row := &tap{}
+			for _, s := range []sprm{
+				{op: sprmTDefTable, operand: def},
+				{op: sprmTPc, operand: []byte{tt.pc}},
+				{op: sprmTDyaAbs, operand: u16s(tt.dyaAbs)},
+			} {
+				applyTap(row, s)
+			}
+			var w strings.Builder
+			writeTable(&w, []tableRow{{cells: []string{"A1"}, tap: row}}, page{width: tt.width, left: 2835, right: 1134})
+			if html := w.String(); !strings.Contains(html, tt.want) || strings.Contains(html, "<div") {
+				t.Errorf("expected %q in the table:\n%s", tt.want, html)
+			}
+		})
 	}
 }
 

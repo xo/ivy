@@ -356,3 +356,36 @@ property `-ivy-float-position`, with a second layout of the page when the
 float is above its anchor. A float that does not fit moves up until it
 fits on the page. A float that pushes its anchor to the next page stays on
 its page, and the anchor goes on.
+
+## The build
+
+The build of 2026-11-19 differs from the proposal in these places:
+
+1. A page with page floats has at most two layouts, not three. The
+   decision keeps a float on its page when its anchor goes to the next
+   page, so the third layout of point 8 of the proposal, which takes the
+   float away, is not needed. A page has four layouts at most when
+   `-ivy-margin-box-fit` also grows its margins.
+2. A float at the top, the center or the bottom that is higher than its
+   area starts at the top of the area. A negative length can still put a
+   float above its area.
+3. The rule of CSS that a float is never higher than an earlier float
+   leaves out the page floats. Without this, a float at the bottom of the
+   page pushes the later floats of the flow down to it.
+4. The floats that the page places before the flow do not make the page
+   count as not empty, so the flow breaks as in the first layout.
+5. A page float inside a line is placed after that line.
+6. In a section of `msdoc` with more than one column, the layout places
+   such a float as a float of the flow. `docx` does not write the property
+   in such a section.
+7. Wrap above and below gets the margin of point 14 in the shapes of
+   `msdoc` and `docx`, and not only in the tables and the frames.
+8. The frames of `rtf`, the frames of `odf` that are anchored to the page,
+   `w:tblOverlap` and `allowOverlap` are not built.
+
+The restore of the saved state of a page also no longer keeps the name of
+a running element that the page added. The page lost the rest of a float
+that the page before cut, and `-ivy-margin-box-fit` had the same fault.
+On its test files, ivy places the floats within 0.03 inches of LibreOffice
+26.8, except in the two cases where the decision differs from LibreOffice.
+The pages of the corpus do not change.

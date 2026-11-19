@@ -201,6 +201,7 @@ func (c *converter) convertBody(body roxmltree.Node) {
 	}
 	c.startSection(0)
 	i := 0
+	frame := ""
 	for n := range body.Children() {
 		if c.check() != nil {
 			return
@@ -208,13 +209,16 @@ func (c *converter) convertBody(body roxmltree.Node) {
 		if !n.IsElement() {
 			continue
 		}
+		c.openFrame(n, nil, &frame)
 		c.block(n, nil)
 		if ends[n.ID()] && i+1 < len(c.sections) {
+			c.closeFrame(&frame)
 			c.w.WriteString("</div>")
 			i++
 			c.startSection(i)
 		}
 	}
+	c.closeFrame(&frame)
 	c.w.WriteString("</div>")
 }
 

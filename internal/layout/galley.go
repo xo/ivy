@@ -347,10 +347,11 @@ type galleyReader struct {
 	// lines.
 	keep bool
 	wait bool
-	// passed is the index of the part of the last line that the pages
-	// took.
-	passed int
-	cancel context.CancelFunc
+	// reached is the index of the last part from which the pages took a
+	// line, and passed the index of the first part that the pages did not
+	// stop.
+	reached, passed int
+	cancel          context.CancelFunc
 	// lines counts the lines of all the parts, which Limits.MaxObjects
 	// bounds.
 	lines    atomic.Int64
@@ -532,8 +533,8 @@ func (gr *galleyReader) partOf(i int) int {
 }
 
 // take returns a copy of the line of the galley of the key, and where the
-// next line resumes. The pages then stop the parts before the part of the
-// line.
+// next line resumes. When the page is complete, the pages stop the parts
+// before the part of the line, see galleyPageDone.
 func (gr *galleyReader) take(lc *layoutContext, key galleyKey) (*Box, skipStack, bool) {
 	if key.box < 0 {
 		return nil, nil, false
@@ -542,9 +543,7 @@ func (gr *galleyReader) take(lc *layoutContext, key galleyKey) (*Box, skipStack,
 	if k < 0 {
 		return nil, nil, false
 	}
-	for ; gr.passed < k; gr.passed++ {
-		gr.parts[gr.passed].stop(gr.keep)
-	}
+	gr.reached = max(gr.reached, k)
 	p := gr.parts[k]
 	if gr.wait {
 		<-p.done
@@ -560,6 +559,20 @@ func (gr *galleyReader) take(lc *layoutContext, key galleyKey) (*Box, skipStack,
 	}
 	lc.lines.taken++
 	return copyGalleyBox(gl.line, lc.fontConfig), gl.resumeAt.clone(), true
+}
+
+// galleyPageDone stops the parts before the part of the last line that the
+// pages took, when the page maker completes a page. A page that the page
+// maker makes again, for a page float of -ivy-float-position, can take the
+// lines of the parts that its first layout passed (D60).
+func (lc *layoutContext) galleyPageDone() {
+	gr := lc.lines.galley
+	if gr == nil {
+		return
+	}
+	for ; gr.passed < gr.reached; gr.passed++ {
+		gr.parts[gr.passed].stop(gr.keep)
+	}
 }
 
 // galleyRecorder keeps the lines of a part of the galley. It maps the

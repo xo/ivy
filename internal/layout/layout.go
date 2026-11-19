@@ -1035,6 +1035,11 @@ type layoutContext struct {
 	// column box, or the first in-flow child of such a box. Upstream has
 	// no such property. See layoutContext.discardsSpaceBefore.
 	columnTopBox *Box
+
+	// pageFloats is the state of the page floats of -ivy-float-position on
+	// the page that the page maker makes (D60). Upstream has no such
+	// property.
+	pageFloats pageFloatState
 }
 
 // newLayoutContext is LayoutContext.__init__ in

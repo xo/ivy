@@ -33,6 +33,23 @@ func floatLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes, fi
 	lc.enter()
 	defer lc.leave()
 
+	newBox, resumeAt := floatBoxLayout(lc, box, containingBlock, absoluteBoxes, fixedBoxes, bottomSpace, skip, true)
+
+	newBox = findFloatPosition(lc, newBox, containingBlock)
+
+	lc.appendExcludedShape(newBox)
+	return newBox, resumeAt
+}
+
+// floatBoxLayout is the part of float_layout in weasyprint/layout/float.py
+// before find_float_position: it sets the width of the floating box, lays
+// it out, and returns the laid out box and where it resumes.
+//
+// Port: upstream has one function. The port splits it, so that a page
+// float of -ivy-float-position gets the same layout and another position,
+// see pageFloatLayout. A page float has no clearance, as withClearance is
+// false.
+func floatBoxLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes, fixedBoxes *[]*Box, bottomSpace float64, skip skipStack, withClearance bool) (*Box, skipStack) {
 	cbWidth, cbHeight := containingBlock.Width, containingBlock.Height
 	resolvePercentages(box, sizeBlock(cbWidth, cbHeight))
 
@@ -57,8 +74,10 @@ func floatLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes, fi
 		box.MarginBottom = 0
 	}
 
-	if clearance, ok := getClearance(lc, box, containingDirection(containingBlock), 0); ok {
-		box.PositionY += clearance
+	if withClearance {
+		if clearance, ok := getClearance(lc, box, containingDirection(containingBlock), 0); ok {
+			box.PositionY += clearance
+		}
 	}
 
 	if box.Kind == KindBlockReplaced {
@@ -92,10 +111,6 @@ func floatLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes, fi
 		// port keeps the box, without children and without size.
 		newBox, resumeAt = emptyLayoutBox(box), nil
 	}
-
-	newBox = findFloatPosition(lc, newBox, containingBlock)
-
-	lc.appendExcludedShape(newBox)
 	return newBox, resumeAt
 }
 
@@ -118,8 +133,12 @@ func findFloatPosition(lc *layoutContext, box, containingBlock *Box) *Box {
 
 	// Points 5 and 6, box.position_y is set to the highest position_y
 	// possible
-	if shapes := lc.excludedShapes(); len(shapes) > 0 {
-		highestY := shapes[len(shapes)-1].PositionY
+	//
+	// Port: upstream takes the last float of the formatting context. A page
+	// float of -ivy-float-position is at its own place on the page, so the
+	// port takes the last float that is not a page float (D60).
+	if last := lc.lastOrdinaryShape(lc.excludedShapes()); last != nil {
+		highestY := last.PositionY
 		if box.PositionY < highestY {
 			box.Translate(0, highestY-box.PositionY, false)
 		}
@@ -131,12 +150,7 @@ func findFloatPosition(lc *layoutContext, box, containingBlock *Box) *Box {
 	// Point 9
 	// position_y is set now, let's define position_x
 	// for float: left elements, it's already done!
-	floatValue := box.Style.Get("float")
-	direction := box.Style.Get("direction")
-	floatRight := isStr(floatValue, "right") ||
-		(isStr(direction, "ltr") && isStr(floatValue, "inline-end")) ||
-		(isStr(direction, "rtl") && isStr(floatValue, "inline-start"))
-	if floatRight {
+	if floatsRight(box) {
 		positionX += availableWidth - box.MarginWidth()
 	}
 
