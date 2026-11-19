@@ -14,7 +14,8 @@ page description, and XPS renders, as the section of phase 2 below says. PDF
 renders, as the section of phase 3 says. The layout of HTML and CSS puts the
 ebooks on pages, as the section of phase 4 says. The Office formats give
 their pages, as the section of phase 5 says, and DjVu gives its pages, as
-the section of phase 6 says. These
+the section of phase 6 says. On 2026-11-19 phase 7a is done: `pdf/pdfenc`
+writes the pages of a document as a PDF file (D58). These
 formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
@@ -331,6 +332,25 @@ The test module compares each page with ddjvu of DjVuLibre, within a mean
 difference of 1.6. An indirect document returns `ErrUnsupported` (D26).
 The work that is left is under "Left by phase 6" in `BACKLOG.md`.
 
+### Phase 7. PDF output (9 to 14 weeks)
+
+The package `pdf/pdfenc` writes the pages of a document as a PDF file,
+through the PDF writer of okage (D58). Each estimate is for one agent with
+a maintainer, and assumes okage v0.17.0, which holds okage D68.
+
+| Phase | What it gives | Estimate |
+| --- | --- | --- |
+| 7a. The API and the device | `Encode`, `EncodePages` and their options, the PDF device, the raster fallback, `display.Drawer` and the method `Draw` of each page type, the raster pages as images, the metadata, the limits, the errors, `FuzzEncode`, the round trip in CI, and the oracles of MuPDF, Poppler and qpdf. The glyphs are paths | 3 to 5 weeks |
+| 7b. Fonts and text | `GlyphRun.Text` and the clusters, the source of `font.Face`, the font database with the bytes of its faces, the text of the layout, XPS, the metafiles and the charts, `fsType`, and the tests of the text | 3 to 4 weeks |
+| 7c. Links and the outline | `display.Linker` and `display.Bookmarker`, the port of the rest of `weasyprint/anchors.py`, the tables of contents of the books, the links and the outline of `pdf`, `xps` and `djvu`, and the named destinations | 3 to 5 weeks |
+
+A later decision can add the Type 3 fonts from outlines for `pdf` and
+`ps`, invisible text for the text layer of DjVu, a picture that goes into
+the file without a new encode, and a writer that streams its pages.
+
+Phase 7a was done on 2026-11-19. The work that is left is under "Left by
+phase 7a" in `BACKLOG.md`.
+
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.
 The long tail is not a phase. Each format of it waits until a user asks for
@@ -349,4 +369,5 @@ A question has a number, and it stays here until the maintainers answer it.
 The answer becomes a decision. The questions were numbered again when the
 decisions were consolidated (D4). D22 answers question 3, D23 answers question
 4, and D25 answers question 5. D33 to D45 answer questions 1 and 6 to 20. D55
-answers question 21. No question is open. The next question is question 22.
+answers question 21, D57 answers question 22, and D58 answers question 23. No
+question is open. The next question is question 24.

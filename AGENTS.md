@@ -47,6 +47,7 @@ every other agent read the same rules. Edit this file, not `CLAUDE.md`.
 | adding a format, or starting work on one | `docs/FORMATS.md`, then "The layout of the packages" in `docs/API.md`, then D6, D10 and D11 |
 | naming a package, or giving a package a module of its own | D6 |
 | working on PDF, EPS or Illustrator | D14, then the decisions that amend it: D16, D17 and D20. Then D18 and D19 |
+| working on the PDF writer, `pdf/pdfenc` | D58, then D10 and okage D68 |
 | working on the layout of HTML and CSS | D15, then D7 |
 | reading XML, HTML or CSS, or about to port or copy any code | D7. Use what okage or magic has first |
 | needing a decoder of compressed data | D8 |
@@ -75,8 +76,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 56, and the next question is
-question 22.
+repeat. The next decision has the number 59, and the next question is
+question 24.
 
 ## Hard rules
 
@@ -166,6 +167,7 @@ On 2026-11-16 the repository holds these files:
 | `rtf/` | RTF, as RTF 1.9.1 describes it, converted into HTML and CSS for the layout |
 | `xps/` | XPS and OpenXPS, the format of phase 2 |
 | `pdf/` | PDF and Illustrator compatible with PDF, the format of phase 3 |
+| `pdf/pdfenc/` | the PDF writer of phase 7: the pages of a document as a PDF file, through the PDF writer of okage, with the PDF device that maps the display list onto it (D58) |
 | `internal/hayro/` | the ports of the crates of hayro, which `pdf` and `ps` share (D14, D16, D20, D29) |
 | `ps/internal/` | the interpreter of PostScript, which gives the pages of PostScript and EPS files (D29) |
 | `epub/`, `html/`, `text/`, `fb2/`, `markdown/`, `mobi/`, `chm/` | the ebooks and the documents of text of phase 4, each with its tests and its `testdata/` |
@@ -214,7 +216,7 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-On 2026-11-19 the `go.mod` of ivy requires okage v0.14.0 and magic v0.9.1.
+On 2026-11-19 the `go.mod` of ivy requires okage v0.17.0 and magic v0.9.1.
 If a change needs a commit of okage or magic that is pushed and not tagged,
 require it as a pseudo-version. When okage and magic tag that commit,
 require the tag. A change that needs a commit of okage or magic that is not

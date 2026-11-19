@@ -5,7 +5,8 @@
 #
 # It sets Office for the user `user` so that the export runs without a
 # question: the license agreements, the first run, Protected View and the
-# blocks of old file formats. The maintainer installs and activates Office
+# blocks of old file formats. It also makes Excel keep the paper of a sheet,
+# and makes "Microsoft Print to PDF" the default printer of the user. The maintainer installs and activates Office
 # by hand, in the desktop of the VM, before the script runs. If Office is
 # not installed, the script stops.
 #
@@ -55,14 +56,14 @@ if (-not (Test-Path $root)) {
 	& reg.exe load "HKU\$sid" 'C:\Users\user\NTUSER.DAT' | Out-Null
 	$loaded = $true
 }
-function Set-UserValue($path, $name, $value) {
+function Set-UserValue($path, $name, $value, $type = 'DWord') {
 	$key = "$root\$path"
 	# New-Item -Force replaces a key that exists, with its values, so it
 	# runs only for a key that is missing.
 	if (-not (Test-Path $key)) {
 		New-Item -Force -Path $key | Out-Null
 	}
-	Set-ItemProperty -Path $key -Name $name -Value $value -Type DWord
+	Set-ItemProperty -Path $key -Name $name -Value $value -Type $type
 }
 $o = 'Software\Microsoft\Office\16.0'
 Set-UserValue "$o\Common\General" ShownFirstRunOptin 1
@@ -94,8 +95,30 @@ foreach ($app in $blocks.Keys) {
 		Set-UserValue "Software\Policies\Microsoft\Office\16.0\$app\Security\FileBlock" $name 0
 	}
 }
+# A4Letter 0 turns off the option of Excel "Scale content for A4 or 8.5 x 11"
+# paper sizes", Application.MapPaperSize. With the option on, Excel printed
+# and exported a sheet with an A4 page setup on US Letter, the paper of the
+# region of the user, and shrank the sheet to fit it.
+Set-UserValue "$o\Excel\Options" A4Letter 0
+# Excel lays out a page with the driver of the default printer of the user,
+# also when it exports a PDF file. The first default printer of the VM is
+# "OneNote (Desktop)", a printer that sends the pages to OneNote. "Microsoft
+# Print to PDF" is the default printer instead. On 2026-11-19 the
+# two printers gave the same pages of Excel, within 0.03 pt. The export
+# cannot set Excel.ActivePrinter: it failed with 0x800A03EC from the
+# scheduled task. Device holds the name of the printer, a comma and its value
+# in the key Devices of the user, such as "winspool,Ne00:".
+# LegacyDefaultPrinterMode 1 stops Windows from making the last printer used
+# the default.
+$pdf = 'Microsoft Print to PDF'
+$port = (Get-ItemProperty -ErrorAction SilentlyContinue -Path "$root\Software\Microsoft\Windows NT\CurrentVersion\Devices").$pdf
+if (-not $port) {
+	$port = 'winspool,Ne00:'
+}
+Set-UserValue 'Software\Microsoft\Windows NT\CurrentVersion\Windows' LegacyDefaultPrinterMode 1
+Set-UserValue 'Software\Microsoft\Windows NT\CurrentVersion\Windows' Device "$pdf,$port" String
 if ($loaded) {
 	[gc]::Collect()
 	& reg.exe unload "HKU\$sid" | Out-Null
 }
-Write-Output 'the settings of Office are set'
+Write-Output "the settings of Office are set, and the default printer is $pdf"

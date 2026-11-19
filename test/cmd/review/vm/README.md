@@ -118,7 +118,10 @@ whether to run `ivy-macos` on another host.
    Professional 2024 in 64 bits, and activate them. `windows/office.xml`
    lists the parts of Office that the exports need.
 3. Run `ivy-vm.sh setup win`. It sets Office for the user, so that the
-   exports run without a question. If Office is not installed, it stops.
+   exports run without a question. It turns off the option of Excel "Scale
+   content for A4 or 8.5 x 11" paper sizes" (`A4Letter`), which put each A4
+   sheet on US Letter, and makes "Microsoft Print to PDF" the default
+   printer of the user. If Office is not installed, it stops.
    `windows/setup.ps1 -Install` installs Office with the Office Deployment
    Tool and `windows/office.xml` instead, but does not activate it.
 4. Run `ivy-vm.sh stop win` before you start the Mac VM.
@@ -146,7 +149,8 @@ Add `vsdx,vsd` to the extensions of the Office export when Visio is
 installed. Without Visio, the export records the Visio files as failed, and
 only `RETRY=1` sends them again.
 
-On 2026-11-17 Office exported 81 of the 85 files. Office refuses the other
+On 2026-11-17 Office exported 81 of the 85 files. On 2026-11-19 Excel
+exported again the six A4 workbooks that it had put on Letter. Office refuses the other
 four, so LibreOffice is their only reference: Word cannot read
 `libreoffice/rtf/uxtsorel.rtf` and `poi/docx/deep-table-cell.docx`,
 PowerPoint 2024 does not open the PowerPoint 95 file `poi/ppt/ppt95.ppt`,

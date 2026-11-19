@@ -34,7 +34,7 @@ which does not exist.
 ```text
 github.com/xo/ivy                the root package: the document API (D11)
 ├── pdf/                         PDF, and Illustrator compatible with PDF (D14)
-│   └── pdfenc/                  reserved for the PDF writer (D1)
+│   └── pdfenc/                  the PDF writer, through okage (D58)
 ├── xps/  ps/  emf/  djvu/       the other page descriptions. ps holds EPS
 ├── psd/  ora/                   the images with layers. ora also opens Krita
 ├── epub/  mobi/  fb2/  chm/     the ebooks. mobi holds MOBI, PRC, AZW, AZW3, AZW4
@@ -458,15 +458,34 @@ A container, such as `dmg`, has the same `Open`, and its `Document` is a
 
 ## An encoder
 
-No encoder is planned yet (D1). When one comes, it has this form, in its own
-package:
+`pdf/pdfenc` writes the pages of a document as a PDF file, through the PDF
+writer of okage (D58). It imports no format, and no format imports it (D6).
+A program that writes no PDF does not link it.
 
 ```go
 package pdfenc
 
-// Encode writes the pages to w as a PDF file.
-func Encode(ctx context.Context, w io.Writer, pages iter.Seq2[ivy.Page, error], opts ...Option) error
+// Encode writes the pages of d to w as one PDF file. d must be an
+// ivy.Pager. When a page draws only in part, Encode still writes the file,
+// and returns a *ivy.PartialError that names each such page.
+func Encode(ctx context.Context, w io.Writer, d ivy.Document, opts ...Option) error
+
+// EncodePages writes pages to w as one PDF file, such as pages of more than
+// one document. It writes the metadata only from WithInfo.
+func EncodePages(ctx context.Context, w io.Writer, pages iter.Seq2[ivy.Page, error], opts ...Option) error
+
+func WithConfig(cfg ivy.Config) Option   // the Logger and the Limits
+func WithPages(pages ...int) Option      // the pages to write, from 0, in order
+func WithInfo(info ivy.Info) Option      // the metadata, in place of Describe
+func WithOutline(on bool) Option         // on by default
+func WithLinks(on bool) Option           // on by default
+func WithRasterDPI(dpi float32) Option   // 300 by default
 ```
+
+`Encode` writes to `w` only after it drew every page. A page that is a
+`display.Drawer` goes into the file as vectors. Another page goes into the
+file as one image of `ivy.RenderImage`. The limits and the errors are those
+of D58.
 
 ## The internal layers
 
@@ -477,7 +496,10 @@ a program needs one, the maintainers decide to export it.
 1. `internal/display` holds the interface `Device`, with the commands of the
    display list (D10). It holds a `List`, which records the commands and
    replays them onto another device, and the device that draws with okage.
-   `xps` draws through it, and the port of hayro and the layout will. A path
+   Each page description, the layout and the scenes draw through it. A page
+   that draws onto a device is a `Drawer`, whose method `Draw` gives pdfenc
+   the commands of the page (D58). Phase 7c adds the optional interfaces
+   `Linker` and `Bookmarker` of D58, for the links and the outline. A path
    of okage changes in place when it transforms, so a shared path, such as
    the outline of a glyph, is cloned first with `display.Clone`.
 2. `internal/font` reads the faces: the TrueType, OpenType and CFF fonts with
