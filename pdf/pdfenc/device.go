@@ -18,11 +18,9 @@ import (
 // of a path long before.
 const maxCoordinate = 1 << 40
 
-// maxStops is the largest number of stops of a gradient that the device
-// writes. The writer makes a stitching function of one function for each
-// pair of stops, and MuPDF 1.28 reads at most 256 of them. A gradient with
-// more stops goes to the raster fallback.
-const maxStops = 257
+// maxDashes is the largest number of dashes of a stroke. okage, as
+// tiny-skia, draws no stroke with more dashes, so the device writes none.
+const maxDashes = 1000000
 
 // The bytes that the device counts for the commands of a path, for each
 // point and for each command.
@@ -372,10 +370,11 @@ func (d *device) paint(shader okage.Shader) (pdf.Paint, pdf.NormalizedF32, bool)
 }
 
 // gradientFits reports whether the writer can write a gradient of n stops
-// with the parameters params: at least one stop, at most maxStops, and each
-// parameter within maxCoordinate.
+// with the parameters params: at least one stop, and each parameter within
+// maxCoordinate. The writer of okage puts the functions of many stops into
+// a tree that MuPDF reads (okage D69).
 func gradientFits(n int, params ...float32) bool {
-	if n == 0 || n > maxStops {
+	if n == 0 {
 		return false
 	}
 	for _, v := range params {
@@ -411,8 +410,8 @@ func (d *device) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage
 }
 
 // stroke strokes p with the shader, and with the stroke adjustment when
-// adjust is true. The writer cannot read the dashes of an okage.Stroke, so
-// the device cuts the path into its dashes first, as okage does.
+// adjust is true. The dash of the stroke is the dash of PDF, so a viewer
+// draws the caps and the joins of each dash (okage D69).
 func (d *device) stroke(p *okage.Path, stroke okage.Stroke, shader okage.Shader, adjust bool) {
 	if d.skip() || p == nil || shader == nil {
 		return
@@ -433,14 +432,13 @@ func (d *device) stroke(p *okage.Path, stroke okage.Stroke, shader okage.Shader,
 	if _, ok := pageBounds(bounds, ctm); !ok {
 		return
 	}
+	var dash *pdf.StrokeDash
 	if stroke.Dash != nil {
 		sx, sy := ctm.GetScale()
-		dashed, ok := p.Dash(stroke.Dash, max(sx, sy)*d.res)
-		if !ok {
+		if !dashFits(p, stroke.Dash, max(sx, sy)*d.res) {
 			return
 		}
-		p = dashed
-		stroke.Dash = nil
+		dash = &pdf.StrokeDash{Array: stroke.Dash.Array(), Offset: stroke.Dash.Offset()}
 	}
 	if !d.enc.charge(pathBytes(p)) {
 		return
@@ -470,12 +468,36 @@ func (d *device) stroke(p *okage.Path, stroke okage.Stroke, shader okage.Shader,
 		LineCap:    lineCap(stroke.LineCap),
 		LineJoin:   lineJoin(stroke.LineJoin),
 		Opacity:    opacity,
+		Dash:       dash,
 	})
 	d.s.DrawPath(p)
 	d.s.SetStroke(nil)
 	if adjust {
 		d.s.Pop()
 	}
+}
+
+// dashFits reports whether okage draws the stroke of p with the dash, at
+// the resolution scale res: when the dash gives at most maxDashes dashes.
+// The length of the lines between the points of p is at least the length of
+// its curves, and twice it covers the lines that close its contours. When
+// that bound gives too many dashes, the dash of okage decides.
+func dashFits(p *okage.Path, dash *okage.StrokeDash, res float32) bool {
+	pts := p.Points()
+	var length float64
+	for i := 1; i < len(pts); i++ {
+		length += float64(pts[i].Distance(pts[i-1]))
+	}
+	array := dash.Array()
+	var sum float64
+	for _, v := range array {
+		sum += float64(v)
+	}
+	if 2*length*float64(len(array)/2)/sum <= maxDashes {
+		return true
+	}
+	_, ok := p.Dash(dash, res)
+	return ok
 }
 
 // outset returns r with a margin of pad on each side.

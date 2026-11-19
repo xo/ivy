@@ -316,8 +316,9 @@ var pdfencDiffers = map[string]string{
 	"pdfjs/pdf/text-cjk-nonembedded.pdf":              textDiffers,
 	"pdfjs/pdf/text-office-nonembedded.pdf":           textDiffers,
 	"poi/ppt/backgrounds.ppt":                         "Poppler draws the tiles of the background at another phase than ivy and MuPDF",
-	"repo/pdf/font-type3-widths-with-matrix.pdf": "the glyphs are stencil masks, which the file holds as soft masks, and ivy and the viewers " +
-		"scale a soft mask down in another way than a stencil mask. The pages are the same at 300 dots for each inch",
+	"repo/pdf/font-type3-widths-with-matrix.pdf": "the glyphs of the Type 3 font are image masks, which the written file holds as " +
+		"the same image masks on the page. A pixel of a glyph is less than a pixel at 72 dots for each inch, and ivy, " +
+		"MuPDF and Poppler each scale the image of a Type 3 glyph down in another way than an image of the page",
 }
 
 // The reasons of pdfencDiffers.

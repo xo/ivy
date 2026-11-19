@@ -227,16 +227,17 @@ The pages of Visio came on 2026-11-17 (D30).
    `poi/ppt/backgrounds.ppt` at another phase than ivy and MuPDF in the file
    of pdfenc. A tiling pattern in a simple group draws at the same phase in
    both viewers. Source: `TestPDFEnc` of the test module.
-3. Use the additions of okage D69 when ivy requires the release of okage that
-   holds them. pdfenc can write the dashes of a stroke with `StrokeDash.Array`
-   and `Offset`, and can remove `maxStops` and its raster fallback for a
-   gradient of many stops. Source: `pdf/pdfenc` and okage D69, 2026-11-19.
-4. Give a new reason for `repo/pdf/font-type3-widths-with-matrix.pdf` in
-   `pdfencDiffers` of the test module, or remove the difference. The stencils
-   that ivy gives for its Type 3 glyphs are larger than the image masks of the
-   file, such as 12 by 14 pixels for a glyph `l` that is 4 by 10 in the file.
-   With the image masks of okage D69, the file still differs by 16.7 at 72
-   dots for each inch. Source: `pdf` and `pdf/pdfenc`, 2026-11-19.
+3. Write the glyphs of a Type 3 font of bitmaps as a Type 3 font of the
+   written file. `Page.Draw` of `pdf` gives the image mask of each glyph with
+   the pixels of the file, and pdfenc writes it as an image mask of the page.
+   At 72 dots for each inch, ivy, MuPDF and Poppler each scale the image of a
+   Type 3 glyph down in another way than an image of the page. So
+   `repo/pdf/font-type3-widths-with-matrix.pdf` differs by 13.9 through ivy,
+   27.5 through MuPDF and 39.4 through Poppler, and `pdfencDiffers` of the
+   test module lists it. At 300 dots for each inch, the written page differs
+   from the source page by 0 through ivy, 3.8 through MuPDF and 8.3 through
+   Poppler. The writer of okage makes a Type 3 font only from the glyphs of
+   a font file. Source: `pdf` and `pdf/pdfenc`, 2026-11-19.
 
 ## Left by phase 6
 

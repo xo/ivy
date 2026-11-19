@@ -573,9 +573,13 @@ The build of 2026-11-19 differs from this decision in these places:
    pictures with another filter, Poppler smooths the glyph paths of 5 pages
    of small text in another way, Poppler draws the tiles of
    `poi/ppt/backgrounds.ppt` at another phase, and the stencils of a Type 3
-   font of bitmaps become soft masks.
+   font of bitmaps become soft masks. Since okage v0.18.0 (okage D69), each
+   such stencil is an image mask with the pixels of the source file. The
+   reason in the test says why the page still differs.
 4. `StrokeDash` of okage has no method that gives the dash array, so the
-   device cuts a dashed path with `Path.Dash` before it strokes it.
+   device cuts a dashed path with `Path.Dash` before it strokes it. Since
+   okage v0.18.0, the device writes the dash of PDF with the array and the
+   offset of the `StrokeDash`, as the table above says (okage D69).
 
 The test of the corpus passes on 246 documents and 527 pages. `qpdf
 --check` finds no error and no warning. The mean difference from the

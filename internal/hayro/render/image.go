@@ -160,6 +160,8 @@ func (r *renderer) drawImageWithAlphaMask(data renderImageData, alpha interpret.
 // of luma, RGB or RGBA. The port builds an image of RGBA, premultiplied, and
 // resizes it, as buildImagePixels says. A solid image becomes the stencil
 // of FillMask. The data of an image shorter than its size draws nothing.
+// With KeepGlyphImages, the image of a glyph of Type 3 keeps its size and
+// gets no margin.
 func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t kurbo.Affine) {
 	imgWidth, imgHeight := data.width(), data.height()
 	if imgWidth == 0 || imgHeight == 0 {
@@ -180,7 +182,8 @@ func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t 
 		return
 	}
 	smooth := interpolate
-	needsResize := xScale < 1 || yScale < 1
+	keep := r.inType3Glyph && r.global.keepGlyphImages
+	needsResize := !keep && (xScale < 1 || yScale < 1)
 	newWidth, newHeight := imgWidth, imgHeight
 	if needsResize {
 		newWidth = resizedSide(imgWidth, xScale)
@@ -209,7 +212,7 @@ func (r *renderer) drawImage(data renderImageData, alpha *interpret.LumaData, t 
 	}
 	// Pad the images of glyphs of Type 3 with transparent pixels, so that
 	// the sampling of the edges does not make them look bold.
-	if r.inType3Glyph {
+	if r.inType3Glyph && !keep {
 		padded := image.NewRGBA(image.Rect(0, 0, rgba.Rect.Dx()+4, rgba.Rect.Dy()+4))
 		xdraw.Copy(padded, image.Pt(2, 2), rgba, rgba.Rect, xdraw.Src, nil)
 		rgba = padded

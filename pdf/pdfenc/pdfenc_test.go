@@ -188,7 +188,16 @@ func scenes() []scene {
 			d.StrokePath(circle(100, 100, 60), st, solid(20, 20, 20, 255))
 			st = okage.Stroke{Width: 10, MiterLimit: 10, LineJoin: okage.LineJoinBevel}
 			d.StrokePath(rect(40, 40, 120, 120), st, solid(200, 120, 0, 255))
-		}, diff: 2},
+		}, diff: 2, want: []string{"[12 6]3 d"}},
+		{name: "too many dashes", draw: func(_ *testing.T, d display.Device) {
+			// okage draws no stroke of more than a million dashes
+			dash, _ := okage.NewStrokeDash([]float32{0.0001, 0.0001}, 0)
+			pb := okage.NewPathBuilder()
+			pb.MoveTo(0, 100)
+			pb.LineTo(400, 100)
+			p, _ := pb.Finish()
+			d.StrokePath(p, okage.Stroke{Width: 4, MiterLimit: 4, Dash: dash}, solid(0, 0, 0, 255))
+		}, diff: 2, notWant: []string{"]0 d"}},
 		{name: "stroke adjusted", draw: func(_ *testing.T, d display.Device) {
 			for i := range 10 {
 				y := 20 + float32(i)*16.3
@@ -215,6 +224,16 @@ func scenes() []scene {
 			sweep, _ := okage.NewSweepGradient(okage.PointFromXY(150, 130), 0, 360, stops(), okage.SpreadModePad, okage.IdentityTransform())
 			d.FillPath(circle(150, 130, 40), okage.FillRuleWinding, sweep)
 		}, diff: 2},
+		{name: "many stops", draw: func(_ *testing.T, d display.Device) {
+			// more stops than MuPDF reads in one stitching function
+			many := make([]okage.GradientStop, 600)
+			for i := range many {
+				c := uint8(i * 255 / (len(many) - 1))
+				many[i] = okage.NewGradientStop(float32(i)/float32(len(many)-1), okage.ColorFromRGBA8(c, 60, 255-c, 255))
+			}
+			lin, _ := okage.NewLinearGradient(okage.PointFromXY(10, 0), okage.PointFromXY(190, 0), many, okage.SpreadModePad, okage.IdentityTransform())
+			d.FillPath(rect(0, 0, 200, 200), okage.FillRuleWinding, lin)
+		}, diff: 2, want: []string{"/ShadingType 2"}, notWant: []string{"/Subtype/Image"}},
 		{name: "mesh", draw: func(_ *testing.T, d display.Device) {
 			v := func(x, y float32, r, g, b uint8) okage.MeshVertex {
 				return okage.MeshVertex{Point: okage.PointFromXY(x, y), Color: okage.ColorFromRGBA8(r, g, b, 255)}

@@ -38,17 +38,23 @@ const maxCachedOutlines = 1 << 16
 //
 // Port: imageBudget is the number of bytes that the cache of the decoded
 // images keeps, which the limits of the interpreter set. cancel is the
-// Cancel function of the interpreter.
+// Cancel function of the interpreter. keepGlyphImages is the setting of
+// RenderSettings.
 type globalState struct {
 	cache                   *RenderCache
 	forceImageInterpolation bool
+	keepGlyphImages         bool
 	imageBudget             int64
 	cancel                  func() bool
 }
 
 // newGlobalState is GlobalState::new in hayro src/lib.rs.
 func newGlobalState(cache *RenderCache, settings *RenderSettings) *globalState {
-	return &globalState{cache: cache, forceImageInterpolation: settings.ForceImageInterpolation}
+	return &globalState{
+		cache:                   cache,
+		forceImageInterpolation: settings.ForceImageInterpolation,
+		keepGlyphImages:         settings.KeepGlyphImages,
+	}
 }
 
 // keepImages reports whether the cache of the decoded images can keep the
@@ -210,6 +216,12 @@ func NewRenderCache() *RenderCache {
 type RenderSettings struct {
 	// ForceImageInterpolation draws each image with bilinear filtering.
 	ForceImageInterpolation bool
+	// KeepGlyphImages draws the image of a glyph of Type 3 with the pixels
+	// of the file. The renderer does not resize the image and does not add
+	// the transparent margin of drawImage. A device that writes the image,
+	// such as the PDF device of pdfenc, then gets the image of the file
+	// (D58). It is not in hayro.
+	KeepGlyphImages bool
 }
 
 // PixmapSettings is PixmapSettings in hayro src/lib.rs. It holds the

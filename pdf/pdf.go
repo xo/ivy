@@ -484,12 +484,13 @@ func (p *Page) Size() (float32, float32) {
 // inside the page box of WithPageBox, by default the CropBox, rotated by the
 // entry Rotate of the page.
 func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
-	return p.draw(ctx, display.NewOkage(dst, okage.IdentityTransform()), int(dst.Width()), int(dst.Height()), t)
+	return p.draw(ctx, display.NewOkage(dst, okage.IdentityTransform()), int(dst.Width()), int(dst.Height()), t, &render.RenderSettings{})
 }
 
 // Draw satisfies the display.Drawer interface (D58). It draws the page as
 // Render does, onto a target of res pixels for each point, and scales the
-// target back to points on d.
+// target back to points on d. The image of a glyph of Type 3 keeps the
+// pixels of the file, as KeepGlyphImages of render says.
 func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
 	if !(res > 0) || math.IsInf(float64(res), 0) {
 		res = 1
@@ -502,13 +503,13 @@ func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
 	d.Save()
 	defer d.Restore()
 	d.Concat(okage.TransformFromScale(1/res, 1/res))
-	return p.draw(ctx, d, int(pw), int(ph), okage.TransformFromScale(res, res))
+	return p.draw(ctx, d, int(pw), int(ph), okage.TransformFromScale(res, res), &render.RenderSettings{KeepGlyphImages: true})
 }
 
 // draw draws the page onto dev, whose user space is the space of the pixels
-// of a target of width by height pixels. t maps the points of the page onto
-// those pixels.
-func (p *Page) draw(ctx context.Context, dev display.Device, width, height int, t okage.Transform) (err error) {
+// of a target of width by height pixels, with the settings. t maps the
+// points of the page onto those pixels.
+func (p *Page) draw(ctx context.Context, dev display.Device, width, height int, t okage.Transform, settings *render.RenderSettings) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering pdf page %d: %w", p.n+1, err)
 	}
@@ -520,7 +521,7 @@ func (p *Page) draw(ctx context.Context, dev display.Device, width, height int, 
 	transform := kurbo.NewAffine([6]float64{
 		float64(t.SX), float64(t.KY), float64(t.KX), float64(t.SY), float64(t.TX), float64(t.TY),
 	}).Mul(interpret.TransformToKurbo(p.page.InitialTransform(true)))
-	err = render.RenderInto(p.page, p.doc.cache, p.doc.settings(ctx), &render.RenderSettings{}, dev,
+	err = render.RenderInto(p.page, p.doc.cache, p.doc.settings(ctx), settings, dev,
 		width, height, transform)
 	switch {
 	case err == nil:

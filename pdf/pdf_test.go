@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
 	"github.com/xo/ivy/internal/hayro/interpret"
 	"github.com/xo/okage"
 )
@@ -465,6 +466,49 @@ func TestConcurrentRender(t *testing.T) {
 	for _, n := range inks[1:] {
 		if n != inks[0] {
 			t.Errorf("expected the same ink in each render, got: %v", inks)
+		}
+	}
+}
+
+// maskSizes records the size of each stencil that FillMask takes.
+type maskSizes struct {
+	*display.List
+	sizes []image.Point
+}
+
+// FillMask satisfies the display.Device interface.
+func (m *maskSizes) FillMask(mask *image.Alpha, t okage.Transform, opts display.ImageOptions, shader okage.Shader) {
+	m.sizes = append(m.sizes, mask.Rect.Size())
+	m.List.FillMask(mask, t, opts, shader)
+}
+
+// TestDrawType3Image checks that Draw gives the image mask of a glyph of a
+// Type 3 font with the pixels of the file, at each resolution (D58).
+func TestDrawType3Image(t *testing.T) {
+	buf := build(
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+		stream("", "BT /F1 8 Tf 10 50 Td (a) Tj ET"),
+		"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 3 5] /FontMatrix [0.1 0 0 0.1 0 0] "+
+			"/CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> "+
+			"/FirstChar 97 /LastChar 97 /Widths [3] /Resources << >> >>",
+		stream("", "3 0 0 0 3 5 d1 q 3 0 0 5 0 0 cm BI /W 3 /H 5 /BPC 1 /IM true /F /AHx ID 40A0E0A0A0> EI Q"),
+		"<< >>",
+	)
+	p, ok := page(t, open(t, buf), 0).(*Page)
+	if !ok {
+		t.Fatal("expected a *Page")
+	}
+	// The glyph is 2.4 by 4 points: at 1 pixel for each point, Render
+	// scales its image down, and at 300 dots for each inch, it does not.
+	for _, res := range []float32{1, 300.0 / 72} {
+		m := &maskSizes{List: display.NewRecording()}
+		if err := p.Draw(t.Context(), m, res); err != nil {
+			t.Fatal(err)
+		}
+		if len(m.sizes) != 1 || m.sizes[0] != image.Pt(3, 5) {
+			t.Errorf("resolution %g: expected one stencil of 3 by 5 pixels, got %v", res, m.sizes)
 		}
 	}
 }
