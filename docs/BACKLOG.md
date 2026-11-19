@@ -58,14 +58,12 @@ found these faults. Each item names a file of the corpus.
    the middle of the column, as Word does on page 6 of
    `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
    side. Source: `msdoc`.
-7. Place a table or a frame of `msdoc` that floats from the margin or from the
-   page vertically when it does not start a page, and at the special vertical
-   positions center, bottom, inside and outside. The layout places a float at
-   the line of its paragraph, so `msdoc` uses the position only for a block
-   that starts a page. A frame of the width of its text does not let the text
-   wrap beside it. No file of the corpus has such a frame or table. Question
-   24 asks the maintainers for a way to place a float on the page. Source:
-   `msdoc` and the layout.
+7. Place a table or a frame of `msdoc` and `docx`, and a shape with wrap, that
+   floats from the margin or from the page vertically, as D60 decides with the
+   property `-ivy-float-position`. `msdoc` now uses the position only for a
+   block that starts a page, `docx` does not read `w:tblpPr` or `w:framePr`,
+   and `odf` does not read `style:vertical-rel`. No file of the corpus has
+   such a float. Source: `msdoc`, `docx`, `odf` and the layout, D60.
 8. Compare the path gradient "shape" of a focus out of the shape with
    PowerPoint. ivy puts the first stop where the ray from the focus enters the
    shape, and the last stop where the ray leaves it. On slide 4 of

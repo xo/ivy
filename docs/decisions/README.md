@@ -79,3 +79,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D57 | [The lines of a large document are laid out ahead on goroutines](D057-the-lines-of-a-large-document-are-laid-out-ahead-on-goroutines.md) | Decided |
 | D58 | [pdfenc writes the pages of a document as PDF through okage](D058-pdfenc-writes-the-pages-of-a-document-as-pdf-through-okage.md) | Decided |
 | D59 | [The space before is left out at the top of a column](D059-the-space-before-is-left-out-at-the-top-of-a-column.md) | Decided. Amends D56 |
+| D60 | [The layout places a float at a position on the page](D060-the-layout-places-a-float-at-a-position-on-the-page.md) | Decided |
