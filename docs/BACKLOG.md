@@ -360,15 +360,14 @@ time is for a page at 96 dpi.
    the mask of the image can have a key, or draw it without a group.
    Source: `internal/hayro/render` and `internal/display`.
 3. Allocate less in the boxes of a book. `PageCount` of
-   `idpf/epub/linear-algebra.epub` now allocates 2.3 GB, down from 2.5 GB, in
-   26.5 million objects instead of 31.8 million. 397,000 of its 524,000 text
+   `idpf/epub/linear-algebra.epub` now allocates 2.1 GB, down from 2.5 GB, in
+   26.4 million objects instead of 31.8 million. 397,000 of its 524,000 text
    boxes hold only white space, and `inlineInBlock` drops most of them later.
    A box is 384 bytes, so these boxes take about 150 MB. The layout cannot
    leave them out, because the collapsible spaces of `ProcessWhitespace` go
    from one text box to the next. Most of the rest comes from okage:
    `roxmltree`, `newElementWrapper` and `addRelevantSelectors` of
-   `cssselect2`, and the glyphs of `shaping.Output`. Source: `internal/layout`
-   and okage.
+   `cssselect2`. Source: `internal/layout` and okage.
 4. Render each page of a long sheet without a second layout of its parts.
    `PageCount` lays out the parts on goroutines and drops their layouts (D48),
    so the pages after it lay out each part again, with its lead page and its
@@ -401,14 +400,16 @@ time is for a page at 96 dpi.
 8. Make the test `TestGalley` of the test module faster. It takes about 8
    minutes on the whole corpus, so it runs only when `IVY_REVIEW_CACHE` is
    set, and CI does not run it. Source: D57, 2026-11-19.
-9. Reuse the shaping of a text for its lines with `Glyph.UnsafeToBreak` and
-   `HarfbuzzShaper.ShapeInto` of okage D70, when ivy requires the release of
-   okage that holds them. The layout shapes each character of
-   `pg1342-images.html` about 4.5 times. `shapeText` can shape into a buffer
-   that it keeps, and a text that is a prefix or a suffix of a text that the
-   layout shaped before can take a slice of its glyphs when each cut is safe
-   to break. The estimate is a layout about 25 percent faster, with about 40
-   percent fewer bytes. Source: `internal/layout` and okage D70, 2026-11-19.
+9. Shape each text of a paragraph once. A text that is the start or the end
+   of the last long text that the layout shaped for a font takes the glyphs
+   of that text (okage D70, `internal/layout/text_shape_slice.go`). Two kinds
+   of texts still shape again. The short text of the next line starts in the
+   last text and ends after it. A text in the middle of the last text, such
+   as a word for the minimum width of a box, also shapes again. So the layout
+   still shapes about 1.3 characters for each character of the lines of
+   `pg1342-images.html`, and about 1.6 for `pg24264.txt`. A last text that
+   holds the whole paragraph, or a cut at each end of a part, can give these
+   texts their glyphs too. Source: `internal/layout`, 2026-11-19.
 
 ## Work for okage
 

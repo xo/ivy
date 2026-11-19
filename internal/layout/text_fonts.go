@@ -120,9 +120,17 @@ type FontConfiguration struct {
 	// their texts.
 	shaped      map[shapeKey]*shapedText
 	shapedBytes int
-	// shapeRunes, shapeClusters, shapeFound and shapeIndex are the buffers
-	// of shapeText, which it reuses for each text.
+	// parents holds the last long text of one paragraph that the
+	// configuration shaped, for each font of a style. A later text that is
+	// its start or its end takes its glyphs (okage D70).
+	parents map[parentKey]*shapedParent
+	// shapeRunes, shapeBytes, shapeGlyphs, shapeItems, shapeClusters,
+	// shapeFound and shapeIndex are the buffers of shapeText, which it
+	// reuses for each text.
 	shapeRunes    []rune
+	shapeBytes    []int32
+	shapeGlyphs   []shaping.Glyph
+	shapeItems    []parentRun
 	shapeClusters []textCluster
 	shapeFound    []bool
 	shapeIndex    []int32
@@ -219,6 +227,7 @@ func NewFontConfiguration(db *svg.FontDatabase, opts FontConfigurationOptions) *
 		chains:       map[string][]svg.FontID{},
 		fallbacks:    map[fallbackKey]int{},
 		shaped:       map[shapeKey]*shapedText{},
+		parents:      map[parentKey]*shapedParent{},
 		strutLayouts: map[string][2]float64{},
 	}
 }
@@ -379,6 +388,7 @@ func (fc *FontConfiguration) AddFontFace(ruleDescriptors map[string]Value, urlFe
 		clear(fc.fallbacks)
 		clear(fc.shaped)
 		fc.shapedBytes = 0
+		clear(fc.parents)
 		clear(fc.strutLayouts)
 		return
 	}

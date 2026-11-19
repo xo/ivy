@@ -67,8 +67,6 @@ type shapeKey struct {
 // The indexes are of 32 bits, which hold maxShapedRunes runes of 4 bytes
 // each, so that a shaped text takes less memory.
 type shapedText struct {
-	// runeToByte maps the index of each rune, and the end, to its byte.
-	runeToByte []int32
 	// clusters are the clusters of the text, in logical order.
 	clusters []textCluster
 	// runs are the runs of one face, in logical order.
@@ -106,6 +104,9 @@ type textCluster struct {
 	run        int32
 	advance    float64
 	inkTop     float64
+	// unsafe is true when the shaper can give other glyphs if the text
+	// breaks before the cluster: Glyph.UnsafeToBreak of okage D70.
+	unsafe bool
 }
 
 // LogAttr is a PangoLogAttr: the log attributes of Pango that the port
@@ -149,11 +150,20 @@ func isWhite(r rune) bool {
 // can.
 func (fc *FontConfiguration) shape(text string, style *Style) *shapedText {
 	rtl := isStr(style.Get("direction"), "rtl")
-	key := shapeKey{fontStyleCacheKey(style, false), rtl, text}
+	font := fontStyleCacheKey(style, false)
+	key := shapeKey{font, rtl, text}
 	if s, ok := fc.shaped[key]; ok {
 		return s
 	}
-	s := fc.shapeText(text, style, rtl)
+	// A part of the last long text of the font takes its glyphs, in
+	// text_shape_slice.go.
+	pkey := parentKey{font, ValueString(style.Get("font_kerning")), rtl}
+	s := fc.shapeSlice(pkey, text, style)
+	if s == nil {
+		var p *shapedParent
+		s, p = fc.shapeText(text, style, rtl)
+		fc.keepParent(pkey, p)
+	}
 	if len(fc.shaped) >= maxShapedTexts || fc.shapedBytes+len(text) > maxShapedBytes {
 		clear(fc.shaped)
 		fc.shapedBytes = 0
@@ -163,16 +173,19 @@ func (fc *FontConfiguration) shape(text string, style *Style) *shapedText {
 	return s
 }
 
-// shapeText shapes a text.
-func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *shapedText) {
+// shapeText shapes a text. It also returns the text as a parent when later
+// texts can take its glyphs, or nil.
+func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *shapedText, p *shapedParent) {
 	runes := textRunes(&fc.shapeRunes, text, maxShapedRunes)
-	s = &shapedText{runeToByte: make([]int32, len(runes)+1)}
+	// runeToByte maps the index of each rune, and the end, to its byte.
+	runeToByte := scratch(&fc.shapeBytes, len(runes)+1)
 	offset := 0
 	for i, r := range runes {
-		s.runeToByte[i] = int32(offset)
+		runeToByte[i] = int32(offset)
 		offset += utf8.RuneLen(r)
 	}
-	s.runeToByte[len(runes)] = int32(offset)
+	runeToByte[len(runes)] = int32(offset)
+	s = &shapedText{}
 
 	m, faces := fc.styleFontmap(style)
 	primary, primaryID := m.primary()
@@ -184,26 +197,27 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		s.clusters = make([]textCluster, 0, len(runes))
 		for i, r := range runes {
 			s.clusters = append(s.clusters, textCluster{
-				start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r,
+				start: runeToByte[i], end: runeToByte[i+1], runeStart: int32(i), r: r,
 				advance: zeroWidth(r, 0.5), inkTop: 0.5,
 			})
 		}
-		return s
+		return s, nil
 	}
 	s.ascent, s.descent = faceExtents(primary)
 	if len(runes) == 0 {
-		return s
+		return s, nil
 	}
 
 	defer func() {
 		// Port: a panic in the shaper is a text without fonts.
 		if r := recover(); r != nil {
 			fc.log.debug("Failed to shape text: %v", r)
+			p = nil
 			s.clusters = s.clusters[:0]
 			s.runs = []shapedRun{{ascent: s.ascent, descent: s.descent}}
 			for i, r := range runes {
 				s.clusters = append(s.clusters, textCluster{
-					start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r,
+					start: runeToByte[i], end: runeToByte[i+1], runeStart: int32(i), r: r,
 					advance: zeroWidth(r, 0.5), inkTop: 0.5,
 				})
 			}
@@ -231,6 +245,11 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	// glyphs holds the glyphs of all the runs, so that the runs share one
 	// allocation.
 	glyphs := make([]shapedGlyph, 0, len(runes))
+	// paragraphs counts the paragraphs, and items holds the runs of the
+	// segmenter, for the parent. faceless is true when the segmenter gave a
+	// run without a face.
+	paragraphs, faceless := 0, false
+	items := fc.shapeItems[:0]
 	// The bidirectional algorithm of go-text reads one paragraph, so each
 	// paragraph is split on its own.
 	for start := 0; start < len(runes); {
@@ -246,10 +265,16 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		}
 		input.RunStart, input.RunEnd = start, end
 		start = end
+		paragraphs++
 		for _, item := range fc.segmenter.Split(input, faces) {
 			if item.Face == nil {
+				faceless = true
 				continue
 			}
+			items = append(items, parentRun{
+				start: int32(item.RunStart), end: int32(item.RunEnd),
+				face: item.Face, script: item.Script, dir: item.Direction,
+			})
 			id := m.byFace[item.Face]
 			upem := float64(item.Face.Upem())
 			item.Size = fixed.I(int(item.Face.Upem()))
@@ -257,7 +282,12 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			if rule, ok := fc.faceRules[id]; ok {
 				item.FontFeatures = append(slices.Clone(rule.features), features...)
 			}
-			out := fc.shaper.Shape(item)
+			// The glyphs of the shaper go into the buffer of the
+			// configuration, since the loop copies them at once.
+			out := fc.shaper.ShapeInto(item, fc.shapeGlyphs[:0])
+			if cap(out.Glyphs) <= maxScratch {
+				fc.shapeGlyphs = out.Glyphs[:0]
+			}
 			ascent, descent := faceExtents(item.Face)
 			run := shapedRun{id: id, hasID: true, ascent: ascent, descent: descent}
 			if cap(glyphs)-len(glyphs) < len(out.Glyphs) {
@@ -274,8 +304,8 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 				if !found[ci] {
 					end := min(ci+max(g.RunesCount(), 1), len(runes))
 					*c = textCluster{
-						start: s.runeToByte[ci], end: s.runeToByte[end], runeStart: int32(ci), r: runes[ci],
-						run: runIndex,
+						start: runeToByte[ci], end: runeToByte[end], runeStart: int32(ci), r: runes[ci],
+						run: runIndex, unsafe: g.UnsafeToBreak(),
 					}
 					found[ci] = true
 				}
@@ -296,7 +326,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 	}
 	// Each character that the shaper left out, such as a separator of
 	// paragraphs, is a cluster without width.
-	count := 0
+	count, gaps := 0, 0
 	for i, r := range runes {
 		if found[i] {
 			count++
@@ -305,7 +335,7 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 		covered := false
 		for j := i - 1; j >= 0 && j >= i-8; j-- {
 			if found[j] {
-				covered = byRune[j].end > s.runeToByte[i]
+				covered = byRune[j].end > runeToByte[i]
 				break
 			}
 		}
@@ -313,9 +343,10 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			if len(s.runs) == 0 {
 				s.runs = append(s.runs, shapedRun{id: primaryID, hasID: true, ascent: s.ascent, descent: s.descent})
 			}
-			byRune[i] = textCluster{start: s.runeToByte[i], end: s.runeToByte[i+1], runeStart: int32(i), r: r}
+			byRune[i] = textCluster{start: runeToByte[i], end: runeToByte[i+1], runeStart: int32(i), r: r}
 			found[i] = true
 			count++
+			gaps++
 		}
 	}
 	// Sort the clusters in the order of the text.
@@ -335,7 +366,13 @@ func (fc *FontConfiguration) shapeText(text string, style *Style, rtl bool) (s *
 			g.cluster = index[g.cluster]
 		}
 	}
-	return s
+	if cap(items) <= maxScratch {
+		fc.shapeItems = items[:0]
+	}
+	if paragraphs == 1 && !faceless && gaps == 0 && int(runeToByte[len(runes)]) == len(text) {
+		p = newShapedParent(text, s, items)
+	}
+	return s, p
 }
 
 // maxScratch bounds the items of a buffer that scratch keeps.
