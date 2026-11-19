@@ -37,6 +37,7 @@ const (
 	sprmPIstd         = 0x4600
 	sprmPJc80         = 0x2403
 	sprmPFPageBreak   = 0x2407
+	sprmPFNoLineNumb  = 0x240C
 	sprmPFInTable     = 0x2416
 	sprmPFTtp         = 0x2417
 	sprmPFInnerCell   = 0x244B
@@ -60,6 +61,10 @@ const (
 	sprmPDxaAbs       = 0x8418
 	sprmTDefTable     = 0xD608
 	sprmSBkc          = 0x3009
+	sprmSLnc          = 0x3013
+	sprmSNLnnMod      = 0x5015
+	sprmSDxaLnn       = 0x9016
+	sprmSLnnMin       = 0x501B
 	sprmSFTitlePage   = 0x300A
 	sprmSDyaHdrTop    = 0xB017
 	sprmSDyaHdrBottom = 0xB018
@@ -227,6 +232,8 @@ type pap struct {
 	// A change makes a new slice, as the paragraphs share the slice of
 	// their style.
 	tabs []tabStop
+	// noLineNumb is set for a paragraph whose lines have no numbers.
+	noLineNumb bool
 }
 
 // tabStop is a custom tab stop of a paragraph: its position from the left
@@ -428,6 +435,8 @@ func applyPap(p *pap, s sprm) {
 		}
 	case sprmPFPageBreak:
 		p.pageBreak = v != 0
+	case sprmPFNoLineNumb:
+		p.noLineNumb = v != 0
 	case sprmPDxaLeft, sprmPDxaLeft80:
 		p.left, p.hasLeftFirst = int(s.value()), true
 	case sprmPDxaRight, sprmPDxaRight80:
@@ -472,8 +481,12 @@ func applyPap(p *pap, s sprm) {
 var word6Sections = map[byte]uint16{
 	142: sprmSBkc,
 	143: sprmSFTitlePage,
+	152: sprmSLnc,
+	154: sprmSNLnnMod,
+	155: sprmSDxaLnn,
 	156: sprmSDyaHdrTop,
 	157: sprmSDyaHdrBottom,
+	160: sprmSLnnMin,
 	164: sprmSXaPage,
 	165: sprmSYaPage,
 	166: sprmSDxaLeft,

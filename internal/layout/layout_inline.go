@@ -947,8 +947,15 @@ func adjustLineHeight(box *Box) {
 	lineHeight, box.Baseline = strut(box.Style)
 	box.Height = num(box.Style.Get("font_size"))
 	halfLeading := (lineHeight - box.Height) / 2
-	box.MarginTop = halfLeading - box.BorderTopWidth - box.PaddingTop
-	box.MarginBottom = halfLeading - box.BorderBottomWidth - box.PaddingBottom
+	// Port: upstream has no -ivy-line-multiple, which moves the text up
+	// and the leading below it.
+	var shift float64
+	if _, ok := box.Style.Get("line_multiple").(Float); ok {
+		shift = leadingShift(box.Style, lineHeight, strutTextHeight(box.Style))
+	}
+	box.Baseline -= shift
+	box.MarginTop = halfLeading - shift - box.BorderTopWidth - box.PaddingTop
+	box.MarginBottom = halfLeading + shift - box.BorderBottomWidth - box.PaddingBottom
 }
 
 // splitInlineBox is split_inline_box in weasyprint/layout/inline.py: it
@@ -1293,8 +1300,10 @@ func splitTextBoxWidth(lc *layoutContext, box *Box, availableWidth *float64, ski
 		// Set margins so that margin_height() == line_height
 		lineHeight, _ := strut(box.Style)
 		halfLeading := (lineHeight - m.Height) / 2
-		box.MarginTop = halfLeading
-		box.MarginBottom = halfLeading
+		// Port: upstream has no -ivy-line-multiple, see adjustLineHeight.
+		shift := leadingShift(box.Style, lineHeight, m.Height)
+		box.MarginTop = halfLeading - shift
+		box.MarginBottom = halfLeading + shift
 		// form the top of the content box
 		box.Baseline = m.Baseline
 		// form the top of the margin box

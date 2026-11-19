@@ -23,7 +23,7 @@ const documentName = "index.xhtml"
 // styleSheet is the style sheet of the format. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // section after this style sheet.
-const styleSheet = `html { font-family: serif; font-size: 10pt; line-height: 1.17; -ivy-page-overflow: descent }
+const styleSheet = `html { font-family: serif; font-size: 10pt; line-height: 1.17; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note; -ivy-text-autospace: ideograph-alpha ideograph-numeric }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2 }
 table { border-collapse: collapse; border-spacing: 0 }
@@ -37,7 +37,7 @@ img { vertical-align: baseline }
 ::footnote-marker { content: none }
 .fnref::before { content: counter(note) }
 .endnote-ref { vertical-align: super; font-size: 0.65em }
-.endnotes { break-before: auto; margin-top: 12pt; border-top: 0.5pt solid black; padding-top: 6pt }
+.endnotes { break-before: auto; margin-top: 12pt; border-top: 0.5pt solid black; padding-top: 6pt; -ivy-line-numbers: none }
 @page {
   @footnote { margin-top: 6pt; padding-top: 3pt; border-top: 0.5pt solid black }
   @top-center { width: 100%; vertical-align: top; text-align: left }

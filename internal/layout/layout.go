@@ -1007,6 +1007,13 @@ type layoutContext struct {
 	// The lines of a table cell, a float or a flex item keep the rule of
 	// upstream.
 	pageOverflowBox *Box
+
+	// unforcedBreak is set when the current page starts after a break
+	// that is not forced: the content of the page before it did not fit.
+	// Upstream counts a break as forced when the page has a name, so
+	// forcedBreak is set for each page of a named page, see
+	// -ivy-page-top-space.
+	unforcedBreak bool
 }
 
 // newLayoutContext is LayoutContext.__init__ in

@@ -241,7 +241,12 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		}
 		cur = i
 		d.parser.page = secs[i].page.page
-		b.WriteString(`<div class="section" style="page: ` + secs[i].name + `">`)
+		style := "page: " + secs[i].name
+		if v := secs[i].page.lines.css(); v != "" {
+			// the numbers of the lines have the font of the style Normal
+			style += "; -ivy-line-numbers: " + v + d.parser.normalFont()
+		}
+		b.WriteString(`<div class="section" style="` + attr(style) + `">`)
 		b.WriteString(running[i])
 	}
 	body := d.parser.body(paras, section)

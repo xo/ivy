@@ -23,7 +23,7 @@ const documentName = "index.xhtml"
 // styleSheet is the style sheet of the format. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // section after this style sheet.
-const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15; -ivy-page-overflow: descent }
+const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; tab-size: 36pt }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed }
@@ -103,6 +103,8 @@ type paraProps struct {
 	borderLeft, borderRight bool
 	// side is the side of the border that the next border word sets.
 	side byte
+	// noLine is set for a paragraph whose lines have no numbers.
+	noLine bool
 }
 
 // sectionProps are the properties of a section, in twips.
@@ -116,6 +118,31 @@ type sectionProps struct {
 	// paper is set while width and height are the paper of
 	// ivy.Config.Paper, which the file did not change (D32).
 	paper bool
+	// lineMod is the step of the numbers of the lines, or 0 for none,
+	// lineX their distance from the text, 0 for the default, lineStart
+	// the first number, and lineRestart when they restart: "page",
+	// "section" or "continuous".
+	lineMod, lineX, lineStart int
+	lineRestart               string
+}
+
+// lineNumbers returns the value of -ivy-line-numbers of the section, or ""
+// when its lines have no numbers. Word puts the numbers 0.25 inch before
+// the text when \linex is 0, and takes at most 100 for the step.
+func (s sectionProps) lineNumbers() string {
+	if s.lineMod <= 0 || s.lineMod > 100 {
+		return ""
+	}
+	distance := s.lineX
+	if distance <= 0 {
+		distance = 360
+	}
+	restart := s.lineRestart
+	if restart == "" {
+		restart = "page"
+	}
+	first := min(max(s.lineStart, 1), 32767)
+	return pt(distance) + " " + strconv.Itoa(s.lineMod) + " " + strconv.Itoa(first) + " " + restart
 }
 
 // cellDef is the definition of a cell of a row: its right edge and its

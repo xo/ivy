@@ -79,6 +79,10 @@ func blockLevelLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, sk
 		adjoiningMargins = &[]float64{}
 	}
 
+	// Port: upstream has no -ivy-page-top-space. The root box and the
+	// in-flow children of a block of its flow are in the flow of the page,
+	// see layoutContext.pageOverflowBox.
+	inFlow := lc.pageOverflowBox == box
 	if !box.IsTable() {
 		resolvePercentages(box, containingBlock)
 
@@ -87,6 +91,15 @@ func blockLevelLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, sk
 		}
 		if box.MarginBottom == Auto {
 			box.MarginBottom = 0
+		}
+		// Port: upstream has no -ivy-page-top-space. Word leaves out the
+		// space before a paragraph at the top of a page after a break that
+		// is not forced, see layoutContext.discardsSpaceBefore.
+		if lc.discardsSpaceBefore(box, pageIsEmpty, inFlow) {
+			box.MarginTop = 0
+			if box.BorderTopWidth == 0 && !hasBackground(box.Style) {
+				box.PaddingTop = 0
+			}
 		}
 
 		if lc.currentPage > 1 && pageIsEmpty {
@@ -760,9 +773,14 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 			// TODO: the margin-top value is set afterwards in
 			// block_level_layout, we shouldn’t duplicate this code.
 			childMarginTop := child.MarginTop
-			if childMarginTop == Auto {
+			switch {
+			case childMarginTop == Auto:
 				childMarginTop = 0
-			} else if lc.currentPage > 1 && pageIsEmpty {
+			case lc.discardsSpaceBefore(child, pageIsEmpty, pageOverflow):
+				// Port: upstream has no -ivy-page-top-space, see
+				// blockLevelLayoutShared.
+				childMarginTop = 0
+			case lc.currentPage > 1 && pageIsEmpty:
 				switch str(box.Style.Get("margin_break")) {
 				case "discard":
 					childMarginTop = 0

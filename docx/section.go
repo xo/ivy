@@ -47,6 +47,9 @@ type section struct {
 	bordersShadow bool
 	// bordersName is the name of the running element of the borders, or "".
 	bordersName string
+	// lineNumbers is the value of -ivy-line-numbers of the section, from
+	// w:lnNumType, or "" when its lines have no numbers.
+	lineNumbers string
 }
 
 // parseSection reads a w:sectPr element. A missing value takes the value
@@ -93,6 +96,8 @@ func parseSection(n roxmltree.Node, paper ivy.Paper) *section {
 					s.linePitch = v
 				}
 			}
+		case "lnNumType":
+			s.lineNumbers = lineNumbers(c)
 		case "titlePg":
 			v := ooxml.Attr(c, "val")
 			s.titlePg = v == "" || v == "1" || v == "true" || v == "on"
@@ -125,6 +130,32 @@ func parseSection(n roxmltree.Node, paper ivy.Paper) *section {
 	s.width = min(max(s.width, 72), 14400)
 	s.height = min(max(s.height, 72), 14400)
 	return s
+}
+
+// lineNumbers returns the value of -ivy-line-numbers of a w:lnNumType
+// element, or "" when the lines have no numbers (ECMA-376 Part 1,
+// 17.6.8). w:countBy is the step, and the lines have no numbers without
+// it, as in LibreOffice. w:distance is the distance of the numbers from
+// the text, 0.25 inch by default as in Word. w:start is the first number
+// minus 1, as lnnMin of Word 97, and w:restart is newPage by default.
+func lineNumbers(n roxmltree.Node) string {
+	step := int(number(ooxml.Attr(n, "countBy"), 0))
+	if step <= 0 || step > 100 {
+		return ""
+	}
+	distance := number(ooxml.Attr(n, "distance"), 0) / 20
+	if distance <= 0 || distance > 1584 {
+		distance = 18
+	}
+	first := int(min(max(number(ooxml.Attr(n, "start"), 0), 0), 32766)) + 1
+	restart := "page"
+	switch ooxml.Attr(n, "restart") {
+	case "newSection":
+		restart = "section"
+	case "continuous":
+		restart = "continuous"
+	}
+	return pt(distance) + " " + strconv.Itoa(step) + " " + strconv.Itoa(first) + " " + restart
 }
 
 // defaultSection returns the section of a document without w:sectPr.
@@ -217,6 +248,21 @@ func (c *converter) startSection(i int) {
 			if prev != nil {
 				style.set("break-before", "page")
 			}
+		}
+	}
+	if s.lineNumbers != "" {
+		style.set("-ivy-line-numbers", s.lineNumbers)
+		// The numbers have the font of the style LineNumber over the
+		// default paragraph style. Each paragraph gives its own font.
+		rpr := c.styles.rDefault
+		if st := c.styles.get("", "paragraph"); st != nil {
+			rpr = rpr.over(st.rpr)
+		}
+		if st := c.styles.get("LineNumber", "character"); st != nil {
+			rpr = rpr.over(st.rpr)
+		}
+		for _, d := range c.inherited(rpr) {
+			style.set(d.name, d.value)
 		}
 	}
 	if s.cols > 1 {

@@ -303,6 +303,11 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 			// twips, and drops the fraction of a twip
 			h := math.Floor(ratio*size*20*min(pct/100, 10)+1e-6) / 20
 			s.set("line-height", odtRatio(h/size))
+			// LibreOffice puts the extra space of the lines below their
+			// text
+			if pct > 100 {
+				s.set("-ivy-line-multiple", odtRatio(min(pct/100, 10)))
+			}
 		}
 	default:
 		if v, ok := odtLength(lh); ok && v > 0 {
@@ -314,6 +319,9 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 		} else {
 			s.set("line-height", odtRatio(ratio))
 		}
+	}
+	if p["number-lines"] == "false" {
+		s.set("-ivy-line-numbers", "none")
 	}
 	switch p["text-align"] {
 	case "center":

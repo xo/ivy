@@ -160,6 +160,9 @@ type pageMaker struct {
 	pagesWanted    bool
 	anchors        []string
 	counters       []*TargetCounter
+	// lineNumbers is the state of -ivy-line-numbers at the start of the
+	// page. Upstream has no line numbers.
+	lineNumbers lineNumberState
 }
 
 // pageGroup is an item of the page groups of upstream, [name, index,
@@ -1036,6 +1039,10 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	lc.currentPage = pageNumber
 	lc.currentPageFootnotes = nil
 	lc.forcedBreak = pageData.nextPage.brk != "any" || truthy(pageData.nextPage.page)
+	// Port: upstream has no -ivy-page-top-space. A break that is not
+	// forced gives the next page "any", and the page of the content that
+	// did not fit.
+	lc.unforcedBreak = pageData.nextPage.brk == "any"
 	if pageNumber == 1 {
 		sizes := &lc.styleFor.Context.InitialPageSizes
 		sizes.Box = &[2]float64{cbWidth, cbHeight}
@@ -1256,6 +1263,11 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 
 	lc.finishBlockFormattingContext(nil)
 
+	// Port: upstream has no -ivy-line-numbers. The numbers of the lines
+	// depend on the lines of the pages before, so the state at the end of
+	// the page goes to the next page.
+	lineNumbers := numberLines(lc, rootBox, pageData.lineNumbers)
+
 	page.Children = []*Box{rootBox, footnoteArea, noteArea}
 
 	// Update page counter values.
@@ -1285,12 +1297,18 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			counterScopes:  counterScopes,
 			pageGroups:     pageGroups,
 			contentChanged: contentChanged,
+			lineNumbers:    lineNumbers,
 		}
 		if newPage {
 			lc.pageMaker = append(lc.pageMaker, data)
 		} else {
 			lc.pageMaker[index+1] = data
 		}
+	} else if next := lc.pageMaker[index+1]; next.lineNumbers != lineNumbers {
+		// Port: the next page starts at the same place, but with other
+		// numbers of its lines, so it is made again.
+		next.lineNumbers = lineNumbers
+		next.contentChanged = true
 	}
 
 	return page, resumeAt

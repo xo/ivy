@@ -480,6 +480,8 @@ func (c *converter) paraWord(s *state, t token) bool {
 		p.line = t.param
 	case "slmult":
 		p.lineMultiple = t.param != 0
+	case "noline":
+		p.noLine = true
 	case "keepn":
 		p.keepNext = true
 	case "keep":
@@ -659,6 +661,18 @@ func (c *converter) sectionWord(t token) bool {
 		s.colSpace = twips
 	case "titlepg":
 		s.titlePage = true
+	case "linemod":
+		s.lineMod = min(max(t.param, 0), 100)
+	case "linex":
+		s.lineX = twips
+	case "linestarts":
+		s.lineStart = min(max(t.param, 1), 32767)
+	case "lineppage":
+		s.lineRestart = "page"
+	case "linerestart":
+		s.lineRestart = "section"
+	case "linecont":
+		s.lineRestart = "continuous"
 	case "landscape", "lndscpsxn":
 		if s.width < s.height {
 			s.width, s.height = s.height, s.width

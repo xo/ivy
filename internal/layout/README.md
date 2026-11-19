@@ -89,7 +89,7 @@ one of its functions.
 | none | | `book.go` | 931 | `Book`, the pages of a whole `Source`. See "The book" |
 | none | | `part.go` | 254 | The pages of a part of a long document. See "The document" |
 | none | | `objects.go` | 232 | The metafiles of Windows, the objects of a `Source`, and the boxes of display lists. See "The metafiles and the objects" |
-| none | | `css_ivy.go`, `layout_tabs.go`, `layout_page_fit.go`, `text_autospace.go` | 621 | The properties that ivy adds for the word processors. See "The properties of ivy" |
+| none | | `css_ivy.go`, `layout_tabs.go`, `layout_page_fit.go`, `text_autospace.go`, `layout_word.go` | 907 | The properties that ivy adds for the word processors. See "The properties of ivy" |
 | `tests/testing_utils.py` | | `testing_utils_test.go` | 641 | Ported, without `tree_position` |
 | `tests/test_boxes.py` | 1280 | `formatting_structure_build_test.go` | 649 | Ported. The tests that need the layout are in `layout_page_test.go` |
 | `tests/test_text.py` | 1671 | `text_line_break_test.go`, `layout_text_test.go` | 1533 | The tests that split lines and the tests of `text-transform`, then the tests that need the layout |
@@ -667,7 +667,7 @@ import the module of the fonts.
 
 ## The properties of ivy
 
-`css_ivy.go` is not a port. It adds four properties for the formats of the
+`css_ivy.go` is not a port. It adds eight properties for the formats of the
 word processors, such as `docx` and `odf`. Upstream does not have them. A
 style sheet names each one with the prefix `-ivy-`, such as
 `-ivy-tab-stops`, and the validation ignores the name without the prefix.
@@ -739,6 +739,49 @@ style sheet names each one with the prefix `-ivy-`, such as
    block or a column keep the rule of upstream, because their parents
    check the bottom of the page without the descent. The property is
    inherited. `docx`, `msdoc`, `odf` and `rtf` turn it on.
+6. `-ivy-line-numbers` is `none`, the initial value, or four values in
+   this order: the distance, the step, the first number and the restart,
+   such as `18pt 1 1 page` (D56). The distance is a length that is not
+   negative. The step and the first number are integers from 1 to 32767.
+   The restart is `page`, `section` or `continuous`. The property is
+   inherited. The box that declares the value, whose parent has another
+   value, starts a section. After a page is laid out, the layout numbers
+   the line boxes of the in-flow blocks of the root box. The lines of a
+   table, a float, a flex or grid item, an absolutely positioned box, a
+   running element, a margin box and a footnote have no number. A line
+   with no height has no number, and a line of a block with `none` does
+   not count. The first line of the document has the first number. Each
+   next line has the next number, but the first line of a page with
+   `page`, and the first line of a section with `section`, has the first
+   number again. A number that is a multiple of the step is drawn in the
+   style of the box of its section, with its end at the distance before
+   the start of the content box of that box, and with its baseline at the
+   baseline of its line. The numbers are text boxes in an anonymous block
+   that is the last child of the root box of the page. The state of the
+   numbers at the end of a page goes to the next page with the state of
+   the pages. `docx`, `msdoc`, `odf` and `rtf` read the numbering of the
+   lines of their sections.
+7. `-ivy-line-multiple` is `none`, the initial value, or a number that is
+   not negative: the multiple of a single line that the line height of a
+   word processor is (D56). With a number m above 1, the text of a line
+   stays where it is in a single line of the height `line-height / m`,
+   with the line gap of that single line above the text, and the rest of
+   the line goes below the text. The top of the text is then
+   `line-height / m - h` below the top of the line, where h is the height
+   of the text, and at least 0. CSS puts half of the leading above the
+   text. The property is inherited. `docx`, `msdoc`, `odf` and `rtf` set
+   it on a paragraph with a multiple line spacing, as Word and LibreOffice
+   put the extra space below the text.
+8. `-ivy-page-top-space` is `keep`, the initial value, or `discard`. With
+   `discard`, a block of the flow of the root box that starts a page
+   other than the first, after a break that is not forced, has no space
+   before it (D56). The space is its top margin, and its top padding when
+   it has no top border and no background. A break is not forced when the
+   page before ends because its content does not fit. The `margin-break`
+   of CSS truncates the margins only for the children of the root box and
+   of the boxes whose margins collapse with it, and upstream counts each
+   break of a named page as forced. The property is inherited. `docx`,
+   `msdoc`, `odf` and `rtf` turn it on.
 
 ## The hooks for the later stages
 

@@ -169,7 +169,7 @@ func parsePPr(n roxmltree.Node) props {
 		case "jc", "pStyle", "outlineLvl":
 			p[name] = ooxml.Attr(c, "val")
 		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens", "snapToGrid",
-			"autoSpaceDE", "autoSpaceDN":
+			"autoSpaceDE", "autoSpaceDN", "suppressLineNumbers":
 			v := ooxml.Attr(c, "val")
 			if v == "" {
 				v = "1"

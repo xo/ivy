@@ -25,7 +25,7 @@ const odtDocumentName = "index.xhtml"
 // odtStyleSheet is the style sheet of the texts. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // master page after this style sheet.
-const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17; -ivy-page-overflow: descent }
+const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; margin-break: discard }
 table { border-collapse: collapse; border-spacing: 0; margin-break: discard }
@@ -38,7 +38,7 @@ a { color: inherit; text-decoration: none }
 ::footnote-marker { content: none }
 .fnref::before { content: counter(note) }
 .fnref { padding-right: 0.3em }
-.endnotes { margin-top: 12pt }
+.endnotes { margin-top: 12pt; -ivy-line-numbers: none }
 @page {
   @footnote { margin-top: 6pt; padding-top: 3pt; border-top: 0.5pt solid black }
   @top-center { width: 100%; vertical-align: top; text-align: left }
@@ -172,7 +172,20 @@ func convertText(ctx context.Context, d *Document) (layout.Source, error) {
 	}
 	var out strings.Builder
 	out.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
-	out.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="UTF-8"/><title></title></head>` + "\n<body>")
+	out.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="UTF-8"/><title></title></head>` + "\n<body")
+	if c.st.lineNumbers != "" {
+		// The numbers of the lines have the font of the body, which the
+		// text style of the numbers gives. Each paragraph gives its own
+		// font.
+		var s odtCSS
+		s.set("-ivy-line-numbers", c.st.lineNumbers)
+		p := c.st.textOver(c.st.props("paragraph", "Standard"), c.st.lineNumberStyle)
+		for _, d := range c.inherited(p) {
+			s.set(d.name, d.value)
+		}
+		out.WriteString(` style="` + odtAttrText(s.String()) + `"`)
+	}
+	out.WriteString(">")
 	out.WriteString(c.body.String())
 	if c.endnotes.Len() > 0 {
 		out.WriteString(`<div class="endnotes">` + c.endnotes.String() + "</div>")

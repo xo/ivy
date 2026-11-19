@@ -163,6 +163,14 @@ func (p *parser) sectionPage(i int, paper ivy.Paper) sectionPage {
 			sp.footer = v
 		case sprmSFTitlePage:
 			sp.titlePage = s.byteValue() != 0
+		case sprmSNLnnMod:
+			sp.lines.step = v
+		case sprmSDxaLnn:
+			sp.lines.distance = int(int16(v))
+		case sprmSLnc:
+			sp.lines.restart = int(s.byteValue())
+		case sprmSLnnMin:
+			sp.lines.min = int(int16(v))
 		}
 	}
 	// a page must hold some text: a value out of range takes the default
@@ -179,11 +187,50 @@ func (p *parser) sectionPage(i int, paper ivy.Paper) sectionPage {
 }
 
 // sectionPage is the page of a section, with the distances of its header
-// from the top of the paper and of its footer from the bottom, in twips.
+// from the top of the paper and of its footer from the bottom, in twips,
+// and the numbers of its lines.
 type sectionPage struct {
 	page
 	header, footer int
 	titlePage      bool
+	lines          lineNumbering
+}
+
+// lineNumbering is the numbering of the lines of a section (MS-DOC 2.6.4):
+// the step, nLnnMod, 0 for none, the distance of the numbers from the
+// text in twips, dxaLnn, 0 for the default, when the numbers restart, lnc,
+// and the first number minus 1, lnnMin.
+type lineNumbering struct {
+	step, distance, restart, min int
+}
+
+// The values of lnc (MS-DOC 2.9.150).
+const (
+	lncPerPage  = 0
+	lncRestart  = 1
+	lncContinue = 2
+)
+
+// css returns the value of -ivy-line-numbers of the section, or "" when
+// its lines have no numbers. Word puts the numbers 0.25 inch before the
+// text when dxaLnn is 0, and takes at most 100 for the step.
+func (ln lineNumbering) css() string {
+	if ln.step <= 0 || ln.step > 100 {
+		return ""
+	}
+	distance := ln.distance
+	if distance <= 0 || distance > 31680 {
+		distance = 360
+	}
+	restart := "page"
+	switch ln.restart {
+	case lncRestart:
+		restart = "section"
+	case lncContinue:
+		restart = "continuous"
+	}
+	first := min(max(ln.min, 0), 32766) + 1
+	return pt(distance) + " " + strconv.Itoa(ln.step) + " " + strconv.Itoa(first) + " " + restart
 }
 
 // sectionSprms iterates over the modifiers of a section. A document of
@@ -227,6 +274,7 @@ html {
   tab-size: %s;
   -ivy-tab-stops: auto;
   -ivy-page-overflow: descent;
+  -ivy-page-top-space: discard;
 }
 p, h1, h2, h3, h4, h5, h6 {
   margin: 0;
@@ -275,6 +323,7 @@ body {
   font-size: 0.65em;
 }
 .endnotes {
+  -ivy-line-numbers: none;
   margin-top: 12pt;
   border-top: 0.5pt solid black;
   padding-top: 6pt;
@@ -287,6 +336,23 @@ body {
   }
 }
 `, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family, pt(p.defaultTab()))
+}
+
+// normalFont returns the declarations of the size and the family of the
+// font of the style Normal, each after "; ", or "".
+func (p *parser) normalFont() string {
+	st := p.styles.resolve(0, p.lim.MaxDepth)
+	if st == nil || st.stk != stkParagraph {
+		return ""
+	}
+	var s string
+	if hps := st.chp.hps; hps > 0 {
+		s += "; font-size: " + strconv.FormatFloat(float64(hps)/2, 'f', -1, 64) + "pt"
+	}
+	if f := p.fontFamily(st.chp.ftc, st.chp.ftcEA); f != "" {
+		s += "; font-family: " + f
+	}
+	return s
 }
 
 // fontFamily returns the font family of CSS for the font ftc, then the
@@ -505,6 +571,8 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	switch pp := para.pap; {
 	case pp.lineMult > 0:
 		style = append(style, "line-height: "+strconv.FormatFloat(ratio*pp.lineMult, 'f', 3, 64))
+		// Word puts the extra space of the lines below their text
+		style = append(style, "-ivy-line-multiple: "+strconv.FormatFloat(pp.lineMult, 'f', 3, 64))
 		spacing.mult = pp.lineMult
 	case pp.lineExact > 0:
 		style = append(style, "line-height: "+pt(pp.lineExact))
@@ -528,6 +596,9 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	}
 	if f := p.fontFamily(para.mark.ftc, para.mark.ftcEA); f != "" {
 		style = append(style, "font-family: "+f)
+	}
+	if para.pap.noLineNumb {
+		style = append(style, "-ivy-line-numbers: none")
 	}
 	b.WriteString("<" + tag)
 	if para.pageBreak || para.pap.pageBreak {

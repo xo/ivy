@@ -419,6 +419,13 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 		s.set("background-color", v)
 	}
 	s.set("line-height", c.lineHeight(ppr, rpr))
+	if m := lineMultiple(ppr); m != "" {
+		// Word puts the extra space of the lines below their text
+		s.set("-ivy-line-multiple", m)
+	}
+	if ppr.on("suppressLineNumbers") {
+		s.set("-ivy-line-numbers", "none")
+	}
 	switch ppr["jc"] {
 	case "center":
 		s.set("text-align", "center")
@@ -578,6 +585,21 @@ func (c *converter) lineHeight(ppr, rpr props) string {
 		return pt(n * pitch * min(line/240, 10))
 	}
 	return num(min(line/240, 10) * ratio)
+}
+
+// lineMultiple returns the value of -ivy-line-multiple of a paragraph
+// whose lines have a multiple spacing, or "".
+func lineMultiple(ppr props) string {
+	switch ppr["spacing.lineRule"] {
+	case "", "auto":
+	default:
+		return ""
+	}
+	line := ppr.num("spacing.line", 240)
+	if line <= 240 {
+		return ""
+	}
+	return num(min(line/240, 10))
 }
 
 // linePitch returns the pitch of the grid of lines of the current

@@ -178,6 +178,10 @@ type odtStyles struct {
 	// the same names, and the styles map holds them under their name with
 	// the prefix odtStylesPart.
 	partAuto map[string]bool
+	// lineNumbers is the value of -ivy-line-numbers of the text, from
+	// text:linenumbering-configuration, or "" when its lines have no
+	// numbers, and lineNumberStyle is the text style of the numbers.
+	lineNumbers, lineNumberStyle string
 }
 
 // odtStylesPart is the prefix of the name of an automatic style of
@@ -375,8 +379,40 @@ func (ts *odtStyles) readStyles(n roxmltree.Node, auto, part bool) {
 			}
 		case "page-layout":
 			ts.layouts[odtAttr(s, "name")] = readODTPageLayout(s)
+		case "linenumbering-configuration":
+			ts.lineNumbers = odtLineNumbers(s)
+			ts.lineNumberStyle = odtAttr(s, "style-name")
 		}
 	}
+}
+
+// odtLineNumbers returns the value of -ivy-line-numbers of a
+// text:linenumbering-configuration, or "" when the lines have no numbers
+// (ODF 1.3 Part 3, 16.29.1). text:number-lines is true by default. The
+// layout draws the numbers on the left only, and counts the empty lines,
+// as text:count-empty-lines does by default. text:increment is the step,
+// and text:offset the distance from the text. The numbers restart on each
+// page with text:restart-on-page, and else go on through the text.
+func odtLineNumbers(n roxmltree.Node) string {
+	if odtAttr(n, "number-lines") == "false" {
+		return ""
+	}
+	if pos := odtAttr(n, "number-position"); pos != "" && pos != "left" {
+		return ""
+	}
+	step, err := strconv.Atoi(odtAttr(n, "increment"))
+	if err != nil || step < 1 || step > 100 {
+		step = 1
+	}
+	distance, ok := odtLength(odtAttr(n, "offset"))
+	if !ok || distance < 0 || distance > 1584 {
+		distance = 14.15
+	}
+	restart := "continuous"
+	if odtAttr(n, "restart-on-page") == "true" {
+		restart = "page"
+	}
+	return odtPt(distance) + " " + strconv.Itoa(step) + " 1 " + restart
 }
 
 // readODTListStyle reads a text:list-style.

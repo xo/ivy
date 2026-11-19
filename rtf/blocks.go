@@ -289,6 +289,10 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	switch {
 	case p.line > 0 && p.lineMultiple:
 		s.set("line-height", num(min(float64(p.line)/240, 10)*ratio))
+		// Word puts the extra space of the lines below their text
+		if p.line > 240 {
+			s.set("-ivy-line-multiple", num(min(float64(p.line)/240, 10)))
+		}
 	case p.line > 0 && float64(p.line)/20 > ratio*size:
 		s.set("line-height", pt(p.line))
 	case p.line < 0:
@@ -312,6 +316,9 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	}
 	if p.keepLines {
 		s.set("break-inside", "avoid")
+	}
+	if p.noLine {
+		s.set("-ivy-line-numbers", "none")
 	}
 	return s.String()
 }
@@ -727,6 +734,9 @@ func (c *converter) openSection() {
 	if c.section.cols > 1 {
 		s.set("columns", strconv.Itoa(c.section.cols))
 		s.set("column-gap", pt(c.section.colSpace))
+	}
+	if v := c.section.lineNumbers(); v != "" {
+		s.set("-ivy-line-numbers", v)
 	}
 	// The headers and the footers of the section before stay, until the
 	// section gives its own.

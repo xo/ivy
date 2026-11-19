@@ -297,6 +297,9 @@ var InitialValues = map[string]Value{
 	"margin_box_fit": String("none"),
 	"static_top":     String("auto"),
 	"page_overflow":  String("none"),
+	"line_numbers":   String("none"),
+	"line_multiple":  String("none"),
+	"page_top_space": String("keep"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -350,12 +353,15 @@ var Inherited = map[string]bool{
 	"lang":                    true,
 	"letter_spacing":          true,
 	"line_height":             true,
+	"line_multiple":           true,
+	"line_numbers":            true,
 	"list_style_image":        true,
 	"list_style_position":     true,
 	"list_style_type":         true,
 	"orphans":                 true,
 	"overflow_wrap":           true,
 	"page_overflow":           true,
+	"page_top_space":          true,
 	"quotes":                  true,
 	"tab_size":                true,
 	"tab_stops":               true,
