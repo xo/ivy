@@ -45,7 +45,10 @@ type Page struct {
 }
 
 // The interfaces that a Page implements.
-var _ ivy.Page = (*Page)(nil)
+var (
+	_ ivy.Page       = (*Page)(nil)
+	_ display.Drawer = (*Page)(nil)
+)
 
 // layers are the decoded layers of a page, and the last composite.
 type layers struct {
@@ -109,7 +112,23 @@ func (p *Page) Size() (float32, float32) {
 // page at the resolution that t gives, up to the resolution of the page,
 // and draws the composite as one image. A layer that does not decode is
 // left out, and Render returns an *ivy.PartialError.
-func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
+func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.draw(ctx, display.NewOkage(dst, t), t, false)
+}
+
+// Draw satisfies the display.Drawer interface (D58). It draws the composite
+// of the layers at the resolution of the page, whatever res is, as one
+// image.
+func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
+	return p.draw(ctx, d, okage.TransformFromScale(res, res), true)
+}
+
+// draw composites the layers of the page and draws the composite onto
+// dev, whose user space is the space of the page in points, after its
+// rotation. t maps that space onto the pixels of the target, and sets the
+// size of the composite. With full, the composite has the pixels of the
+// page.
+func (p *Page) draw(ctx context.Context, dev display.Device, t okage.Transform, full bool) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering djvu page %d: %w", p.n+1, err)
 	}
@@ -122,8 +141,13 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 		return fmt.Errorf("djvu page %d of %dx%d pixels: %w", p.n+1, in.Width, in.Height, ivy.ErrFormat)
 	}
 	w, h := float32(in.Width)*72/float32(in.DPI), float32(in.Height)*72/float32(in.DPI)
-	page := t.PreConcat(rotation(in.Rotate, w, h))
-	size, err := p.fit(target(page, in))
+	rot := rotation(in.Rotate, w, h)
+	page := t.PreConcat(rot)
+	want := target(page, in)
+	if full {
+		want = image.Pt(in.Width, in.Height)
+	}
+	size, err := p.fit(want)
 	if err != nil {
 		return err
 	}
@@ -132,8 +156,10 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 		return err
 	}
 	place := okage.TransformFromScale(w/float32(size.X), h/float32(size.Y))
-	dev := display.NewOkage(dst, page)
+	dev.Save()
+	dev.Concat(rot)
 	dev.DrawImage(img, place, display.ImageOptions{Opacity: 1, Smooth: !aligned(page.PreConcat(place), size)})
+	dev.Restore()
 	if partial != nil {
 		p.d.log.Debug("djvu: page drawn in part", "page", p.n+1, "err", partial)
 		return &ivy.PartialError{Err: partial}

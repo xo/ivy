@@ -376,6 +376,12 @@ func (p *Page) root(ctx context.Context) (roxmltree.Node, error) {
 	return p.tree.RootElement(), nil
 }
 
+// The interfaces that a Page implements.
+var (
+	_ ivy.Page       = (*Page)(nil)
+	_ display.Drawer = (*Page)(nil)
+)
+
 // Size satisfies the ivy.Page interface.
 func (p *Page) Size() (float32, float32) {
 	return p.width * pointsPerUnit, p.height * pointsPerUnit
@@ -391,6 +397,22 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 	ctm := t.PreScale(pointsPerUnit, pointsPerUnit)
 	area, _ := okage.RectFromXYWH(0, 0, float32(dst.Width()), float32(dst.Height()))
 	return p.draw(ctx, root, display.NewOkage(dst, ctm), ctm, area)
+}
+
+// Draw satisfies the display.Drawer interface (D58). It walks the page as
+// Render does, onto a target of res pixels for each point.
+func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
+	root, err := p.root(ctx)
+	if err != nil {
+		return err
+	}
+	ctm := okage.TransformFromScale(res, res).PreScale(pointsPerUnit, pointsPerUnit)
+	w, h := p.Size()
+	area, _ := okage.RectFromXYWH(0, 0, w*res, h*res)
+	d.Save()
+	defer d.Restore()
+	d.Concat(okage.TransformFromScale(pointsPerUnit, pointsPerUnit))
+	return p.draw(ctx, root, d, ctm, area)
 }
 
 // draw walks the page onto a device. ctm maps the units of the page to the

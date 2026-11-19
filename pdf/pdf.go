@@ -467,6 +467,12 @@ type Page struct {
 	n    int
 }
 
+// The interfaces that a Page implements.
+var (
+	_ ivy.Page       = (*Page)(nil)
+	_ display.Drawer = (*Page)(nil)
+)
+
 // Size satisfies the ivy.Page interface. It returns the size of the page
 // box of WithPageBox, by default the CropBox, in points, after the rotation
 // of the page.
@@ -477,7 +483,32 @@ func (p *Page) Size() (float32, float32) {
 // Render satisfies the ivy.Page interface. It draws the content of the page
 // inside the page box of WithPageBox, by default the CropBox, rotated by the
 // entry Rotate of the page.
-func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
+func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.draw(ctx, display.NewOkage(dst, okage.IdentityTransform()), int(dst.Width()), int(dst.Height()), t)
+}
+
+// Draw satisfies the display.Drawer interface (D58). It draws the page as
+// Render does, onto a target of res pixels for each point, and scales the
+// target back to points on d.
+func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
+	if !(res > 0) || math.IsInf(float64(res), 0) {
+		res = 1
+	}
+	w, h := p.Size()
+	pw, ph := math.Ceil(float64(w*res)), math.Ceil(float64(h*res))
+	if !(pw >= 1 && ph >= 1 && pw < math.MaxInt32 && ph < math.MaxInt32) {
+		return fmt.Errorf("drawing pdf page %d of %gx%g points: %w", p.n+1, w, h, ivy.ErrFormat)
+	}
+	d.Save()
+	defer d.Restore()
+	d.Concat(okage.TransformFromScale(1/res, 1/res))
+	return p.draw(ctx, d, int(pw), int(ph), okage.TransformFromScale(res, res))
+}
+
+// draw draws the page onto dev, whose user space is the space of the pixels
+// of a target of width by height pixels. t maps the points of the page onto
+// those pixels.
+func (p *Page) draw(ctx context.Context, dev display.Device, width, height int, t okage.Transform) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering pdf page %d: %w", p.n+1, err)
 	}
@@ -489,9 +520,8 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 	transform := kurbo.NewAffine([6]float64{
 		float64(t.SX), float64(t.KY), float64(t.KX), float64(t.SY), float64(t.TX), float64(t.TY),
 	}).Mul(interpret.TransformToKurbo(p.page.InitialTransform(true)))
-	dev := display.NewOkage(dst, okage.IdentityTransform())
 	err = render.RenderInto(p.page, p.doc.cache, p.doc.settings(ctx), &render.RenderSettings{}, dev,
-		int(dst.Width()), int(dst.Height()), transform)
+		width, height, transform)
 	switch {
 	case err == nil:
 		return nil

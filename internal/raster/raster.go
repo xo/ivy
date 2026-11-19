@@ -158,6 +158,19 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 	return nil
 }
 
+// Image returns the image of the page, with its premultiplied pixels from
+// the origin, which decodes on the first call. The PDF writer of pdfenc
+// draws it into the file at its own pixels (D58). raster cannot satisfy
+// display.Drawer, because the display list imports raster.
+func (p *Page) Image(ctx context.Context) (*image.RGBA, error) {
+	pix, err := p.pixmap(ctx)
+	if err != nil {
+		return nil, err
+	}
+	w, h := int(pix.Width()), int(pix.Height())
+	return &image.RGBA{Pix: pix.Data(), Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}, nil
+}
+
 // pixmap decodes the image on the first call, and converts it to a pixmap.
 // A failed decode is not kept, so that a call with a new context can try
 // again.

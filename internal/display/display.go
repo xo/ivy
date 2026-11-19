@@ -11,6 +11,7 @@
 package display
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"strings"
@@ -48,6 +49,17 @@ type Device interface {
 	// EndGroup draws the layer of the group onto its parent, with the
 	// opacity, the blend mode and the soft mask of the group.
 	EndGroup()
+}
+
+// Drawer is a page that draws onto a device of the display list. A writer,
+// such as the PDF writer of pdfenc, takes the commands of the page from it
+// (D58).
+type Drawer interface {
+	// Draw draws the page onto d, in points with y down, as Render draws
+	// it with the identity transform. res is the resolution, in pixels for
+	// each point, of a part that the page draws into a pixmap first, such
+	// as a tiling pattern of PDF.
+	Draw(ctx context.Context, d Device, res float32) error
 }
 
 // ImageOptions are the options of DrawImage and FillMask.

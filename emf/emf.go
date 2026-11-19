@@ -165,14 +165,26 @@ func (p *Page) Size() (width, height float32) {
 	return p.pic.Size()
 }
 
+// The interfaces that a Page implements.
+var (
+	_ ivy.Page       = (*Page)(nil)
+	_ display.Drawer = (*Page)(nil)
+)
+
 // Render satisfies the ivy.Page interface.
 func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.Draw(ctx, display.NewOkage(dst, t), 1)
+}
+
+// Draw satisfies the display.Drawer interface (D58). The picture draws
+// nothing into a pixmap, so it does not read res.
+func (p *Page) Draw(ctx context.Context, d display.Device, _ float32) error {
 	w, h := p.pic.Size()
 	r, ok := okage.RectFromXYWH(0, 0, w, h)
 	if !ok {
 		return fmt.Errorf("rendering metafile of size %gx%g: %w", w, h, ivy.ErrFormat)
 	}
-	err := p.pic.Draw(ctx, display.NewOkage(dst, t), r)
+	err := p.pic.Draw(ctx, d, r)
 	if err != nil {
 		p.log.Debug("emf: page drawn in part", "err", err)
 	}

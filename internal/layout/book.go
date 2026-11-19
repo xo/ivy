@@ -808,7 +808,10 @@ type bookPage struct {
 }
 
 // The interfaces that a page implements.
-var _ ivy.Page = (*bookPage)(nil)
+var (
+	_ ivy.Page       = (*bookPage)(nil)
+	_ display.Drawer = (*bookPage)(nil)
+)
 
 // Size satisfies the ivy.Page interface: the size of the margin box of the
 // page, in points.
@@ -839,6 +842,24 @@ func (p *bookPage) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transf
 		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
 	}
 	rec.list.Replay(display.NewOkage(dst, okage.TransformFromTranslate(x, y)))
+	return rec.err
+}
+
+// Draw satisfies the display.Drawer interface (D58). It draws the page as
+// Book.Draw does, with the identity transform and the scale res.
+func (p *bookPage) Draw(ctx context.Context, d display.Device, res float32) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
+	}
+	scale := float64(res)
+	if !(scale > 0) || math.IsInf(scale, 0) {
+		scale = 1
+	}
+	rec, err := p.record(ctx, okage.IdentityTransform(), scale)
+	rec.list.Replay(d)
+	if err != nil {
+		return err
+	}
 	return rec.err
 }
 

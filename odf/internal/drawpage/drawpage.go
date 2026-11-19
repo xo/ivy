@@ -1001,7 +1001,10 @@ type page struct {
 }
 
 // The interfaces that a page implements.
-var _ ivy.Page = (*page)(nil)
+var (
+	_ ivy.Page       = (*page)(nil)
+	_ display.Drawer = (*page)(nil)
+)
 
 // Size satisfies the ivy.Page interface: the size of the page in points.
 func (p *page) Size() (float32, float32) {
@@ -1009,7 +1012,21 @@ func (p *page) Size() (float32, float32) {
 }
 
 // Render satisfies the ivy.Page interface.
-func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
+func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.draw(ctx, display.NewOkage(dst, t), t)
+}
+
+// Draw satisfies the display.Drawer interface (D58).
+func (p *page) Draw(ctx context.Context, d display.Device, res float32) error {
+	d.Save()
+	defer d.Restore()
+	return p.draw(ctx, d, okage.TransformFromScale(res, res))
+}
+
+// draw draws the scene of the page onto dev, whose user space is the space
+// of the page in points. t maps that space onto the pixels of the target,
+// and sets the resolution of the pictures and the text.
+func (p *page) draw(ctx context.Context, dev display.Device, t okage.Transform) (err error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("rendering page %d: %w", p.n+1, err)
 	}
@@ -1018,7 +1035,7 @@ func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 			err = &ivy.PartialError{Err: fmt.Errorf("rendering page %d: panic: %v: %w", p.n+1, r, ivy.ErrFormat)}
 		}
 	}()
-	err = p.scene.Render(ctx, dst, t)
+	err = p.scene.Draw(ctx, dev, t)
 	if pe, ok := asPartial(err); ok {
 		return &ivy.PartialError{Err: fmt.Errorf("rendering page %d: %w", p.n+1, pe.Err)}
 	}

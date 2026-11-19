@@ -120,9 +120,27 @@ func (p *page) Size() (float32, float32) {
 	return float32(p.p.Width), float32(p.p.Height)
 }
 
+// The interfaces that a page implements.
+var (
+	_ ivy.Page       = (*page)(nil)
+	_ display.Drawer = (*page)(nil)
+)
+
 // Render satisfies the ivy.Page interface. It returns a *ivy.PartialError
 // for a page that an error of the program ended early.
-func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) (err error) {
+func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform) error {
+	return p.draw(ctx, display.NewOkage(dst, t), t)
+}
+
+// Draw satisfies the display.Drawer interface (D58).
+func (p *page) Draw(ctx context.Context, d display.Device, res float32) error {
+	return p.draw(ctx, d, okage.TransformFromScale(res, res))
+}
+
+// draw replays the page onto dev, whose user space is the space of the
+// page in points. t maps the page onto the pixels of the target, and sets
+// the resolution of the parts that the page draws into a pixmap.
+func (p *page) draw(ctx context.Context, dev display.Device, t okage.Transform) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = &ivy.PartialError{Err: fmt.Errorf("rendering postscript page: panic: %v: %w", r, ivy.ErrFormat)}
@@ -132,7 +150,9 @@ func (p *page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 		return fmt.Errorf("rendering postscript page: %w", err)
 	}
 	s := float32(1 / graphics.ResolutionScale)
-	dev := display.NewOkage(dst, t.PreScale(s, s))
+	dev.Save()
+	defer dev.Restore()
+	dev.Concat(okage.TransformFromScale(s, s))
 	pixels := math.Sqrt(math.Abs(float64(t.SX*t.SY-t.KX*t.KY))) / graphics.ResolutionScale
 	p.p.List.Replay(dev, pixels)
 	if p.p.Err != nil {
