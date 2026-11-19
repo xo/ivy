@@ -58,15 +58,15 @@ found these faults. Each item names a file of the corpus.
    the middle of the column, as Word does on page 6 of
    `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
    side. Source: `msdoc`.
-7. Draw the picture effects of a Word 97 document: washout, brightness,
-   contrast, grayscale and black and white (pages 4 and 5 of
-   `poi/doc/floating-pictures.doc`). Source: `internal/odraw`, which draws
-   the pictures of `msdoc`, `msppt` and `msxls`.
-8. Place a table or a frame of `msdoc` that floats from the margin or from
-   the page vertically, and a frame at a position other than the center or
-   the right. A table that floats beside the text now floats in CSS, with the
-   text around it. Source: `msdoc` and the layout.
-9. Compare the path gradient "shape" of a focus out of the shape with
+7. Place a table or a frame of `msdoc` that floats from the margin or from the
+   page vertically when it does not start a page, and at the special vertical
+   positions center, bottom, inside and outside. The layout places a float at
+   the line of its paragraph, so `msdoc` uses the position only for a block
+   that starts a page. A frame of the width of its text does not let the text
+   wrap beside it. No file of the corpus has such a frame or table. Question
+   24 asks the maintainers for a way to place a float on the page. Source:
+   `msdoc` and the layout.
+8. Compare the path gradient "shape" of a focus out of the shape with
    PowerPoint. ivy puts the first stop where the ray from the focus enters the
    shape, and the last stop where the ray leaves it. On slide 4 of
    `pptx/testdata/path-gradients.pptx`, the star of ivy differs from
@@ -74,21 +74,21 @@ found these faults. Each item names a file of the corpus.
    on its outline, with the path "circle" about that center, as PowerPoint
    draws the moon. The rule of PowerPoint for this is not known. Source:
    `internal/drawingml`.
-10. Measure in Excel how it fits a row when it opens a file. ivy counts the
-    lines of text that wraps with the widths of Calibri (`TextWidth`), and it
-    estimates the height of rotated text. An empty cell takes one line of its
-    font. A row without cells keeps its height. A row keeps the height of its
-    file when that height is at most 2 pixels or 10 percent away from the fit.
-    These rules come from 4 files of the corpus and are not measured. Source:
-    `internal/sheet`.
-11. Find why Excel breaks some sheets of
+9. Measure in Excel how it fits a row when it opens a file. ivy counts the
+   lines of text that wraps with the widths of Calibri (`TextWidth`), and it
+   estimates the height of rotated text. An empty cell takes one line of its
+   font. A row without cells keeps its height. A row keeps the height of its
+   file when that height is at most 2 pixels or 10 percent away from the fit.
+   These rules come from 4 files of the corpus and are not measured. Source:
+   `internal/sheet`.
+10. Find why Excel breaks some sheets of
     `poi/xls/conditional-formatting-samples.xls` into other pages than ivy: a
     narrow band of columns on a page of its own (pages 16, 18 and 20), and a
     page that only shows the header (page 10). Source: `internal/sheet`.
-12. Find why the pages of the receipt pictures of
+11. Find why the pages of the receipt pictures of
     `poi/xls/basic-expense-template-2011.xls`, from page 45, start higher in
     ivy than in Excel. Source: `msxls` and `internal/sheet`.
-13. Compare the WordArt of `internal/odraw` with PowerPoint. No file of the
+12. Compare the WordArt of `internal/odraw` with PowerPoint. No file of the
     corpus has WordArt. `internal/odraw/warp.go` bends the text of the
     triangles, the chevrons, the arches and the circles, the waves, inflate
     and deflate, the fades, the slants and the cans of MS-ODRAW 2.4.24, with
@@ -97,37 +97,34 @@ found these faults. Each item names a file of the corpus.
     and the two mixes of inflate and deflate as plain text. It leaves out
     fKern and gtextFShadow. A file with WordArt of each kind can give the size
     of the text along an arch. Source: `internal/odraw`.
-14. Convert the adjust values of the presets of Office Drawing that
+13. Convert the adjust values of the presets of Office Drawing that
     `internal/odraw/adjust.go` does not convert: the trapezoid, which Office
     Drawing draws with its narrow side down, the arc, the block arc, the
     circular arrow, the bent, curved and U-turn arrows, the ribbons and the
     arrow callouts. Map the callouts of the types 178 to 181. The defaults of
     the tips of the callouts 61, 62, 63 and 106 are not known, and they take
     the defaults of ECMA-376. Source: `internal/odraw`.
-15. Draw the border of characters (sprmCBrc) of a Word 97 document, such as
-    the word "border" on page 3 of `poi/doc/floating-pictures.doc`. Word makes
-    the line about 2 points taller for it. Source: `msdoc`.
-16. Make the running element of the headers and the footers of `docx` a flow
+14. Make the running element of the headers and the footers of `docx` a flow
     root, as `msdoc`, `rtf` and `odf` do. A footer aligned at the bottom moves
     down by the space before its first paragraph. Source: `docx`.
-17. Find why page 2 of `libreoffice/doc/landscape-letter-form.doc` draws the
+15. Find why page 2 of `libreoffice/doc/landscape-letter-form.doc` draws the
     black bars of its table 1 pixel lower than Word. The header line of Arial
     16 is now 18.4 points high, as in Word. Source: `msdoc`.
-18. Draw the lines, the shapes, the regions and the text of a QuickDraw
+16. Draw the lines, the shapes, the regions and the text of a QuickDraw
     picture (PICT). `internal/pict` draws only the bitmaps of a picture and
     its images of QuickTime, for the pictures of Office Drawing of `msxls`,
     `msppt` and `msdoc`. No file of the corpus has a PICT picture. Source:
     `internal/pict`, 2026-11-18.
-19. Compare a chart of Excel 97 without the records ShapePropsStream with
+17. Compare a chart of Excel 97 without the records ShapePropsStream with
     Excel. `msxls` reads the theme of the record THEME, and a workbook without
     one takes the theme of Office 2007. The corpus has no such chart. Source:
     `msxls`.
-20. Find why a chart that rows cut shows a light seam at some edges of its
+18. Find why a chart that rows cut shows a light seam at some edges of its
     rows, as on page 3 of `poi/xls/three-charts.xls`. A slice of a chart
     reaches 1 point into the next row. A strip across the edge of the row, as
     a picture has, gave more seams in the charts, and the cause is not known.
     Source: `internal/sheet` and the layout.
-21. Put the line gap of a single line above its text, as Word and LibreOffice
+19. Put the line gap of a single line above its text, as Word and LibreOffice
     do. The layout puts half of the gap above the text and half below.
     `-ivy-line-multiple` (D56) puts the whole gap above only for a multiple
     line spacing. With Calibri, whose gap is 0.22 em, the text of a single
@@ -135,25 +132,33 @@ found these faults. Each item names a file of the corpus.
     puts the baseline of Liberation Serif 0.935 em below the top of a single
     line: the ascent and the whole gap. Source: the layout, `docx`, `msdoc`,
     `odf` and `rtf`.
-22. Find why the text in the cells of the table of
+20. Find why the text in the cells of the table of
     `libreoffice/doc/legal-table.doc` is lower in Word than in ivy, and why
     the rows of Word are taller. `-ivy-line-multiple` (D56) moves the text up
     in its lines, and the review of the file went from 1.52 to 1.66. Source:
     `msdoc`.
-23. Find why page 2 of `libreoffice/odt/tdf146272.odt` holds fewer lines in
+21. Find why page 2 of `libreoffice/odt/tdf146272.odt` holds fewer lines in
     ivy than in LibreOffice. The text after the caption "Figure 2" is 2 pixels
     higher than in LibreOffice. With `-ivy-line-multiple` (D56) the review of
     the page went from 8.25 to 9.05, and pages 1 and 3 got better. Source:
     `odf`.
-24. Give the numbers of the lines of `msdoc` the font of the style Line Number
-    (sti 40). They now take the font of the style Normal. Leave out the space
-    before a paragraph at the top of a column and of a page in a section with
-    columns, as Word does. `-ivy-page-top-space` (D56) only applies to the
-    blocks of the flow of the root box. Source: `msdoc` and the layout.
-25. Read `text:count-empty-lines`, `text:count-in-text-boxes`, the right,
+22. Read `text:count-empty-lines`, `text:count-in-text-boxes`, the right,
     inner and outer positions, and `text:line-number` of a paragraph in the
     line numbering of `odf`. The layout draws the numbers on the left only,
     and counts the empty lines. Source: `odf` and the layout.
+23. Find why the lines of the bulleted list on page 3 of
+    `poi/doc/floating-pictures.doc` are about 15.2 points apart in ivy and
+    14.64 in Word. The text below the list is 3 to 5 pixels lower than in
+    Word. Source: `msdoc`, 2026-11-19.
+24. Measure the picture effects of Word with more values. The contrast and the
+    brightness of `internal/drawingml/recolor.go` come from the washout, the
+    brightness of 75 percent and the contrast of 75 percent of pages 4 and 5
+    of `poi/doc/floating-pictures.doc`. With a contrast below 1, Word adds
+    less of the brightness, and the rule of ivy for this fits only the
+    washout. On 2026-11-19 a script made pictures with 9 other values through
+    COM in the Windows VM of the review, but Word 2024 stopped when the script
+    saved or exported the document, so these pictures have no reference.
+    Source: `internal/odraw`, 2026-11-19.
 
 ## Left by the charts
 
@@ -191,6 +196,25 @@ The pages of Visio came on 2026-11-17 (D30).
    other than the shadow: the bevel, the glow and the reflection. No sample
    is in the corpus.
 
+## Left by phase 7b
+
+1. Give the text of a `Glyphs` element of XPS whose fill is a
+   `VisualBrush`. `xps` fills the outlines of such a run as a path, so the
+   run has no text in a PDF file. Source: `xps/page.go`.
+2. Give the text of a color glyph and of a bitmap glyph of the layout, such
+   as an emoji. The layout draws such a glyph as an image, so it has no
+   text in a PDF file. The writer of okage can draw the glyphs of the tables
+   `COLR`, `sbix`, `CBDT` and `SVG` as a Type 3 font with their text.
+   Source: `internal/layout/draw_text.go`.
+3. Keep the text of a group that the PDF device draws as pixels, such as a
+   group of a blend mode that PDF does not have. The device can draw the
+   text again over the pixels as invisible text. Source: `pdf/pdfenc`.
+4. Draw the pages once when the subset of a font fails. pdfenc now makes
+   the subset of each font in a file of its own and draws every page again,
+   because the writer of okage reports a failed subset only in
+   `Document.Finish`. Item 1 of "Work for okage" asks for the change.
+   Source: `pdf/pdfenc`.
+
 ## Left by phase 7a
 
 1. Keep a thin line thin at every resolution in a PDF file. The port of
@@ -205,6 +229,16 @@ The pages of Visio came on 2026-11-17 (D30).
    `poi/ppt/backgrounds.ppt` at another phase than ivy and MuPDF in the file
    of pdfenc. A tiling pattern in a simple group draws at the same phase in
    both viewers. Source: `TestPDFEnc` of the test module.
+3. Use the additions of okage D69 when ivy requires the release of okage that
+   holds them. pdfenc can write the dashes of a stroke with `StrokeDash.Array`
+   and `Offset`, and can remove `maxStops` and its raster fallback for a
+   gradient of many stops. Source: `pdf/pdfenc` and okage D69, 2026-11-19.
+4. Give a new reason for `repo/pdf/font-type3-widths-with-matrix.pdf` in
+   `pdfencDiffers` of the test module, or remove the difference. The stencils
+   that ivy gives for its Type 3 glyphs are larger than the image masks of the
+   file, such as 12 by 14 pixels for a glyph `l` that is 4 by 10 in the file.
+   With the image masks of okage D69, the file still differs by 16.7 at 72
+   dots for each inch. Source: `pdf` and `pdf/pdfenc`, 2026-11-19.
 
 ## Left by phase 6
 
@@ -233,31 +267,38 @@ The pages of Visio came on 2026-11-17 (D30).
 6. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
    the test module. Source: `msdoc`, `msxls` and `msppt`.
 7. Draw the annotations of the spreadsheets of `odf`. Source: `odf`.
-8. Draw the glow, the soft edge, the inner shadow and the reflection of
-   DrawingML. Find which side of a line the thick line of `thickThin` and
-   `thinThick` takes. Source: `internal/drawingml`. On 2026-11-18 no page that
-   the review renders uses these effects. Only slide 23 of
-   `poi/pptx/custom-geometry.pptx` has an inner shadow.
-9. Draw the objects of OpenDocument that only an SVM picture shows, and
+8. Draw the objects of OpenDocument that only an SVM picture shows, and
    `fo:clip` of the pictures of a text. No permissive decoder of SVM is
    known, and D45 lets it wait. Source: `odf`.
-10. Compare the custom caps and the arrows of EMF+ lines with GDI+.
-    `internal/gowemf` draws them with a geometry that MS-EMFPLUS does not
-    define. Draw the triangle cap and the anchor caps (round, diamond and
-    arrow), which gowemf reports. Source: `internal/gowemf`.
-11. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
+9. Compare the custom caps and the arrows of EMF+ lines with GDI+.
+   `internal/gowemf` draws them with a geometry that MS-EMFPLUS does not
+   define. Draw the triangle cap and the anchor caps (round, diamond and
+   arrow), which gowemf reports. Source: `internal/gowemf`.
+10. Draw a stroke with a mix mode (ROP2) that reads the page with a styled pen
     in OPAQUE mode, and the source of an EMF+ DrawImage of a metafile outside
     the metafile with a tile mode. `internal/gowemf` reports them. The blend
     modes of the raster operations are exact for black and white masks only.
     Source: `internal/metafile` and `internal/gowemf`.
-12. Take a fallback face for the characters that the face of a run of a
+11. Take a fallback face for the characters that the face of a run of a
     metafile lacks, such as Arabic in Carlito. The run draws the empty glyph
     of its face. Source: `internal/metafile`.
-13. Test change 19 of `internal/gowemf` (D53) with a metafile that a program
+12. Test change 19 of `internal/gowemf` (D53) with a metafile that a program
     wrote. The corpus of the review has no record that names its glyphs by
     index, so only synthetic records test the text of the indexes. Add to the
     corpus an EMF from a printer driver or from Uniscribe, and an EMF+ Dual
     file with DrawDriverString. Source: D53.
+13. Blur the reflection of DrawingML by its blurRad, and keep the reflection
+    of a turned shape upright when rotWithShape is 0. `internal/drawingml`
+    draws the reflection of a shape and its text through a soft mask, without
+    a blur, and turns it with the shape. Source: `internal/drawingml`,
+    2026-11-19.
+14. Measure the glow and the soft edge of PowerPoint for more radii. ivy grows
+    the shape by half the radius of a glow and blurs it with a standard
+    deviation of a sixth of the radius. It makes the shape smaller by 0.8
+    times the radius of a soft edge and blurs it with a standard deviation of
+    a third of the radius. These rules come from a glow of 18 points and a
+    soft edge of 10 points of `pptx/testdata/effects.pptx`. Source:
+    `internal/drawingml`, 2026-11-19.
 
 ## Left by phase 4
 
@@ -361,29 +402,34 @@ time is for a page at 96 dpi.
 8. Make the test `TestGalley` of the test module faster. It takes about 8
    minutes on the whole corpus, so it runs only when `IVY_REVIEW_CACHE` is
    set, and CI does not run it. Source: D57, 2026-11-19.
+9. Reuse the shaping of a text for its lines with `Glyph.UnsafeToBreak` and
+   `HarfbuzzShaper.ShapeInto` of okage D70, when ivy requires the release of
+   okage that holds them. The layout shapes each character of
+   `pg1342-images.html` about 4.5 times. `shapeText` can shape into a buffer
+   that it keeps, and a text that is a prefix or a suffix of a text that the
+   layout shaped before can take a slice of its glyphs when each cut is safe
+   to break. The estimate is a layout about 25 percent faster, with about 40
+   percent fewer bytes. Source: `internal/layout` and okage D70, 2026-11-19.
 
 ## Work for okage
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
 
-1. Give `shaping.Output` the unsafe-to-break flags of HarfBuzz, so that the
-   layout can reuse the shaping of a text for a line that breaks in it, and
-   allocate the glyphs of `shaping.Output` less. Half of the layout of
-   `gutenberg/html/pg1342-images.html` is the shaper. Source:
-   `internal/layout`, 2026-11-18.
-2. Give the dash array and the offset of a `StrokeDash`, so that pdfenc
-   writes the dashes of a stroke, not a path cut into dashes. Source:
+1. In `pdf`, when the subset of a font fails in `Document.Finish`, draw the
+   glyphs of that font as paths and write the file, or give a method that
+   makes the subset of a font before `Finish`. Today one font that the
+   subsetter refuses makes the whole file fail, and pdfenc draws every
+   page again without that font. Source: `pdf/pdfenc`, 2026-11-19.
+2. In `pdf`, export the test of the ranges of `DrawGlyphs`, so that a
+   caller knows that the ranges of its glyphs are valid before the call.
+   Today a range that is not valid makes `Document.Finish` fail, and pdfenc
+   tests the ranges itself with `display.GlyphRun.TextRanges`. Source:
    `pdf/pdfenc`, 2026-11-19.
-3. In `pdf`, write a gradient with more than 257 stops so that MuPDF 1.28
-   reads it, such as with a sampled function. MuPDF reads at most 256
-   functions of a stitching function and draws nothing for more. pdfenc
-   draws such a gradient with the raster fallback. Source: `pdf/pdfenc` and
-   `hayro/pdf/pattern-shading-type2-many.pdf`, 2026-11-19.
-4. In `pdf`, let `Surface.FillStencil` write a stencil as an image mask
-   (`/ImageMask`) when its fill is one color. A viewer scales a soft mask
-   down in another way than a stencil mask, so the glyph bitmaps of
-   `repo/pdf/font-type3-widths-with-matrix.pdf` differ by 16 at 72 dots for
-   each inch, and by 0.01 at 300. Source: `pdf/pdfenc`, 2026-11-19.
+3. Give the blur and the color matrix of the filters of `svg` an API on a
+   `Mask` and on a `Pixmap`. `internal/drawingml` blurs the masks of the
+   shadows, the glows and the soft edges with box blurs of its own, in
+   `blur.go`, and changes the colors of the pictures itself, in `recolor.go`.
+   Source: `internal/drawingml`, 2026-11-19.
 
 ## Work for magic
 

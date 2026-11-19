@@ -75,6 +75,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D53 | [A metafile draws glyph indexes through their text](D053-a-metafile-draws-glyph-indexes-through-their-text.md) | Decided |
 | D54 | [The text bodies of a scene share a font configuration](D054-the-text-bodies-of-a-scene-share-a-font-configuration.md) | Decided |
 | D55 | [A long sheet is laid out in parts that end at a probe row](D055-a-long-sheet-is-laid-out-in-parts-that-end-at-a-probe-row.md) | Decided. Amends D48 |
-| D56 | [The layout follows Word in three places for word processors](D056-the-layout-follows-word-in-three-places-for-word-processors.md) | Decided |
+| D56 | [The layout follows Word in three places for word processors](D056-the-layout-follows-word-in-three-places-for-word-processors.md) | Decided. Amended by D59 |
 | D57 | [The lines of a large document are laid out ahead on goroutines](D057-the-lines-of-a-large-document-are-laid-out-ahead-on-goroutines.md) | Decided |
 | D58 | [pdfenc writes the pages of a document as PDF through okage](D058-pdfenc-writes-the-pages-of-a-document-as-pdf-through-okage.md) | Decided |
+| D59 | [The space before is left out at the top of a column](D059-the-space-before-is-left-out-at-the-top-of-a-column.md) | Decided. Amends D56 |

@@ -581,3 +581,61 @@ The test of the corpus passes on 246 documents and 527 pages. `qpdf
 --check` finds no error and no warning. The mean difference from the
 source page at 72 dots for each inch is 0.77 through the package `pdf` of
 ivy, 0.94 through MuPDF and 2.19 through Poppler.
+
+## The build of phase 7b
+
+The build of 2026-11-19 writes the text of the layout, XPS, the metafiles
+and the charts as text of an embedded subset of its font. The glyphs of
+`pdf` and `ps` stay paths. The build differs from this decision in these
+places:
+
+1. The rule of `fsType` follows the OpenType specification. Bits 0 to 3
+   forbid the embedding only when their value is 2. A font can set more
+   than one of these bits, and a program then takes the least restrictive
+   one. So a font with bit 1 and bit 3 lets a program embed it. Bit 8 and
+   bit 9 draw the glyphs as paths, as this decision says. krilla reads the
+   bits in the same way.
+2. The writer of okage makes the subsets in `Document.Finish`. When one
+   subset fails, the whole file fails. pdfenc then makes the subset of each
+   font in a file of its own, with the glyphs that the pages drew. It draws
+   every page again onto a new document, with the glyphs of each font that
+   failed as paths. A file that okage writes without an error needs no
+   second attempt.
+3. The device draws a run with a transform with one `PushTransform`, not
+   one for each glyph. It puts the origin of each glyph through the inverse
+   of the linear part of the transform, so each glyph lands where its
+   outline lands.
+4. A run whose ranges are not valid for its text, whose text is not valid
+   UTF-8, whose size is not positive, or that holds a glyph ID above 65535
+   draws its glyphs as paths. The page looks the same, and a reader cannot
+   copy that run.
+5. The layout draws a color glyph and a bitmap glyph as an image, as
+   before. Such a glyph has no text in the file.
+6. The text test takes the words of a page from the runs of the source
+   page that have a text and a font that the file can embed. A word holds
+   the characters of the glyphs whose middle is inside the clip and the
+   page. A glyph `.notdef` has no word. Each word must be in the text of
+   `pdftotext -raw`, in order. `mutool draw -F txt` sorts the blocks of a
+   page by their places, so each word must be in its text, and the test
+   only logs a word out of order. The test lists one document whose words
+   `pdftotext` gives out of order: it puts a bracket between Arabic text
+   and Latin text in the order of the page.
+7. A viewer puts each glyph of a font on the grid of the pixels. At 72 dots
+   for each inch, small text then differs from its paths by up to half a
+   pixel. When a page of a file that embeds a font differs from the source
+   by more than 8 through a viewer, the test renders both at 288 dots for
+   each inch and scales them down to 72. The page passes when they differ
+   by 8 at most there.
+
+The test of the corpus passes on 259 documents and 542 pages. The mean
+difference from the source page at 72 dots for each inch is 0.54 through
+the package `pdf` of ivy, 1.41 through MuPDF and 2.92 through Poppler.
+Phase 7a gives 0.78, 0.93 and 2.19 on the same pages. Because of the
+text, 18 pages through Poppler and 3 pages through MuPDF differ by more
+than 8 at 72 dots for each inch. Each one differs by 5.3 at most at 288
+dots for each inch. 349 pages have words.
+`pdftotext` finds every word of each of them, and in order on 348.
+`mutool` finds every word of each of them, and in order on 345. `pdffonts`
+shows 384 fonts in 163 documents, and each one is embedded and a subset.
+The files are smaller: a document of text, such as
+`poi/docx/illustrative-cases.docx`, goes from 1.5 MB to 54 KB.

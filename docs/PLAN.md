@@ -14,8 +14,9 @@ page description, and XPS renders, as the section of phase 2 below says. PDF
 renders, as the section of phase 3 says. The layout of HTML and CSS puts the
 ebooks on pages, as the section of phase 4 says. The Office formats give
 their pages, as the section of phase 5 says, and DjVu gives its pages, as
-the section of phase 6 says. On 2026-11-19 phase 7a is done: `pdf/pdfenc`
-writes the pages of a document as a PDF file (D58). These
+the section of phase 6 says. On 2026-11-19 phases 7a and 7b are done:
+`pdf/pdfenc` writes the pages of a document as a PDF file, with the text
+that a reader can search and copy (D58). These
 formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
@@ -349,7 +350,9 @@ A later decision can add the Type 3 fonts from outlines for `pdf` and
 the file without a new encode, and a writer that streams its pages.
 
 Phase 7a was done on 2026-11-19. The work that is left is under "Left by
-phase 7a" in `BACKLOG.md`.
+phase 7a" in `BACKLOG.md`. Phase 7b was done on 2026-11-19, as "The build
+of phase 7b" in D58 says. The work that is left is under "Left by phase
+7b" in `BACKLOG.md`.
 
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.

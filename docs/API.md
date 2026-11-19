@@ -483,9 +483,10 @@ func WithRasterDPI(dpi float32) Option   // 300 by default
 ```
 
 `Encode` writes to `w` only after it drew every page. A page that is a
-`display.Drawer` goes into the file as vectors. Another page goes into the
-file as one image of `ivy.RenderImage`. The limits and the errors are those
-of D58.
+`display.Drawer` goes into the file as vectors. A run of glyphs with a text
+goes into the file as text of an embedded subset of its font, so a reader
+can search and copy it. Another page goes into the file as one image of
+`ivy.RenderImage`. The limits and the errors are those of D58.
 
 ## The internal layers
 
@@ -498,17 +499,23 @@ a program needs one, the maintainers decide to export it.
    replays them onto another device, and the device that draws with okage.
    Each page description, the layout and the scenes draw through it. A page
    that draws onto a device is a `Drawer`, whose method `Draw` gives pdfenc
-   the commands of the page (D58). Phase 7c adds the optional interfaces
+   the commands of the page (D58). A `GlyphRun` holds the text of its
+   glyphs, and each glyph holds the bytes of the text of its cluster, for
+   the writer of PDF. Phase 7c adds the optional interfaces
    `Linker` and `Bookmarker` of D58, for the links and the outline. A path
    of okage changes in place when it transforms, so a shared path, such as
    the outline of a glyph, is cloned first with `display.Clone`.
 2. `internal/font` reads the faces: the TrueType, OpenType and CFF fonts with
    the copy of go-text in okage (D28), and Type 1 and Type 3 with the port
    of hayro-font. It gives the
-   substitute of a font of Office, such as Carlito for Calibri.
+   substitute of a font of Office, such as Carlito for Calibri. A face
+   keeps its `Source`, the bytes of its font file, its index and its
+   variations, which pdfenc embeds, and it reads the field `fsType` of the
+   font (D58).
    `internal/fontdb` builds the font database of a program from
    `ivy.Config.Fonts`, the Go fonts and the fonts of the system (D23, D24),
-   and the layout, the metafiles and the charts share it.
+   and the layout, the metafiles and the charts share it. `fontdb.Source`
+   gives the bytes of a face of the database.
 3. `internal/layout` holds the port of WeasyPrint (D15). It takes a tree of
    HTML from the parser of okage, the style sheets and an `fs.FS` of the
    resources, such as the files in an EPUB. It returns a document that is a

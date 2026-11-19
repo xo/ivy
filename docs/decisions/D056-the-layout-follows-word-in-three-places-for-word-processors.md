@@ -1,6 +1,6 @@
 # D56. The layout follows Word in three places for word processors
 
-Status: Decided.
+Status: Decided. Amended by D59.
 
 The review found three places where the layout of WeasyPrint puts the lines
 of a document of a word processor in other places than Word does. CSS has
