@@ -7,6 +7,8 @@ import (
 	"image"
 	"image/color"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -146,4 +148,43 @@ func TestDefaultTableStyle(t *testing.T) {
 	// tint of 40 percent, CFD5EA
 	expect(t, img, 150, 120, color.NRGBA{0x44, 0x72, 0xc4, 255})
 	expect(t, img, 150, 170, color.NRGBA{0xcf, 0xd5, 0xea, 255})
+}
+
+// TestEffects checks the effects of effects.pptx at 72 dots per inch, as
+// PowerPoint 2024 draws them: a glow, an inner shadow, a reflection, and
+// the sides of the lines of thickThin and thinThick.
+func TestEffects(t *testing.T) {
+	buf, err := os.ReadFile(filepath.Join("testdata", "effects.pptx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	black := color.NRGBA{0, 0, 0, 255}
+	// the orange glow of 18 points at 40 percent of transparency around
+	// the rectangle at (60, 60)
+	img := render(t, buf, 0)
+	expect(t, img, 57, 110, color.NRGBA{255, 217, 102, 255})
+	expect(t, img, 40, 110, white)
+	// the inner shadow of the white rectangle at (60, 60) of 200 by 120
+	// points lies along its right and bottom edges
+	img = render(t, buf, 2)
+	if near(img, 257, 120, white, 40) {
+		t.Error("expected the inner shadow along the right edge")
+	}
+	expect(t, img, 63, 120, white)
+	// the reflection of the green ellipse at (260, 40) of 160 by 90 points
+	// starts 4 points below it and fades out
+	img = render(t, buf, 3)
+	if near(img, 340, 137, white, 30) {
+		t.Error("expected the reflection below the ellipse")
+	}
+	expect(t, img, 340, 200, white)
+	// the lines of 16 points from (360, 50) and (360, 230) to the right:
+	// thickThin has its thick line on top, and thinThick at the bottom
+	img = render(t, buf, 4)
+	expect(t, img, 440, 45, black)
+	expect(t, img, 440, 53, white)
+	expect(t, img, 440, 56, black)
+	expect(t, img, 440, 223, black)
+	expect(t, img, 440, 226, white)
+	expect(t, img, 440, 234, black)
 }

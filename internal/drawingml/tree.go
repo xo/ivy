@@ -506,37 +506,37 @@ func (t *Tree) line(sp *shapeProps, pics Pictures) Line {
 	return l
 }
 
-// shadow returns the shadow of the shape.
-func (t *Tree) shadow(sp *shapeProps, pics Pictures) *Shadow {
+// effects returns the effects of the shape.
+func (t *Tree) effects(sp *shapeProps, pics Pictures) Effects {
 	own := sp.hasPr
 	if own {
 		_, own = child(sp.own, "effectLst")
 	}
 	if !own && sp.ownStyle {
-		if s, ok := t.styleShadow(sp); ok {
-			return s
+		if fx, ok := t.styleEffects(sp); ok {
+			return fx
 		}
 	}
 	if e, _, ok := sp.find("effectLst", pics); ok {
-		if names := Effects(e); len(names) > 0 {
+		if names := LeftOut(e); len(names) > 0 {
 			t.log().Debug("drawingml: effects left out", "effects", names)
 		}
-		s, _ := t.Colors.ParseEffects(e)
-		return s
+		fx, _ := t.Colors.ParseEffects(e)
+		return fx
 	}
-	s, _ := t.styleShadow(sp)
-	return s
+	fx, _ := t.styleEffects(sp)
+	return fx
 }
 
-// styleShadow returns the shadow of the a:effectRef of the p:style of the
-// shape.
-func (t *Tree) styleShadow(sp *shapeProps) (*Shadow, bool) {
+// styleEffects returns the effects of the a:effectRef of the p:style of
+// the shape.
+func (t *Tree) styleEffects(sp *shapeProps) (Effects, bool) {
 	if idx, colors, ok := t.styleRef(sp, "effectRef"); ok && idx > 0 {
 		if e, ok := t.Colors.Theme.EffectStyle(idx); ok {
 			return colors.ParseEffects(e)
 		}
 	}
-	return nil, false
+	return Effects{}, false
 }
 
 // xfrm returns the transform of the shape: its own, or that of the nearest
@@ -569,11 +569,11 @@ func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures,
 		Paths:         paths,
 		Fill:          t.fill(sp, groupFill, pics),
 		Line:          t.line(sp, pics),
-		Shadow:        t.shadow(sp, pics),
 		TextRect:      rect,
 		TextTransform: m.PreConcat(x.textTransform()),
 		Theme:         t.Colors.Theme,
 	}
+	f.SetEffects(t.effects(sp, pics))
 	if f.Fill.Kind == PaintGradient && f.Fill.Gradient.Path == "shape" && t.preset(sp, pics) == "ellipse" {
 		// PowerPoint fills an ellipse with a radial gradient that fits its
 		// box, whatever the focus
@@ -666,8 +666,8 @@ func (t *Tree) picture(n roxmltree.Node, gs space, pics Pictures) {
 		H:         x.H,
 		Paths:     paths,
 		Line:      t.line(sp, pics),
-		Shadow:    t.shadow(sp, pics),
 	}
+	f.SetEffects(t.effects(sp, pics))
 	if e, ok := child(n, "blipFill"); ok {
 		f.Fill, _ = t.Colors.PaintOf(e, pics)
 		if f.Fill.Kind == PaintPicture && f.Fill.Picture == nil {

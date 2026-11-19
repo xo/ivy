@@ -219,8 +219,9 @@ func TestPictureDuotone(t *testing.T) {
 		{color.NRGBA{255, 255, 255, 128}, color.NRGBA{255, 0, 0, 128}},
 	} {
 		base := NewPicture(fixture.PNG(2, 2, c.in), ivy.Config{})
-		p := base.Duotone(black, red)
-		if base.Duotone(black, red) != p {
+		r := Recolor{Duotone: [2]RGBA{black, red}, HasDuotone: true}
+		p := base.Recolor(r)
+		if base.Recolor(r) != p {
 			t.Error("expected the picture of the same colors once")
 		}
 		if err := p.decode(t.Context()); err != nil {

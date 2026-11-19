@@ -16,6 +16,9 @@ const (
 	PropCropRight          = 0x0103
 	PropPib                = 0x0104
 	PropPictureTransparent = 0x0107
+	PropPictureContrast    = 0x0108
+	PropPictureBrightness  = 0x0109
+	PropPictureBools       = 0x013F
 	PropGeoLeft            = 0x0140
 	PropGeoTop             = 0x0141
 	PropGeoRight           = 0x0142
@@ -70,6 +73,12 @@ const (
 	ShadowUseShdw  = 0x00020000
 	GroupHidden    = 0x00000002
 	GroupUseHidden = 0x00020000
+	// PictureBiLevel and PictureGray are the black and white and the
+	// grayscale of a picture. Word writes both bits for black and white.
+	PictureBiLevel    = 0x00000002
+	PictureGray       = 0x00000004
+	PictureUseBiLevel = 0x00020000
+	PictureUseGray    = 0x00040000
 )
 
 // The kinds of fills of fillType (MS-ODRAW 2.4.13).

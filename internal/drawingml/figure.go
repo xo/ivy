@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/xo/okage"
-	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy/internal/display"
 )
@@ -28,8 +27,18 @@ type Figure struct {
 	Fill Paint
 	// Line is the outline of the paths.
 	Line Line
-	// Shadow is the shadow of the shape, or nil.
+	// Shadow is the outer shadow of the shape, or nil.
 	Shadow *Shadow
+	// InnerShadow is the inner shadow of the shape, or nil. It draws over
+	// the fill and under the outline.
+	InnerShadow *Shadow
+	// Glow is the glow of the shape, or nil. It draws under the shape.
+	Glow *Glow
+	// SoftEdge is the radius of the soft edge of the shape, in points, or
+	// 0. The fill and the outline fade out at the outline.
+	SoftEdge float64
+	// Reflection is the reflection of the shape and its text, or nil.
+	Reflection *Reflection
 	// Text is the text of the shape, or nil.
 	Text *TextBody
 	// TextRect is the box of the text in the box of the shape. An empty
@@ -43,8 +52,8 @@ type Figure struct {
 	Theme *Theme
 }
 
-// Shadow is the outer shadow of a shape (a:outerShdw). The other effects of
-// DrawingML are left out (D5).
+// Shadow is the outer shadow (a:outerShdw) or the inner shadow
+// (a:innerShdw) of a shape.
 type Shadow struct {
 	Color RGBA
 	// DX and DY are the offset of the shadow, in points.
@@ -54,57 +63,6 @@ type Shadow struct {
 	Blur float64
 	// SX and SY scale the shadow, from 1.
 	SX, SY float64
-}
-
-// ParseEffects reads the outer shadow of the element n, an a:effectLst or an
-// a:effectStyle of the theme. It returns nil for no shadow, and false if n
-// holds no list of effects. It logs nothing: a format logs the effects that
-// it leaves out with Effects.
-func (c *Colors) ParseEffects(n roxmltree.Node) (*Shadow, bool) {
-	if n.TagName().Name() == "effectStyle" {
-		e, ok := child(n, "effectLst")
-		if !ok {
-			return nil, false
-		}
-		n = e
-	}
-	if n.TagName().Name() != "effectLst" {
-		return nil, false
-	}
-	e, ok := child(n, "outerShdw")
-	if !ok {
-		return nil, true
-	}
-	col, ok := c.In(e)
-	if !ok {
-		col = Black.WithAlpha(0.5)
-	}
-	dist := emu(numberAttr(e, "dist", 0))
-	dir := numberAttr(e, "dir", 0) / 60000 * math.Pi / 180
-	s := &Shadow{
-		Color: col,
-		DX:    dist * math.Cos(dir),
-		DY:    dist * math.Sin(dir),
-		Blur:  emu(numberAttr(e, "blurRad", 0)),
-		SX:    pct(numberAttr(e, "sx", 100000)),
-		SY:    pct(numberAttr(e, "sy", 100000)),
-	}
-	if math.IsNaN(s.DX) || math.IsNaN(s.DY) || math.Abs(s.DX) > 1e4 || math.Abs(s.DY) > 1e4 {
-		return nil, true
-	}
-	return s, true
-}
-
-// Effects returns the names of the effects of the a:effectLst n that a
-// Figure leaves out, for the log.
-func Effects(n roxmltree.Node) []string {
-	var names []string
-	for e := range n.Children() {
-		if e.IsElement() && e.TagName().Name() != "outerShdw" {
-			names = append(names, e.TagName().Name())
-		}
-	}
-	return names
 }
 
 // ShapeTransform returns the transform of a shape of the box at (x, y) of
@@ -137,15 +95,18 @@ func TextTransform(x, y, w, h, rot float64, flipV bool) okage.Transform {
 	return ShapeTransform(x, y, w, h, rot, false, false)
 }
 
-// AddFigure adds the figure to the scene: its shadow, its fill, its outline
-// and its text, in that order.
+// AddFigure adds the figure to the scene: its shadow, its glow, its
+// reflection, its fill, its inner shadow, its outline and its text, in
+// that order. The soft edge fades the fill, the inner shadow and the
+// outline.
 func (s *Scene) AddFigure(f *Figure) {
 	box, ok := okage.RectFromXYWH(0, 0, float32(max(f.W, 1e-3)), float32(max(f.H, 1e-3)))
 	if !ok || !f.Transform.IsFinite() {
 		return
 	}
 	paths := f.Paths
-	if f.Shadow != nil && f.Shadow.Color.A > 0 && (f.Fill.Visible() || f.Line.Visible()) {
+	visible := f.Fill.Visible() || f.Line.Visible()
+	if f.Shadow != nil && f.Shadow.Color.A > 0 && visible {
 		sh := *f.Shadow
 		m := okage.TransformFromTranslate(float32(sh.DX), float32(sh.DY)).PreConcat(f.Transform)
 		if sh.SX > 0 && sh.SY > 0 && (sh.SX != 1 || sh.SY != 1) {
@@ -183,8 +144,21 @@ func (s *Scene) AddFigure(f *Figure) {
 			return nil
 		})
 	}
-	if f.Fill.Visible() || f.Line.Visible() {
-		s.Add(f.Transform, func(ctx context.Context, dev display.Device, scale float64) error {
+	if f.Glow != nil && visible {
+		s.Add(f.Transform, func(_ context.Context, dev display.Device, scale float64) error {
+			drawGlow(dev, f, scale)
+			return nil
+		})
+	}
+	var ops []sceneOp
+	if visible {
+		ops = append(ops, drawOp(f.Transform, func(ctx context.Context, dev display.Device, scale float64) error {
+			if f.SoftEdge > 0 {
+				if mask := softEdgeMask(f, scale); mask != nil {
+					dev.BeginGroup(display.Group{Opacity: 1, Isolated: true, Mask: mask})
+					defer dev.EndGroup()
+				}
+			}
 			var errs []error
 			for _, p := range paths {
 				if p.Fill == FillNone || !f.Fill.Visible() {
@@ -195,6 +169,9 @@ func (s *Scene) AddFigure(f *Figure) {
 					errs = append(errs, err)
 				}
 			}
+			if f.InnerShadow != nil && f.InnerShadow.Color.A > 0 {
+				drawInnerShadow(dev, f, f.Transform, scale)
+			}
 			for _, p := range paths {
 				if !p.Stroke {
 					continue
@@ -202,7 +179,7 @@ func (s *Scene) AddFigure(f *Figure) {
 				f.Line.StrokePath(dev, p.Path, box)
 			}
 			return errors.Join(errs...)
-		})
+		}))
 	}
 	if f.Text != nil && !f.Text.Empty() {
 		r := f.TextRect
@@ -212,9 +189,15 @@ func (s *Scene) AddFigure(f *Figure) {
 		tb, ok := f.Text.Box(f.Theme, float64(r.Width()), float64(r.Height()))
 		if ok {
 			m := f.TextTransform.PreTranslate(r.X(), r.Y()).PreConcat(tb.Transform)
-			s.AddHTML(tb.HTML, tb.Width, tb.Height, m)
+			if op := s.htmlOp(tb.HTML, tb.Width, tb.Height, m); op != nil {
+				ops = append(ops, op)
+			}
 		}
 	}
+	if f.Reflection != nil && len(ops) > 0 {
+		s.ops = append(s.ops, s.reflect(f, ops)...)
+	}
+	s.ops = append(s.ops, ops...)
 }
 
 // shadeFill returns the paint of a path with the fill mode mode: lighter or

@@ -81,16 +81,16 @@ func (p *parser) picture(ctx context.Context, c chp) *picture {
 	var pic *picture
 	switch {
 	case sh == nil:
-		pic = p.plainPicture(&odraw.Shape{Type: odraw.SptPictureFrame, Props: pibProps(1)}, pics, w, h)
+		pic = p.plainPicture(ctx, &odraw.Shape{Type: odraw.SptPictureFrame, Props: pibProps(1)}, pics, w, h)
 	case w > 0:
-		if pic = p.plainPicture(sh, pics, w, h); pic == nil {
+		if pic = p.plainPicture(ctx, sh, pics, w, h); pic == nil {
 			if obj, ok := p.shapeObject(ctx, sh, w, h, pics); ok {
 				pic = &picture{name: obj.name, width: w, height: h, pad: obj.pad}
 			}
 		}
 	default:
 		// a picture without a size shows at the size of its file
-		pic = p.plainPicture(sh, pics, 0, 0)
+		pic = p.plainPicture(ctx, sh, pics, 0, 0)
 	}
 	p.pictures[c.picLocation] = pic
 	return pic

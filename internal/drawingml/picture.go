@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
-	"image/color"
 	"math"
 	"sync"
 
@@ -43,13 +42,17 @@ type Picture struct {
 	cfg  ivy.Config
 	lim  ivy.Limits
 
-	// base and duo are the picture and the colors of a picture that
-	// Duotone made, or nil.
-	base *Picture
-	duo  *[2]RGBA
-	// duotones holds the pictures that Duotone made from this one, by
-	// their colors.
-	duotones map[[2]RGBA]*Picture
+	// base is the picture of a picture that Recolor made, or nil, and
+	// recolor is its change of the colors.
+	base    *Picture
+	recolor Recolor
+	// recolors holds the pictures that Recolor made from this one.
+	recolors map[Recolor]*Picture
+	// raster is the last picture in pixels of a metafile or of SVG with a
+	// change of its colors, and rasterSize is its size.
+	rasterMu   sync.Mutex
+	raster     *image.NRGBA
+	rasterSize image.Point
 
 	once sync.Once
 	kind pictureKind
@@ -66,25 +69,27 @@ func NewPicture(data []byte, cfg ivy.Config) *Picture {
 	return &Picture{data: data, cfg: cfg, lim: cfg.Limits.WithDefaults()}
 }
 
-// duotoneMu guards the duotones of the pictures.
-var duotoneMu sync.Mutex
+// recolorMu guards the recolors of the pictures.
+var recolorMu sync.Mutex
 
-// Duotone returns the picture with the colors of a:duotone: each pixel of
-// a raster picture takes the color between dark and light that its
-// luminance gives, and keeps its alpha. A metafile and SVG keep their
-// colors. The picture is made once for each pair of colors.
-func (p *Picture) Duotone(dark, light RGBA) *Picture {
-	duotoneMu.Lock()
-	defer duotoneMu.Unlock()
-	key := [2]RGBA{dark, light}
-	if q, ok := p.duotones[key]; ok {
+// Recolor returns the picture with the colors that r changes, after the
+// changes of p. A raster picture changes its pixels once. A metafile and SVG
+// draw into pixels at the resolution of the device, which then change. The
+// picture is made once for each change.
+func (p *Picture) Recolor(r Recolor) *Picture {
+	if r.Zero() {
+		return p
+	}
+	recolorMu.Lock()
+	defer recolorMu.Unlock()
+	if q, ok := p.recolors[r]; ok {
 		return q
 	}
-	q := &Picture{data: p.data, cfg: p.cfg, lim: p.lim, base: p, duo: &key}
-	if p.duotones == nil {
-		p.duotones = make(map[[2]RGBA]*Picture)
+	q := &Picture{data: p.data, cfg: p.cfg, lim: p.lim, base: p, recolor: r}
+	if p.recolors == nil {
+		p.recolors = make(map[Recolor]*Picture)
 	}
-	p.duotones[key] = q
+	p.recolors[r] = q
 	return q
 }
 
@@ -98,7 +103,7 @@ func (p *Picture) decode(ctx context.Context) error {
 			b := p.base
 			p.kind, p.img, p.meta, p.tree = b.kind, b.img, b.meta, b.tree
 			if p.kind == pictureRaster {
-				p.img = duotone(p.img, p.duo[0], p.duo[1])
+				p.img = p.recolor.Apply(p.img)
 			}
 		})
 		return p.err
@@ -139,23 +144,6 @@ func (p *Picture) decode(ctx context.Context) error {
 		}
 	})
 	return p.err
-}
-
-// duotone returns img with each pixel between the colors dark and light, by
-// its luminance, as a:duotone of ECMA-376 Part 1, 20.1.8.23 gives it.
-func duotone(img image.Image, dark, light RGBA) image.Image {
-	b := img.Bounds()
-	out := image.NewNRGBA(b)
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			c := color.NRGBAModel.Convert(img.At(x, y)).(color.NRGBA)
-			lum := (0.299*float64(c.R) + 0.587*float64(c.G) + 0.114*float64(c.B)) / 255
-			m := dark.Mix(light, lum).NRGBA()
-			m.A = c.A
-			out.SetNRGBA(x, y, m)
-		}
-	}
-	return out
 }
 
 // isMetafile reports whether data starts as a WMF or an EMF file.
@@ -286,6 +274,9 @@ func (p *Picture) Draw(ctx context.Context, dev display.Device, dst okage.Rect, 
 	if !crop.Zero() {
 		dev.ClipPath(okage.PathFromRect(dst), okage.FillRuleWinding)
 	}
+	if p.base != nil && p.kind != pictureRaster {
+		return p.drawRecolored(ctx, dev, full, opacity, scale)
+	}
 	switch p.kind {
 	case pictureMetafile:
 		if opacity < 1 {
@@ -333,6 +324,50 @@ func (p *Picture) drawSVG(dev display.Device, full okage.Rect, opacity, scale fl
 	copy(img.Pix, pix.TakeDemultiplied())
 	dev.DrawImage(img, display.RectTransform(img.Bounds().Size(), full),
 		display.ImageOptions{Opacity: float32(unit(opacity)), Smooth: true})
+	return nil
+}
+
+// drawRecolored draws the base of a metafile or of SVG into pixels at the
+// scale of the device, changes their colors, and draws them into full. It
+// keeps the pixels of the last size, so the bands of a page draw them once.
+func (p *Picture) drawRecolored(ctx context.Context, dev display.Device, full okage.Rect, opacity, scale float64) error {
+	if !(scale > 0) || math.IsInf(scale, 0) {
+		scale = 1
+	}
+	w := math.Ceil(float64(full.Width()) * scale)
+	h := math.Ceil(float64(full.Height()) * scale)
+	if limit := float64(min(p.lim.MaxPixels, 1<<24)); w*h > limit {
+		f := math.Sqrt(limit / (w * h))
+		w, h = math.Floor(w*f), math.Floor(h*f)
+	}
+	if w < 1 || h < 1 {
+		return nil
+	}
+	size := image.Pt(int(w), int(h))
+	p.rasterMu.Lock()
+	img := p.raster
+	if img == nil || p.rasterSize != size {
+		pix, ok := okage.NewPixmap(uint32(w), uint32(h))
+		if !ok {
+			p.rasterMu.Unlock()
+			return fmt.Errorf("picture of %gx%g pixels: %w", w, h, ivy.ErrLimit)
+		}
+		box, ok := okage.RectFromXYWH(0, 0, float32(w), float32(h))
+		if !ok {
+			p.rasterMu.Unlock()
+			return nil
+		}
+		if err := p.base.Draw(ctx, display.NewOkage(pix, okage.IdentityTransform()), box, Insets{}, 1, 1); err != nil {
+			p.rasterMu.Unlock()
+			return err
+		}
+		img = image.NewNRGBA(image.Rectangle{Max: size})
+		copy(img.Pix, pix.TakeDemultiplied())
+		p.recolor.applyNRGBA(img)
+		p.raster, p.rasterSize = img, size
+	}
+	p.rasterMu.Unlock()
+	dev.DrawImage(img, display.RectTransform(size, full), display.ImageOptions{Opacity: float32(unit(opacity)), Smooth: true})
 	return nil
 }
 

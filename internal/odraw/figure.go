@@ -370,6 +370,7 @@ func (s *Style) Figure(sh *Shape, c Chain, r Rect) *drawingml.Figure {
 	if pib := int(c.Value(PropPib, 0)); pib > 0 {
 		key, keyed := c.Get(PropPictureTransparent)
 		if pic := s.picture(pib, key, keyed); pic != nil {
+			pic = pic.Recolor(PictureRecolor(c))
 			f.Fill = drawingml.Paint{Kind: drawingml.PaintPicture, Picture: pic, Opacity: 1, Crop: drawingml.Insets{
 				L: Fixed(c.Value(PropCropLeft, 0)),
 				T: Fixed(c.Value(PropCropTop, 0)),
@@ -384,6 +385,30 @@ func (s *Style) Figure(sh *Shape, c Chain, r Rect) *drawingml.Figure {
 		}
 	}
 	return f
+}
+
+// PictureRecolor returns the change of the colors of the picture of a
+// shape with the properties c: its contrast, its brightness, its grayscale
+// and its black and white (MS-ODRAW 2.3.23). The contrast is a factor of
+// 16.16 bits, and 1 changes nothing. The brightness goes from -32768 to
+// 32768. The washout of Word is a contrast of 0.3 and a brightness of 0.7.
+// Black and white makes each pixel white when its luminance is at least one
+// half, as Word does.
+func PictureRecolor(c Chain) drawingml.Recolor {
+	var r drawingml.Recolor
+	if v, ok := c.Get(PropPictureContrast); ok && v != 0x10000 {
+		r.Contrast = drawingml.ContrastOf(Fixed(v))
+	}
+	if v, ok := c.Get(PropPictureBrightness); ok {
+		r.Bright = max(-1, min(float64(int32(v))/32768, 1))
+	}
+	switch {
+	case c.Flag(PropPictureBools, PictureBiLevel, PictureUseBiLevel, false):
+		r.BiLevel, r.Threshold = true, 0.5
+	case c.Flag(PropPictureBools, PictureGray, PictureUseGray, false):
+		r.Gray = true
+	}
+	return r
 }
 
 // BodyStyle returns the style of the text body of a shape: the insets, the

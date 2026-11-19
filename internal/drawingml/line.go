@@ -175,23 +175,30 @@ func (l *Line) StrokePath(dev display.Device, p *okage.Path, box okage.Rect) {
 }
 
 // compoundBands holds the lines of each kind of a compound line (ECMA-376
-// Part 1, 20.1.10.15), as fractions of the width from one side of the line
-// to the other: the start and the end of each line. The lines are
-// symmetric about the middle of the line. A thick line and a thin line
-// (thickThin and thinThick) draw as two lines of 2/5 and 1/5 of the width
-// on each side, not as one thick line on one side and a thin line on the
-// other, because the side of a stroke is not known.
+// Part 1, 20.1.10.15), as fractions of the width from the left side of the
+// line to its right side: the start and the end of each line. The left side
+// is on the left of the direction of the path in the box of the shape, with
+// y down: the outside of a path that turns clockwise, such as the outline of
+// a preset rectangle or ellipse, and the top of a line from left to right.
+// PowerPoint 2024 draws thickThin as a thick line of 3/5 of the width on the
+// left side and a thin line of 1/5 on the right side, and thinThick the
+// other way round.
 var compoundBands = map[string][]float64{
 	"dbl":       {0, 1.0 / 3, 2.0 / 3, 1},
 	"tri":       {0, 1.0 / 6, 2.0 / 6, 4.0 / 6, 5.0 / 6, 1},
-	"thickThin": {0, 2.0 / 5, 3.0 / 5, 1},
-	"thinThick": {0, 2.0 / 5, 3.0 / 5, 1},
+	"thickThin": {0, 3.0 / 5, 4.0 / 5, 1},
+	"thinThick": {0, 1.0 / 5, 2.0 / 5, 1},
 }
 
 // compound strokes p as the lines of a compound line. Each line of a
 // symmetric pair is the stroke of its outer width less the stroke of its
-// inner width, which a group erases.
+// inner width, which a group erases. The lines of a compound line that is
+// not symmetric draw through the regions on each side of the path.
 func (l *Line) compound(dev display.Device, p *okage.Path, bands []float64, sh okage.Shader) {
+	if !symmetricBands(bands) {
+		l.sidedCompound(dev, p, bands, sh)
+		return
+	}
 	st := l.stroke()
 	width := st.Width
 	for i := 0; i+1 < len(bands); i += 2 {

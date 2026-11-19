@@ -1,10 +1,13 @@
 package odraw
 
 import (
+	"bytes"
 	"context"
+	"image/png"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/raster"
 )
 
 // Pictures holds the pictures of a store, each made once. It is not safe
@@ -16,6 +19,15 @@ type Pictures struct {
 	pics  map[int]*drawingml.Picture
 	raw   map[int][]byte
 	keyed map[pictureKey]*drawingml.Picture
+	// recolored holds the files of the pictures with their colors
+	// changed, or nil for a picture that Recolored cannot change.
+	recolored map[recolorKey][]byte
+}
+
+// recolorKey is a picture of the store with a change of its colors.
+type recolorKey struct {
+	pib int
+	r   drawingml.Recolor
 }
 
 // pictureKey is a picture of the store with a color that it leaves
@@ -29,12 +41,13 @@ type pictureKey struct {
 // in the entries or in the stream delay.
 func NewPictures(store []Entry, delay []byte, cfg ivy.Config) *Pictures {
 	return &Pictures{
-		store: store,
-		delay: delay,
-		cfg:   cfg,
-		pics:  make(map[int]*drawingml.Picture),
-		raw:   make(map[int][]byte),
-		keyed: make(map[pictureKey]*drawingml.Picture),
+		store:     store,
+		delay:     delay,
+		cfg:       cfg,
+		pics:      make(map[int]*drawingml.Picture),
+		raw:       make(map[int][]byte),
+		keyed:     make(map[pictureKey]*drawingml.Picture),
+		recolored: make(map[recolorKey][]byte),
 	}
 }
 
@@ -85,4 +98,29 @@ func (p *Pictures) Get(ctx context.Context, pib int, key uint32, keyed bool) *dr
 	q := drawingml.NewPicture(data, p.cfg)
 	p.keyed[k] = q
 	return q
+}
+
+// Recolored returns the file of the raster picture of the entry pib, from
+// 1, with its colors changed by r, as a PNG file, or nil for a picture that
+// it cannot decode, such as a metafile. It decodes the picture with ctx.
+func (p *Pictures) Recolored(ctx context.Context, pib int, r drawingml.Recolor) []byte {
+	k := recolorKey{pib: pib, r: r}
+	if data, ok := p.recolored[k]; ok {
+		return data
+	}
+	p.recolored[k] = nil
+	data := p.Data(pib)
+	if ctx == nil || len(data) == 0 || data[0] == 0x01 || data[0] == 0xD7 {
+		return nil
+	}
+	img, err := raster.Decode(ctx, data, p.cfg.Limits)
+	if err != nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, r.Apply(img)); err != nil {
+		return nil
+	}
+	p.recolored[k] = buf.Bytes()
+	return p.recolored[k]
 }

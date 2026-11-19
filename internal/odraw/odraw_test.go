@@ -388,3 +388,57 @@ func TestAdjust(t *testing.T) {
 		}
 	}
 }
+
+// TestPictureRecolor checks the picture effects of the properties that
+// Word 97 writes for the pictures of pages 4 and 5 of
+// floating-pictures.doc: the washout, the brightness of 75 percent, the
+// contrast of 75 percent, the grayscale and the black and white.
+func TestPictureRecolor(t *testing.T) {
+	same := func(a, b float64) bool { return math.Abs(a-b) < 1e-3 }
+	for _, c := range []struct {
+		name  string
+		props map[uint16]uint32
+		check func(r drawingml.Recolor) bool
+	}{
+		{"washout", map[uint16]uint32{PropPictureContrast: 0x4CCD, PropPictureBrightness: 0x599A, PropPictureBools: 0x20000},
+			func(r drawingml.Recolor) bool {
+				return same(r.Bright, 0.7) && same(r.Contrast, -0.7) && !r.Gray && !r.BiLevel
+			}},
+		{"brightness", map[uint16]uint32{PropPictureBrightness: 0x4000},
+			func(r drawingml.Recolor) bool { return same(r.Bright, 0.5) && r.Contrast == 0 }},
+		{"darker", map[uint16]uint32{PropPictureBrightness: 0xFFFFC000},
+			func(r drawingml.Recolor) bool { return same(r.Bright, -0.5) }},
+		{"contrast", map[uint16]uint32{PropPictureContrast: 0x20000},
+			func(r drawingml.Recolor) bool { return same(r.Contrast, 0.5) && r.Bright == 0 }},
+		{"grayscale", map[uint16]uint32{PropPictureBools: 0x60004},
+			func(r drawingml.Recolor) bool { return r.Gray && !r.BiLevel }},
+		{"black and white", map[uint16]uint32{PropPictureBools: 0x60006},
+			func(r drawingml.Recolor) bool { return r.BiLevel && same(r.Threshold, 0.5) }},
+		{"none", map[uint16]uint32{PropPictureBools: 0x60000, PropPictureContrast: 0x10000},
+			func(r drawingml.Recolor) bool { return r.Zero() }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var p Props
+			for id, v := range c.props {
+				p.Set(id, v)
+			}
+			if r := PictureRecolor(Chain{&p}); !c.check(r) {
+				t.Errorf("unexpected change: %+v", r)
+			}
+		})
+	}
+	blip := record(RecBlipDIB, 0x7A8, append(make([]byte, 17), dib1x1()...))
+	entries := ReadEntries(record(RecFBSE, 0, append(make([]byte, fbseSize), blip...)), 1)
+	pics := NewPictures(entries, nil, ivy.Config{})
+	data := pics.Recolored(t.Context(), 1, drawingml.Recolor{Gray: true})
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := color.NRGBAModel.Convert(img.At(0, 0)).(color.NRGBA); c != (color.NRGBA{76, 76, 76, 255}) {
+		t.Errorf("expected the red pixel gray, got %v", c)
+	}
+	if pics.Recolored(t.Context(), 2, drawingml.Recolor{Gray: true}) != nil {
+		t.Error("expected no file for a picture that the store does not hold")
+	}
+}

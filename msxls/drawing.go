@@ -253,8 +253,8 @@ func (d *drawing) addObject(prefix string, obj layout.Object) string {
 
 // plainPicture sets the path of the image img to the file of the picture
 // of the shape sh, when sh is a picture without a crop, a turn, a line, a
-// color key or a shadow, in a raster format. The layout
-// then draws the picture as an image of the sheet, as it draws the
+// color key, a shadow or a change of its colors, in a raster format. The
+// layout then draws the picture as an image of the sheet, as it draws the
 // pictures of xlsx.
 func (d *drawing) plainPicture(sh *odraw.Shape, img *sheet.Image) bool {
 	c := odraw.Chain{&sh.Props}
@@ -267,7 +267,7 @@ func (d *drawing) plainPicture(sh *odraw.Shape, img *sheet.Image) bool {
 			return false
 		}
 	}
-	if l := d.style.Line(c, false); l.Visible() || d.style.Shadow(c) != nil || sh.Flags&(odraw.FSPFlipH|odraw.FSPFlipV) != 0 {
+	if l := d.style.Line(c, false); l.Visible() || d.style.Shadow(c) != nil || !odraw.PictureRecolor(c).Zero() || sh.Flags&(odraw.FSPFlipH|odraw.FSPFlipV) != 0 {
 		return false
 	}
 	data := d.pics.Data(pib)

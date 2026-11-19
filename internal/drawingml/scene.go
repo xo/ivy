@@ -117,30 +117,42 @@ func (c *Canvas) scale(m okage.Transform) float64 {
 // space m. f draws in the space m: the canvas sets it before and restores
 // it after. scale is the number of pixels for a unit of the space m.
 func (s *Scene) Add(m okage.Transform, f func(ctx context.Context, dev display.Device, scale float64) error) {
-	s.ops = append(s.ops, func(c *Canvas) error {
+	s.ops = append(s.ops, drawOp(m, f))
+}
+
+// drawOp returns the operation that Add adds.
+func drawOp(m okage.Transform, f func(ctx context.Context, dev display.Device, scale float64) error) sceneOp {
+	return func(c *Canvas) error {
 		c.dev.Save()
 		defer c.dev.Restore()
 		c.dev.Concat(m)
 		return f(c.ctx, c.dev, c.scale(m))
-	})
+	}
 }
 
 // AddHTML adds a document of HTML, which the layout lays out on a page of w
 // by h points and draws with the transform m from the page onto the space
 // of the scene. The layout happens once, on the first draw.
 func (s *Scene) AddHTML(doc string, w, h float64, m okage.Transform) {
+	if op := s.htmlOp(doc, w, h, m); op != nil {
+		s.ops = append(s.ops, op)
+	}
+}
+
+// htmlOp returns the operation that AddHTML adds, or nil.
+func (s *Scene) htmlOp(doc string, w, h float64, m okage.Transform) sceneOp {
 	if !(w > 0 && h > 0) || math.IsInf(w, 0) || math.IsInf(h, 0) {
-		return
+		return nil
 	}
 	b := &htmlBlock{doc: doc, scene: s}
-	s.ops = append(s.ops, func(c *Canvas) error {
+	return func(c *Canvas) error {
 		// the device takes the transform of the page, and the book renders
 		// at the pixels of a unit of the scene
 		if err := b.book().Draw(c.ctx, 0, c.dev, m, c.scale(okage.IdentityTransform())); err != nil {
 			return fmt.Errorf("drawing text: %w", err)
 		}
 		return nil
-	})
+	}
 }
 
 // htmlBlock is a document of HTML of a scene, with the book that lays it

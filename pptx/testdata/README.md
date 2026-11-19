@@ -19,3 +19,25 @@ focus to blue (0000FF) at the edge:
 
 On 2026-11-19, PowerPoint 2024 exported the file to PDF in the Windows VM
 of the review, to show how PowerPoint draws each path.
+
+## The effects
+
+On 2026-11-19, PowerPoint 2024 wrote `effects.pptx` through COM in the
+Windows VM of the review. A script of PowerShell made the shapes and set
+their effects. Some shapes show a picture of 128 by 64 pixels with four
+ramps from black: to white, red, green and blue. The slides are 720 by 405
+points:
+
+1. A glow on a rectangle, an ellipse, a rectangle without a fill and the
+   picture.
+2. A soft edge of 10 points on a rectangle, of 25 points on an ellipse, and
+   of 5 points on the picture.
+3. An inner shadow on two rectangles and an ellipse, with a blur, without a
+   blur, and in two directions.
+4. Reflections of the types 1, 2, 5 and 9 of PowerPoint, and one with a
+   size of 80 percent, on rectangles, an ellipse and the picture.
+5. Lines of 16 points of `thickThin` and `thinThick`: rectangles, ellipses,
+   lines from left to right and from right to left, and lines down and up.
+
+PowerPoint exported the file to PDF in the same VM. The export shows on
+which side of a path each kind of line draws its thick line.

@@ -277,7 +277,7 @@ func (p *parser) drawnAt(ctx context.Context, cp uint32, header bool) (*drawn, e
 		d.by = [...]int{0, 1, 2, 2}[v]
 	}
 	wp, hp := float64(w)/20, float64(h)/20
-	if pic := p.plainPicture(s, p.drawing.pics, wp, hp); pic != nil {
+	if pic := p.plainPicture(ctx, s, p.drawing.pics, wp, hp); pic != nil {
 		// a picture, such as that of an OLE object, shows and not its text
 		d.pic = pic
 		return d, nil
@@ -406,9 +406,10 @@ func (p *parser) shapeObject(ctx context.Context, top *odraw.Shape, w, h float64
 
 // plainPicture returns the picture of a picture frame of w by h points
 // whose file the layout can draw as an image: a picture without a crop, a
-// turn, a flip, a line, a shadow or a transparent color. It adds the file
-// to the media. It returns nil for another shape.
-func (p *parser) plainPicture(sh *odraw.Shape, pics *odraw.Pictures, w, h float64) *picture {
+// turn, a flip, a line, a shadow or a transparent color. A raster picture
+// whose colors change takes a file of its own, which it decodes with ctx.
+// It adds the file to the media. It returns nil for another shape.
+func (p *parser) plainPicture(ctx context.Context, sh *odraw.Shape, pics *odraw.Pictures, w, h float64) *picture {
 	c := odraw.Chain{&sh.Props}
 	pib := int(c.Value(odraw.PropPib, 0))
 	if sh.IsGroup() || sh.Type != odraw.SptPictureFrame || pib <= 0 || sh.Flags&(odraw.FSPFlipH|odraw.FSPFlipV) != 0 {
@@ -424,6 +425,10 @@ func (p *parser) plainPicture(sh *odraw.Shape, pics *odraw.Pictures, w, h float6
 		return nil
 	}
 	data := pics.Data(pib)
+	if r := odraw.PictureRecolor(c); !r.Zero() {
+		// a raster picture with its colors changed is a file of its own
+		data = pics.Recolored(ctx, pib, r)
+	}
 	if data == nil {
 		return nil
 	}
