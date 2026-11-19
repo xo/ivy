@@ -78,8 +78,8 @@ type paragraph struct {
 	// end of a cell or of a row of a table.
 	end byte
 	// pageBreak is set when a page break or a section break comes before
-	// the paragraph.
-	pageBreak bool
+	// the paragraph, and columnBreak when a column break comes before it.
+	pageBreak, columnBreak bool
 	// cp is the character position of the mark of the paragraph.
 	cp uint32
 	// mark holds the character properties of the mark of the paragraph,
@@ -108,8 +108,10 @@ type parser struct {
 	objects  map[string]layout.Object
 	// lists holds the lists of a document of Word 97, or nil.
 	lists *lists
-	// page is the page of the section that the conversion writes.
-	page page
+	// page is the page of the section that the conversion writes, and
+	// columns the number of its columns.
+	page    page
+	columns int
 	// notes holds the ranges of the text of the footnotes and of the
 	// endnotes by the characters of their references, once read.
 	notes []map[uint32][2]uint32
@@ -124,7 +126,10 @@ type parser struct {
 	pictureLine bool
 	// spacing is the spacing of the lines of the paragraph that it
 	// writes.
-	spacing      lineSpacing
+	spacing lineSpacing
+	// joinBorder is set, for the start and for the end, while it writes a
+	// run whose border joins the border of the run before or after it.
+	joinBorder   [2]bool
 	endnotes     strings.Builder
 	endnoteCount int
 	// drawing holds the shapes and the pictures of Office Drawing, once
@@ -748,6 +753,19 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 				cur.pageBreak = true
 			}
 			continue
+		case 0x0E:
+			if hidden() {
+				continue
+			}
+			// a column break ends the text before it too, and the text
+			// after it starts in the next column
+			if len(pending) > 0 {
+				mark := c
+				mark.r = 0x0D
+				endPara(mark)
+			}
+			cur.columnBreak = true
+			continue
 		}
 		if len(fields) > 0 {
 			if f := fields[len(fields)-1]; f.code {
@@ -777,7 +795,7 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 // a character that has no text, such as the anchor of a picture.
 func visible(r rune) (string, bool) {
 	switch r {
-	case 0x0B, 0x0E, '\n':
+	case 0x0B, '\n':
 		return "\n", true
 	case 0x09:
 		return "\t", true

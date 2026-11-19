@@ -18,7 +18,7 @@
 //   - -ivy-line-multiple puts the extra space of a multiple line spacing
 //     below the text of a line, see leadingShift (D56).
 //   - -ivy-page-top-space leaves out the space before the first block of
-//     a page after a break that is not forced, see
+//     a page or of a column after a break that is not forced, see
 //     layoutContext.discardsSpaceBefore (D56).
 
 package layout
@@ -128,7 +128,8 @@ func validateLineMultiple(tokens []tinycss2.Node, _ string) (Value, error) {
 // validatePageTopSpace validates -ivy-page-top-space: 'keep' or 'discard'.
 // With 'discard', a block of the flow of the page that starts a page after
 // a break that is not forced has no space before it, as a paragraph of
-// Word (D56). The property is inherited.
+// Word (D56). So does a block at the top of a column after a break that is
+// not forced. The property is inherited.
 var validatePageTopSpace = singleKeyword(func(keyword string) bool {
 	return keyword == "keep" || keyword == "discard"
 })

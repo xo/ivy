@@ -221,6 +221,57 @@ func TestPageTopSpace(t *testing.T) {
 	}
 }
 
+func TestPageTopSpaceColumns(t *testing.T) {
+	five := strings.Repeat("<p>a</p>", 5)
+	for _, tt := range []struct {
+		name  string
+		space string
+		body  string
+		page  int
+		x, y  float64
+	}{
+		// The sixth paragraph starts the second column, and its margin
+		// of 10px goes with 'discard'.
+		{"keep", "keep", five + `<p style="margin-top: 10px">b</p>`, 0, 120, 10},
+		{"discard", "discard", five + `<p style="margin-top: 10px">b</p>`, 0, 120, 0},
+		// The first block of a block that starts a column loses its
+		// space too.
+		{"nested", "discard", five + `<div><p style="margin-top: 10px">b</p></div>`, 0, 120, 0},
+		// The eleventh paragraph starts the first column of the second
+		// page.
+		{"page keep", "keep", five + five + `<p style="margin-top: 10px">b</p>`, 1, 40, 10},
+		{"page", "discard", five + five + `<p style="margin-top: 10px">b</p>`, 1, 40, 0},
+		// A column break keeps the space, as a page break does.
+		{"forced", "discard", `<p>a</p><p style="break-before: column; margin-top: 10px">b</p>`, 0, 120, 10},
+		// The first column of the first page keeps the space.
+		{"first", "discard", `<p style="margin-top: 10px">b</p>`, 0, 40, 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `<div style="-ivy-page-top-space: ` + tt.space + `; columns: 2; column-gap: 0; column-fill: auto">` + tt.body + `</div>`
+			pages := renderPages(t, wordStyle+body)
+			for i, page := range pages {
+				var text *Box
+				page.Descendants(func(b *Box) bool {
+					if b.Kind == KindText && b.Text == "b" && text == nil {
+						text = b
+					}
+					return true
+				})
+				if text == nil {
+					continue
+				}
+				if i != tt.page {
+					t.Fatalf("the text is on page %d, want %d", i+1, tt.page+1)
+				}
+				assertApprox(t, "the left of the text", text.PositionX, tt.x)
+				assertApprox(t, "the top of the text", text.PositionY, tt.y)
+				return
+			}
+			t.Fatal("no text b")
+		})
+	}
+}
+
 func TestPageTopSpaceFirstPage(t *testing.T) {
 	// The first page keeps the space before its first paragraph.
 	pages := renderPages(t, wordStyle+`<div style="-ivy-page-top-space: discard"><p style="margin-top: 10px">a</p></div>`)

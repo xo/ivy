@@ -780,7 +780,11 @@ style sheet names each one with the prefix `-ivy-`, such as
    page before ends because its content does not fit. The `margin-break`
    of CSS truncates the margins only for the children of the root box and
    of the boxes whose margins collapse with it, and upstream counts each
-   break of a named page as forced. The property is inherited. `docx`,
+   break of a named page as forced. In columns, the first block of a
+   column has no space before it either, as in Word: each column after a
+   column that a forced break does not end, and the first column at the
+   top of a page after a break that is not forced. A column break keeps
+   the space, as a page break does. The property is inherited. `docx`,
    `msdoc`, `odf` and `rtf` turn it on.
 
 ## The hooks for the later stages

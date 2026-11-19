@@ -201,9 +201,13 @@ func blockBoxLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, skip
 		if adjoiningMargins != nil {
 			margins = *adjoiningMargins
 		}
+		// Port: upstream has no -ivy-page-top-space. The layout of the
+		// columns clears layoutContext.pageOverflowBox, so pageTop holds
+		// whether the first column is at the top of the page.
+		pageTop := lc.discardsSpaceBefore(box, pageIsEmpty, lc.pageOverflowBox == box)
 		result := columnsLayout(lc, box, bottomSpace, skip, containingBlock,
 			pageIsEmpty, absoluteBoxes, fixedBoxes, margins,
-			firstLetterStyle, firstLineStyle)
+			firstLetterStyle, firstLineStyle, pageTop)
 		// TODO: this condition and the whole relayout are probably wrong
 		if result.resumeAt == nil && result.box != nil {
 			newBox := result.box
@@ -213,7 +217,7 @@ func blockBoxLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, skip
 				bottomSpace += columnsBottomSpace
 				result = columnsLayout(lc, box, bottomSpace, skip, containingBlock,
 					pageIsEmpty, absoluteBoxes, fixedBoxes, margins,
-					firstLetterStyle, firstLineStyle)
+					firstLetterStyle, firstLineStyle, pageTop)
 			}
 		}
 		result.maxLines = noMaxLines
@@ -761,6 +765,9 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 	result := func(abort, stop bool, resumeAt skipStack) inFlowResult {
 		return inFlowResult{abort, stop, resumeAt, positionY, adjoiningMargins, next, maxLines}
 	}
+	// Port: upstream has no -ivy-page-top-space. The layout of the child
+	// clears layoutContext.columnTopBox, so a second layout sets it again.
+	columnTop := lc.columnTopBox == child
 
 	// Resolve percentages and collapsing top margins.
 	if !box.IsTableWrapper {
@@ -883,6 +890,9 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 				child.PositionX, child.PositionY = childPositionX, childPositionY
 				if pageOverflow {
 					lc.pageOverflowBox = child
+				}
+				if columnTop {
+					lc.columnTopBox = child
 				}
 				layout = blockLevelLayoutShared(lc, child, bottomSpace, skip, box,
 					pageIsEmptyWithNoChildren, absoluteBoxes, fixedBoxes,
@@ -1011,6 +1021,10 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 	// layoutContext.pageOverflowBox.
 	pageOverflow := lc.pageOverflowBox == box && !lc.inColumn
 	lc.pageOverflowBox = nil
+	// Port: upstream has no -ivy-page-top-space. See
+	// layoutContext.columnTopBox.
+	columnTop := lc.columnTopBox == box
+	lc.columnTopBox = nil
 	// Port: upstream asserts that box is a BlockContainerBox.
 	if absoluteBoxes == nil {
 		absoluteBoxes = &[]*Box{}
@@ -1147,10 +1161,17 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 
 		case !stop:
 			// Layout in-flow child.
+			//
+			// Port: upstream has no -ivy-page-top-space. The first in-flow
+			// child at the top of a column is at the top of the column too.
+			if columnTop && findLastInFlowChild(newChildren) == nil {
+				lc.columnTopBox = child
+			}
 			result := blockInFlowLayout(lc, box, index, child, &newChildren,
 				pageIsEmpty, absoluteBoxes, fixedBoxes, adjoiningMargins,
 				bottomSpace, positionY, skip, firstLetterStyle, firstLineStyle,
 				discard, next, maxLines, pageOverflow)
+			lc.columnTopBox = nil
 			abort, stop, resumeAt = result.abort, result.stop, result.resumeAt
 			positionY, adjoiningMargins, next = result.positionY, result.adjoiningMargins, result.nextPage
 			newMaxLines := result.maxLines

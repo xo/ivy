@@ -1029,6 +1029,12 @@ type layoutContext struct {
 	// forcedBreak is set for each page of a named page, see
 	// -ivy-page-top-space.
 	unforcedBreak bool
+
+	// columnTopBox is the box whose layout starts next at the top of a
+	// column, where -ivy-page-top-space leaves out the space before it: a
+	// column box, or the first in-flow child of such a box. Upstream has
+	// no such property. See layoutContext.discardsSpaceBefore.
+	columnTopBox *Box
 }
 
 // newLayoutContext is LayoutContext.__init__ in

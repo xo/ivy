@@ -136,7 +136,7 @@ func (p *parser) firstPage(paper ivy.Paper) page {
 // of the program (D32).
 func (p *parser) sectionPage(i int, paper ivy.Paper) sectionPage {
 	def := defaultPage(paper)
-	sp := sectionPage{page: def, header: 720, footer: 720}
+	sp := sectionPage{page: def, header: 720, footer: 720, columns: 1, columnGap: 720}
 	pg := &sp.page
 	plc, n := p.sedPlc()
 	if i >= n {
@@ -171,6 +171,12 @@ func (p *parser) sectionPage(i int, paper ivy.Paper) sectionPage {
 			sp.lines.restart = int(s.byteValue())
 		case sprmSLnnMin:
 			sp.lines.min = int(int16(v))
+		case sprmSCcolumns:
+			// ccolM1, the number of the columns minus 1. The package takes
+			// at most 16 columns, as the package docx does
+			sp.columns = min(v, 15) + 1
+		case sprmSDxaColumns:
+			sp.columnGap = v
 		}
 	}
 	// a page must hold some text: a value out of range takes the default
@@ -183,17 +189,21 @@ func (p *parser) sectionPage(i int, paper ivy.Paper) sectionPage {
 	pg.left, pg.right = clamp(pg.left, pg.width/3), clamp(pg.right, pg.width/3)
 	pg.top, pg.bottom = clamp(pg.top, pg.height/3), clamp(pg.bottom, pg.height/3)
 	sp.header, sp.footer = clamp(sp.header, pg.height/3), clamp(sp.footer, pg.height/3)
+	sp.columnGap = clamp(sp.columnGap, (pg.width-pg.left-pg.right)/max(sp.columns-1, 1))
 	return sp
 }
 
 // sectionPage is the page of a section, with the distances of its header
 // from the top of the paper and of its footer from the bottom, in twips,
-// and the numbers of its lines.
+// the numbers of its lines, and the number of its columns and the space
+// between them in twips.
 type sectionPage struct {
 	page
 	header, footer int
 	titlePage      bool
 	lines          lineNumbering
+	columns        int
+	columnGap      int
 }
 
 // lineNumbering is the numbering of the lines of a section (MS-DOC 2.6.4):
@@ -292,6 +302,9 @@ td {
 .page {
   break-before: page;
 }
+.column {
+  break-before: column;
+}
 .pg::before {
   content: counter(page);
 }
@@ -338,18 +351,39 @@ body {
 `, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family, pt(p.defaultTab()))
 }
 
-// normalFont returns the declarations of the size and the family of the
-// font of the style Normal, each after "; ", or "".
-func (p *parser) normalFont() string {
+// stiLineNumber is the sti of the built-in character style Line Number,
+// which Word gives the numbers of the lines.
+const stiLineNumber = 40
+
+// lineNumberFont returns the declarations of the size and the family of the
+// font of the numbers of the lines, each after "; ", or "": the font of the
+// style Normal, with the character style Line Number over it. The numbers
+// take only the size and the family, because the paragraphs inherit the
+// other properties of the section that declares the numbers.
+func (p *parser) lineNumberFont() string {
 	st := p.styles.resolve(0, p.lim.MaxDepth)
 	if st == nil || st.stk != stkParagraph {
 		return ""
 	}
-	var s string
-	if hps := st.chp.hps; hps > 0 {
-		s += "; font-size: " + strconv.FormatFloat(float64(hps)/2, 'f', -1, 64) + "pt"
+	c := st.chp
+	for i := range p.styles.styles {
+		ln := &p.styles.styles[i]
+		if ln.sti != stiLineNumber || ln.stk != stkCharacter {
+			continue
+		}
+		// a character style holds the modifiers over the font of the
+		// paragraph, as in charProps
+		base := c
+		for s := range sprmsOf(p.s.word6, ln.chpx) {
+			applyChp(&c, s, &base)
+		}
+		break
 	}
-	if f := p.fontFamily(st.chp.ftc, st.chp.ftcEA); f != "" {
+	var s string
+	if c.hps > 0 {
+		s += "; font-size: " + strconv.FormatFloat(float64(c.hps)/2, 'f', -1, 64) + "pt"
+	}
+	if f := p.fontFamily(c.ftc, c.ftcEA); f != "" {
 		s += "; font-family: " + f
 	}
 	return s
@@ -444,15 +478,24 @@ func cssFont(name string) string {
 
 // body converts the paragraphs into the body of an HTML document. The
 // paragraphs of a table become the cells of an HTML table. A table inside a
-// table becomes the paragraphs of its cell. section, when it is not nil, is
-// called before each paragraph, and can end the table and write the start
-// of a section.
+// table becomes the paragraphs of its cell. The paragraphs of a frame
+// become a block, see writeFrame. section, when it is not nil, is called
+// before each paragraph, and can end the table or the frame and write the
+// start of a section.
 func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para paragraph, closeTable func())) string {
 	var b strings.Builder
 	var (
 		rows  []tableRow
 		cells []string
 		cell  strings.Builder
+		// frame holds the paragraphs of the frame of the properties
+		// framePap. pageTop is set while nothing of a page of the main
+		// document is written, and tableTop and frameTop are set for a
+		// table and a frame that start a page.
+		frame              strings.Builder
+		framePap           *pap
+		pageTop            = section != nil
+		tableTop, frameTop bool
 	)
 	closeTable := func() {
 		if cell.Len() > 0 {
@@ -463,19 +506,58 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			rows = append(rows, tableRow{cells: cells})
 			cells = nil
 		}
-		writeTable(&b, rows, p.page)
+		writeTable(&b, rows, p.page, tableTop)
 		rows = nil
+	}
+	closeFrame := func() {
+		if framePap != nil {
+			p.writeFrame(&b, *framePap, frame.String(), frameTop)
+			frame.Reset()
+			framePap = nil
+		}
+	}
+	closeBlocks := func() {
+		closeTable()
+		closeFrame()
 	}
 	for _, para := range paras {
 		// a section starts between the rows of a table at the earliest
 		if section != nil && len(cells) == 0 && cell.Len() == 0 {
-			section(&b, para, closeTable)
+			section(&b, para, closeBlocks)
 		}
+		if para.pageBreak || para.pap.pageBreak {
+			pageTop = section != nil
+		}
+		if len(rows) == 0 && len(cells) == 0 && cell.Len() == 0 {
+			tableTop = pageTop
+		}
+		top := pageTop
+		pageTop = false
 		if !para.pap.inTable {
 			closeTable()
-			p.writeParagraph(&b, para)
+			if !para.pap.framed {
+				closeFrame()
+				p.writeParagraph(&b, para)
+				continue
+			}
+			// the paragraphs of the same frame properties share a frame
+			if framePap != nil && !sameFrame(*framePap, para.pap) {
+				closeFrame()
+			}
+			if framePap == nil {
+				pp := para.pap
+				framePap, frameTop = &pp, top
+				if para.pageBreak || para.pap.pageBreak {
+					// a block that floats does not break the page, so
+					// the page breaks before the frame
+					b.WriteString(`<div class="page"></div>`)
+					para.pageBreak, para.pap.pageBreak = false, false
+				}
+			}
+			p.writeParagraph(&frame, para)
 			continue
 		}
+		closeFrame()
 		if para.pap.ttp && para.end == 0x07 {
 			// the mark of the end of a row, with the properties of the row
 			cell.Reset()
@@ -492,7 +574,7 @@ func (p *parser) body(paras []paragraph, section func(b *strings.Builder, para p
 			cell.Reset()
 		}
 	}
-	closeTable()
+	closeBlocks()
 	return b.String()
 }
 
@@ -524,13 +606,14 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		}
 	}
 	jc := para.pap.jc
-	if para.pap.framed && !para.pap.inTable {
-		// a frame at the center or at the right of the column holds its
-		// text there, which the alignment of the text gives
+	if para.pap.framed && !para.pap.inTable && para.pap.dxaWidth == 0 {
+		// a frame of the width of its text at the center or at the right
+		// of the column holds its text there, which the alignment of the
+		// text gives, see writeFrame
 		switch para.pap.dxaAbs {
 		case dxaAbsCenter:
 			jc = 1
-		case dxaAbsRight:
+		case dxaAbsRight, dxaAbsOutside:
 			jc = 2
 		}
 	}
@@ -601,7 +684,14 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		style = append(style, "-ivy-line-numbers: none")
 	}
 	b.WriteString("<" + tag)
-	if para.pageBreak || para.pap.pageBreak {
+	switch {
+	case para.pageBreak || para.pap.pageBreak:
+		b.WriteString(` class="page"`)
+	case para.columnBreak && p.columns > 1:
+		b.WriteString(` class="column"`)
+	case para.columnBreak:
+		// Word starts a new page at a column break of a section of one
+		// column
 		b.WriteString(` class="page"`)
 	}
 	if len(style) > 0 {
@@ -617,9 +707,11 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	// a footnote writes its paragraphs within this one
 	prevLine, prevSpacing := p.pictureLine, p.spacing
 	p.pictureLine, p.spacing = !numbered && pictureLine(para.runs), spacing
-	for _, r := range para.runs {
+	for i, r := range para.runs {
+		p.joinBorder = [2]bool{i > 0 && joinsBorder(para.runs[i-1], r), i+1 < len(para.runs) && joinsBorder(r, para.runs[i+1])}
 		p.writeRun(b, r)
 	}
+	p.joinBorder = [2]bool{}
 	p.pictureLine, p.spacing = prevLine, prevSpacing
 	if empty {
 		// an empty paragraph has the line of the font of its mark
@@ -760,10 +852,15 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	case 2:
 		style = append(style, "vertical-align: sub", "line-height: 0")
 	default:
-		if v := p.runLineHeight(c.ftc); v != "" {
+		v := p.borderLineHeight(c)
+		if v == "" {
+			v = p.runLineHeight(c.ftc)
+		}
+		if v != "" {
 			style = append(style, "line-height: "+v)
 		}
 	}
+	style = append(style, p.borderStyle(c)...)
 	if c.spacing != 0 {
 		style = append(style, "letter-spacing: "+pt(c.spacing))
 	}
@@ -801,6 +898,64 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	b.WriteString(">")
 	b.WriteString(text)
 	b.WriteString("</span>")
+}
+
+// borderStyle returns the declarations of the border of the characters c
+// of a run, or nil. Word draws the border around a single line of the
+// font, at the distance br.space from it. The layout gives the content of
+// an inline box the height of the font size, in the middle of the line,
+// so the padding at the top and at the bottom holds the rest of the
+// single line. Word draws one border around the runs of the same border,
+// so the border has no side where joinBorder joins it to the run before
+// or after it.
+func (p *parser) borderStyle(c chp) []string {
+	br := c.border
+	if br.none() {
+		return nil
+	}
+	ratio, _ := p.lineRatio(c.ftc)
+	size := 10.0
+	if c.hps > 0 {
+		size = float64(c.hps) / 2
+	}
+	space := float64(br.space)
+	style := []string{"border: " + br.css(),
+		"padding: " + num((ratio-1)/2*size+space) + "pt " + num(space) + "pt"}
+	if p.joinBorder[0] {
+		style = append(style, "border-left: none", "padding-left: 0")
+	}
+	if p.joinBorder[1] {
+		style = append(style, "border-right: none", "padding-right: 0")
+	}
+	return style
+}
+
+// borderLineHeight returns the line-height of a run of the characters c
+// with a border, or "" for a run without a border. Word makes the line of
+// such a run higher by the width of the border and its distance from the
+// text, above and below the text. A line of an exact height or of a least
+// height keeps its height.
+func (p *parser) borderLineHeight(c chp) string {
+	br := c.border
+	sp := p.spacing
+	if br.none() || sp.mult == 0 {
+		return ""
+	}
+	ratio, _ := p.lineRatio(c.ftc)
+	size := 10.0
+	if c.hps > 0 {
+		size = float64(c.hps) / 2
+	}
+	return num(ratio*sp.mult*size+2*(br.cssWidth()+float64(br.space))) + "pt"
+}
+
+// joinsBorder reports whether the run a is text with a border, and the run
+// b after it text with the same border.
+func joinsBorder(a, b run) bool {
+	text := func(r run) bool {
+		return r.pic == nil && r.drawn == nil && r.note == nil && !r.noteMark
+	}
+	return text(a) && text(b) && !a.chp.border.none() && a.chp.border == b.chp.border
 }
 
 // floatStyle returns the style of an object of w by h points that floats

@@ -6,7 +6,7 @@
 //   - -ivy-line-multiple puts the extra space of a multiple line spacing
 //     below the text of a line, see leadingShift.
 //   - -ivy-page-top-space leaves out the space before the first block of a
-//     page after a break that is not forced, see
+//     page or of a column after a break that is not forced, see
 //     layoutContext.discardsSpaceBefore.
 
 package layout
@@ -171,9 +171,27 @@ func strutTextHeight(style *Style) float64 {
 // or a section break. The margin-break of CSS does the same only for the
 // children of the root box and of the boxes whose margins collapse with
 // it, and upstream counts each break of a named page as forced.
+//
+// In columns, the box loses the space before it when it starts a column at
+// its top, see layoutContext.columnTopBox and startColumn. Word leaves out
+// the space before a paragraph at the top of each column too.
 func (lc *layoutContext) discardsSpaceBefore(box *Box, pageIsEmpty, inFlow bool) bool {
-	return inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak &&
+	return (lc.columnTopBox == box || inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak) &&
 		isStr(box.Style.Get("page_top_space"), "discard")
+}
+
+// startColumn sets the column box column as the box whose first in-flow
+// child loses the space before it, when -ivy-page-top-space is 'discard'
+// and the column starts at the top of a column as Word sees it: the column
+// i of a row of columns after a column that a forced break did not end, or
+// the first column at the top of a page whose space before is discarded,
+// pageTop. Word keeps the space after a column break, as after a page
+// break.
+func (lc *layoutContext) startColumn(column *Box, i int, pageTop, forced bool) {
+	lc.columnTopBox = nil
+	if (i > 0 && !forced || i == 0 && pageTop) && isStr(column.Style.Get("page_top_space"), "discard") {
+		lc.columnTopBox = column
+	}
 }
 
 // hasBackground reports whether a style gives a box a background: a color

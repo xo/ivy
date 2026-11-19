@@ -49,12 +49,14 @@ const (
 	vertMergeRestart  = 3
 )
 
-// brc is a border: its width in points, its type, and its color as
-// 0xRRGGBB. A brc that is not set gives no border of its own.
+// brc is a border: its width in points, its type, its color as 0xRRGGBB,
+// and its distance from the text in points. A brc that is not set gives no
+// border of its own.
 type brc struct {
 	width float64
 	typ   byte
 	color uint32
+	space int
 	set   bool
 }
 
@@ -69,19 +71,32 @@ func (b brc) css() string {
 		return "none"
 	}
 	style := "solid"
-	width := b.width
 	switch b.typ {
 	case 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21:
 		style = "double"
-		width = max(width*3, 1.5)
 	case 6:
 		style = "dotted"
 	case 7, 8, 9, 22, 23:
 		style = "dashed"
+	}
+	return fmt.Sprintf("%spt %s #%06x", num(b.cssWidth()), style, b.color)
+}
+
+// cssWidth returns the width in points of the border that css gives: a
+// double line has three times the width of the line, and at least 1.5
+// points, as a thick line has.
+func (b brc) cssWidth() float64 {
+	if b.none() {
+		return 0
+	}
+	width := b.width
+	switch b.typ {
+	case 3, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21:
+		width = max(width*3, 1.5)
 	case 5:
 		width = max(width, 1.5)
 	}
-	return fmt.Sprintf("%spt %s #%06x", num(min(width, 6)), style, b.color)
+	return min(width, 6)
 }
 
 // num returns v as a short decimal number.
@@ -107,7 +122,7 @@ func brc80(b []byte) brc {
 	if b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 {
 		return brc{}
 	}
-	out := brc{width: float64(b[0]) / 8, typ: b[1], set: true}
+	out := brc{width: float64(b[0]) / 8, typ: b[1], space: int(b[3] & 0x1F), set: true}
 	if int(b[2]) < len(icoColors) {
 		out.color = icoColors[b[2]]
 	}
@@ -123,7 +138,7 @@ func brc97(b []byte) brc {
 	if b[4] == 0xFF && b[5] == 0xFF {
 		return brc{set: true}
 	}
-	out := brc{width: float64(b[4]) / 8, typ: b[5], set: true}
+	out := brc{width: float64(b[4]) / 8, typ: b[5], space: int(b[6] & 0x1F), set: true}
 	if b[3] == 0 {
 		out.color = uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2])
 	}
@@ -250,12 +265,18 @@ type tap struct {
 	fromText [4]int
 }
 
-// The positions of a table that floats that the package reads.
+// The positions of a table or a frame that floats that the package reads:
+// the position codes, and the special values of the XAS and the YAS, of
+// MS-DOC.
 const (
 	pcHorzPage      = 2
+	pcVertPage      = 1
 	pcVertParagraph = 2
 	dxaAbsCenter    = -4
 	dxaAbsRight     = -8
+	dxaAbsInside    = -12
+	dxaAbsOutside   = -16
+	dyaAbsTop       = -4
 )
 
 // cellRange returns the cells from first to lim of the row, within its
@@ -390,13 +411,14 @@ func applyTap(t *tap, s sprm) {
 	}
 }
 
-// floatTable returns the style of a table that floats, of the width at x
-// in a column of the width col, all in twips, with the alignment jc and
-// top the distance from the top of its paragraph, so that the text wraps
-// around it. It returns nil for a table that does not leave half an inch
-// of the column beside it, or that is at the center of the column, which
-// stays a block.
-func floatTable(t *tap, jc, x, width, col, top int) []string {
+// floatBlock returns the style of a table or a frame that floats, of the
+// width at x in a column of the width col, all in twips, with the
+// alignment jc, top the distance from the top of its paragraph, and
+// fromText its distances from the text around it at the top, the right,
+// the bottom and the left, so that the text wraps around it. It returns nil
+// for a block that does not leave half an inch of the column beside it, or
+// that is at the center of the column, which stays a block.
+func floatBlock(fromText [4]int, jc, x, width, col, top int) []string {
 	side := "left"
 	switch {
 	case jc == 1:
@@ -410,7 +432,7 @@ func floatTable(t *tap, jc, x, width, col, top int) []string {
 		return nil
 	}
 	// a table can float into the margin of the page
-	margin := [4]int{top, t.fromText[1], t.fromText[2], t.fromText[3]}
+	margin := [4]int{top, fromText[1], fromText[2], fromText[3]}
 	if side == "right" {
 		margin[1] = max(col-x-width, -14400)
 	} else {
@@ -418,6 +440,138 @@ func floatTable(t *tap, jc, x, width, col, top int) []string {
 	}
 	return []string{"float: " + side,
 		"margin: " + pt(margin[0]) + " " + pt(margin[1]) + " " + pt(margin[2]) + " " + pt(margin[3])}
+}
+
+// blockTop returns the distance in twips of a table or a frame that floats
+// from the top of its paragraph, from its position dyaAbs from the
+// margin, the page or the paragraph, as pcVert says, on the page pg. The
+// layout places a float at the line of its paragraph, so a position from
+// the margin or from the page holds only for a block that starts the page,
+// pageTop, whose paragraph is at the top of the margin. Another block stays
+// at its paragraph. A position above the margin, or a position of a
+// special value other than the top, such as the center or the bottom,
+// which needs the height of the block, stays at the top.
+func blockTop(pcVert, dyaAbs int, pg page, pageTop bool) int {
+	y := dyaAbs
+	switch {
+	case pcVert == pcVertParagraph:
+	case !pageTop:
+		return 0
+	case dyaAbs == dyaAbsTop:
+		y = 0
+	case pcVert == pcVertPage:
+		y -= pg.top
+	}
+	if y <= 0 || y >= 14400 {
+		return 0
+	}
+	return y
+}
+
+// The wrapping of the text around a frame that the package reads, the wr
+// of MS-DOC, as for a shape: no text beside the frame, and the text as if
+// the frame were not there.
+const (
+	wrTopBottom = 1
+	wrNone      = 3
+)
+
+// sameFrame reports whether two paragraphs have the same properties of a
+// frame, and so share their frame.
+func sameFrame(a, b pap) bool {
+	return a.pcHorz == b.pcHorz && a.pcVert == b.pcVert && a.dxaAbs == b.dxaAbs && a.dyaAbs == b.dyaAbs &&
+		a.dxaWidth == b.dxaWidth && a.wr == b.wr && a.fromText == b.fromText
+}
+
+// writeFrame writes the paragraphs of a frame, inner, as a block of the
+// frame properties pp, on the page of the section. Word places a frame at
+// dxaAbs from the column, the margin or the page, and at dyaAbs from its
+// paragraph, or from the margin or the page when it starts the page,
+// pageTop, see blockTop. A frame of a width that leaves half an inch of
+// the column beside it floats, so that the text wraps around it, unless
+// its wr puts no text beside it. A frame that the text does not see is
+// placed on the page, as a shape is. Another frame is a block. A frame of
+// the width of its text takes the width of the column, and the alignment
+// of its text puts the text at the center or at the right, see
+// writeParagraph.
+func (p *parser) writeFrame(b *strings.Builder, pp pap, inner string, pageTop bool) {
+	pg := p.page
+	if pg.width == 0 {
+		pg = letter
+	}
+	col := pg.width - pg.left - pg.right
+	width := pp.dxaWidth
+	jc, x := 0, 0
+	switch pp.dxaAbs {
+	case dxaAbsCenter:
+		jc = 1
+	case dxaAbsRight, dxaAbsOutside:
+		jc = 2
+	case dxaAbsInside:
+	default:
+		x = pp.dxaAbs
+		if pp.pcHorz == pcHorzPage {
+			x -= pg.left
+		}
+	}
+	var style []string
+	if width > 0 {
+		style = append(style, "width: "+pt(width))
+	}
+	switch pp.wr {
+	case wrNone:
+		if width > 0 && jc != 0 {
+			x = (col - width) / 2 * jc
+		} else if jc != 0 {
+			x, style = 0, append(style, "width: "+pt(col))
+		}
+		style = append(style, "position: absolute", "left: "+pt(max(min(x, 14400), -14400)))
+		switch y := pp.dyaAbs; {
+		case pp.pcVert == pcVertParagraph:
+			if y > 0 && y < 14400 {
+				style = append(style, "margin-top: "+pt(y))
+			}
+		case y == dyaAbsTop:
+			if pp.pcVert == pcVertPage {
+				style = append(style, "top: "+pt(-pg.top))
+			} else {
+				style = append(style, "top: 0")
+			}
+		case y >= 0 && y < 31680:
+			if pp.pcVert == pcVertPage {
+				y -= pg.top
+			}
+			style = append(style, "top: "+pt(y))
+		}
+	default:
+		top := blockTop(pp.pcVert, pp.dyaAbs, pg, pageTop)
+		if width > 0 && pp.wr != wrTopBottom {
+			fromText := [4]int{pp.fromText[0], pp.fromText[1], pp.fromText[0], pp.fromText[1]}
+			if f := floatBlock(fromText, jc, x, width, col, top); f != nil {
+				style = append(style, f...)
+				break
+			}
+		}
+		if top > 0 {
+			// a block of the height of the position, as for a table
+			b.WriteString(`<div style="height: ` + pt(top) + `"></div>`)
+		}
+		switch {
+		case width > 0 && jc == 1:
+			style = append(style, "margin-left: auto", "margin-right: auto")
+		case width > 0 && jc == 2:
+			style = append(style, "margin-left: auto", "margin-right: 0")
+		case jc == 0 && x != 0 && abs(x) < 14400:
+			style = append(style, "margin-left: "+pt(x))
+		}
+	}
+	b.WriteString("<div")
+	if len(style) > 0 {
+		b.WriteString(` style="` + strings.Join(style, "; ") + `"`)
+	}
+	b.WriteString(">")
+	b.WriteString(inner)
+	b.WriteString("</div>\n")
 }
 
 // isTableSprm reports whether op is a modifier of a table that applyTap
@@ -446,11 +600,13 @@ type tableRow struct {
 // rows make the columns of the table, so that each cell covers the columns
 // between its edges, as in Word, where each row has cells of its own. A
 // cell that the cells above cover becomes part of the cell where they
-// start. A table that floats is at its position from the column, and from
-// the top of its paragraph, on the page pg. The text wraps around a table
-// that leaves half an inch of the column beside it, which floats to the
-// side of the column where it is. A wider table is a block.
-func writeTable(b *strings.Builder, rows []tableRow, pg page) {
+// start. A table that floats is at its position from the column, the
+// margin or the page, and from the top of its paragraph, on the page pg.
+// It is at its position from the top of the margin or of the page only
+// when it starts the page, pageTop, see blockTop. The text wraps around a
+// table that leaves half an inch of the column beside it, which floats to
+// the side of the column where it is. A wider table is a block.
+func writeTable(b *strings.Builder, rows []tableRow, pg page, pageTop bool) {
 	if len(rows) == 0 {
 		return
 	}
@@ -467,26 +623,24 @@ func writeTable(b *strings.Builder, rows []tableRow, pg page) {
 		style = append(style, "table-layout: fixed", "width: "+pt(width))
 		jc, x := first.jc, edges[0]
 		if first.floats {
+			if pg.width == 0 {
+				pg = letter
+			}
 			switch first.dxaAbs {
 			case dxaAbsCenter:
 				jc = 1
-			case dxaAbsRight:
+			case dxaAbsRight, dxaAbsOutside:
 				jc = 2
+			case dxaAbsInside:
 			default:
 				x += first.dxaAbs
 				if first.pcHorz == pcHorzPage {
 					x -= pg.left
 				}
 			}
-			top := 0
-			if first.pcVert == pcVertParagraph && first.dyaAbs > 0 && first.dyaAbs < 14400 {
-				top = first.dyaAbs
-			}
-			if pg.width == 0 {
-				pg = letter
-			}
+			top := blockTop(first.pcVert, first.dyaAbs, pg, pageTop)
 			col := pg.width - pg.left - pg.right
-			if f := floatTable(first, jc, x, width, col, top); f != nil {
+			if f := floatBlock(first.fromText, jc, x, width, col, top); f != nil {
 				style = append(style, f...)
 				jc, x = 0, 0
 			} else if top > 0 {

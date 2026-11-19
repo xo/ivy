@@ -6,18 +6,20 @@
 // A Word document is a Compound File, which the package cfb of magic reads.
 // The package reads the File Information Block, the piece table and the text
 // of the main document, with the bold, the italic, the underline, the size,
-// the color and the font of each run, the alignment, the indents, the
-// spacing and the tab stops of each paragraph, and the headings of the
-// style sheet. It converts the text into HTML, with each table as an HTML
-// table, for the layout of ivy (D10). Each section has pages of its own
-// size and margins, with its headers and its footers. The layout makes the
-// margins of a page larger for a header or a footer that needs it. A
-// section break starts a new page, unless the next section is continuous
-// on a page of the same size. The tables have the borders, the shading and
-// the merged cells of their rows. A table that floats is at its position,
-// and the text does not wrap around it. The lists have their numbers and
-// their bullets, with the indents and the tab stops of their levels. A
-// frame at the center or at the right of the column puts its text there.
+// the color, the border and the font of each run, the alignment, the
+// indents, the spacing and the tab stops of each paragraph, and the
+// headings of the style sheet. It converts the text into HTML, with each
+// table as an HTML table, for the layout of ivy (D10). Each section has
+// pages of its own size and margins, with its headers, its footers and its
+// columns. The layout makes the margins of a page larger for a header or a
+// footer that needs it. A section break starts a new page, unless the next
+// section is continuous on a page of the same size. The tables have the
+// borders, the shading and the merged cells of their rows. The lists have
+// their numbers and their bullets, with the indents and the tab stops of
+// their levels. A table or a frame that floats is at its position, and the
+// text wraps around it when it leaves room beside it. Its vertical
+// position from the margin or from the page holds only when it starts a
+// page, because the layout places a float at the line of its paragraph.
 // The pictures of the stream Data and the shapes of Office Drawing that
 // float on the page show. internal/odraw draws the shapes, as it draws
 // those of msppt and msxls (D51): the preset shapes, the freeforms, the
@@ -47,6 +49,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -226,7 +229,8 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 	if err != nil {
 		return layout.Source{}, err
 	}
-	nameSections(secs, d.parser.sections())
+	sl := d.parser.sections()
+	nameSections(secs, sl)
 	cur := -1
 	// section starts the element of the section of each paragraph, with
 	// the running elements of its headers and its footers
@@ -241,10 +245,20 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		}
 		cur = i
 		d.parser.page = secs[i].page.page
+		d.parser.columns = secs[i].page.columns
 		style := "page: " + secs[i].name
 		if v := secs[i].page.lines.css(); v != "" {
-			// the numbers of the lines have the font of the style Normal
-			style += "; -ivy-line-numbers: " + v + d.parser.normalFont()
+			style += "; -ivy-line-numbers: " + v + d.parser.lineNumberFont()
+		}
+		if n := secs[i].page.columns; n > 1 {
+			style += "; columns: " + strconv.Itoa(n) + "; column-gap: " + pt(secs[i].page.columnGap)
+			if i+1 >= len(secs) || !sl.continuous(secs[i+1].cp) {
+				// Word makes the columns of a section the same height
+				// only before a section that continues on the same page,
+				// as in the package docx. Else the text fills each column
+				// to the bottom of the page
+				style += "; column-fill: auto"
+			}
 		}
 		b.WriteString(`<div class="section" style="` + attr(style) + `">`)
 		b.WriteString(running[i])

@@ -36,7 +36,12 @@ type columnsItem struct {
 
 // columnsLayout is columns_layout in weasyprint/layout/column.py: it lays
 // out a multi-column box.
-func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack, containingBlock *Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins []float64, firstLetterStyle, firstLineStyle *Style) blockLayoutResult {
+//
+// Port: upstream has no -ivy-page-top-space. pageTop is set when the box
+// starts at the top of a page where the space before its first block is
+// left out. The first block of each column loses the space before it as
+// Word does, see layoutContext.startColumn.
+func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipStack, containingBlock *Box, pageIsEmpty bool, absoluteBoxes, fixedBoxes *[]*Box, adjoiningMargins []float64, firstLetterStyle, firstLineStyle *Style, pageTop bool) blockLayoutResult {
 	lc.enter()
 	defer lc.leave()
 	if absoluteBoxes == nil {
@@ -252,8 +257,12 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 			columnSkipStack = skip
 			var consumedHeights []float64
 			var newBoxes []*Box
-			for range count {
+			// Port: upstream has no -ivy-page-top-space. forced is set
+			// when a forced break ends the column before.
+			forced := false
+			for i := range count {
 				// Render one column
+				lc.startColumn(columnBox, i, originalPageIsEmpty && pageTop, forced)
 				result := blockBoxLayout(lc, columnBox,
 					lc.pageBottom-currentPositionY-height,
 					columnSkipStack, containingBlock,
@@ -261,6 +270,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 					firstLetterStyle, firstLineStyle, false, noMaxLines)
 				newBox, resumeAt := result.box, result.resumeAt
 				next = result.nextPage
+				forced = next.brk != "any"
 				if newBox == nil {
 					// We didn't render anything, retry
 					columnSkipStack = skipStack{0: nil}
@@ -281,6 +291,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 
 					// Get the minimum size needed to render the next box
 					if len(columnSkipStack) > 0 {
+						lc.startColumn(columnBox, i+1, false, forced)
 						nextBox := blockBoxLayout(lc, columnBox, math.Inf(1), columnSkipStack,
 							containingBlock, true, new([]*Box), new([]*Box), []float64{},
 							firstLetterStyle, firstLineStyle, false, noMaxLines).box
@@ -390,6 +401,8 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 		i := 0
 		maxColumnHeight := 0.0
 		var columns []*Box
+		// Port: upstream has no -ivy-page-top-space, see above.
+		forced := false
 		for {
 			lc.spend(1)
 			columnBox := createColumnBox(box, containingBlock, columnChildren, width, currentPositionY)
@@ -399,11 +412,13 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 				columnBox.PositionX += float64(i) * (width + gap)
 			}
 			previousSkip := skip
+			lc.startColumn(columnBox, i, originalPageIsEmpty && pageTop, forced)
 			result := blockBoxLayout(lc, columnBox, bottomSpace, skip, containingBlock,
 				originalPageIsEmpty, absoluteBoxes, fixedBoxes, nil,
 				firstLetterStyle, firstLineStyle, false, noMaxLines)
 			newChild := result.box
 			columnSkipStack = result.resumeAt
+			forced = result.nextPage.brk != "any"
 			if newChild == nil {
 				columns = nil
 				breakPage = true

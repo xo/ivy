@@ -34,6 +34,8 @@ const (
 	sprmCRgLid1       = 0x4874
 	sprmCCv           = 0x6870
 	sprmCDxaSpace     = 0x8840
+	sprmCBrc80        = 0x6865
+	sprmCBrc          = 0xCA72
 	sprmPIstd         = 0x4600
 	sprmPJc80         = 0x2403
 	sprmPFPageBreak   = 0x2407
@@ -59,8 +61,15 @@ const (
 	sprmPChgTabsPapx  = 0xC60D
 	sprmPPc           = 0x261B
 	sprmPDxaAbs       = 0x8418
+	sprmPDyaAbs       = 0x8419
+	sprmPDxaWidth     = 0x841A
+	sprmPWr           = 0x2423
+	sprmPDyaFromText  = 0x842E
+	sprmPDxaFromText  = 0x842F
 	sprmTDefTable     = 0xD608
 	sprmSBkc          = 0x3009
+	sprmSCcolumns     = 0x500B
+	sprmSDxaColumns   = 0x900C
 	sprmSLnc          = 0x3013
 	sprmSNLnnMod      = 0x5015
 	sprmSDxaLnn       = 0x9016
@@ -197,6 +206,9 @@ type chp struct {
 	// stream Data.
 	special, data bool
 	picLocation   uint32
+	// border is the border of the characters, from sprmCBrc80 or
+	// sprmCBrc.
+	border brc
 }
 
 // pap holds the paragraph properties that the package reads.
@@ -224,10 +236,19 @@ type pap struct {
 	// its level in the list.
 	ilfo, ilvl int
 	// framed is set for a paragraph in a frame, which Word places at
-	// dxaAbs from the column, the margin or the page. A dxaAbs of
-	// dxaAbsCenter or dxaAbsRight centers it, or puts it at the right.
-	framed bool
-	dxaAbs int
+	// dxaAbs from the column, the margin or the page, as pcHorz says, and
+	// at dyaAbs from the margin, the page or the paragraph, as pcVert
+	// says. A dxaAbs of dxaAbsCenter or dxaAbsRight centers it, or puts it
+	// at the right. dxaWidth is the width of the frame in twips, or 0 for
+	// the width of its text. wr is how the text wraps around the frame,
+	// and fromText holds its distances from the text, vertical and
+	// horizontal, in twips.
+	framed         bool
+	pcHorz, pcVert int
+	dxaAbs, dyaAbs int
+	dxaWidth       int
+	wr             byte
+	fromText       [2]int
 	// tabs holds the custom tab stops, in the order of their positions.
 	// A change makes a new slice, as the paragraphs share the slice of
 	// their style.
@@ -402,6 +423,13 @@ func applyChp(c *chp, s sprm, base *chp) {
 		c.data = v != 0
 	case sprmCPicLocation:
 		c.picLocation = uint32(s.value())
+	case sprmCBrc80:
+		c.border = brc80(s.operand)
+	case sprmCBrc:
+		// the operand starts with its size
+		if len(s.operand) > 0 {
+			c.border = brc97(s.operand[1:])
+		}
 	}
 }
 
@@ -470,10 +498,40 @@ func applyPap(p *pap, s sprm) {
 	case sprmPChgTabsPapx, sprmPChgTabs:
 		applyTabs(p, s)
 	case sprmPPc:
+		// a PositionCodeOperand: pcVert and pcHorz, where 3 keeps the
+		// position code that the paragraph has (MS-DOC)
+		if vert := int(v >> 4 & 3); vert != 3 {
+			p.pcVert = vert
+		}
+		if horz := int(v >> 6 & 3); horz != 3 {
+			p.pcHorz = horz
+		}
 		p.framed = true
 	case sprmPDxaAbs:
-		p.dxaAbs, p.framed = int(s.value()), true
+		p.dxaAbs, p.framed = plusOne(int(s.value())), true
+	case sprmPDyaAbs:
+		p.dyaAbs, p.framed = plusOne(int(s.value())), true
+	case sprmPDxaWidth:
+		if w := int(s.value()); w >= 0 && w <= 31680 {
+			p.dxaWidth = w
+		}
+	case sprmPWr:
+		p.wr = v
+	case sprmPDyaFromText, sprmPDxaFromText:
+		if d := int(s.value()); d >= 0 && d < 14400 {
+			p.fromText[s.op&1] = d
+		}
 	}
+}
+
+// plusOne returns the position of a frame in twips from an XAS_plusOne or
+// a YAS_plusOne of MS-DOC, which hold a position that is not negative plus
+// one, and the special values, such as the center, as they are.
+func plusOne(v int) int {
+	if v > 0 {
+		return v - 1
+	}
+	return v
 }
 
 // The modifiers of a section of Word 6 and Word 95 that the package reads,
@@ -481,6 +539,8 @@ func applyPap(p *pap, s sprm) {
 var word6Sections = map[byte]uint16{
 	142: sprmSBkc,
 	143: sprmSFTitlePage,
+	144: sprmSCcolumns,
+	145: sprmSDxaColumns,
 	152: sprmSLnc,
 	154: sprmSNLnnMod,
 	155: sprmSDxaLnn,
