@@ -229,9 +229,9 @@ func TestSynthetic(t *testing.T) {
 	for _, want := range []string{
 		">abc</td>",
 		">defЖ</td>",
-		// the line of 12 points is higher than the default row of 13.07
+		// the line of 12 points is higher than the default row of 12.36
 		// points, and keeps its height
-		`<td class="s1 c" style="line-height:13.07pt">2.5x</td>`,
+		`<td class="s1 c" style="line-height:12.36pt">2.5x</td>`,
 		">123</td>",
 		">0.01</td>",
 		">5</td>",
@@ -320,8 +320,8 @@ func TestRowHeights(t *testing.T) {
 	b.record(recBOF, u16(biff8, bofWorksheet, 0, 0), u32(0, 0))
 	// the record DefColWidth gives columns of 10 digits: 80 pixels
 	b.record(recDefColWidth, u16(10))
-	// a row of 30 points that Excel fitted to its cells, without fUnsynced,
-	// and a row of 20 points that a person set
+	// a row of 30 points without fUnsynced, which Excel fits to its cells
+	// again, and a row of 20 points that a person set
 	b.record(recRow, u16(0, 0, 1, 600, 0, 0, 0, 15))
 	b.record(recRow, u16(1, 0, 1, 400, 0, 0, 0x0040, 15))
 	b.record(recNumber, u16(0, 0, 0), float(1))
@@ -333,13 +333,14 @@ func TestRowHeights(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := sheets(t, d)[0]
-	// Excel prints the rows at sheet.RowScale, and the columns in digits
-	// of 46 dots of Arial of 10 points: 80 / 7 * 5.52 points
+	// Excel prints a row of Arial of 10 points, 17 pixels, as 103 dots, so
+	// the row of 20 points, 26.67 pixels, as 161 dots. It prints the
+	// columns in digits of 46 dots: 80 / 7 * 5.52 points
 	for _, want := range []string{
 		`<col style="width:63.09pt">`,
-		`<tr style="height:29.04pt"><td class="n c">1</td>`,
-		`<tr style="height:19.36pt"><td class="n c">2</td>`,
-		`tr{break-inside:avoid;height:13.07pt}`,
+		`<tbody><tr><td class="n c">1</td>`,
+		`<tr style="height:19.32pt"><td class="n c">2</td>`,
+		`tr{break-inside:avoid;height:12.36pt}`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, doc)

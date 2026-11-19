@@ -190,10 +190,11 @@ func TestDrawings(t *testing.T) {
 		t.Errorf("expected 4 objects, got: %d", len(src.Objects))
 	}
 	docs := sheets(t, d)
-	// the columns of 50.47 points and the rows of 13.07 points
+	// the columns of 50.47 points and the rows of 12.36 points, the
+	// default height of Arial of 10 points, 103 dots
 	for _, want := range []string{
 		`src="media/image1.png"`,
-		`<div class="ph" style="left:0pt;top:0pt;width:201.87pt;height:78.41pt">Chart</div>`,
+		`<div class="ph" style="left:0pt;top:0pt;width:201.87pt;height:74.16pt">Chart</div>`,
 	} {
 		if !strings.Contains(docs[0], want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, docs[0])

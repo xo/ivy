@@ -345,7 +345,7 @@ func (d *Document) workbook() *sheet.Workbook {
 	wb.Styles[1].Wrap = true
 	sh := &sheet.Sheet{
 		DefaultColWidth:  minColWidth,
-		DefaultRowHeight: 15 * sheet.RowScale,
+		DefaultRowHeight: sheet.NewExcelRows(nil, sheet.DefaultStyle.Font).Default(),
 		Gridlines:        true,
 		Page:             sheet.DefaultPage,
 	}

@@ -20,11 +20,12 @@
 // xlsx, msxls, odf and csv share the package. The two formats of Excel,
 // xlsx and msxls, also share the sizes of the papers, the widths of the
 // columns, the heights of the rows and the codes of the headers and the
-// footers of Excel: PaperSize, Digit, RowScale and ParseHeaderFooter.
+// footers of Excel: PaperSize, Digit, ExcelRows and ParseHeaderFooter.
 package sheet
 
 import (
 	"image/color"
+	"math"
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/layout"
@@ -95,6 +96,15 @@ type Sheet struct {
 	// text that is higher than its row crosses the edges of the row. Without
 	// it, the row grows to hold the line.
 	FixedRows bool
+	// RowScale is the ratio of the height of a line of text that Excel
+	// prints to its height on the screen, for the lines of a row whose
+	// height FixedRows keeps (ExcelRows.Scale). 0 takes 0.968, the scale
+	// of Calibri of 11 points.
+	RowScale float64
+	// RowDots rounds the height of each row down to a dot of 600 dots per
+	// inch, as Excel prints the grid of the cells. A picture across the
+	// rows takes their heights without the rounding.
+	RowDots bool
 	// CondFormats are the conditional formats of the cells.
 	CondFormats []CondFormat
 	// Comments are the comments of the cells, which the pages show after
@@ -140,6 +150,8 @@ type Row struct {
 	Height float64
 	// Hidden hides the row.
 	Hidden bool
+	// Fit asks ExcelRows.Fit to fit the height of the row to its cells.
+	Fit bool
 	// Style is the style of the cells of the row that the sheet does not
 	// hold, or 0.
 	Style int
@@ -452,9 +464,24 @@ func (sh *Sheet) colWidth(i int) float64 {
 	return sh.DefaultColWidth
 }
 
-// rowHeight returns the height of the row r in points, or 0 if it is
-// hidden.
+// rowHeight returns the height of the row r in the grid of the cells, in
+// points, or 0 if it is hidden: with RowDots, rounded down to a dot.
 func (sh *Sheet) rowHeight(r *Row) float64 {
+	return sh.grid(sh.exactHeight(r))
+}
+
+// grid returns the height h of a row in the grid of the cells: with
+// RowDots, rounded down to a dot of 600 dots per inch.
+func (sh *Sheet) grid(h float64) float64 {
+	if !sh.RowDots || !(h > 0) {
+		return h
+	}
+	return math.Floor(h*printDPI/72+1e-6) * 72 / printDPI
+}
+
+// exactHeight returns the height of the row r in points, without the
+// rounding of RowDots, or 0 if it is hidden.
+func (sh *Sheet) exactHeight(r *Row) float64 {
 	if r == nil {
 		return sh.DefaultRowHeight
 	}
@@ -477,9 +504,10 @@ func (sh *Sheet) ColWidth(i int) float64 {
 }
 
 // RowHeight returns the height of the row i in points, or 0 if it is
-// hidden. The rows must be sorted, as Sort sorts them.
+// hidden, without the rounding of RowDots: the height that a picture across
+// the row takes. The rows must be sorted, as Sort sorts them.
 func (sh *Sheet) RowHeight(i int) float64 {
-	return sh.rowHeight(sh.row(i))
+	return sh.exactHeight(sh.row(i))
 }
 
 // Sort sorts the rows of the sheet, the cells of each row and the

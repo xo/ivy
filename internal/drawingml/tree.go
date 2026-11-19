@@ -373,6 +373,15 @@ func (t *Tree) geometry(sp *shapeProps, w, h float64, pics Pictures) ([]Path, ok
 	return Evaluated(g, adjust, w, h, t.log())
 }
 
+// preset returns the name of the preset geometry of the shape, or "" for a
+// custom geometry.
+func (t *Tree) preset(sp *shapeProps, pics Pictures) string {
+	if e, _, ok := sp.find("prstGeom", pics); ok {
+		return attr(e, "prst", "rect")
+	}
+	return ""
+}
+
 // Evaluated evaluates the geometry g with the adjust values for a box of w
 // by h points, and returns its paths and its text rectangle in points. The
 // guides are computed in EMU, the unit of the geometry. It logs an error
@@ -564,6 +573,11 @@ func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures,
 		TextRect:      rect,
 		TextTransform: m.PreConcat(x.textTransform()),
 		Theme:         t.Colors.Theme,
+	}
+	if f.Fill.Kind == PaintGradient && f.Fill.Gradient.Path == "shape" && t.preset(sp, pics) == "ellipse" {
+		// PowerPoint fills an ellipse with a radial gradient that fits its
+		// box, whatever the focus
+		f.Fill.Gradient.Focus = Insets{L: 0.5, T: 0.5, R: 0.5, B: 0.5}
 	}
 	if b, ok := boolAttr(n, "useBgFill"); ok && b {
 		if v, ok := t.Colors.scheme("bg1"); ok {

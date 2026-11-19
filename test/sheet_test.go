@@ -470,8 +470,8 @@ func TestXLSX(t *testing.T) {
 // ivy no longer matches LibreOffice here, because Excel is the primary
 // reference of the files of Excel, and Excel prints them otherwise:
 //
-//   - Excel prints a row at 0.968 of its height (sheet.RowScale): a row of
-//     15 points is 14.52 points, 19.36 pixels. LibreOffice prints it at 20
+//   - Excel prints a row of Calibri of 11 points at 0.968 of its height
+//     (sheet.ExcelRows): a row of 15 points is 14.52 points, 19.36 pixels. LibreOffice prints it at 20
 //     pixels. So a page of ivy holds 44 rows of data, and one of
 //     LibreOffice 42.
 //   - Excel prints a column in the digits of the printer: the pixels of

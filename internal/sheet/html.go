@@ -629,7 +629,7 @@ func (w *writer) height(r Range) float64 {
 		n--
 		h += sh.rowHeight(row)
 	}
-	return h + float64(n)*sh.DefaultRowHeight
+	return h + float64(n)*sh.grid(sh.DefaultRowHeight)
 }
 
 // bands cuts the columns into the bands that fit the width of the page,
@@ -783,7 +783,7 @@ func (w *writer) css(b *strings.Builder) {
 	}
 	b.WriteString("}\n")
 	b.WriteString("table.sh+table.sh{break-before:page}\n")
-	b.WriteString("tr{break-inside:avoid;height:" + pt(w.sh.DefaultRowHeight*s) + "}\n")
+	b.WriteString("tr{break-inside:avoid;height:" + pt(w.sh.grid(w.sh.DefaultRowHeight)*s) + "}\n")
 	b.WriteString("tr.pb{break-before:page}\n")
 	b.WriteString("td{padding:0 " + pt(cellPadding*s) + ";vertical-align:bottom;white-space:pre;text-align:left;overflow:visible;line-height:normal;")
 	if w.sh.Gridlines {
@@ -1192,7 +1192,7 @@ func (w *writer) rows(r Range, band []int, skipTitles bool) error {
 		if w.rowBreaks[i] && !firstRow {
 			w.body.WriteString(` class="pb"`)
 		}
-		if h != sh.DefaultRowHeight {
+		if h != sh.grid(sh.DefaultRowHeight) {
 			w.body.WriteString(` style="height:` + pt(h*w.scale) + `"`)
 		}
 		w.body.WriteString(">")
@@ -1643,13 +1643,22 @@ func (w *writer) room(cell *Cell, st *Style, h float64) (size, avail float64) {
 
 // lines returns the number of lines of the text of a cell that rows of the
 // printed height h hold, with lines of 1.22 times the size of the font, as
-// Excel lays out Calibri and MS PGothic. The lines are printed at RowScale
-// too, and the borders of the rows do not count: Excel fits 2 lines of MS
-// PGothic of 11 points in a row of 27 points, twice its default height.
+// Excel lays out Calibri and MS PGothic. The lines are printed at the scale
+// of the rows (Sheet.RowScale) too, and the borders of the rows do not
+// count: Excel fits 2 lines of MS PGothic of 11 points in a row of 27
+// points, twice its default height.
 func (w *writer) lines(cell *Cell, st *Style, h float64) int {
 	size, _ := w.room(cell, st, h)
-	return int(h/(size*1.22*RowScale) + 0.01)
+	scale := w.sh.RowScale
+	if !(scale > 0) {
+		scale = calibriRowScale
+	}
+	return int(h/(size*1.22*scale) + 0.01)
 }
+
+// calibriRowScale is the scale of the rows of a workbook whose default font
+// is Calibri of 11 points: 121 dots for 20 pixels (ExcelRows).
+const calibriRowScale = 0.968
 
 // eastAsian reports whether the text of a cell holds a character of the
 // scripts of East Asia, whose fonts have higher lines.

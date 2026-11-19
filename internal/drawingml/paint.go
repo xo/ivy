@@ -66,7 +66,8 @@ type Gradient struct {
 	// Stops are the stops, in order.
 	Stops []Stop
 	// Path is "" for a linear gradient, and "circle", "rect" or "shape" for
-	// a gradient along a path. The paths "radial", "ellipsoid", "square"
+	// a gradient along a path. The path "shape" follows the outline of the
+	// shape that FillPath fills. The paths "radial", "ellipsoid", "square"
 	// and "rectangular" are the path gradients of OpenDocument, which
 	// LibreOffice draws.
 	Path string
@@ -348,6 +349,12 @@ func (pt *Paint) FillPath(ctx context.Context, dev display.Device, p *okage.Path
 			dev.FillPath(p, rule, okage.SolidColor(pt.Color.Okage()))
 		}
 	case PaintGradient:
+		if pt.Gradient.Path == "shape" {
+			if sh, ok := pt.Gradient.shapeShader(p, box, scale); ok {
+				dev.FillPath(p, rule, sh)
+				return nil
+			}
+		}
 		if sh, ok := pt.Gradient.shader(box); ok {
 			dev.FillPath(p, rule, sh)
 		}
@@ -509,15 +516,14 @@ func (g *Gradient) odfShader(x, y, w, h float64, stops []okage.GradientStop) (ok
 	return rectMesh(g.Stops, 0.5, 0.5, 0.5, 0.5, ts)
 }
 
-// rectMesh returns the shader of a gradient of the path "rect" or "shape"
-// over the unit square, which ts maps onto the box. The focus is the
-// rectangle from l, t to r, b in the unit square. The first stop is on the
-// edge of the focus, and the last one on the edge of the box. A stop
-// between them is on the rectangle that is that fraction of the way from
-// the focus to the box. Lines from the corners of the focus to the corners
-// of the box join the four sides, as PowerPoint draws them. The shape of
-// the path "shape" is drawn as its box, as PowerPoint draws the shading
-// msofillShadeShape of Office Drawing.
+// rectMesh returns the shader of a gradient of the path "rect" over the
+// unit square, which ts maps onto the box. The focus is the rectangle from
+// l, t to r, b in the unit square. The first stop is on the edge of the
+// focus, and the last one on the edge of the box. A stop between them is on
+// the rectangle that is that fraction of the way from the focus to the box.
+// Lines from the corners of the focus to the corners of the box join the
+// four sides, as PowerPoint draws them. A gradient of the path "shape"
+// whose outline gives no mesh (shapeShader) is drawn as the path "rect".
 //
 // In each of the four parts between the focus and the box, the fraction is
 // linear in the distance from the side of the focus. A mesh of triangles

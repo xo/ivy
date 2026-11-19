@@ -321,7 +321,10 @@ type cell struct {
 type rowInfo struct {
 	height float64
 	hidden bool
-	xf     int
+	// fit is set when a person did not set the height (fUnsynced), so that
+	// Excel fits the row to its cells when it opens the file.
+	fit bool
+	xf  int
 }
 
 // colInfo is a record COLINFO (MS-XLS 2.4.53).
@@ -556,7 +559,9 @@ func (w *workbook) sheetRecord(sh *rawSheet, rec record, add func(cell), pending
 		if r.bad || row > maxRow {
 			return
 		}
-		ri := rowInfo{hidden: flags&0x0020 != 0}
+		// Excel fits a row without fUnsynced to its cells when it opens
+		// the file
+		ri := rowInfo{hidden: flags&0x0020 != 0, fit: flags&0x0040 == 0}
 		// miyRw is the height of the row that Excel shows, whether a person
 		// set it (fUnsynced) or Excel fitted it to the cells
 		if height > 0 && height < 410 {

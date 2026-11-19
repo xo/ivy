@@ -3,12 +3,12 @@ package msxls
 import (
 	"context"
 	"image/color"
-	"math"
 	"slices"
 	"strconv"
 	"unicode/utf16"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/numfmt"
 	"github.com/xo/ivy/internal/odraw"
@@ -165,6 +165,10 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 	}
 	def := w.font(0)
 	digit := sheet.DigitOf(def, 10)
+	if !(def.Size > 0) {
+		def.Size = 10
+	}
+	rows := sheet.NewExcelRows(fontdb.Of(cfg), def)
 	cells := 0
 	book.Files = make(map[string][]byte)
 	look := &chartLookup{ctx: ctx, lim: lim, w: w}
@@ -198,7 +202,7 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 			continue
 		}
 		cells += len(raw.cells)
-		sh := w.toSheet(raw, def, digit, len(book.Styles))
+		sh := w.toSheet(raw, rows, digit, book.Styles)
 		if p := w.prints[i]; p != nil {
 			sh.PrintAreas, sh.TitleRows, sh.TitleCols = p.areas, p.rows, p.cols
 		}
@@ -213,9 +217,11 @@ func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*she
 
 // toSheet converts a worksheet into a sheet of internal/sheet. The widths
 // of the columns and the heights of the rows are those that Excel prints:
-// the widths in the digits of the default font, and the heights at
-// sheet.RowScale.
-func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, styles int) *sheet.Sheet {
+// the widths in the digits of the default font, and the heights with the
+// scale of the default font (sheet.ExcelRows). Excel fits each row without
+// fUnsynced to its cells.
+func (w *workbook) toSheet(raw *rawSheet, rows *sheet.ExcelRows, digit sheet.Digit, bookStyles []sheet.Style) *sheet.Sheet {
+	styles := len(bookStyles)
 	sh := &sheet.Sheet{
 		Name:             raw.name,
 		DefaultRowHeight: raw.defHeight,
@@ -223,14 +229,19 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, sty
 		Page:             raw.page,
 		Gridlines:        raw.gridlines,
 		FixedRows:        true,
+		RowScale:         rows.Scale(),
+		RowDots:          true,
 		Header:           sheet.ParseHeaderFooter(raw.header),
 		Footer:           sheet.ParseHeaderFooter(raw.footer),
 	}
 	sh.Page.ScaleHeaderFooter = raw.scaleHeaderFooter()
-	if sh.DefaultRowHeight <= 0 {
-		sh.DefaultRowHeight = math.Max(12.75, math.Round(def.Size*1.36*4)/4)
+	// the height of a row without a record ROW, or the default height of
+	// the default font
+	if raw.defHeight > 0 {
+		sh.DefaultRowHeight = rows.Printed(raw.defHeight)
+	} else {
+		sh.DefaultRowHeight = rows.Default()
 	}
-	sh.DefaultRowHeight *= sheet.RowScale
 	if raw.stdWidth > 0 {
 		sh.DefaultColWidth = digit.Column(raw.stdWidth)
 	} else {
@@ -275,7 +286,7 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, sty
 	sh.Rows = make([]sheet.Row, 0, len(indexes))
 	for _, r := range indexes {
 		info := raw.rows[r]
-		row := sheet.Row{Index: r, Height: info.height * sheet.RowScale, Hidden: info.hidden, Style: styleOf(info.xf)}
+		row := sheet.Row{Index: r, Height: rows.Printed(info.height), Hidden: info.hidden, Fit: info.fit, Style: styleOf(info.xf)}
 		cs := byRow[r]
 		slices.SortStableFunc(cs, func(a, b cell) int { return a.col - b.col })
 		for i, c := range cs {
@@ -287,6 +298,7 @@ func (w *workbook) toSheet(raw *rawSheet, def sheet.Font, digit sheet.Digit, sty
 		}
 		sh.Rows = append(sh.Rows, row)
 	}
+	rows.Fit(sh, bookStyles)
 	w.setup(sh, raw)
 	w.condFormats(sh, raw)
 	if raw.truncated {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/ooxml"
 	"github.com/xo/ivy/internal/sheet"
@@ -54,6 +55,18 @@ type book struct {
 	// sheets holds the sheets that the book read, by their names, for the
 	// number formats of the values of the charts.
 	sheets map[string]*sheet.Sheet
+	// rows gives the heights of the rows that Excel prints, for the
+	// default font of the workbook.
+	rows *sheet.ExcelRows
+}
+
+// excelRows returns the heights of the rows of the workbook, whose default
+// font is def, with the fonts of the program.
+func (b *book) excelRows(def sheet.Font) *sheet.ExcelRows {
+	if b.rows == nil {
+		b.rows = sheet.NewExcelRows(fontdb.Of(b.cfg), def)
+	}
+	return b.rows
 }
 
 // richText is a shared string: plain text, or runs of rich text.

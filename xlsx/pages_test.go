@@ -124,8 +124,9 @@ func TestWorkbookHTML(t *testing.T) {
 		// and the default of 64 pixels. Excel prints them in digits of
 		// 5.64 points. The hidden column C is left out.
 		`<col style="width:116.83pt"><col style="width:51.57pt"><col style="width:51.57pt"><col style="width:51.57pt">`,
-		// Excel prints a row of 24 points 23.23 points high
-		`<tr style="height:23.23pt"><td class="s1 c" colspan="2">Title</td>`,
+		// Excel prints a row of 24 points, 32 pixels, 32 × 121 / 20 dots
+		// high: 193 dots, 23.16 points
+		`<tr style="height:23.16pt"><td class="s1 c" colspan="2">Title</td>`,
 		`<td class="c">a &amp; b</td><td class="s4 n c" style="color:#ff0000">-1,234.50</td>`,
 		`<td class="s2 n c">2023-03-15</td><td class="s3 n c">25.60%</td><td class="x c">TRUE</td><td class="x c">#DIV/0!</td>`,
 		`<td class="c">formula text</td><td class="n c">2</td>`,

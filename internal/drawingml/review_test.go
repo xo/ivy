@@ -442,6 +442,50 @@ func TestODFGradients(t *testing.T) {
 	}
 }
 
+// TestShapeGradient checks that a gradient of the path "shape" follows the
+// outline of the shape, as PowerPoint draws it on the slides of
+// pptx/testdata/path-gradients.pptx: the lines of one color are copies of
+// the outline, scaled about the focus. A moon, whose box has its center on
+// its outline, takes the path "circle" about that center.
+func TestShapeGradient(t *testing.T) {
+	center := Insets{L: 0.5, T: 0.5, R: 0.5, B: 0.5}
+	g := Gradient{Path: "shape", Focus: center, Stops: []Stop{{Pos: 0, Color: White}, {Pos: 1, Color: Black}}}
+	for _, tt := range []struct {
+		prst      string
+		x, y, red int
+	}{
+		// the focus is white, and the point halfway from the focus to the
+		// left side of the triangle is gray: the path "rect" gives a
+		// quarter of the way
+		{"triangle", 100, 100, 255},
+		{"triangle", 75, 100, 128},
+		{"triangle", 100, 150, 128},
+		{"triangle", 50, 150, 128},
+		// a pixel next to the inner corner of the star at the top left is
+		// almost black, as the tips of the star
+		{"star5", 77, 78, 15},
+		// the point is 60 points from the center, and the radius of the
+		// circle is 141 points
+		{"moon", 40, 100, 146},
+	} {
+		geom, _ := Preset(tt.prst)
+		paths, _ := Evaluated(geom, nil, 200, 200, nil)
+		s := NewScene(ivy.Config{})
+		s.AddFigure(&Figure{
+			Transform: okage.IdentityTransform(), W: 200, H: 200, Paths: paths,
+			Fill: Paint{Kind: PaintGradient, Gradient: g}, Line: Line{Paint: Paint{Kind: PaintNone}},
+		})
+		pix, _ := okage.NewPixmap(200, 200)
+		pix.Fill(okage.ColorWhite)
+		if err := s.Render(t.Context(), pix, okage.IdentityTransform()); err != nil {
+			t.Fatal(err)
+		}
+		if r := red(pix, uint32(tt.x), uint32(tt.y)); r < tt.red-10 || r > tt.red+10 {
+			t.Errorf("%s: expected about %d at (%d, %d), got %d", tt.prst, tt.red, tt.x, tt.y, r)
+		}
+	}
+}
+
 // TestTwoStops checks that a gradient of DrawingML with two stops at 0 and 1
 // mixes in linear light along the curve of sigma, as PowerPoint draws it,
 // and that the other gradients keep their stops.

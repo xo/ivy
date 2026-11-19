@@ -41,9 +41,12 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	root := doc.RootElement()
 	def := b.styles.defaultFont()
 	digit := sheet.DigitOf(def, 11)
+	rows := b.excelRows(def)
 	sh.DefaultColWidth = digit.DefaultColumn(8)
-	sh.DefaultRowHeight = 15 * sheet.RowScale
+	sh.DefaultRowHeight = rows.Default()
 	sh.FixedRows = true
+	sh.RowScale = rows.Scale()
+	sh.RowDots = true
 	sh.Page = sheet.Page{
 		Width: sheet.LetterWidth, Height: sheet.LetterHeight,
 		Left: 0.7 * 72, Right: 0.7 * 72, Top: 0.75 * 72, Bottom: 0.75 * 72,
@@ -78,8 +81,10 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 				fit = flag(p, "fitToPage", false)
 			}
 		case "sheetFormatPr":
+			// the height of a row that the sheet does not list; a row
+			// that it lists without ht takes the height of its cells
 			if v := number(n, "defaultRowHeight", 0); v > 0 && v < 410 {
-				sh.DefaultRowHeight = v * sheet.RowScale
+				sh.DefaultRowHeight = rows.Printed(v)
 			}
 			if v := number(n, "defaultColWidth", 0); v > 0 {
 				sh.DefaultColWidth = digit.Column(v)
@@ -89,7 +94,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 		case "cols":
 			b.readCols(sh, n, digit)
 		case "sheetData":
-			if err := b.readSheetData(sh, n); err != nil {
+			if err := b.readSheetData(sh, n, rows); err != nil {
 				return err
 			}
 		case "conditionalFormatting":
@@ -164,6 +169,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	}
 	sh.Page.Fit = fit
 	sh.Sort()
+	rows.Fit(sh, b.styles.cells)
 	b.printSetup(sh, index)
 	if drawing != "" {
 		b.readDrawing(sh, drawing)
@@ -318,8 +324,9 @@ func (b *book) readCols(sh *sheet.Sheet, n roxmltree.Node, digit sheet.Digit) {
 	}
 }
 
-// readSheetData reads the rows and the cells of a worksheet.
-func (b *book) readSheetData(sh *sheet.Sheet, n roxmltree.Node) error {
+// readSheetData reads the rows and the cells of a worksheet. Excel fits a
+// row without customHeight to its cells, whatever its ht.
+func (b *book) readSheetData(sh *sheet.Sheet, n roxmltree.Node, rows *sheet.ExcelRows) error {
 	next := 0
 	for rn := range children(n, "row") {
 		if err := b.ctx.Err(); err != nil {
@@ -332,11 +339,12 @@ func (b *book) readSheetData(sh *sheet.Sheet, n roxmltree.Node) error {
 		next = idx + 1
 		row := sheet.Row{Index: idx}
 		if ht := number(rn, "ht", -1); ht >= 0 && ht < 410 {
-			row.Height = ht * sheet.RowScale
+			row.Height = rows.Printed(ht)
 			if ht == 0 {
 				row.Hidden = true
 			}
 		}
+		row.Fit = !flag(rn, "customHeight", false)
 		row.Hidden = row.Hidden || flag(rn, "hidden", false)
 		if flag(rn, "customFormat", false) {
 			if s := integer(rn, "s", 0); s > 0 && s < len(b.styles.cells) {

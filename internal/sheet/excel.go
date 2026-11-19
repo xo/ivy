@@ -86,14 +86,6 @@ const (
 	printDPI  = 600
 )
 
-// RowScale is the ratio of the height of a row that Excel prints to its
-// height in the file. Excel 2024 prints a row of 15 points as 14.52 points,
-// a row of 12.75 points as 12.36 points and a row of 21.75 points as 21
-// points, with Calibri and with Arial as the default font, in the PDF
-// files that it exports. So a sheet of 50000 rows of 15 points has 47 rows
-// on a page of US Letter, not 45.
-const RowScale = 0.968
-
 // Digit is the width of a digit of the default font of a workbook, the
 // unit of the widths of the columns of Excel.
 type Digit struct {
