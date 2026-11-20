@@ -81,3 +81,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D59 | [The space before is left out at the top of a column](D059-the-space-before-is-left-out-at-the-top-of-a-column.md) | Decided. Amends D56 |
 | D60 | [The layout places a float at a position on the page](D060-the-layout-places-a-float-at-a-position-on-the-page.md) | Decided |
 | D61 | [The package icc converts the colors of an image to sRGB](D061-the-package-icc-converts-the-colors-of-an-image-to-srgb.md) | Decided. Amends D16 |
+| D62 | [ivy reads and writes LaTeX with a copy of go-tex/engine](D062-ivy-reads-and-writes-latex-with-a-copy-of-go-tex-engine.md) | Decided |

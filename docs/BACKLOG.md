@@ -195,10 +195,8 @@ From the request of the maintainers of 2026-11-20 for the package `icc`
 
 ## LaTeX
 
-From the request of the maintainers of 2026-11-20. Question 25 of
-`PLAN.md` asks how ivy reads and writes LaTeX, and it holds the facts of
-`go-tex/tex` and `go-tex/engine`. No code is written before the answer
-(D3).
+From the request of the maintainers of 2026-11-20. D62 decides how ivy
+reads and writes LaTeX, and phase 8 of `PLAN.md` gives its steps.
 
 1. Read LaTeX: put a `.tex` document on pages, with its macros, classes,
    packages, math, tables, figures, cross-references and bibliography.
@@ -208,8 +206,8 @@ From the request of the maintainers of 2026-11-20. Question 25 of
 3. Draw the equations of Office Math (`docx`), MathML (`html` and `epub`)
    and the formulas of OpenDocument as math. `docx` now writes the text of
    an equation in italics, in `converter.math` of `docx/paragraph.go`. This
-   needs the layout of math of item 4 of "Work for okage". Source: question
-   25 of `PLAN.md`, 2026-11-20.
+   needs the layout of math of item 4 of "Work for okage". Source: D62,
+   2026-11-20.
 
 ## Left by the charts
 
@@ -483,11 +481,14 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    shadows, the glows and the soft edges with box blurs of its own, in
    `blur.go`, and changes the colors of the pictures itself, in `recolor.go`.
    Source: `internal/drawingml`, 2026-11-19.
-4. Read the OpenType MATH table in `typesetting`, and lay out TeX math with
-   it, so that ivy draws the equations of Office Math, MathML, OpenDocument
-   and LaTeX. A port of `go-tex/math`, under BSD-3-Clause, onto the font model
-   of okage is a start. Question 25 of `PLAN.md` asks the maintainers first.
-   Source: question 25, 2026-11-20.
+4. Read the OpenType MATH table in `typesetting`, and give a layout of math: a
+   tree of math nodes, a parser of TeX math ported from `go-tex/math`, and the
+   layout of TeX Appendix G, whose result draws with okage, gives its outlines
+   as paths, or gives its glyphs and rules. ivy draws the math of LaTeX,
+   Office Math, MathML and OpenDocument with it, and zuzu the math of its
+   Mermaid labels. Also give the metrics, the kerning of a pair and the
+   ligature of a pair of glyphs, for the engine of D62. okage decides the API
+   in okage D72. Source: D62, 2026-11-20.
 
 ## Work for magic
 

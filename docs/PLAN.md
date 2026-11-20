@@ -354,6 +354,20 @@ phase 7a" in `BACKLOG.md`. Phase 7b was done on 2026-11-19, as "The build
 of phase 7b" in D58 says. The work that is left is under "Left by phase
 7b" in `BACKLOG.md`.
 
+### Phase 8. LaTeX (8 to 13 weeks)
+
+ivy reads and writes LaTeX with a copy of `go-tex/engine` that draws with
+okage (D62). okage holds the layout of math (okage D72), which zuzu also
+uses. Each estimate is for one agent with a maintainer.
+
+| Phase | What it gives | Estimate |
+| --- | --- | --- |
+| 8a. The copy and the driver | `latex/internal/engine` without `go-pdfkit` and `go-gfx`, the driver from the tree of boxes to the display list, the specials of SVG, the figures through the decoders of ivy, a context and the limits | 2 to 3 weeks |
+| 8b. The fonts | `fontFace` on the fonts of okage, Latin Modern in the module `fonts`, and the helpers of okage for the metrics, the kerning and the ligatures | 1 to 2 weeks |
+| 8c. The package | `latex/` with the document API of D11, the classes and packages from `ivy.Config`, the fuzz test, the corpus, and real TeX as an oracle | 1.5 to 2 weeks |
+| 8d. The math | the math of the engine, and the equations of Office Math, MathML and OpenDocument, through the layout of math of okage, after its release | 1 to 2 weeks in ivy, and 3 to 5 weeks in okage at the same time |
+| 8e. The writer | `latex/latexenc`, which writes the HTML of a document of the layout as LaTeX | not estimated |
+
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.
 The long tail is not a phase. Each format of it waits until a user asks for
@@ -373,70 +387,5 @@ The answer becomes a decision. The questions were numbered again when the
 decisions were consolidated (D4). D22 answers question 3, D23 answers question
 4, and D25 answers question 5. D33 to D45 answer questions 1 and 6 to 20. D55
 answers question 21, D57 answers question 22, D58 answers question 23, and
-D60 answers question 24. Question 25 is open. The next question is question
-26.
-
-### Question 25. How does ivy read and write LaTeX?
-
-On 2026-11-20 the maintainers asked for a proper reader and writer of
-LaTeX. `docs/FORMATS.md` says "No" for LaTeX, so this changes the plan
-(D3). A reader puts a `.tex` document on pages. A writer, `latex/latexenc`
-(D6), writes a document of ivy as LaTeX source.
-
-The maintainers named `github.com/go-tex/tex`. These are the facts of
-2026-11-20:
-
-1. `go-tex/tex` is 21 KB of Go in two files, under BSD-3-Clause. It expands
-   the macros of a subset of LaTeX and writes HTML, with the math as SVG
-   through `go-tex/math`. It has no tables, no figures, no
-   cross-references, no bibliography and no packages, and drops an unknown
-   command. Since September 2026 its commits only update its dependencies.
-2. `go-tex/engine`, of the same organization, is a faithful TeX engine
-   under BSD-3-Clause: the tokenizer, the macros and expansion, the
-   registers, a box, glue and penalty stomach with Knuth-Plass line
-   breaking, and a page builder. It runs the real classes `article`,
-   `report` and `book`, which it embeds under the LaTeX Project Public
-   License. A real-TeX oracle gates it. It is one package of about 860
-   files, made in August 2026, with 97 open issues and many commits each
-   day.
-3. `go-tex/engine` gives only PDF bytes or SVG strings. Its output goes
-   through its own renderer `go-gfx/gfx` and its own PDF stack
-   `go-pdfkit`, with about 15 modules outside `xo`. `go-tex/texmf` fetches
-   the classes and packages that a document needs from the network.
-4. ivy draws the equations of Office Math as plain italic text, and okage
-   has no reader of the OpenType MATH table.
-
-The choices are:
-
-1. Import `go-tex/engine`. It reads real documents, but it brings a second
-   renderer and a second PDF stack (D8, hard rule 7), about 15 outside
-   modules (D7), classes under the LPPL, and a fetch from the network.
-2. `go-tex/tex` writes HTML, and the layout of ivy puts it on pages, as
-   `markdown` does. The math goes through okage as SVG. It is small and
-   fits ivy, but it reads only a subset, and its development has stopped.
-3. A TeX engine of ivy in `latex/`, ported in parts from `go-tex/engine`
-   under its BSD-3-Clause license, with real TeX as an oracle of the test
-   module (D13). Its pages go onto the display list, and PDF output goes
-   through pdfenc (D58). A program gives the classes and packages through
-   `ivy.Config`, and ivy fetches nothing.
-4. No LaTeX for now.
-
-The recommendation is choice 3, built in this order:
-
-1. okage reads the OpenType MATH table, and lays out TeX math with it, as
-   a package of `typesetting`. A port of `go-tex/math` onto the font model
-   of okage is a start. ivy then draws the equations of Office Math
-   (`docx`), MathML (`html` and `epub`) and the formulas of OpenDocument
-   with it. This gives a result before the engine exists.
-2. The engine of ivy: the tokenizer, the macros, the expansion and the
-   registers, then the stomach and the page builder, then the LaTeX
-   classes.
-3. `latex/latexenc`, which writes the HTML of a document of the layout as
-   LaTeX.
-
-The split is this. okage holds what any program that sets text needs: the
-MATH table, the layout of math, and Knuth-Plass line breaking with
-hyphenation if the layout of ivy also wants it. ivy holds what is LaTeX:
-the engine, the classes and packages, the bibliography, the figures
-through the decoders of ivy, and the writer. The fonts, such as Latin
-Modern and STIX Two Math, go in the module `fonts` under their licenses.
+D60 answers question 24, and D62 answers question 25. No question is open.
+The next question is question 26.
