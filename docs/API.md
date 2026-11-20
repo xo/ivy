@@ -50,6 +50,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 ├── camera/  iwork/              camera RAW, iWork
 ├── drm/                         a module of its own, for DRM that needs a key (D12)
 ├── fonts/                       a module of its own: the fonts with the metrics of Office (D24)
+├── icc/                         color management: an image converted to sRGB, for iv (D61)
 ├── internal/
 │   ├── display/                 the display list and the okage device (D10)
 │   ├── font/                    the fonts (D10)
@@ -58,7 +59,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 │   ├── msole/  offcrypto/  ...  the code that more than one format shares
 │   ├── hayro/                   the port of hayro, which pdf and ps share (D14, D29)
 │   ├── ccitt/  jbig2/  jpeg2000/ the codecs of the port of hayro (D14, D17)
-│   └── moxcms/                  the subset of moxcms that hayro uses (D16)
+│   └── moxcms/                  the subset of moxcms that hayro and icc use (D16, D61)
 └── test/                        a module of its own: the oracles (D13)
 ```
 
@@ -487,6 +488,33 @@ func WithRasterDPI(dpi float32) Option   // 300 by default
 goes into the file as text of an embedded subset of its font, so a reader
 can search and copy it. Another page goes into the file as one image of
 `ivy.RenderImage`. The limits and the errors are those of D58.
+
+## The package icc
+
+The package `icc` is not a format. It converts the colors of an image to
+sRGB, for a program that decodes images, as iv does (D61). It wraps the port
+of moxcms in `internal/moxcms`.
+
+```go
+// Parse reads an ICC profile. ToSRGB converts an image with the profile.
+func Parse(data []byte) (*Profile, error)
+func (p *Profile) ToSRGB(ctx context.Context, img image.Image, intent Intent) (image.Image, error)
+
+// ToSRGB parses profile and converts img. An empty profile converts a CMYK
+// image with DefaultCMYK, and copies any other image as sRGB.
+func ToSRGB(ctx context.Context, img image.Image, profile []byte, intent Intent) (image.Image, error)
+
+// DefaultCMYK is the CMYK profile of DeviceCMYK in PDF.
+func DefaultCMYK() []byte
+
+// FromCICP makes the profile of the code points of Rec. ITU-T H.273, as an
+// AVIF or a HEIC file holds them in a colr box of the type nclx.
+func FromCICP(c CICP) (*Profile, error)
+```
+
+The result keeps the alpha of the image. It is an `*image.NRGBA64` for an
+image with samples of 16 bits, and an `*image.NRGBA` for any other image.
+The errors wrap `ivy.ErrFormat`, `ivy.ErrUnsupported` or `ivy.ErrLimit`.
 
 ## The internal layers
 

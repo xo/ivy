@@ -1,6 +1,6 @@
 # D16. The port of hayro uses Go, and ports a subset of moxcms
 
-Status: Decided. Amends D14. Amended by D17. Amended by D20.
+Status: Decided. Amends D14. Amended by D17. Amended by D20. Amended by D61.
 
 hayro and moxcms are about 111,000 lines of Rust. The maintainers cut the port
 of D14 on 2026-11-16, so that it ports only the code that ivy has no other way

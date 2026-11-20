@@ -8,9 +8,10 @@
 // Package moxcms is a port of a subset of the Rust crate moxcms, a color
 // management system for ICC profiles.
 //
-// The subset is the part of moxcms that hayro uses (D16). It reads an ICC
-// profile, makes the sRGB profile and a gray profile, and builds transforms
-// of 8 bits from a profile to another profile. A transform is a
+// The subset is the part of moxcms that hayro uses (D16), and the part that
+// the package icc uses (D61). It reads an ICC profile, makes the sRGB
+// profile, a gray profile and the profile of CICP code points, and builds
+// transforms of 8 bits from a profile to another profile. A transform is a
 // TransformExecutor or an InPlaceTransformExecutor. SUBSET.md lists each item
 // of the subset and its user in hayro.
 //

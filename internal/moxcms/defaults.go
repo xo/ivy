@@ -50,6 +50,17 @@ func basicRgbProfile(whitePoint XyY) *ColorProfile {
 	return &p
 }
 
+// NewFromCicp is ColorProfile::new_from_cicp in moxcms src/defaults.rs. It
+// returns a new RGB profile with the primaries and the transfer
+// characteristics of cicp. When cicp has no primaries or no transfer curve,
+// the profile has no colorants or no tone curves, and a transform from it
+// fails.
+func NewFromCicp(cicp CicpProfile) *ColorProfile {
+	p := basicRgbProfile(whitePointD65())
+	p.updateRgbColorimetryFromCicp(cicp)
+	return p
+}
+
 // NewSrgb is ColorProfile::new_srgb in moxcms src/defaults.rs. It returns a
 // new sRGB profile.
 //

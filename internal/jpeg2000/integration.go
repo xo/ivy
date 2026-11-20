@@ -9,14 +9,13 @@ package jpeg2000
 //
 // Port: upstream integrates the decoder with the crate image, and converts
 // colors with moxcms. The port integrates it with the package image of Go.
-// ivy ports moxcms in internal/moxcms, and this package does not import it.
-// A caller passes an ICCTransform instead. Without one, the port decodes
-// without color management. The method original_color_type and the function
-// orig_bits_per_pixel are left out, because the package image of Go has no
-// ExtendedColorType.
+// ivy ports moxcms in internal/moxcms. This file takes only the CMYK profile
+// from it, and a caller passes an ICCTransform for the conversions. Without
+// one, the port decodes without color management. The method
+// original_color_type and the function orig_bits_per_pixel are left out,
+// because the package image of Go has no ExtendedColorType.
 
 import (
-	_ "embed"
 	"fmt"
 	"image"
 	"image/color"
@@ -24,13 +23,15 @@ import (
 	"sync"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/moxcms"
 )
 
 // cmykProfile is CMYK_PROFILE: the CMYK profile of upstream, under CC0 1.0
 // Universal.
 //
-//go:embed assets/CGATS001Compat-v2-micro.icc
-var cmykProfile []byte
+// Port: the port of moxcms holds the file, byte for byte, because
+// hayro-interpret and the package icc use it too (D61).
+var cmykProfile = moxcms.CmykProfile
 
 // ColorType is ColorType of the crate image, for the four types that the
 // integration gives. Each sample has 8 bits.

@@ -35,7 +35,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D13 | [The test module holds the oracles, and runs by hand](D013-the-test-module-holds-the-oracles-and-runs-by-hand.md) | Decided |
 | D14 | [ivy reads PDF as a port of hayro and moxcms](D014-ivy-reads-pdf-as-a-port-of-hayro-and-moxcms.md) | Decided. Amended by D16. Amended by D20 |
 | D15 | [The layout is a port of WeasyPrint on the parsers of okage](D015-the-layout-is-a-port-of-weasyprint-on-the-parsers-of-okage.md) | Decided |
-| D16 | [The port of hayro uses Go, and ports a subset of moxcms](D016-the-port-of-hayro-uses-go-and-ports-a-subset-of-moxcms.md) | Decided. Amends D14. Amended by D17. Amended by D20 |
+| D16 | [The port of hayro uses Go, and ports a subset of moxcms](D016-the-port-of-hayro-uses-go-and-ports-a-subset-of-moxcms.md) | Decided. Amends D14. Amended by D17. Amended by D20. Amended by D61 |
 | D17 | [ivy ports all of hayro-ccitt, and decodes JPEG with Go](D017-ivy-ports-all-of-hayro-ccitt-and-decodes-jpeg-with-go.md) | Decided. Amends D16 |
 | D18 | [A port can guard against hostile input](D018-a-port-can-guard-against-hostile-input.md) | Decided |
 | D19 | [ivy does not hint glyphs, for now](D019-ivy-does-not-hint-glyphs-for-now.md) | Decided |
@@ -80,3 +80,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D58 | [pdfenc writes the pages of a document as PDF through okage](D058-pdfenc-writes-the-pages-of-a-document-as-pdf-through-okage.md) | Decided |
 | D59 | [The space before is left out at the top of a column](D059-the-space-before-is-left-out-at-the-top-of-a-column.md) | Decided. Amends D56 |
 | D60 | [The layout places a float at a position on the page](D060-the-layout-places-a-float-at-a-position-on-the-page.md) | Decided |
+| D61 | [The package icc converts the colors of an image to sRGB](D061-the-package-icc-converts-the-colors-of-an-image-to-srgb.md) | Decided. Amends D16 |

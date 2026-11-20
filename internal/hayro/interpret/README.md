@@ -9,8 +9,11 @@ The port of the crate `hayro` implements a `Device` that draws with okage.
 The port starts from the commit `61f50b42a7f7b15764780b9ba534cba91488bb28`
 of hayro. The crate is under Apache-2.0 or MIT. `LICENSE-APACHE` and
 `LICENSE-MIT` in this folder are the license files of hayro, byte for byte.
-`assets/` holds the two ICC profiles of the crate, under CC0 1.0 Universal,
-as `assets/README.md` and `assets/CGATS_LICENSE.txt` say.
+`assets/` holds the ICC profiles of the crate, under CC0 1.0 Universal, as
+`assets/README.md` says. The CMYK profile `CGATS001Compat-v2-micro.icc` is
+in `internal/moxcms/assets`, byte for byte, because `internal/jpeg2000` and
+the package `icc` use the same file (D61). Its license
+`CGATS_LICENSE.txt` is `LICENSE.txt` there, byte for byte.
 
 ## The files
 
@@ -66,7 +69,7 @@ Rust file are in the Go test file of the same name.
 | `src/x_object/decode/image.rs` | 310 | `x_object_decode_image.go` | 320 |
 | `src/x_object/decode/mask.rs` | 141 | `x_object_decode_mask.go` | 144 |
 | `examples/extract_html.rs`, `examples/extract_images.rs` | 262 | not ported. They are programs, not part of the crate | |
-| `assets/*` | | `assets/`, byte for byte | |
+| `assets/*` | | `assets/`, byte for byte, apart from the CMYK profile in `internal/moxcms/assets` | |
 | none | | `decoders.go`: the hooks of JBIG2 and JPX, see below | 145 |
 | none | | `thumbnail.go`: `NewRasterImage`, the image of a stream that no page draws, such as a thumbnail | 25 |
 | none | | `image_cache.go`, `image_cache_test.go`: the cache of the decoded images, see below | 229, 161 |

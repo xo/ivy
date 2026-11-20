@@ -8,7 +8,10 @@ codestreams. It is a port of the crate `hayro-jpeg2000` of
 
 The code is under the Apache-2.0 or MIT license of hayro, in
 `LICENSE-APACHE` and `LICENSE-MIT`. The ICC profiles in `assets/` are under
-CC0 1.0 Universal, as `assets/README.md` and `assets/LICENSE.txt` say.
+CC0 1.0 Universal, as `assets/README.md` and `assets/LICENSE.txt` say. The
+CMYK profile `CGATS001Compat-v2-micro.icc` is in `internal/moxcms/assets`,
+byte for byte, because `internal/hayro/interpret` and the package `icc` use
+the same file (D61).
 
 ## The files
 

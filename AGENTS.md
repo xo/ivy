@@ -48,6 +48,7 @@ every other agent read the same rules. Edit this file, not `CLAUDE.md`.
 | naming a package, or giving a package a module of its own | D6 |
 | working on PDF, EPS or Illustrator | D14, then the decisions that amend it: D16, D17 and D20. Then D18 and D19 |
 | working on the PDF writer, `pdf/pdfenc` | D58, then D10 and okage D68 |
+| working on the color management of the package `icc` | D61, then D16 and `internal/moxcms/SUBSET.md` |
 | working on the layout of HTML and CSS | D15, then D7 |
 | reading XML, HTML or CSS, or about to port or copy any code | D7. Use what okage or magic has first |
 | needing a decoder of compressed data | D8 |
@@ -76,7 +77,7 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 61, and the next question is
+repeat. The next decision has the number 62, and the next question is
 question 26. Question 25 is open.
 
 ## Hard rules
@@ -191,7 +192,8 @@ On 2026-11-16 the repository holds these files:
 | `internal/chart/` | the charts of DrawingML, of Office 2016 (cx:chartSpace) and of OpenDocument: ivy lays them out and draws them onto the display list as Office and LibreOffice do, with the scales of the axes of Excel and the fonts of fontdb (D27) |
 | `internal/offcrypto/`, `odf/internal/odfcrypt/` | the encryption of MS-OFFCRYPTO (Agile, Standard, RC4 CryptoAPI and RC4), and the encryption of OpenDocument (D12, D24) |
 | `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24) |
-| `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17) |
+| `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17). `internal/moxcms/assets` holds the default CMYK profile, which `pdf`, `internal/jpeg2000` and `icc` share (D61) |
+| `icc/` | the public package of color management for iv: an image converted to sRGB with an ICC profile, with the default CMYK profile, or with CICP code points, over `internal/moxcms` (D61) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10. The layout also reads EMF and WMF, and draws the objects of a format, such as the charts |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
 | `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |

@@ -2,7 +2,9 @@
 
 ivy ports a subset of moxcms 0.9.2, from the commit `1e2befc3` (D16). The
 subset holds each item of moxcms that hayro calls, and each item that those
-items need. moxcms is under the BSD-3-Clause license or the Apache-2.0
+items need. Since D61 it also holds each item that the package `icc` of ivy
+calls, and the items that they need. The column "Used by" names that
+package as "package `icc`". moxcms is under the BSD-3-Clause license or the Apache-2.0
 license. `LICENSE.md` and `LICENSE-APACHE.md` are its license files.
 
 `icc.rs` and `lab.rs` mean the files `src/color/icc.rs` and
@@ -50,6 +52,10 @@ moxcms, such as `checkLanes` and the functions of `math_mod.go` that give Go
 the semantics of the arithmetic of Rust. Each helper names the code of
 moxcms that it serves.
 
+`cmyk.go` has no item in moxcms. It holds `CmykProfile`, the CMYK profile of
+hayro-interpret and hayro-jpeg2000, which `assets/` holds with its license
+(D61). The ports of the two crates and the package `icc` read it from there.
+
 `testdata/golden.txt` holds the output of moxcms for 17 transforms. The
 test `TestGolden` compares the port with it. On 2026-11-16 the two are
 equal, byte for byte.
@@ -64,13 +70,13 @@ equal, byte for byte.
 | `Stage`, `InPlaceStage` | `Stage`, `InPlaceStage` | for the subset: the stages of the LUTs |
 | `BarycentricWeightScale::Low` | `BarycentricWeightScaleLow` | for the subset |
 | `InterpolationMethod::Linear` | `InterpolationMethodLinear` | for the subset |
-| `TransformOptions` | `TransformOptions` | `icc.rs`, `integration.rs`, `tests/main.rs` |
-| `impl Default for TransformOptions` | `DefaultTransformOptions` | `icc.rs`, `integration.rs`, `tests/main.rs` |
-| `Layout` | `Layout`, `LayoutRgb`, `LayoutRgba`, `LayoutGray`, `LayoutGrayAlpha`, `LayoutCmyka`, `LayoutInks5` to `LayoutInks15` | `icc.rs` (`Gray`, `Rgb`, `Rgba`), `integration.rs` (`Rgb`, `Rgba`), `tests/main.rs` (`Gray`, `GrayAlpha`, `Rgb`, `Rgba`) |
+| `TransformOptions` | `TransformOptions` | `icc.rs`, `integration.rs`, `tests/main.rs`, package `icc` |
+| `impl Default for TransformOptions` | `DefaultTransformOptions` | `icc.rs`, `integration.rs`, `tests/main.rs`, package `icc` |
+| `Layout` | `Layout`, `LayoutRgb`, `LayoutRgba`, `LayoutGray`, `LayoutGrayAlpha`, `LayoutCmyka`, `LayoutInks5` to `LayoutInks15` | `icc.rs` (`Gray`, `Rgb`, `Rgba`), `integration.rs` (`Rgb`, `Rgba`), `tests/main.rs` (`Gray`, `GrayAlpha`, `Rgb`, `Rgba`), package `icc` (`Gray`, `Rgb`, `Rgba`) |
 | `Layout::r_i`, `g_i`, `b_i`, `a_i` | `Layout.rI`, `gI`, `bI`, `aI` | for the subset |
 | `Layout::has_alpha`, `Layout::channels` | `Layout.HasAlpha`, `Layout.Channels` | for the subset |
-| `ColorProfile::is_matrix_shaper` | `ColorProfile.IsMatrixShaper` | for the subset |
-| `ColorProfile::create_transform_8bit` | `ColorProfile.CreateTransform8Bit` | `icc.rs`, `integration.rs`, `tests/main.rs` |
+| `ColorProfile::is_matrix_shaper` | `ColorProfile.IsMatrixShaper` | package `icc` |
+| `ColorProfile::create_transform_8bit` | `ColorProfile.CreateTransform8Bit` | `icc.rs`, `integration.rs`, `tests/main.rs`, package `icc` |
 | `ColorProfile::create_in_place_transform_8bit` | `ColorProfile.CreateInPlaceTransform8Bit` | `icc.rs` |
 | `ColorProfile::create_transform_nbit` | `ColorProfile.createTransformNbit` | for the subset |
 | `ColorProfile::create_transform_in_place_nbit` | `ColorProfile.createTransformInPlaceNbit` | for the subset |
@@ -84,23 +90,24 @@ equal, byte for byte.
 | `MAX_PROFILE_SIZE` | `maxProfileSize` | for the subset |
 | `ProfileSignature` | `profileSignature` | for the subset |
 | `ProfileVersion`, its `TryFrom<u32>` | `ProfileVersion`, `profileVersionFrom` | for the subset |
-| `DataColorSpace`, its `TryFrom<u32>` | `DataColorSpace`, `DataColorSpaceXyz` to `DataColorSpaceColor15`, `dataColorSpaceFrom` | `icc.rs` (`Lab`) |
+| `DataColorSpace`, its `TryFrom<u32>` | `DataColorSpace`, `DataColorSpaceXyz` to `DataColorSpaceColor15`, `dataColorSpaceFrom` | `icc.rs` (`Lab`), package `icc` |
 | `DataColorSpace::check_layout`, `is_three_channels` | `DataColorSpace.CheckLayout`, `isThreeChannels` | for the subset |
 | `ProfileClass`, its `TryFrom<u32>` | `ProfileClass`, `profileClassFrom` | for the subset |
 | `LutStore` | `LutStore`, `LutStore8`, `LutStore16` | for the subset |
 | `LutType`, its `TryFrom<u32>` | `LutType`, `lutTypeFrom` | for the subset |
 | `LutWarehouse`, `LutDataType`, `LutMultidimensionalType` | `LutWarehouse`, `LutDataType`, `LutMultidimensionalType` | for the subset |
-| `RenderingIntent`, its `TryFrom<u32>` | `RenderingIntent`, `renderingIntentFrom` | for the subset |
+| `RenderingIntent`, its `TryFrom<u32>` | `RenderingIntent`, `renderingIntentFrom` | package `icc` (`RenderingIntent`) |
 | `ProfileHeader`, `ProfileHeader::new_from_slice` | `profileHeader`, `newProfileHeaderFromSlice` | for the subset |
-| `CicpProfile` | `CicpProfile` | for the subset |
+| `CicpProfile` | `CicpProfile` | package `icc` |
 | `ColorProfile` | `ColorProfile` | `icc.rs` (`color_space`, `gray_trc`, `red_trc`), `lab.rs` (`white_point`), `integration.rs` |
 | `impl Default for ColorProfile` | `defaultColorProfile` | for the subset |
 | `ParsingOptions`, its `Default` | `ParsingOptions`, `DefaultParsingOptions` | for the subset |
 | `ColorProfile::version` | `ColorProfile.Version` | for the subset |
-| `ColorProfile::new_from_slice` | `NewFromSlice` | `icc.rs`, `lab.rs`, `integration.rs`, `tests/main.rs` |
+| `ColorProfile::new_from_slice` | `NewFromSlice` | `icc.rs`, `lab.rs`, `integration.rs`, `tests/main.rs`, package `icc` |
 | `ColorProfile::new_from_slice_with_options` | `NewFromSliceWithOptions`, `ColorProfile.readTags` | for the subset |
 | `ColorProfile::colorant_matrix`, `colorants_matrix` | `ColorProfile.colorantMatrix`, `colorantsMatrix` | for the subset |
 | `ColorProfile::update_chromatic_adaptation`, `update_colorants` | `ColorProfile.updateChromaticAdaptation`, `updateColorants` | for the subset |
+| `ColorProfile::update_rgb_colorimetry`, `update_rgb_colorimetry_triplet`, `update_rgb_colorimetry_from_cicp` | `ColorProfile.updateRgbColorimetry`, `updateRgbColorimetryTriplet`, `updateRgbColorimetryFromCicp` | for the subset |
 | `ColorProfile::rgb_to_xyz_d`, `rgb_to_xyz_matrix`, `transform_matrix` | `rgbToXyzD`, `ColorProfile.RgbToXyzMatrix`, `TransformMatrix` | for the subset |
 | `ColorProfile::has_device_to_pcs_lut`, `has_pcs_to_device_lut` | `ColorProfile.hasDeviceToPcsLut`, `hasPcsToDeviceLut` | for the subset |
 
@@ -129,6 +136,7 @@ equal, byte for byte.
 | --- | --- | --- |
 | `ToneReprCurve`, its `PartialEq` | `ToneReprCurve`, `ToneReprCurveKind`, `CurveLut`, `CurveParametric`, `ToneReprCurve.equal` | `icc.rs` (`gray_trc`, `red_trc`) |
 | `curve_from_gamma` | `curveFromGamma` | for the subset |
+| `build_trc_table` | `buildTrcTable` | for the subset |
 | `ParametricCurve`, `new`, `is_linear`, `eval`, `invert` | `ParametricCurve`, `newParametricCurve`, `isLinear`, `Eval`, `invert` | for the subset |
 | `u8_fixed_8number_to_float` | `u8Fixed8NumberToFloat` | for the subset |
 | `passthrough_table`, `linear_forward_table`, `linear_lut_interpolate` | `passthroughTable`, `linearForwardTable`, `linearLutInterpolate` | for the subset |
@@ -154,11 +162,14 @@ equal, byte for byte.
 
 | Item | Go | Used by |
 | --- | --- | --- |
-| `CicpColorPrimaries`, its `TryFrom<u8>` | `CicpColorPrimaries`, `cicpColorPrimariesFrom` | for the subset |
-| `ColorPrimaries`, `ColorPrimaries::BT_709` | `ColorPrimaries`, `ColorPrimariesBt709` | for the subset |
-| `TransferCharacteristics`, its `TryFrom<u8>`, `has_transfer_curve` | `TransferCharacteristics`, `transferCharacteristicsFrom`, `hasTransferCurve` | for the subset |
+| `CicpColorPrimaries`, its `TryFrom<u8>` | `CicpColorPrimaries`, `CicpColorPrimariesFrom` | package `icc` |
+| `CicpColorPrimaries::has_chromaticity`, `white_point` | `CicpColorPrimaries.hasChromaticity`, `whitePoint` | for the subset |
+| `ColorPrimaries`, and its constants `BT_709`, `BT_470M`, `BT_470BG`, `BT_601`, `SMPTE_240`, `GENERIC_FILM`, `BT_2020`, `XYZ`, `DCI_P3`, `SMPTE_431`, `SMPTE_432` and `EBU_3213` | `ColorPrimaries`, `ColorPrimariesBt709`, `ColorPrimariesBt470M`, `ColorPrimariesBt470Bg`, `ColorPrimariesBt601`, `ColorPrimariesGenericFilm`, `ColorPrimariesBt2020`, `ColorPrimariesXyz`, `ColorPrimariesDciP3`, `ColorPrimariesEbu3213` | for the subset |
+| `impl TryFrom<CicpColorPrimaries> for ColorPrimaries` | `colorPrimariesFrom` | for the subset |
+| `TransferCharacteristics`, its `TryFrom<u8>`, `has_transfer_curve` | `TransferCharacteristics`, `TransferCharacteristicsFrom`, `hasTransferCurve` | package `icc` |
+| `impl TryFrom<TransferCharacteristics> for ToneReprCurve` | `toneReprCurveFrom`, `numTrcTableEntries` | for the subset |
 | `create_rec709_parametric` | `createRec709Parametric` | for the subset |
-| `MatrixCoefficients`, its `TryFrom<u8>` | `MatrixCoefficients`, `matrixCoefficientsFrom` | for the subset |
+| `MatrixCoefficients`, its `TryFrom<u8>` | `MatrixCoefficients`, `MatrixCoefficientsFrom` | package `icc` |
 
 ## defaults.rs, in defaults.go
 
@@ -167,7 +178,8 @@ equal, byte for byte.
 | `white_point_from_temperature`, `white_point_d65` | `whitePointFromTemperature`, `whitePointD65` | for the subset |
 | `srgb_colorants` | `srgbColorants` | for the subset |
 | `ColorProfile::basic_rgb_profile` | `basicRgbProfile` | for the subset |
-| `ColorProfile::new_srgb` | `NewSrgb` | `icc.rs`, `integration.rs`, `tests/main.rs` |
+| `ColorProfile::new_from_cicp` | `NewFromCicp` | package `icc` |
+| `ColorProfile::new_srgb` | `NewSrgb` | `icc.rs`, `integration.rs`, `tests/main.rs`, package `icc` |
 | `ColorProfile::new_gray_with_gamma` | `NewGrayWithGamma` | `icc.rs` |
 
 ## matrix.rs, in matrix.go
@@ -195,7 +207,7 @@ equal, byte for byte.
 | `writer.rs`, in `writer.go` | `FloatToFixedU8Fixed8::to_u8_fixed8` | `toU8Fixed8` | for the subset |
 | `dat.rs`, in `dat.go` | `ColorDateTime`, `new_from_slice` | `ColorDateTime`, `newColorDateTimeFromSlice` | for the subset |
 | `chad.rs`, in `chad.go` | `PCS_D50`, `Matrix3d::bradford`, `compute_chromatic_adaption_d`, `adaption_matrix_d`, `adapt_to_d50_d`, `adapt_to_illuminant_d` | `pcsD50`, `bradfordD`, `computeChromaticAdaptionD`, `adaptionMatrixD`, `adaptToD50D`, `adaptToIlluminantD` | for the subset |
-| `chromaticity.rs`, in `chromaticity.go` | `Chromaticity`, `D65`, `D50`, `to_xyz`, `to_xyzd` | `Chromaticity`, `ChromaticityD65`, `ChromaticityD50`, `ToXyz`, `ToXyzd` | for the subset |
+| `chromaticity.rs`, in `chromaticity.go` | `Chromaticity`, `D65`, `D50`, `to_xyz`, `to_xyzd`, `to_xyyb` | `Chromaticity`, `ChromaticityD65`, `ChromaticityD50`, `ToXyz`, `ToXyzd`, `ToXyYb` | for the subset |
 | `xyy.rs`, in `xyy.go` | `XyY`, `new`, `to_xyz`, `to_xyzd` | `XyY`, `NewXyY`, `ToXyz`, `ToXyzd` | for the subset |
 | `lab.rs`, in `lab.go` | `Lab`, `new`, `f_1`, `f`, `from_pcs_xyz`, `to_pcs_xyz` | `Lab`, `NewLab`, `labF1`, `labF`, `FromPcsXyz`, `Lab.ToPcsXyz` | for the subset |
 | `nd_array.rs`, in `nd_array.go` | `lerp`, `Hypercube`, `new`, `new_hypercube`, `quadlinear_vec3`, `Cube`, `new`, `new_cube`, `trilinear_vec3` | `lerpVec3`, `Hypercube`, `NewHypercube`, `NewHypercubeGrid`, `QuadlinearVec3`, `Cube`, `NewCube`, `NewCubeGrid`, `TrilinearVec3` | for the subset |

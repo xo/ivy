@@ -489,6 +489,25 @@ func (c *ToneReprCurve) buildLinearizeTable(n, bitDepth int) ([]float32, bool) {
 	}
 }
 
+// buildTrcTable is build_trc_table in moxcms src/trc.rs. It returns a
+// table of numEntries samples of the function eotf, from 0 to 1, as
+// numbers of 16 bits.
+func buildTrcTable(numEntries int, eotf func(float64) float64) []uint16 {
+	table := make([]uint16, numEntries)
+	for i := range table {
+		x := float64(i) / float64(numEntries-1)
+		output := eotf(x)*65535.0 + 0.5
+		// Port: Rust saturates a NaN to 0 in the cast. The comparisons
+		// below keep a NaN, so the port sets it to 0 first.
+		if math.IsNaN(output) {
+			output = 0
+		}
+		output = math.Min(math.Max(output, 0), 65535)
+		table[i] = uint16(math.Floor(output))
+	}
+	return table
+}
+
 // srgbParametric returns the parameters of the parametric curve of sRGB.
 func srgbParametric() []float32 {
 	return []float32{2.4, 1 / float32(1.055), float32(0.055) / float32(1.055), 1 / float32(12.92), 0.04045}

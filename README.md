@@ -95,6 +95,10 @@ its pages or both:
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
 
+The package `github.com/xo/ivy/icc` is not a format. It converts the colors
+of an image to sRGB with the ICC profile of the image, with the CMYK profile
+of ivy, or with the CICP code points of an AVIF or a HEIC file (D61).
+
 ## Using
 
 ```go

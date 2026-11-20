@@ -573,13 +573,13 @@ func readCicpTag(b []byte, entry, size uint64) (*CicpProfile, error) {
 	if tagTypeDefinition(binary.BigEndian.Uint32(t)) != tagTypeCicp {
 		return nil, nil
 	}
-	matrixCoefficients, err := matrixCoefficientsFrom(t[10])
+	matrixCoefficients, err := MatrixCoefficientsFrom(t[10])
 	if err != nil {
 		return nil, err
 	}
 	return &CicpProfile{
-		ColorPrimaries:          cicpColorPrimariesFrom(t[8]),
-		TransferCharacteristics: transferCharacteristicsFrom(t[9]),
+		ColorPrimaries:          CicpColorPrimariesFrom(t[8]),
+		TransferCharacteristics: TransferCharacteristicsFrom(t[9]),
 		MatrixCoefficients:      matrixCoefficients,
 		FullRange:               t[11] == 1,
 	}, nil

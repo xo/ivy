@@ -8,15 +8,17 @@
 package interpret
 
 import (
-	_ "embed"
 	"sync"
+
+	"github.com/xo/ivy/internal/moxcms"
 )
 
 // cmykProfile is the file assets/CGATS001Compat-v2-micro.icc of
 // hayro-interpret, under CC0 1.0 Universal.
 //
-//go:embed assets/CGATS001Compat-v2-micro.icc
-var cmykProfile []byte
+// Port: the port of moxcms holds the file, byte for byte, because
+// hayro-jpeg2000 and the package icc use it too (D61).
+var cmykProfile = moxcms.CmykProfile
 
 // deviceCMYK is DeviceCmyk in hayro-interpret src/color/device_cmyk.rs.
 type deviceCMYK struct{}

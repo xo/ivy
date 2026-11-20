@@ -48,3 +48,9 @@ func (c Chromaticity) ToXyzd() Xyzd {
 		Z: (1 - float64(c.X) - float64(c.Y)) * float64(reciprocal),
 	}
 }
+
+// ToXyYb is Chromaticity::to_xyyb in moxcms src/chromaticity.rs. It returns
+// the color in xyY with the luminance 1.
+func (c Chromaticity) ToXyYb() XyY {
+	return XyY{X: float64(c.X), Y: float64(c.Y), Yb: 1}
+}

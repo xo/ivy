@@ -630,6 +630,67 @@ func (p *ColorProfile) updateColorants(colorants Matrix3d) {
 	p.BlueColorant = Xyzd{X: colorants.V[0][2], Y: colorants.V[1][2], Z: colorants.V[2][2]}
 }
 
+// updateRgbColorimetry is ColorProfile::update_rgb_colorimetry in moxcms
+// src/profile.rs. It sets the colorants of the primaries for a white point,
+// adapted to the PCS D50, and it removes the cicp tag.
+func (p *ColorProfile) updateRgbColorimetry(whitePoint XyY, primaries ColorPrimaries) {
+	p.Cicp = nil
+	red := primaries.Red.ToXyzd()
+	green := primaries.Green.ToXyzd()
+	blue := primaries.Blue.ToXyzd()
+	p.updateRgbColorimetryTriplet(whitePoint, red, green, blue)
+}
+
+// updateRgbColorimetryTriplet is ColorProfile::update_rgb_colorimetry_triplet
+// in moxcms src/profile.rs. It sets the colorants of three colors in XYZ
+// for a white point, adapted to the PCS D50, and it removes the cicp tag.
+func (p *ColorProfile) updateRgbColorimetryTriplet(whitePoint XyY, red, green, blue Xyzd) {
+	p.Cicp = nil
+	p.updateChromaticAdaptation(whitePoint)
+	xyzMatrix := Matrix3d{V: [3][3]float64{
+		{red.X, green.X, blue.X},
+		{red.Y, green.Y, blue.Y},
+		{red.Z, green.Z, blue.Z},
+	}}
+	colorants := rgbToXyzD(xyzMatrix, whitePoint.ToXyzd())
+	colorants = adaptToD50D(colorants, whitePoint)
+	p.updateColorants(colorants)
+}
+
+// updateRgbColorimetryFromCicp is
+// ColorProfile::update_rgb_colorimetry_from_cicp in moxcms src/profile.rs.
+// It sets the colorants, the tone curves and the cicp tag of cicp. It leaves
+// p as it is when cicp has no primaries or no transfer curve.
+//
+// Port: upstream returns false in each case, also after it set the
+// profile. The port keeps this.
+func (p *ColorProfile) updateRgbColorimetryFromCicp(cicp CicpProfile) bool {
+	if !cicp.ColorPrimaries.hasChromaticity() || !cicp.TransferCharacteristics.hasTransferCurve() {
+		return false
+	}
+	primaries, err := colorPrimariesFrom(cicp.ColorPrimaries)
+	if err != nil {
+		return false
+	}
+	whitePoint, err := cicp.ColorPrimaries.whitePoint()
+	if err != nil {
+		return false
+	}
+	p.updateRgbColorimetry(whitePoint.ToXyYb(), primaries)
+	c := cicp
+	p.Cicp = &c
+
+	trc, err := toneReprCurveFrom(cicp.TransferCharacteristics)
+	if err != nil {
+		return false
+	}
+	green, blue := *trc, *trc
+	p.GreenTrc = &green
+	p.BlueTrc = &blue
+	p.RedTrc = trc
+	return false
+}
+
 // rgbToXyzD is ColorProfile::rgb_to_xyz_d in moxcms src/profile.rs. It
 // scales the columns of xyzMatrix so that RGB white maps to wp.
 func rgbToXyzD(xyzMatrix Matrix3d, wp Xyzd) Matrix3d {

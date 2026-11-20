@@ -10,7 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-No unit is in progress on 2026-11-19.
+No unit is in progress on 2026-11-20.
 
 ## Found by the visual review
 
@@ -172,6 +172,26 @@ found these faults. Each item names a file of the corpus.
     puts it beside the frame. A float of CSS starts at the top of a line, so
     it is rare there. A page float of D60 can start anywhere. Source:
     `internal/layout` (layout_inline.go), D60.
+
+## Left by the package icc
+
+From the request of the maintainers of 2026-11-20 for the package `icc`
+(D61).
+
+1. Port the transforms of 16 bits of moxcms, `create_transform_16bit`, so
+   that `icc` converts the colors of an image of 16 bits with 16 bits. It
+   converts them with 8 bits now, and keeps the alpha of 16 bits. Source:
+   item 4 of D61.
+2. Read the ICC profile that an image file embeds, and export it from
+   `icc`: the APP2 segments `ICC_PROFILE` of JPEG, which can split a profile
+   across several segments, the `iCCP` chunk of PNG, the TIFF tag 34675 and
+   the `ICCP` chunk of WebP. ivy reads none of them now. The reader of TIFF
+   in `internal/gowemf` reads the tag 34675 only for the bitmaps of a
+   metafile, and it refuses most TIFF files before the tag. iv reads the
+   profile itself until then. Source: item 10 of D61.
+3. An image in PQ or HLG looks dark after `FromCICP`, because moxcms has no
+   tone mapping. A tone mapping for iv needs a decision of the maintainers
+   first. Source: item 9 of D61.
 
 ## LaTeX
 
