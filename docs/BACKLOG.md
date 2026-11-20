@@ -173,6 +173,24 @@ found these faults. Each item names a file of the corpus.
     it is rare there. A page float of D60 can start anywhere. Source:
     `internal/layout` (layout_inline.go), D60.
 
+## LaTeX
+
+From the request of the maintainers of 2026-11-20. Question 25 of
+`PLAN.md` asks how ivy reads and writes LaTeX, and it holds the facts of
+`go-tex/tex` and `go-tex/engine`. No code is written before the answer
+(D3).
+
+1. Read LaTeX: put a `.tex` document on pages, with its macros, classes,
+   packages, math, tables, figures, cross-references and bibliography.
+   Source: the maintainers, 2026-11-20.
+2. Write LaTeX: `latex/latexenc` writes a document of ivy as LaTeX source.
+   Source: the maintainers, 2026-11-20.
+3. Draw the equations of Office Math (`docx`), MathML (`html` and `epub`)
+   and the formulas of OpenDocument as math. `docx` now writes the text of
+   an equation in italics, in `converter.math` of `docx/paragraph.go`. This
+   needs the layout of math of item 4 of "Work for okage". Source: question
+   25 of `PLAN.md`, 2026-11-20.
+
 ## Left by the charts
 
 1. Draw the treemap, the sunburst and the region map of Office 2016. They
@@ -445,6 +463,11 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    shadows, the glows and the soft edges with box blurs of its own, in
    `blur.go`, and changes the colors of the pictures itself, in `recolor.go`.
    Source: `internal/drawingml`, 2026-11-19.
+4. Read the OpenType MATH table in `typesetting`, and lay out TeX math with
+   it, so that ivy draws the equations of Office Math, MathML, OpenDocument
+   and LaTeX. A port of `go-tex/math`, under BSD-3-Clause, onto the font model
+   of okage is a start. Question 25 of `PLAN.md` asks the maintainers first.
+   Source: question 25, 2026-11-20.
 
 ## Work for magic
 
