@@ -5,10 +5,11 @@
 // commit 2b6ca0c1123c (D7, D26, docs/UPSTREAM.md). Its MIT license is in
 // djvu/internal/LICENSE.
 
-// Package doc provides the DjVu document model: pages, layers, annotations.
+// Package doc provides the DjVu document model: pages, layers, annotations,
+// text.
 //
-// ivy: the package is djvu in dejapdf. ivy leaves out its text layer, its
-// outline and its dump of the chunks, which it does not use.
+// ivy: the package is djvu in dejapdf. ivy leaves out its outline and its
+// dump of the chunks, which it does not use.
 package doc // ivy: renamed from djvu, the name of the package of the format
 
 import (

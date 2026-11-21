@@ -1,0 +1,23 @@
+select; remove-ant; remove-txt
+# ------------------------- 
+select "bilevel.djvu" # page 1
+set-ant
+(maparea "https://example.com/" "Example link" (rect 300 230 700 70) (none))
+(maparea "#3" "Go to page 3" (rect 1250 230 420 70) (none))
+
+.
+set-txt
+(page 0 0 2550 3300
+ (line 300 3010 1060 3060
+  (word 300 3010 520 3060 "Page")
+  (word 545 3010 700 3060 "One:")
+  (word 725 3010 1060 3060 "Bilevel")))
+
+.
+# ------------------------- 
+select "shared_anno.iff"
+set-ant
+(metadata
+	(Title "dejapdf test corpus") )
+
+.

@@ -16,5 +16,6 @@ func unbzz(b []byte, lim ivy.Limits) ([]byte, error) {
 
 // u24 reads a 24-bit big-endian number.
 //
-// ivy: it is u24 of text.go, which the copy leaves out.
+// ivy: it is u24 of text.go of dejapdf. It is in this file because the
+// palettes used it before the copy held text.go.
 func u24(b []byte) int { return int(b[0])<<16 | int(b[1])<<8 | int(b[2]) }
