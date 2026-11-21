@@ -461,6 +461,12 @@ func WithDir(dir fs.FS) Option // package djvu
 // concurrent use. Without it, the document reads only the files of the
 // field TeX of ivy.Config (D65).
 func WithDir(dir fs.FS) Option // package latex
+
+// WithName gives the job name of the document: the name of its input file
+// without the extension, such as "report" for report.tex. The engine reads
+// the files of the run that carry the job name, such as report.bbl, from the
+// folder of WithDir. Without it, the job name is "texput", as in TeX (D66).
+func WithName(name string) Option // package latex
 ```
 
 A format that holds one image, such as `psd`, also has `Decode` and

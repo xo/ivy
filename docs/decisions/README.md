@@ -85,3 +85,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D63 | [The layout wraps the text on both sides of a float](D063-the-layout-wraps-the-text-on-both-sides-of-a-float.md) | Decided |
 | D64 | [A page gives its text and its places through one capability](D064-a-page-gives-its-text-and-its-places-through-one-capability.md) | Decided |
 | D65 | [A program gives LaTeX its TeX files and its folder](D065-a-program-gives-latex-its-tex-files-and-its-folder.md) | Decided |
+| D66 | [A program gives LaTeX the job name of a document](D066-a-program-gives-latex-the-job-name-of-a-document.md) | Decided |

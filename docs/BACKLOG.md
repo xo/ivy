@@ -292,12 +292,11 @@ The review of 2026-11-21 renders the 14 TeX documents of
 `test/review/corpus.tsv` beside pdfLaTeX of TeX Live 2026, with `-tex base`.
 Each item names a file of the corpus.
 
-1. Read the `.bbl` file of a document. The engine reads `\jobname.bbl`,
-   and `latex` gives the engine no job name, so the name is `texput`. A
-   program gives ivy a `Source` without a name. In
-   `repo/tex/report.tex`, the bibliography and the numbers of `\cite` are
-   missing. Find a way to give the name, such as an option of `latex`.
-   Source: the review of LaTeX, 2026-11-21.
+1. Build the option `WithName` of `latex` that D66 decides, and give each TeX
+   document of the review the name of its file. Today `latex` gives the engine
+   no job name, so the engine reads `texput.bbl`, and `repo/tex/report.tex`
+   loses its bibliography and the numbers of `\cite`. Source: the review of
+   LaTeX, 2026-11-21.
 2. Draw the headers and the footers of fancyhdr. In
    `repo/tex/report.tex`, pdfLaTeX draws `\leftmark`, "Test Report" and
    "Page N" with their rules on each page. ivy draws an empty page with a
