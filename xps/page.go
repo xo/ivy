@@ -30,6 +30,9 @@ type renderer struct {
 	visuals int
 	// w is the state that the renderers of the visuals of a page share.
 	w *walk
+	// links is the state of the links of the page, or nil when the device
+	// takes no link and no bookmark (D58).
+	links *pageLinks
 }
 
 // walk is the state of the walk of one page, which the renderers of its
@@ -235,6 +238,7 @@ func (r *renderer) canvas(n roxmltree.Node, res *resources, depth int) {
 	res = r.resourcesOf(n, res)
 	end := r.begin(n, res, opacityOf(n))
 	defer end()
+	r.mark(n, func() (okage.Rect, bool) { return r.childrenBounds(n, res, depth) })
 	r.children(n, res, depth)
 }
 
@@ -248,6 +252,7 @@ func (r *renderer) path(n roxmltree.Node, res *resources) {
 	}
 	end := r.begin(n, res, 1)
 	defer end()
+	r.mark(n, func() (okage.Rect, bool) { return g.path.Bounds(), true })
 	op := opacityOf(n)
 	fill, err := r.brushOf(n, "Fill", res, op)
 	r.fail(err)
@@ -467,6 +472,7 @@ func (r *renderer) glyphs(n roxmltree.Node, res *resources) {
 	}
 	end := r.begin(n, res, 1)
 	defer end()
+	r.mark(n, func() (okage.Rect, bool) { return runBounds(run) })
 	fill, err := r.brushOf(n, "Fill", res, opacityOf(n))
 	if err != nil || fill == nil {
 		r.fail(err)

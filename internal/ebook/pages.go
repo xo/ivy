@@ -42,6 +42,7 @@ func (p *Pages) Book(ctx context.Context, src Source, cfg ivy.Config) (*layout.B
 		Logger:      cfg.Logger,
 		FontFiles:   cfg.Fonts,
 		SystemFonts: cfg.SystemFonts,
+		Links:       true,
 	})
 	return p.book, nil
 }

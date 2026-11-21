@@ -17,6 +17,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/okage/roxmltree"
 	"golang.org/x/text/encoding/charmap"
 )
@@ -214,6 +215,16 @@ func TestSource(t *testing.T) {
 	}
 	if !slices.Equal(src.Documents, []string{coverName, documentName}) || src.Title != "Война и мир" || len(src.StyleSheets) != 2 {
 		t.Fatalf("unexpected source: %q %q", src.Documents, src.Title)
+	}
+	wantTOC := []layout.TOCEntry{
+		{Label: "Война и мир", Level: 1, Target: documentName + "#toc-1"},
+		{Label: "Часть первая", Level: 2, Target: documentName + "#toc-2"},
+		{Label: "Глава", Level: 3, Target: documentName + "#toc-3"},
+		{Label: "notes", Level: 1, Target: documentName + "#toc-4"},
+		{Label: "1", Level: 2, Target: documentName + "#toc-5"},
+	}
+	if !slices.Equal(src.TOC, wantTOC) {
+		t.Errorf("expected the table of contents %+v, got: %+v", wantTOC, src.TOC)
 	}
 	buf, err := fs.ReadFile(src.FS, documentName)
 	if err != nil {

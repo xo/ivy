@@ -25,6 +25,8 @@ var (
 	_ display.Device         = (*Recorder)(nil)
 	_ display.TextFiller     = (*Recorder)(nil)
 	_ display.StrokeAdjuster = (*Recorder)(nil)
+	_ display.Linker         = (*Recorder)(nil)
+	_ display.Bookmarker     = (*Recorder)(nil)
 )
 
 // newRecorder returns an empty recorder with the limits of lim.
@@ -163,4 +165,24 @@ func (r *Recorder) BeginGroup(g display.Group) {
 // EndGroup satisfies the display.Device interface.
 func (r *Recorder) EndGroup() {
 	r.record(func(d display.Device) { d.EndGroup() })
+}
+
+// LinkURI satisfies the display.Linker interface.
+func (r *Recorder) LinkURI(rect okage.Rect, uri string) {
+	r.record(func(d display.Device) { display.LinkURI(d, rect, uri) })
+}
+
+// LinkAnchor satisfies the display.Linker interface.
+func (r *Recorder) LinkAnchor(rect okage.Rect, name string) {
+	r.record(func(d display.Device) { display.LinkAnchor(d, rect, name) })
+}
+
+// Anchor satisfies the display.Linker interface.
+func (r *Recorder) Anchor(name string, x, y float32) {
+	r.record(func(d display.Device) { display.Anchor(d, name, x, y) })
+}
+
+// Bookmark satisfies the display.Bookmarker interface.
+func (r *Recorder) Bookmark(level int, label string, x, y float32, open bool) {
+	r.record(func(d display.Device) { display.Bookmark(d, level, label, x, y, open) })
 }

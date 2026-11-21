@@ -24,6 +24,7 @@ import (
 	"iter"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -117,6 +118,11 @@ type Document struct {
 	log         *slog.Logger
 	annotations bool
 	pages       []*syntax.Page
+
+	// linksMu guards linkIdx, the links of the file, which the first Draw
+	// onto a device that takes them reads.
+	linksMu sync.Mutex
+	linkIdx *linkIndex
 }
 
 // The capabilities of a document.
@@ -502,6 +508,7 @@ func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
 	}
 	d.Save()
 	defer d.Restore()
+	p.drawLinks(ctx, d)
 	d.Concat(okage.TransformFromScale(1/res, 1/res))
 	return p.draw(ctx, d, int(pw), int(ph), okage.TransformFromScale(res, res), &render.RenderSettings{KeepGlyphImages: true})
 }

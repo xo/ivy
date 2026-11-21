@@ -496,6 +496,7 @@ func FuzzOpen(f *testing.F) {
 		`TileMode="FlipXY"><VisualBrush.Visual><Path Data="M 0,0 H 2 V 2 Z" Fill="{StaticResource v}"/></VisualBrush.Visual>` +
 		`</VisualBrush></ResourceDictionary></FixedPage.Resources>` +
 		`<Path Data="M 0,0 H 9 V 9 Z" Fill="{StaticResource v}" Stroke="{StaticResource v}"/>`))
+	f.Add(linkFile(2))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))
@@ -508,6 +509,8 @@ func FuzzOpen(f *testing.F) {
 		}
 		dst, _ := okage.NewPixmap(32, 32)
 		_ = p.Render(t.Context(), dst, okage.TransformFromScale(0.05, 0.05))
+		// a list takes the links, the anchors and the bookmarks
+		_ = p.(display.Drawer).Draw(t.Context(), display.NewRecording(), 0.05)
 	})
 }
 

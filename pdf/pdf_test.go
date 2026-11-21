@@ -523,6 +523,7 @@ func FuzzOpen(f *testing.F) {
 	}
 	f.Add(onePage("0 0 1 rg 10 10 30 30 re f", "", "/Title (x)"))
 	f.Add(cjkPage)
+	f.Add(linkFile())
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 1000, MaxDepth: 16}}
 	// The fonts of the module github.com/xo/ivy/fonts resolve the fonts
 	// that a file does not embed, when the folder is there.
@@ -541,6 +542,10 @@ func FuzzOpen(f *testing.F) {
 		p, err := d.Page(t.Context(), 0)
 		if err != nil {
 			return
+		}
+		// the links, the anchors and the outline of the file
+		if pp, ok := p.(*Page); ok {
+			pp.drawLinks(t.Context(), &display.List{})
 		}
 		w, h := p.Size()
 		dst, _ := okage.NewPixmap(32, 32)

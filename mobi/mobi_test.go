@@ -20,6 +20,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
+	"github.com/xo/ivy/internal/layout"
 )
 
 // The files of testdata are books that calibre made with ebook-convert from
@@ -107,6 +108,22 @@ func TestCalibre(t *testing.T) {
 			src, err := d.source()
 			if err != nil {
 				t.Fatal(err)
+			}
+			wantTOC := []layout.TOCEntry{
+				{Label: "Chapter One", Level: 1, Target: "part0000.xhtml#c1"},
+				{Label: "Chapter Two", Level: 1, Target: "part0001.xhtml#c2"},
+			}
+			if d.kind == mobi6 {
+				// the anchors of the targets are in the text, as the test of
+				// the document below finds them
+				wantTOC[0].Target, wantTOC[1].Target = "index.html#filepos109", "index.html#filepos501"
+				doc := readFile(t, src.FS, "index.html")
+				if !strings.Contains(doc, `<a id="filepos109"></a>`) || !strings.Contains(doc, `<a id="filepos501"></a>`) {
+					t.Errorf("expected the anchors of the table of contents, got: %s", doc)
+				}
+			}
+			if !slices.Equal(src.TOC, wantTOC) {
+				t.Errorf("expected the table of contents %+v, got: %+v", wantTOC, src.TOC)
 			}
 			// a MOBI 6 book adds the style sheet of its HTML
 			sheets := 2
@@ -974,5 +991,40 @@ func TestSVGPageSize(t *testing.T) {
 	want = `width="769.89pt"`
 	if got := svgPageSize(doc, ivy.A4.Landscape()); !strings.Contains(got, want) {
 		t.Errorf("expected the width of the page area of A4 in landscape, got: %s", got)
+	}
+}
+
+func TestNCXOrder(t *testing.T) {
+	entry := func(label string, level, parent int) ncxEntry {
+		return ncxEntry{label: label, level: level, pos: -1, fid: -1, off: -1, parent: parent}
+	}
+	// KF8 lists the entries of each depth after those of the depth above
+	flat := []ncxEntry{
+		entry("A", 1, -1), entry("B", 1, -1),
+		entry("A1", 2, 0), entry("A2", 2, 0), entry("B1", 2, 1),
+		entry("A1a", 3, 2),
+		// a cycle, which does not lead to a root
+		entry("X", 2, 7), entry("Y", 2, 6),
+	}
+	labels := func(entries []ncxEntry) []string {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.label)
+		}
+		return out
+	}
+	want := []string{"A", "A1", "A1a", "A2", "B", "B1", "X", "Y"}
+	if got := labels(ncxOrder(flat, 64)); !slices.Equal(got, want) {
+		t.Errorf("expected %q, got: %q", want, got)
+	}
+	// past the depth, an entry keeps its place after the tree
+	want = []string{"A", "A1", "A2", "B", "B1", "A1a", "X", "Y"}
+	if got := labels(ncxOrder(flat, 2)); !slices.Equal(got, want) {
+		t.Errorf("expected %q, got: %q", want, got)
+	}
+	// without parents, the order is the order of the index
+	plain := []ncxEntry{entry("B", 1, -1), entry("A", 2, -1)}
+	if got := labels(ncxOrder(plain, 64)); !slices.Equal(got, []string{"B", "A"}) {
+		t.Errorf("expected the order of the index, got: %q", got)
 	}
 }

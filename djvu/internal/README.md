@@ -24,7 +24,7 @@ of `internal/djvu`, because the package of the format is `djvu`.
 | `bzz` | the decoder of BZZ, for DIRM, ANTz, FGbz and the other compressed chunks |
 | `jb2` | the decoder of JB2 masks and of their shared dictionaries, Sjbz and Djbz |
 | `iw44` | the decoder of IW44 wavelet images, BG44, FG44 and TH44 |
-| `doc` | the document model: the directory of a bundled document, the INFO chunk, the includes, the masks with their shared dictionaries, the G4 masks, the palettes, the annotations and the text layer |
+| `doc` | the document model: the directory of a bundled document, the INFO chunk, the includes, the masks with their shared dictionaries, the G4 masks, the palettes, the annotations, the text layer, the outline, and the links of the annotations |
 
 The tests read the files of `djvu/testdata`, which holds a part of the
 corpus of dejapdf. `doc/testdata` keeps the seed of `FuzzParse` of
@@ -35,14 +35,15 @@ The copy leaves out these files of upstream:
 1. The encoders: `jbig2`, `jpx`, `mq`, `stencil`, `shapes` and `segment`.
    Some carry parts under the Apache License 2.0.
 2. The readers and the writers of PDF: `pdf`, `pdfread`, `rewrite`,
-   `reencode`, `scan` and `convert`.
+   `reencode`, `scan` and `convert`. `doc/links.go` keeps the part of
+   `convert/links.go` that reads the links of DjVu: the targets of a link,
+   the URL of a maparea and the box of its shape.
 3. `ccitt` and `jpeg`. ivy has its own decoder of CCITT in `internal/ccitt`,
    and decodes JPEG with the package `image/jpeg` of Go (D26).
 4. `raster` and `progress`, which only the converter uses.
-5. In `internal/djvu`: `outline.go`, the outline, which ivy does not
-   draw, and `dump.go`, a dump of the chunks for the command of dejapdf.
-   Their tests, `bench_test.go`, and the parts of `text_test.go` for the
-   outline and the annotations, go with them.
+5. In `internal/djvu`: `dump.go`, a dump of the chunks for the command of
+   dejapdf. Its test and `bench_test.go` go with it. `doc/outline_test.go`
+   holds `TestParseOutlineErrors` and `FuzzParseOutline`.
 6. The command in `cmd`, the documents in `docs`, the scripts and the files
    of `testdata`, and the files of the project: `go.mod`, `Makefile`,
    `README.md`, `CONTRIBUTING.md` and `CLAUDE.md`.
@@ -109,3 +110,10 @@ Each change is marked in the code with a comment that starts with `ivy:`.
     text. `TestBooks` is left out, because it runs djvused. `doc` adds
     `textlayer_test.go`, which compares the books of the corpus of the
     review with `text.sha256` and tests TXTa, the limits and two fuzz tests.
+14. `doc.OutlineOf` decodes the NAVM chunk of a bundled document within
+    `MaxMemory`, and `Document.Outline` calls it. In `doc/links.go`,
+    `Targets` takes the directory and the number of the pages in place of a
+    document, and a link to a page that the document left out has no
+    target. `MapAreaOf` reads a maparea. A maparea without a URL gives no
+    link. The shapes `text` and `line` give a box too. A shape with a
+    number that is not finite gives no box.

@@ -36,7 +36,8 @@ const viewerDiff = 8
 // within 8 of the written file. For a file that embeds a font, a page of a
 // viewer also passes when it matches at 288 dots for each inch, scaled down
 // to 72, as fineDiff says. The test also reads the text of each page and
-// the fonts of the file, as textPage and pdfFonts say.
+// the fonts of the file, as textPage and pdfFonts say, and the links, the
+// named destinations and the outline of the file, as checkLinks says.
 //
 // The files of the corpus are in the cache of the review, which
 // test/cmd/review fetches. IVY_REVIEW_CACHE names the folder of the cache,
@@ -132,6 +133,7 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 			t.Logf("qpdf --check warns: %s", lastLines(string(msg), 5))
 		}
 	}
+	checkLinks(t, out, pager, numbers)
 	fonts, badFonts, err := pdfFonts(ctx, out)
 	if err != nil {
 		t.Error(err)

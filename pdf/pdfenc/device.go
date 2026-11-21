@@ -35,6 +35,12 @@ const (
 type device struct {
 	enc *encoder
 	s   *pdf.Surface
+	// page is the page of the file, or nil for the device of a soft mask.
+	// index is the index of the page in the file, from 0, and w and h are
+	// its size in points.
+	page  *pdf.Page
+	index int
+	w, h  float32
 	// res is the resolution of the raster fallback, in pixels for each
 	// point.
 	res float32
@@ -85,12 +91,17 @@ var (
 	_ display.StrokeAdjuster = (*device)(nil)
 )
 
-// newDevice returns a device that draws onto s, a page of w by h points.
-func newDevice(enc *encoder, s *pdf.Surface, w, h float32) *device {
+// newDevice returns a device that draws onto s, the surface of page, the
+// page of index n in the file, of w by h points.
+func newDevice(enc *encoder, page *pdf.Page, s *pdf.Surface, n int, w, h float32) *device {
 	clip, ok := okage.RectFromXYWH(0, 0, w, h)
 	return &device{
 		enc:   enc,
 		s:     s,
+		page:  page,
+		index: n,
+		w:     w,
+		h:     h,
 		res:   enc.o.dpi / 72,
 		state: state{clip: clip, hidden: !ok},
 	}
@@ -776,6 +787,8 @@ func (d *device) fallbackGroup(rec *display.List, g display.Group, open int) {
 	if !ok {
 		return
 	}
+	// the links of the content stay links
+	rec.Replay(&markDevice{d: d, t: okage.IdentityTransform()})
 	bounds, ok := d.state.clip.Transform(inv)
 	if !ok {
 		return

@@ -37,10 +37,14 @@ type DrawOptions struct {
 	Limits ivy.Limits
 	// Logger receives the log of the drawing, or nil.
 	Logger *slog.Logger
+	// Links names the links, the anchors and the bookmarks of the page, or
+	// is nil. With nil, DrawPage gives none of them to the device (D58).
+	Links *PageLinks
 }
 
-// DrawPage is Page.paint in weasyprint/document.py, with the transforms of
-// gather_anchors: it draws a page box of Document.Page onto dev. toDevice
+// DrawPage is Page.paint in weasyprint/document.py, with gather_anchors: it
+// draws a page box of Document.Page onto dev, with its links, its anchors
+// and its bookmarks when opts.Links is not nil. toDevice
 // maps the CSS pixels of the page, from the top left corner of its margin
 // box, onto the user space of dev.
 //
@@ -79,7 +83,11 @@ func DrawPage(ctx context.Context, dev display.Device, page *Box, toDevice okage
 		}
 	}()
 
-	gatherAnchors(page, 0)
+	var marks *pageMarks
+	if opts.Links != nil && wantsMarks(dev) {
+		marks = &pageMarks{max: limits.MaxObjects}
+	}
+	gatherAnchors(page, 0, marks, nil, nil)
 	s := newStream(dc, base)
 	s.stacked(func() {
 		drawPage(s, page)
@@ -87,6 +95,9 @@ func DrawPage(ctx context.Context, dev display.Device, page *Box, toDevice okage
 	dev.Save()
 	dev.Concat(toDevice)
 	s.replay(dev)
+	if marks != nil {
+		marks.draw(dev, opts.Links)
+	}
 	dev.Restore()
 
 	switch {
@@ -96,6 +107,14 @@ func DrawPage(ctx context.Context, dev display.Device, page *Box, toDevice okage
 		return fmt.Errorf("drawing page: %w", ctx.Err())
 	}
 	return &ivy.PartialError{Err: dc.err}
+}
+
+// wantsMarks reports whether dev takes the links or the bookmarks of a
+// page.
+func wantsMarks(dev display.Device) bool {
+	_, linker := dev.(display.Linker)
+	_, bookmarker := dev.(display.Bookmarker)
+	return linker || bookmarker
 }
 
 // deviceBox returns the box on the device of the rectangle r, (x, y, width,

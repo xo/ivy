@@ -221,7 +221,28 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		Documents:   docs,
 		StyleSheets: []string{ebook.BookStyleFor(d.paper), styleSheet},
 		Title:       d.info.Title,
+		TOC:         c.tocEntries(),
 	}, nil
+}
+
+// tocEntries returns the table of contents for the bookmarks of the
+// layout: each entry with a text and an id, at the depth of its section.
+func (c *converter) tocEntries() []layout.TOCEntry {
+	t := ebook.NewTOC(c.d.lim)
+	var walk func(entries []*tocEntry, level int)
+	walk = func(entries []*tocEntry, level int) {
+		for _, e := range entries {
+			if t.Full() || level > t.MaxDepth() {
+				return
+			}
+			if e.text != "" && e.id != "" {
+				t.Add(html.UnescapeString(e.text), level, documentName+"#"+e.id)
+			}
+			walk(e.children, level+1)
+		}
+	}
+	walk(c.toc.children, 1)
+	return t.Entries
 }
 
 // check records an error if the context ends or the document grows past

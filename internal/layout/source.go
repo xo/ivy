@@ -58,6 +58,24 @@ type Source struct {
 	// Splitter cuts the long documents into parts that a Book lays out on
 	// their own, or nil (D55).
 	Splitter Splitter
+
+	// TOC is the table of contents of the work, in its order, or nil. When
+	// it holds an entry, a Book gives a bookmark at the target of each
+	// entry, and the headings give no bookmark (D58).
+	TOC []TOCEntry
+}
+
+// TOCEntry is an entry of the table of contents of a Source.
+type TOCEntry struct {
+	// Label is the text of the entry.
+	Label string
+	// Level is the depth of the entry in the table, from 1.
+	Level int
+	// Target is the path in FS of a document of Documents, with the
+	// fragment "#id" of an element of that document, or without a fragment
+	// for the start of the document. The fragment is not escaped, so
+	// "#a%20b" names the id "a%20b".
+	Target string
 }
 
 // Splitter cuts a long document of a Source, such as a long sheet, into

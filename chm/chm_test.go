@@ -15,6 +15,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
 	"github.com/xo/ivy/internal/ebook/ebooktest"
+	"github.com/xo/ivy/internal/layout"
 )
 
 // cyrillic is "Привет" in windows-1251.
@@ -77,6 +78,13 @@ func TestOpen(t *testing.T) {
 		want := []string{"index.htm", "pages/b.htm", "pages/a.htm", "pages/c.htm"}
 		if !slices.Equal(src.Documents, want) {
 			t.Errorf("expected the documents %q, got: %q", want, src.Documents)
+		}
+		wantTOC := []layout.TOCEntry{
+			{Label: "B", Level: 1, Target: "pages/b.htm#top"},
+			{Label: "A", Level: 1, Target: "pages/a.htm"},
+		}
+		if !slices.Equal(src.TOC, wantTOC) {
+			t.Errorf("expected the table of contents %+v, got: %+v", wantTOC, src.TOC)
 		}
 		if src.Title != "Help of Tests" || len(src.StyleSheets) != 2 || src.StyleSheets[0] != ebook.PaperStyle || src.StyleSheets[1] != ebook.BodyStyle {
 			t.Errorf("expected the title and the style sheets, got: %q %d", src.Title, len(src.StyleSheets))
@@ -412,4 +420,37 @@ func TestPaper(t *testing.T) {
 		t.Fatal(err)
 	}
 	ebooktest.CheckPaper(t, d)
+}
+
+func TestContentsTOC(t *testing.T) {
+	hhc := []byte(`<html><body><object type="text/site properties"><param name="Name" value="Props"></object>
+<ul>
+<li><object type="text/sitemap"><param name="Name" value="One"><param name="Local" value="one.htm"></object>
+<ul>
+<li><object type="text/sitemap"><param name="Name" value="Two &amp; more"><param name="Local" value="Sub/Two.htm#a%20b"></object>
+<li><object type="text/sitemap"><param name="Name" value="No file"><param name="Local" value="missing.htm"></object>
+<li><object type="text/sitemap"><param name="Name" value="Heading"></object>
+<ul><li><object type="text/sitemap"><param name="Name" value="Three"><param name="Local" value="ms-its:x.chm::/help/one.htm#c"></object></ul>
+</ul>
+<li><object type="text/sitemap"><param name="Name" value=" "><param name="Local" value="one.htm"></object>
+<li><object type="text/sitemap"><param name="Name" value="Four"><param name="Local" value="one.htm"></object>
+</ul></body></html>`)
+	files := map[string]string{"help/one.htm": "help/one.htm", "help/sub/two.htm": "help/Sub/Two.htm"}
+	lookup := func(name string) (string, bool) {
+		clean, ok := files[strings.ToLower(name)]
+		return clean, ok
+	}
+	want := []layout.TOCEntry{
+		{Label: "One", Level: 1, Target: "help/one.htm"},
+		{Label: "Two & more", Level: 2, Target: "help/Sub/Two.htm#a b"},
+		{Label: "Three", Level: 3, Target: "help/one.htm#c"},
+		{Label: "Four", Level: 1, Target: "help/one.htm"},
+	}
+	got := contentsTOC(hhc, "help", "windows-1252", ivy.Limits{}, lookup)
+	if !slices.Equal(got, want) {
+		t.Errorf("expected %+v, got: %+v", want, got)
+	}
+	if got := contentsTOC(hhc, "help", "windows-1252", ivy.Limits{MaxObjects: 1000, MaxDepth: 8}, lookup); len(got) != 2 {
+		t.Errorf("expected the 2 entries before the parse stops at 8 open elements, got: %+v", got)
+	}
 }

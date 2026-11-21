@@ -165,6 +165,66 @@ func StrokeAdjusted(d Device, p *okage.Path, stroke okage.Stroke, shader okage.S
 	d.StrokePath(p, stroke, shader)
 }
 
+// Linker is a device that takes the links and the anchors of a page (D58).
+// The marks of a page carry them, so a device that draws pixels, such as an
+// OkageDevice, does not implement it. A List records them.
+type Linker interface {
+	// LinkURI makes r, in the user space, a link to uri.
+	LinkURI(r okage.Rect, uri string)
+	// LinkAnchor makes r, in the user space, a link to the anchor name of
+	// the document.
+	LinkAnchor(r okage.Rect, name string)
+	// Anchor names the point x, y of the page, in the user space.
+	Anchor(name string, x, y float32)
+}
+
+// Bookmarker is a device that takes the bookmarks of a page (D58). A List
+// records them.
+type Bookmarker interface {
+	// Bookmark adds an entry of the outline at x, y of the page, in the
+	// user space, at level, from 1. open shows its children.
+	Bookmark(level int, label string, x, y float32, open bool)
+}
+
+// LinkURI calls LinkURI of d when d is a Linker.
+func LinkURI(d Device, r okage.Rect, uri string) {
+	if l, ok := d.(Linker); ok {
+		l.LinkURI(r, uri)
+	}
+}
+
+// LinkAnchor calls LinkAnchor of d when d is a Linker.
+func LinkAnchor(d Device, r okage.Rect, name string) {
+	if l, ok := d.(Linker); ok {
+		l.LinkAnchor(r, name)
+	}
+}
+
+// Anchor calls Anchor of d when d is a Linker.
+func Anchor(d Device, name string, x, y float32) {
+	if l, ok := d.(Linker); ok {
+		l.Anchor(name, x, y)
+	}
+}
+
+// Bookmark calls Bookmark of d when d is a Bookmarker.
+func Bookmark(d Device, level int, label string, x, y float32, open bool) {
+	if b, ok := d.(Bookmarker); ok {
+		b.Bookmark(level, label, x, y, open)
+	}
+}
+
+// PageAnchor returns the name of the anchor at x, y of page n, from 0, in
+// points with y down. A format names a destination with it when the file
+// gives the destination no name of its own, such as a link to a page of a
+// PDF or a DjVu file. The target page calls Anchor with the same name.
+func PageAnchor(n int, x, y float32) string {
+	return fmt.Sprintf("%s%d-%g-%g", PageAnchorPrefix, n+1, x, y)
+}
+
+// PageAnchorPrefix starts the name of each anchor of PageAnchor.
+const PageAnchorPrefix = "ivy-page-"
+
 // GlyphRun is a run of glyphs of one font and one size.
 type GlyphRun struct {
 	Face *font.Face
@@ -288,6 +348,8 @@ var (
 	_ Device         = (*List)(nil)
 	_ TextFiller     = (*List)(nil)
 	_ StrokeAdjuster = (*List)(nil)
+	_ Linker         = (*List)(nil)
+	_ Bookmarker     = (*List)(nil)
 )
 
 // record keeps one command, and the name that op gives, unless the list is
@@ -400,6 +462,36 @@ func (l *List) BeginGroup(g Group) {
 // EndGroup satisfies the Device interface.
 func (l *List) EndGroup() {
 	l.record(func() string { return "end group" }, func(d Device) { d.EndGroup() })
+}
+
+// LinkURI satisfies the Linker interface. The replay calls LinkURI of this
+// package with the device of the replay.
+func (l *List) LinkURI(r okage.Rect, uri string) {
+	l.record(func() string { return fmt.Sprintf("link %v %q", rectString(r), uri) }, func(d Device) { LinkURI(d, r, uri) })
+}
+
+// LinkAnchor satisfies the Linker interface. The replay calls LinkAnchor of
+// this package with the device of the replay.
+func (l *List) LinkAnchor(r okage.Rect, name string) {
+	l.record(func() string { return fmt.Sprintf("link %v #%q", rectString(r), name) }, func(d Device) { LinkAnchor(d, r, name) })
+}
+
+// Anchor satisfies the Linker interface. The replay calls Anchor of this
+// package with the device of the replay.
+func (l *List) Anchor(name string, x, y float32) {
+	l.record(func() string { return fmt.Sprintf("anchor %q %.0f %.0f", name, x, y) }, func(d Device) { Anchor(d, name, x, y) })
+}
+
+// Bookmark satisfies the Bookmarker interface. The replay calls Bookmark of
+// this package with the device of the replay.
+func (l *List) Bookmark(level int, label string, x, y float32, open bool) {
+	l.record(func() string { return fmt.Sprintf("bookmark %d %q %.0f %.0f %v", level, label, x, y, open) },
+		func(d Device) { Bookmark(d, level, label, x, y, open) })
+}
+
+// rectString returns r, rounded, for the list of commands.
+func rectString(r okage.Rect) string {
+	return fmt.Sprintf("[%.0f %.0f %.0f %.0f]", r.Left(), r.Top(), r.Right(), r.Bottom())
 }
 
 // bounds returns the bounds of p, rounded, for the list of commands.

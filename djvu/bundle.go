@@ -24,7 +24,9 @@ const infoHead = 64
 // from the source. An indirect document reads each component from the file
 // of the folder files that the directory names (D38).
 type bundle struct {
-	src   ivy.Source
+	src ivy.Source
+	// off is the offset of the FORM:DJVM chunk in src.
+	off   int64
 	files fs.FS
 	lim   ivy.Limits
 	dir   *doc.Dir
@@ -54,7 +56,7 @@ func openBundle(src ivy.Source, off int64, files fs.FS, lim ivy.Limits) (*bundle
 	if len(dir.Components) > lim.MaxObjects {
 		return nil, nil, fmt.Errorf("djvu of %d components: %w", len(dir.Components), ivy.ErrLimit)
 	}
-	b := &bundle{src: src, lim: lim, dir: dir, byID: make(map[string]doc.Component, len(dir.Components))}
+	b := &bundle{src: src, off: off, lim: lim, dir: dir, byID: make(map[string]doc.Component, len(dir.Components))}
 	if !dir.Bundled {
 		b.files = files
 	}

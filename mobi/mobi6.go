@@ -164,11 +164,12 @@ func fontSize(v string) (string, bool) {
 const maxTagScan = 4096
 
 // mobiHTML converts the text of a MOBI book into one HTML document, in
-// UTF-8 with a byte order mark. Each target of a filepos link becomes an
-// anchor, each image takes the name that res gives it, and each page break
-// becomes an empty div element that breaks the page.
-func mobiHTML(text []byte, h *header, res *resources, lim ivy.Limits) ([]byte, error) {
-	text, err := addAnchors(text, lim)
+// UTF-8 with a byte order mark. Each target of a filepos link and each
+// offset of targets becomes an anchor, each image takes the name that res
+// gives it, and each page break becomes an empty div element that breaks
+// the page.
+func mobiHTML(text []byte, h *header, res *resources, lim ivy.Limits, targets []int) ([]byte, error) {
+	text, err := addAnchors(text, lim, targets)
 	if err != nil {
 		return nil, err
 	}
@@ -203,14 +204,20 @@ func mobiHTML(text []byte, h *header, res *resources, lim ivy.Limits) ([]byte, e
 }
 
 // addAnchors adds an anchor at each position of the text that a filepos
-// link names. The position counts bytes from the start of the text. A
-// position inside a tag moves to the start of the tag.
-func addAnchors(text []byte, lim ivy.Limits) ([]byte, error) {
+// link names, and at each position of extra, such as the targets of the
+// table of contents. The position counts bytes from the start of the text.
+// A position inside a tag moves to the start of the tag.
+func addAnchors(text []byte, lim ivy.Limits, extra []int) ([]byte, error) {
 	var targets []int
 	seen := make(map[int]bool)
+	positions := slices.Clone(extra)
 	for _, m := range fileposRef.FindAllSubmatch(text, -1) {
-		pos, err := strconv.Atoi(string(m[1]))
-		if err != nil || pos < 0 || pos > len(text) || seen[pos] {
+		if pos, err := strconv.Atoi(string(m[1])); err == nil {
+			positions = append(positions, pos)
+		}
+	}
+	for _, pos := range positions {
+		if pos < 0 || pos > len(text) || seen[pos] {
 			continue
 		}
 		if len(targets) >= lim.MaxObjects {

@@ -118,9 +118,16 @@ func (p *Page) Render(ctx context.Context, dst *okage.Pixmap, t okage.Transform)
 
 // Draw satisfies the display.Drawer interface (D58). It draws the composite
 // of the layers at the resolution of the page, whatever res is, as one
-// image.
+// image. When d is a display.Linker or a display.Bookmarker, it then gives
+// d the outline and the links of the page.
 func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
-	return p.draw(ctx, d, okage.TransformFromScale(res, res), true)
+	err := p.draw(ctx, d, okage.TransformFromScale(res, res), true)
+	if _, ok := errors.AsType[*ivy.PartialError](err); err == nil || ok {
+		if lerr := p.drawLinks(ctx, d); lerr != nil && err == nil {
+			err = &ivy.PartialError{Err: lerr}
+		}
+	}
+	return err
 }
 
 // draw composites the layers of the page and draws the composite onto

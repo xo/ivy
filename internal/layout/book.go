@@ -13,6 +13,7 @@ import (
 	"math"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -59,6 +60,11 @@ type BookOptions struct {
 	// in a document, the two books must not share a configuration. The
 	// lock is not reentrant, so the inner book would wait for ever.
 	FontConfig *FontConfiguration
+	// Links gives the links, the anchors and the bookmarks of the pages to
+	// a device that takes them, such as the PDF device of pdfenc (D58). A
+	// format sets it for the pages of its document, and not for a book that
+	// another page draws inside it, such as the text of a shape.
+	Links bool
 }
 
 // NewFontConfiguration returns a font configuration of the fonts and the
@@ -125,6 +131,11 @@ type Book struct {
 	// recordings holds the pages that Render recorded, the most recent
 	// last.
 	recordings []*recording
+	// paths holds the path of each document of the source, as
+	// DocumentPath gives it, and toc holds the bookmarks of the table of
+	// contents by the name of their target, or is nil.
+	paths map[string]bool
+	toc   map[string][]TOCBookmark
 }
 
 // maxRecordings is the number of recorded pages that a book keeps.
@@ -199,6 +210,13 @@ func NewBook(src Source, opts BookOptions) *Book {
 		log:  log,
 		fc:   fc,
 	}
+	if opts.Links {
+		b.paths = map[string]bool{}
+		for _, path := range src.Documents {
+			b.paths[DocumentPath(path)] = true
+		}
+		b.toc = tocBookmarks(src.TOC, lim)
+	}
 	docs := src.Documents
 	// The documents are bounded as the pages are: each one has a page at
 	// least.
@@ -220,6 +238,28 @@ func NewBook(src Source, opts BookOptions) *Book {
 		}
 	}
 	return b
+}
+
+// tocBookmarks returns the bookmarks of the entries of toc by the name of
+// the anchor of their target, or nil when toc has no entry. It keeps at
+// most MaxObjects entries.
+func tocBookmarks(toc []TOCEntry, lim ivy.Limits) map[string][]TOCBookmark {
+	if len(toc) == 0 {
+		return nil
+	}
+	m := map[string][]TOCBookmark{}
+	for i, e := range toc[:min(len(toc), lim.MaxObjects)] {
+		if e.Level < 1 || e.Label == "" {
+			continue
+		}
+		p, frag, _ := strings.Cut(e.Target, "#")
+		name := DocumentPath(p)
+		if frag != "" {
+			name += "#" + frag
+		}
+		m[name] = append(m[name], TOCBookmark{Index: i, Level: e.Level, Label: e.Label})
+	}
+	return m
 }
 
 // newPart returns the document of the part p of the long document of the
@@ -294,7 +334,9 @@ func (b *Book) Page(ctx context.Context, n int) (ivy.Page, error) {
 		box, err := b.page(ctx, bd, n-offset)
 		switch {
 		case err == nil:
-			return &bookPage{book: b, box: box, n: n}, nil
+			// The first page of the first part of a document starts it.
+			start := n == offset && (bd.part == nil || i == 0 || b.docs[i-1].source != bd.source)
+			return &bookPage{book: b, box: box, n: n, doc: b.src.Documents[bd.source], start: start}, nil
 		case errors.Is(err, ErrNoPage):
 			// The document has fewer pages: its count is now known.
 			offset += bd.count
@@ -805,6 +847,10 @@ type bookPage struct {
 	book *Book
 	box  *Box
 	n    int
+	// doc is the path of the document of the page in Source.Documents, and
+	// start is set on the first page of the document.
+	doc   string
+	start bool
 }
 
 // The interfaces that a page implements.
@@ -947,10 +993,20 @@ func (p *bookPage) drawLocked(ctx context.Context, dev display.Device, t okage.T
 		dev.Concat(okage.TransformFromScale(float32(1/scale), float32(1/scale)))
 	}
 	toDevice := t.PostScale(float32(scale), float32(scale)).PreScale(pointsPerPixel, pointsPerPixel)
+	var links *PageLinks
+	if p.book.opts.Links {
+		links = &PageLinks{
+			Path:       DocumentPath(p.doc),
+			Start:      p.start,
+			IsDocument: func(path string) bool { return p.book.paths[path] },
+			TOC:        p.book.toc,
+		}
+	}
 	err = DrawPage(ctx, dev, p.box, toDevice, DrawOptions{
 		FontConfig: p.book.fc,
 		Limits:     p.book.lim,
 		Logger:     p.book.opts.Logger,
+		Links:      links,
 	})
 	if pe, ok := errors.AsType[*ivy.PartialError](err); ok {
 		return &ivy.PartialError{Err: fmt.Errorf("rendering page %d: %w", p.n+1, pe.Err)}

@@ -224,8 +224,19 @@ func (d *Document) topic() (string, bool) {
 	return d.lookup(name)
 }
 
-// contents returns the files of the table of contents, in its order.
-func (d *Document) contents() []string {
+// contents returns the files of the table of contents, in its order, and
+// its entries for the bookmarks of the layout.
+func (d *Document) contents() ([]string, []layout.TOCEntry) {
+	hhc, dir, ok := d.hhc()
+	if !ok {
+		return nil, nil
+	}
+	return contentsOrder(hhc, dir, d.charset, d.lim), contentsTOC(hhc, dir, d.charset, d.lim, d.lookup)
+}
+
+// hhc returns the bytes of the file of the table of contents, and its
+// folder.
+func (d *Document) hhc() ([]byte, string, bool) {
 	name := strings.TrimSpace(ebook.TextIn(d.system.contents, d.charset))
 	clean, ok := "", false
 	if name != "" {
@@ -244,14 +255,14 @@ func (d *Document) contents() []string {
 		}
 	}
 	if !ok {
-		return nil
+		return nil, "", false
 	}
 	hhc, err := d.fsys.ReadFile(clean)
 	if err != nil {
 		d.log.Debug("chm: table of contents left out", "name", clean, "err", err)
-		return nil
+		return nil, "", false
 	}
-	return contentsOrder(hhc, path.Dir(clean), d.charset, d.lim)
+	return hhc, path.Dir(clean), true
 }
 
 // source returns the help file as a source for the layout: its files, the
@@ -274,7 +285,8 @@ func (d *Document) source() (src layout.Source, err error) {
 	if topic, ok := d.topic(); ok {
 		add(topic)
 	}
-	for _, name := range d.contents() {
+	contents, toc := d.contents()
+	for _, name := range contents {
 		add(name)
 	}
 	for _, name := range d.archive.files() {
@@ -290,5 +302,6 @@ func (d *Document) source() (src layout.Source, err error) {
 		Documents:   docs,
 		StyleSheets: []string{ebook.PaperStyleFor(d.paper), ebook.BodyStyle},
 		Title:       d.title(),
+		TOC:         toc,
 	}, nil
 }

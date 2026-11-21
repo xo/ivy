@@ -387,19 +387,23 @@ func (d *Document) convert() (layout.Source, error) {
 		fsys.Add("index.html", palmDOCHTML(ebook.Windows1252(text)))
 		src.Documents = []string{"index.html"}
 	case mobi6:
-		doc, err := mobiHTML(text, h, res, d.lim)
+		ncx := d.readNCX(h)
+		doc, err := mobiHTML(text, h, res, d.lim, ncxTargets(ncx))
 		if err != nil {
 			return layout.Source{}, err
 		}
 		fsys.Add("index.html", doc)
 		src.Documents = []string{"index.html"}
 		src.StyleSheets = append(src.StyleSheets, mobi6Style)
+		src.TOC = d.mobiTOC(ncx, "index.html")
 	default:
 		book, err := d.readKF8(h, text)
 		if err != nil {
 			return layout.Source{}, err
 		}
-		src.Documents = d.addKF8(fsys, book, res, h)
+		l := d.addKF8(fsys, book, res, h)
+		src.Documents = l.parts
+		src.TOC = d.kf8TOC(d.readNCX(h), l)
 	}
 	src.Documents = d.withCover(fsys, res, src.Documents, src.Title)
 	return src, nil
@@ -441,7 +445,7 @@ func (d *Document) withCover(fsys *zipdoc.FS, res *resources, docs []string, tit
 
 // addKF8 adds the parts and the flows of a KF8 book to fsys, with their
 // links to one another, and returns the names of the parts.
-func (d *Document) addKF8(fsys *zipdoc.FS, book *kf8Book, res *resources, h *header) []string {
+func (d *Document) addKF8(fsys *zipdoc.FS, book *kf8Book, res *resources, h *header) *links {
 	l := &links{book: book, res: res}
 	for i, part := range book.parts {
 		ext := "html"
@@ -475,5 +479,5 @@ func (d *Document) addKF8(fsys *zipdoc.FS, book *kf8Book, res *resources, h *hea
 		}
 		fsys.Add(l.parts[i], []byte(doc))
 	}
-	return l.parts
+	return l
 }

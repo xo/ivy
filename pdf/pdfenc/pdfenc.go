@@ -15,6 +15,10 @@
 // writer cannot read or subset, and of a run without text go into the file
 // as paths. In this version, the glyphs of a PDF or PostScript file are
 // paths (D58, phase 7b).
+//
+// The links of a page become link annotations, its anchors become named
+// destinations, and its bookmarks become the outline of the file (D58,
+// phase 7c).
 package pdfenc
 
 import (
@@ -83,7 +87,10 @@ func WithInfo(info ivy.Info) Option {
 }
 
 // WithOutline writes the outline of the document, where its format knows
-// one. It is on by default. In this version, no format gives an outline.
+// one. It is on by default. The outline holds the bookmarks of the pages, in
+// the order of the pages of the file: the headings and the table of
+// contents of a document of the layout, and the outline of a PDF, XPS or
+// DjVu file.
 func WithOutline(on bool) Option {
 	return func(o *options) {
 		o.outline = on
@@ -91,7 +98,10 @@ func WithOutline(on bool) Option {
 }
 
 // WithLinks writes the links of the pages, where their format knows them.
-// It is on by default. In this version, no format gives links.
+// It is on by default. A link to a URI becomes a link annotation with a URI
+// action. A link inside the document becomes a link annotation to a named
+// destination, and is dropped when the file does not hold the page of its
+// target.
 func WithLinks(on bool) Option {
 	return func(o *options) {
 		o.links = on
@@ -125,6 +135,11 @@ func newOptions(opts []Option) options {
 // no bytes when Encode fails before it writes. When a page draws only in
 // part, Encode still writes the file, and returns a *ivy.PartialError
 // that names each such page.
+//
+// Each anchor of a page becomes a named destination of the file. When a
+// page links to an anchor of a later page, Encode draws the pages a second
+// time, because the writer of okage needs the destination of a link when
+// its page is drawn.
 func Encode(ctx context.Context, w io.Writer, d ivy.Document, opts ...Option) error {
 	o := newOptions(opts)
 	pager, ok := d.(ivy.Pager)
@@ -247,6 +262,19 @@ type encoder struct {
 	// bytes counts the bytes that the writer holds: the pixels of the
 	// images, and the commands of the pages.
 	bytes int64
+
+	// anchors holds the destination of each anchor that the pages named,
+	// and known holds those of an earlier drawing of the pages, or nil.
+	// linked holds the names of the anchors that a link goes to, and ahead
+	// holds those that the file did not know at the link.
+	anchors map[string]destination
+	known   map[string]destination
+	linked  map[string]bool
+	ahead   map[string]bool
+	// bookmarks holds the entries of the outline, in the order of the
+	// pages. marks counts the links, the anchors and the bookmarks.
+	bookmarks []bookmark
+	marks     int
 	// err is the first error of a limit. The devices draw nothing after it.
 	err error
 }
@@ -269,6 +297,8 @@ func newEncoder(o options, blocked map[font.SourceKey]bool) *encoder {
 		masks:   map[maskKey]*pdf.Mask{},
 		fonts:   map[font.SourceKey]*embedded{},
 		blocked: blocked,
+		anchors: map[string]destination{},
+		linked:  map[string]bool{},
 	}
 }
 
@@ -303,7 +333,7 @@ func (e *encoder) page(ctx context.Context, p ivy.Page, n int) error {
 	e.drawn = append(e.drawn, drawnPage{p: p, n: n})
 	page := e.doc.StartPage(settings)
 	s := page.Surface()
-	dev := newDevice(e, s, w, h)
+	dev := newDevice(e, page, s, e.pages, w, h)
 	err := drawPage(ctx, p, dev, e.o.dpi)
 	dev.finish()
 	s.Finish()
@@ -356,9 +386,15 @@ func drawPage(ctx context.Context, p ivy.Page, dev *device, dpi float32) error {
 // and a font cannot give its subset, finish draws the pages again onto a
 // new encoder, with the glyphs of that font as paths (D58).
 func (e *encoder) finish(ctx context.Context, w io.Writer) error {
+	if e.known == nil && e.forward() {
+		// a link goes to an anchor of a later page: draw the pages again
+		// with the anchors that this drawing found
+		return e.again(ctx, w, nil)
+	}
 	if e.o.hasInfo {
 		e.doc.SetMetadata(metadata(e.o.info))
 	}
+	e.writeLinks()
 	ew := &errWriter{w: w}
 	if err := finishDocument(e.doc, ew); err != nil {
 		if ew.err == nil {
@@ -392,12 +428,31 @@ func finishDocument(doc *pdf.Document, w io.Writer) (err error) {
 	return doc.Finish(w) //nolint:wrapcheck // finish wraps the error of the writer
 }
 
+// forward reports whether a link of the file goes to an anchor that a later
+// page named.
+func (e *encoder) forward() bool {
+	for name := range e.ahead {
+		if _, ok := e.anchors[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // again draws the pages of e onto a new encoder whose fonts of failed, and
-// of the fonts that e blocked, are paths, and writes the file to w.
+// of the fonts that e blocked, are paths, and writes the file to w. The new
+// encoder knows the anchors of e, so each link finds its anchor.
 func (e *encoder) again(ctx context.Context, w io.Writer, failed map[font.SourceKey]bool) error {
-	blocked := maps.Clone(failed)
-	maps.Copy(blocked, e.blocked)
+	blocked := maps.Clone(e.blocked)
+	if blocked == nil {
+		blocked = map[font.SourceKey]bool{}
+	}
+	maps.Copy(blocked, failed)
 	next := newEncoder(e.o, blocked)
+	next.known = e.anchors
+	if e.known != nil {
+		next.known = e.known
+	}
 	for _, d := range e.drawn {
 		if err := next.page(ctx, d.p, d.n); err != nil {
 			return err

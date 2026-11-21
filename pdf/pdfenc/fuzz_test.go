@@ -266,8 +266,29 @@ func (p *program) run(d display.Device, n int) {
 		case 13, 14:
 			d.EndGroup()
 		case 15:
-			d.FillPath(p.path(), okage.FillRuleWinding, okage.SolidColor(p.color()))
+			p.mark(d)
 		}
+	}
+}
+
+// mark sends a link, an anchor or a bookmark to d, or fills a path.
+func (p *program) mark(d display.Device) {
+	names := [...]string{"a", "b", display.PageAnchor(0, 0, 0), display.PageAnchor(1, 0, 0)}
+	switch p.byte() % 5 {
+	case 0:
+		d.FillPath(p.path(), okage.FillRuleWinding, okage.SolidColor(p.color()))
+	case 1:
+		if r, ok := okage.RectFromXYWH(p.num(), p.num(), p.num(), p.num()); ok {
+			display.LinkURI(d, r, "https://example.com/"+p.text())
+		}
+	case 2:
+		if r, ok := okage.RectFromXYWH(p.num(), p.num(), p.num(), p.num()); ok {
+			display.LinkAnchor(d, r, names[p.byte()%4])
+		}
+	case 3:
+		display.Anchor(d, names[p.byte()%4], p.num(), p.num())
+	case 4:
+		display.Bookmark(d, int(p.byte()%8)-1, p.text(), p.num(), p.num(), p.byte()%2 == 0)
 	}
 }
 
@@ -281,6 +302,7 @@ func FuzzEncode(f *testing.F) {
 	f.Add([]byte{11, 128, 3, 1, 1, 0, 0, 30, 30, 1, 3, 0, 1, 10, 10, 40, 1, 0, 2, 200, 200, 0, 0, 0, 255, 13})
 	f.Add([]byte{6, 4, 10, 10, 0, 100, 10, 0, 100, 100, 3, 0, 7, 3, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 5, 5, 255, 0})
 	f.Add([]byte{12, 200, 23, 0, 0, 1, 2, 3, 0, 4, 0, 1, 5, 5, 60, 60, 0, 2, 3, 4, 255, 14, 5, 2, 1, 1, 2, 2, 60, 1, 2, 0, 2, 3, 1, 9, 9})
+	f.Add([]byte{15, 2, 10, 10, 50, 20, 1, 15, 4, 2, 3, 97, 98, 99, 0, 0, 1, 15, 3, 0, 30, 30, 15, 1, 5, 5, 20, 20, 2, 97, 98})
 	f.Add([]byte{10, 44, 1, 20, 20, 3, 0, 1, 2, 3, 40, 60, 120, 0, 1, 0, 41, 80, 120, 1, 2, 0, 42, 100, 120, 2, 3, 0, 0, 0, 0, 0, 0, 255})
 	face, err := font.Load(goregular.TTF, 0)
 	if err != nil {
@@ -324,6 +346,10 @@ func FuzzEncode(f *testing.F) {
 			}
 			if _, err := ivy.RenderImage(t.Context(), page, 18, color.White); err != nil {
 				t.Fatalf("rendering page %d: %v", i+1, err)
+			}
+			// the links, the anchors and the outline read back
+			if err := page.(display.Drawer).Draw(t.Context(), display.NewRecording(), 1); err != nil {
+				t.Fatalf("drawing page %d: %v", i+1, err)
 			}
 		}
 	})

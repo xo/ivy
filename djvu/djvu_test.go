@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
 )
 
 // open opens the test file name with the configuration cfg.
@@ -532,10 +533,11 @@ func TestConcurrent(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
-	for _, name := range []string{"bilevel.djvu", "palette.djvu", "shared-dict.djvu", "thumbnails.djvu", "gray.djvu"} {
+	for _, name := range []string{"bilevel.djvu", "palette.djvu", "shared-dict.djvu", "thumbnails.djvu", "gray.djvu", "bundled.djvu"} {
 		f.Add(testFile(f, name))
 	}
 	f.Add(form("DJVU", chunk("INFO", info2550()), chunk("METa", []byte(`(metadata (title "x"))`))))
+	f.Add(form("DJVU", chunk("INFO", info2550()), chunk("ANTa", []byte(`(maparea "#1" "" (rect 1 2 3 4))`))))
 	// an indirect document reads the files of shared-dict.djvu
 	index, files := indirect(f, testFile(f, "shared-dict.djvu"))
 	f.Add(index)
@@ -568,5 +570,9 @@ func FuzzOpen(f *testing.F) {
 		}
 		_, err = ivy.RenderImage(t.Context(), page, 10, color.White)
 		check(t, err)
+		// the outline and the links, which only a writer takes
+		if p, ok := page.(*Page); ok {
+			check(t, p.drawLinks(t.Context(), display.NewRecording()))
+		}
 	})
 }

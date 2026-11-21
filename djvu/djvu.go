@@ -20,7 +20,8 @@
 // their own, which its index names. A source of ivy has no folder, so a
 // program gives it with WithDir (D38). Without it, Open returns an error
 // that wraps ivy.ErrUnsupported for an indirect document. The text layer
-// and the outline are left out.
+// is left out. A writer of PDF, such as pdfenc, gets the outline of NAVM and
+// the links of the annotations of each page (D58).
 package djvu
 
 import (
@@ -101,6 +102,11 @@ type Document struct {
 	// oldest, and the size of each.
 	mu     sync.Mutex
 	recent []*Page
+
+	// navOnce reads nav, the outline and the targets of the links, when a
+	// writer first draws a page with its links.
+	navOnce sync.Once
+	nav     *navigation
 }
 
 // The capabilities of a document.

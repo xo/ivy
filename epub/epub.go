@@ -408,6 +408,9 @@ func (d *Document) source() (src layout.Source, err error) {
 		// a book of fixed layout starts with its own page of the cover
 		docs = p.withCover(docs)
 	}
+	// replaced maps an image of the spine to the page that shows it, for
+	// the table of contents
+	replaced := make(map[string]string)
 	for i, name := range docs {
 		switch {
 		case !fixed.isFixed(name):
@@ -417,6 +420,7 @@ func (d *Document) source() (src layout.Source, err error) {
 				p.fs.Add(page, doc)
 				p.n++
 				docs[i] = page
+				replaced[name] = page
 				continue
 			}
 		default:
@@ -428,6 +432,7 @@ func (d *Document) source() (src layout.Source, err error) {
 		}
 		if d.isSpineImage(name) {
 			docs[i] = p.add(name)
+			replaced[name] = docs[i]
 		}
 	}
 	var fsys fs.FS = d.fsys
@@ -443,6 +448,7 @@ func (d *Document) source() (src layout.Source, err error) {
 		Documents:   docs,
 		StyleSheets: styles,
 		Title:       title,
+		TOC:         d.toc(replaced),
 	}, nil
 }
 

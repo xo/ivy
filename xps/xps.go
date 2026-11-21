@@ -72,6 +72,13 @@ type Document struct {
 	log   *slog.Logger
 	pages []*Page
 	rels  []rel
+	// docs holds the part names of the FixedDocuments, in order.
+	docs []string
+
+	// links is the index of the links and the outline, which Draw builds
+	// once for a device that takes them (D58).
+	linksOnce sync.Once
+	links     *linkIndex
 
 	mu     sync.Mutex
 	fonts  map[string]fontResult
@@ -163,6 +170,7 @@ func (d *Document) readSequence(ctx context.Context, name string) error {
 		if err != nil {
 			return err
 		}
+		d.docs = append(d.docs, docName)
 		for p := range doc.Descendants() {
 			if !p.IsElement() || local(p) != "PageContent" {
 				continue
@@ -172,6 +180,8 @@ func (d *Document) readSequence(ctx context.Context, name string) error {
 			}
 			d.pages = append(d.pages, &Page{
 				doc:    d,
+				n:      len(d.pages),
+				docN:   len(d.docs) - 1,
 				part:   resolve(docName, attr(p, "Source")),
 				width:  number(attr(p, "Width"), 0),
 				height: number(attr(p, "Height"), 0),
@@ -336,7 +346,10 @@ func deobfuscate(data []byte, name string) error {
 
 // Page is a page of an XPS document.
 type Page struct {
-	doc           *Document
+	doc *Document
+	// n is the number of the page in the document, from 0, and docN is the
+	// number of its FixedDocument.
+	n, docN       int
 	part          string
 	width, height float32
 
@@ -419,7 +432,9 @@ func (p *Page) Draw(ctx context.Context, d display.Device, res float32) error {
 // pixels of the device, and area is the target of the device in its pixels.
 func (p *Page) draw(ctx context.Context, root roxmltree.Node, dev display.Device, ctm okage.Transform, area okage.Rect) error {
 	r := &renderer{ctx: ctx, doc: p.doc, part: p.part, dev: dev, ctm: ctm, area: area, w: &walk{}}
+	r.links = p.pageLinks(dev, ctm)
 	r.page(root)
+	r.bookmarks()
 	if r.w.err != nil {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("rendering xps page: %w", err)

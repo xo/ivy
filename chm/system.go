@@ -5,8 +5,11 @@ import (
 	"encoding/binary"
 	"strings"
 
+	okhtml "github.com/xo/okage/html"
+
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/layout"
 )
 
 // The codes of the entries of #SYSTEM that the package reads.
@@ -135,6 +138,65 @@ func contentsOrder(hhc []byte, dir, charset string, lim ivy.Limits) []string {
 		}
 	}
 	return out
+}
+
+// contentsTOC returns the entries of a table of contents for the bookmarks
+// of the layout. An entry is an object element of the type text/sitemap,
+// with the param elements Name and Local. Its level is the number of the
+// ul elements around it. lookup gives the path of a file in any case.
+func contentsTOC(hhc []byte, dir, charset string, lim ivy.Limits, lookup func(string) (string, bool)) []layout.TOCEntry {
+	tree := ebook.ParseHTML(ebook.TextIn(hhc, charset), lim)
+	if tree == nil {
+		return nil
+	}
+	t := ebook.NewTOC(lim)
+	for el := range ebook.Elements(tree.Root()) {
+		if t.Full() {
+			break
+		}
+		if el.Name() != "object" {
+			continue
+		}
+		if typ, _ := el.Attr("type"); !strings.EqualFold(strings.TrimSpace(typ), "text/sitemap") {
+			continue
+		}
+		var label, local string
+		for param := range ebook.Elements(el) {
+			if param.Name() != "param" {
+				continue
+			}
+			name, _ := param.Attr("name")
+			value, _ := param.Attr("value")
+			switch {
+			case strings.EqualFold(strings.TrimSpace(name), "name") && label == "":
+				label = value
+			case strings.EqualFold(strings.TrimSpace(name), "local") && local == "":
+				local = value
+			}
+		}
+		if i := strings.LastIndex(local, "::"); i >= 0 {
+			local = local[i+2:]
+		}
+		target, ok := ebook.ResolveTarget(dir, local)
+		if !ok {
+			continue
+		}
+		file, fragment, found := strings.Cut(target, "#")
+		if file, ok = lookup(file); !ok {
+			continue
+		}
+		if found {
+			file += "#" + fragment
+		}
+		level := 0
+		for p := el.Parent(); p != nil; p = p.Parent() {
+			if p.Type() == okhtml.ElementNode && p.Name() == "ul" {
+				level++
+			}
+		}
+		t.Add(label, max(level, 1), file)
+	}
+	return t.Entries
 }
 
 // resolveLink returns the path of a link of a help file, relative to the

@@ -82,6 +82,8 @@ type header struct {
 	fdstCount int
 	skeleton  int
 	fragment  int
+	// ncx is the record of the NCX index, the table of contents, or -1.
+	ncx int
 
 	exth []exthRecord
 }
@@ -113,6 +115,7 @@ const (
 	offFDST        = 192
 	offFDSTCount   = 196
 	offExtraFlags  = 242
+	offNCX         = 244
 	offFragment    = 248
 	offSkeleton    = 252
 )
@@ -137,6 +140,7 @@ func readHeader(db *database, base int, lim ivy.Limits) (*header, error) {
 		fdst:        -1,
 		skeleton:    -1,
 		fragment:    -1,
+		ncx:         -1,
 	}
 	if db.kind == kindPalmDOC {
 		// PalmDOC keeps the position of the reader at offset 12, not the
@@ -180,6 +184,7 @@ func readHeader(db *database, base int, lim ivy.Limits) (*header, error) {
 	if length >= 0xe4 && offExtraFlags+2 <= end {
 		h.extraFlags = be16(rec, offExtraFlags)
 	}
+	h.ncx = index(offNCX)
 	if h.version >= 8 && h.version != none {
 		h.fdst = index(offFDST)
 		if v := field(offFDSTCount); v != none {

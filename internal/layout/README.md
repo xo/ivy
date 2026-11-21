@@ -79,7 +79,7 @@ one of its functions.
 | `stacking.py` | 132 | `stacking.go` | 208 | Ported |
 | `matrix.py` | 51 | `matrix.go` | 77 | Ported |
 | `pdf/stream.py` | 339 | `pdf_stream.go` | 981 | Partly ported: the class `Stream`, with the operators of pydyf that the drawing calls, onto the display list. See "The drawing" |
-| `anchors.py` | 469 | `anchors.go` | 72 | Partly ported: the transformation matrices of `gather_anchors` |
+| `anchors.py` | 469 | `anchors.go` | 371 | Partly ported: `gather_anchors` without the forms, `rectangle_aabb`, and the levels of `make_page_bookmark_tree`, which the PDF device of pdfenc ports. See "The drawing" |
 | `document.py` | 361 | `document.go` | 112 | Partly ported: `Page.paint`, as `DrawPage` |
 | `svg/utils.py` | 216 | `svg_utils.go` | 109 | Partly ported: `normalize` and `size`, for the intrinsic size of an SVG image. okage draws the SVG images |
 | `logger.py` | 21 | `logger.go` | 55 | Ported |
@@ -557,8 +557,14 @@ port draws onto the display list of D10 instead.
    scale and reduced, so that a pixel that a shape touches is painted.
    `OkageDevice.SetAntiAlias` turns the antialiasing of the device off.
 
-The links, the bookmarks, the anchors, the forms and the tags of a tagged
-PDF are not drawn.
+`DrawPage` gives the links, the anchors and the bookmarks of the page to a
+device that is a `display.Linker` or a `display.Bookmarker`, when its
+options hold a `PageLinks` (D58). `gather_anchors` finds them. A book names
+the anchor of the id X of the document at the path P as "P#X", and the
+start of the document as "P", because it holds many documents. When the
+`Source` has a table of contents, its entries give the bookmarks, at the
+anchors of their targets, and the headings give none. The forms and the
+tags of a tagged PDF are not drawn.
 
 ## The book
 
@@ -1088,8 +1094,9 @@ Each guard is marked with `Port:` in the code.
    URLs of the attachments.
 2. `svg/`, the port of SVG of upstream (D15). okage renders the SVG
    images.
-3. The writing of PDF of `pdf/` and `document.py`, the links, the
-   bookmarks, the anchors, the forms and the tags of a tagged PDF.
+3. The writing of PDF of `pdf/` and `document.py`, the forms and the tags
+   of a tagged PDF. pdfenc writes the links, the anchors and the
+   bookmarks (D58).
 4. `draw_emojis` and the color glyphs of the tables SVG and COLR. okage
    draws such glyphs in the text of an SVG image, and has no API that
    draws a glyph of a face. The bitmap glyphs are drawn, see "The
