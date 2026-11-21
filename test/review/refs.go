@@ -200,6 +200,12 @@ var (
 	weasyprintRoute = &route{id: "weasyprint", name: "WeasyPrint", tools: []string{"weasyprint"},
 		prepare: weasyprintPDF, count: pdfCount, renderers: pdfRenderers, ivyPDF: true,
 		variant: func(j *refJob) string { return ebook.PaperStyleFor(j.paper) }}
+	// pdflatexRoute sets a TeX document with pdfLaTeX of the TeX
+	// distribution of the machine, in a copy of the folder of the document.
+	// pdftex, the program of plain TeX, is the same program as pdflatex.
+	pdflatexRoute = &route{id: "pdflatex", name: "pdfLaTeX", tools: []string{"pdflatex"},
+		prepare: pdflatex, count: pdfCount, renderers: pdfRenderers, ivyPDF: true,
+		variant: func(*refJob) string { return texPaper + plainPaper }}
 	xpsRoute = &route{id: "xps", name: "libgxps",
 		renderers: []pageRenderer{{id: "xpstopng", name: "libgxps", tools: []string{"xpstopng"}, render: xpstopng}}}
 	gsRoute = &route{id: "gs", name: "Ghostscript", tools: []string{"gs"}, perDPI: true,
@@ -232,6 +238,7 @@ var routeKinds = map[*route][]string{
 	},
 	calibreRoute:    {"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "md", "markdown", "txt", "text"},
 	weasyprintRoute: {"html", "htm", "xhtml"},
+	pdflatexRoute:   texKinds,
 	xpsRoute:        {"xps", "oxps"},
 	gsRoute:         {"ps", "eps", "epsi", "epsf", "ept"},
 	inkscapeRoute:   {"emf", "wmf", "emz", "wmz"},
@@ -375,7 +382,7 @@ var versionArgs = map[string][]string{
 	"mutool": {"-v"}, "pdftoppm": {"-v"}, "pdftocairo": {"-v"}, "pdfinfo": {"-v"},
 	"gs": {"--version"}, "soffice": {"--version"}, "ebook-convert": {"--version"}, "weasyprint": {"--version"},
 	"inkscape": {"--version"}, "magick": {"-version"}, "xpstopng": {"--version"},
-	"djvused": {"--help"},
+	"djvused": {"--help"}, "pdflatex": {"--version"},
 }
 
 // version returns the first line of the version of the program name that

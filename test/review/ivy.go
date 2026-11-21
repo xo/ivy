@@ -28,6 +28,7 @@ import (
 	"github.com/xo/ivy/fb2"
 	"github.com/xo/ivy/html"
 	"github.com/xo/ivy/iwork"
+	"github.com/xo/ivy/latex"
 	"github.com/xo/ivy/markdown"
 	"github.com/xo/ivy/mobi"
 	"github.com/xo/ivy/msdoc"
@@ -53,7 +54,7 @@ import (
 var formats = []ivy.Format{
 	camera.Format, chm.Format, comic.Format, csv.Format, djvu.Format, docx.Format,
 	emf.Format, epub.Format, fb2.Format, html.Format, iwork.Format,
-	markdown.Format, mobi.Format, msdoc.Format, msppt.Format, msxls.Format,
+	latex.Format, markdown.Format, mobi.Format, msdoc.Format, msppt.Format, msxls.Format,
 	odf.Format, ora.Format, pdf.Format, pptx.Format, ps.Format, psd.Format,
 	pub.Format, rtf.Format, text.Format, vsdx.Format, xlsx.Format, xps.Format,
 }
@@ -289,16 +290,7 @@ func openIvy(ctx context.Context, path, kind string, cfg ivy.Config) (*ivyDoc, t
 	start := time.Now()
 	doc, err := call(ctx, func() (ivy.Document, error) {
 		src := io.NewSectionReader(f, 0, st.Size())
-		// An HTML or Markdown file reads the files that it links to from
-		// its folder (D22). The manifest fetches them as assets.
-		dir := os.DirFS(filepath.Dir(path))
-		switch format.Name {
-		case html.Format.Name:
-			return html.Open(ctx, src, html.WithConfig(cfg), html.WithDir(dir))
-		case markdown.Format.Name:
-			return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(dir))
-		}
-		return format.Open(ctx, src, cfg)
+		return OpenIvy(ctx, format, src, cfg, filepath.Dir(path))
 	})
 	if err != nil {
 		if !errors.Is(err, errStuck) {
@@ -396,13 +388,16 @@ func FormatFor(kind string) (ivy.Format, bool) {
 
 // OpenIvy opens src with format and the configuration cfg, as render does.
 // An HTML or Markdown file reads the files that it links to from the
-// folder dir.
+// folder dir (D22), and a TeX document reads its figures, its inputs and
+// its bibliography from it (D65). The manifest fetches them as assets.
 func OpenIvy(ctx context.Context, format ivy.Format, src ivy.Source, cfg ivy.Config, dir string) (ivy.Document, error) {
 	switch format.Name {
 	case html.Format.Name:
 		return html.Open(ctx, src, html.WithConfig(cfg), html.WithDir(os.DirFS(dir)))
 	case markdown.Format.Name:
 		return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(os.DirFS(dir)))
+	case latex.Format.Name:
+		return latex.Open(ctx, src, latex.WithConfig(cfg), latex.WithDir(os.DirFS(dir)))
 	}
 	return format.Open(ctx, src, cfg)
 }

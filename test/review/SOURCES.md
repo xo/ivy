@@ -8,9 +8,10 @@ Nothing in this list is committed to the repository or shipped with ivy.
 A row whose URL starts with `repo:` names a file that is already in this
 repository. The review command reads that file in place.
 
-The manifest holds 305 rows: 289 files to download, about 131 MB, and 16
-files of this repository. 57 of the rows are assets: the style sheets, the
-fonts and the images that an HTML file links to. The review command
+The manifest holds 369 rows: 306 files to download, about 169 MB, and 63
+files of this repository. 58 of the rows are assets: the style sheets, the
+fonts and the images that an HTML file links to, and the figure of a TeX
+document. The review command
 downloads an asset and does not render it. A note of the form `password=XYZ` gives the
 password of an encrypted file.
 
@@ -208,6 +209,25 @@ of 2018 is a zip of a folder `.key` with `Index.zip`, and it holds no
 preview image. The manifest leaves out the files of iWork '09, because the
 applications of Apple do not open them now.
 
+## TeX and LaTeX
+
+The rows of the kind `tex` are the LaTeX and plain TeX documents of the
+package `latex` (D62). A document reads the files of its folder, such as
+its figures, so an asset of a TeX document has a name in the folder of the
+document. Six rows are files of this repository, see "Files of this
+repository".
+
+| Source | Commit | License | Files |
+| --- | --- | --- | --- |
+| https://github.com/latex3/latex2e | `db6df6380f8660758d26b9666d0e70600a3d7be9` | LPPL-1.3c, the license of the repository and of the headers of the files | `base/sample2e.tex`, `required/amsmath/testmath.tex`, `base/doc/cfgguide.tex`, `required/graphics/grfguide.tex`, `required/graphics/rotex.tex` and its figure `required/graphics/cat.eps` |
+| https://github.com/josephwright/beamer | `e9e99b8fdc3084d9f118a761264be37184899e4b` | LPPL-1.3c or GFDL-1.3-or-later, the two licenses of the folder `doc` in `LICENSE.md` | `doc/examples/a-conference-talk/beamerexample-conference-talk.tex` |
+| https://github.com/janosh/diagrams | `3bb036835ba754c46ce1ac5b694fa11db5d89b43` | MIT, in `license` | `assets/multilayer-perceptron/multilayer-perceptron.tex` |
+| CTAN, `systems/knuth/dist/lib` | none, the files of Knuth do not change | Knuth, the license that CTAN gives the package knuth-lib | `story.tex` |
+
+The manifest leaves out `subeqn.tex` of amsmath, whose license allows only
+copies without changes or with a new name, and `lppl.tex`, the text of the
+license itself.
+
 ## Other sources
 
 Each of these sources gives one row:
@@ -222,7 +242,7 @@ Each of these sources gives one row:
 
 ## Files of this repository
 
-The rows whose URL starts with `repo:` name 16 files of this repository. The
+The rows whose URL starts with `repo:` name 63 files of this repository. The
 `README.md` of each `testdata` folder says where its files come from. The
 source column names the project that made the file, or `xo/ivy` with the
 commit `81c4da1a35591008a63a05cb42fea70c31dc11c0` for a file that the

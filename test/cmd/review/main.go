@@ -9,6 +9,7 @@
 //	review render -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 //		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR] [-retry]
 //		[-papers LIST] [-system-fonts=BOOL] [-font-dirs LIST] [-faults FILE]
+//		[-tex TREE]
 //	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 //		[-kind LIST]
 //
@@ -78,6 +79,7 @@ Usage:
 	review render -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR] [-retry]
 		[-papers LIST] [-system-fonts=BOOL] [-font-dirs LIST] [-faults FILE]
+		[-tex TREE]
 	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 		[-kind LIST]
 
@@ -150,6 +152,8 @@ func run(ctx context.Context, args []string) error {
 		systemFonts := fs.Bool("system-fonts", true, "give ivy the fonts of the system, as the references have them")
 		fontDirs := fs.String("font-dirs", strings.Join(review.DefaultFontDirs(), ","),
 			"a comma-separated `list` of font folders more for ivy and for the references; the default is the font folders of the account")
+		tex := fs.String("tex", review.TeXBase, "the `tree` of TeX files of a TeX document: base, the standard classes as kpsewhich finds them; "+
+			"dist, the whole TeX distribution; or none (D65)")
 		faults := fs.String("faults", filepath.Join(repo, "test", "review", "reference-faults.tsv"),
 			"the `file` of the known faults of the references")
 		fs.Usage = func() {
@@ -184,6 +188,10 @@ func run(ctx context.Context, args []string) error {
 				return err
 			}
 		}
+		if opts.TeX, err = review.TeXTree(ctx, *tex, repo); err != nil {
+			return err
+		}
+		opts.TeXMode = *tex
 		entries, err := review.LoadManifest(*manifest)
 		if err != nil {
 			return err

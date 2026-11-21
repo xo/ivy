@@ -76,6 +76,7 @@ that is not in the cache, and names it.
 | `-system-fonts` | on | give ivy the fonts of the system. `-system-fonts=false` turns it off. See "The fonts" |
 | `-font-dirs LIST` | the font folders of the account | the font folders more for ivy and for the references, separated by commas. An empty list gives none |
 | `-faults FILE` | `test/review/reference-faults.tsv` | the known faults of the references. See "Faults of a reference" |
+| `-tex TREE` | `base` | the tree of TeX files that ivy gives a TeX document: `base`, `dist` or `none`. See "TeX documents" |
 
 ## The manifest
 
@@ -108,6 +109,7 @@ kinds to PDF first, then draw each page:
 | Office, OpenDocument, rtf, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
 | csv, tsv, tab | LibreOffice to PDF through UNO, on the page of ivy | MuPDF, Poppler Splash, Poppler Cairo | yes |
 | html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
+| tex, latex, ltx | pdfLaTeX, or pdfTeX for plain TeX, to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
 | epub, mobi, azw3, azw4, fb2, chm, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
 | xps, oxps | none | libgxps (`xpstopng`) | no |
 | ps, eps | Ghostscript draws each page | Ghostscript | no |
@@ -138,6 +140,8 @@ IVY_REVIEW_PASSWORD=PASSWORD PYTHON unopdf.py SOFFICE file://PROFILE PIPE file o
 ebook-convert file out.pdf OPTIONS
 xpstopng -f N -l N -r DPI file.xps prefix
 gs -dSAFER -dBATCH -dNOPAUSE -q -sDEVICE=png16m -rDPI -dTextAlphaBits=4 -dGraphicsAlphaBits=4 [-dEPSCrop] -sOutputFile=p-%04d.png file
+pdflatex -interaction=nonstopmode -file-line-error -jobname=NAME '\AtBeginDocument{\pdfpagewidth=\paperwidth \pdfpageheight=\paperheight}\input{NAME.tex}'
+pdftex -interaction=nonstopmode -file-line-error -jobname=NAME '\pdfpagewidth=8.5in \pdfpageheight=11in \input NAME.tex \end'
 inkscape --export-type=png --export-dpi=DPI --export-background=white --export-background-opacity=1 -o out.png file
 ddjvu -format=ppm -page=N -scale=DPI file.djvu out.ppm
 magick 'file[0]' -colorspace sRGB -background white -alpha remove -alpha off png24:out.png
@@ -293,6 +297,61 @@ The references get the paper in this way:
 `pdfinfo` gives the sizes of the PDF files of the cache. calibre rounds a
 size in points, such as 594.96 by 840.96 for A4. The difference is less
 than one pixel at 96 dots per inch.
+
+## TeX documents
+
+The reference of a TeX document is the TeX distribution of the machine,
+such as TeX Live. The report gives the version of `pdflatex` under the
+programs, such as `pdfTeX 3.141592653-2.6-1.40.29 (TeX Live 2026/Arch
+Linux)`.
+
+A TeX document reads the files of its folder: its figures, the files of
+`\input` and its bibliography. The manifest puts each such file in the
+folder of the document, as an asset, and ivy reads the folder with
+`latex.WithDir` (D65). The reference copies the folder into a temporary
+folder of the cache, and runs the program there, so that the files of the
+cache do not change. A document of the repository reads its folder in the
+repository, such as `latex/testdata/report`.
+
+A document with `\documentclass` or `\documentstyle` goes to `pdflatex`,
+and another document goes to `pdftex`, the format of plain TeX. The program
+runs twice, for the cross-references and the table of contents, and again
+while its log asks for it, up to four times. It runs with
+`SOURCE_DATE_EPOCH` of 2026-01-01 and `FORCE_SOURCE_DATE=1`, so that
+`\today` does not change. The review runs no BibTeX: a document with a
+bibliography holds its `.bbl` file in its folder, as a paper of arXiv does.
+
+The input of the program sets the PDF page. pdfTeX takes the page of
+`pdftexconfig.tex` of the distribution, such as A4, when a document loads
+neither geometry nor hyperref. The class article sets the text on US
+Letter, so the text sits on a page of another size. The input of
+`pdflatex` gives the page the paper of the class, at the start of the
+document. A package that sets the page, such as geometry, sets it again
+after that. The input of `pdftex` gives the page US Letter, the paper of
+`plain.tex`. The input of `pdftex` ends with `\end`, because a file of
+plain TeX can end without `\bye`, as `story.tex` of the TeXbook does.
+
+An error in the log of the program fails the reference, because a page
+with an error is not a reference. The error names the first errors of the
+log, such as a package that the distribution does not hold. The cache keeps
+the failure. After you install the package, run `render` with `-retry`. On
+2026-11-21 the TeX Live of the machine of the review does not hold pgf, so
+the documents of beamer and of TikZ have no reference, and it has no
+`repstopdf`, so a document with an EPS figure has no reference.
+
+`-tex` gives ivy the tree of TeX files of `ivy.Config.TeX` (D65):
+
+- `base`, the default, gives the standard classes and the packages that
+  they load, as `kpsewhich` finds them, and Latin Modern of the folder
+  `fonts/lm`. These are the files that the engine of go-tex/engine embeds
+  upstream, and the files of `test/latex_test.go`. The engine sets a
+  package that it implements itself, such as amsmath.
+- `dist` gives the whole tree of the distribution, `TEXMFDIST` of
+  `kpsewhich`. The engine then also reads a class such as `ltxguide.cls`,
+  and a package such as the `amsmath.sty` of TeX Live.
+- `none` gives no tree. The engine sets the text in the Go fonts.
+
+`test/cmd/perf` takes the same flag.
 
 ## External references
 
@@ -471,8 +530,8 @@ A reference can be wrong on a page, and ivy right. The file
 separated by tabs: the name of the document in the manifest, or that name
 with the paper, the page from 1 or `*` for each page, the id of the
 reference or `*` for each one, and a note. The ids are `soffice`,
-`msoffice`, `calibre`, `weasyprint`, `pdf`, `xps`, `winxps`, `gs`,
-`inkscape`, `gdiplus`, `djvu`, `magick` and `iwork`. A line that starts
+`msoffice`, `calibre`, `weasyprint`, `pdflatex`, `pdf`, `xps`, `winxps`,
+`gs`, `inkscape`, `gdiplus`, `djvu`, `magick` and `iwork`. A line that starts
 with `#` is a comment.
 
 The report gives each cell of such a reference a dashed border and the
@@ -693,6 +752,8 @@ and the sizes:
 ## Add a format
 
 To add a format of ivy, such as DjVu, add its `Format` value to the list
-`formats` in `test/review/ivy.go`. The kinds of the manifest are the
+`formats` in `test/review/ivy.go`. A format that reads the files of its
+folder, such as HTML, Markdown and LaTeX, also gets the folder in
+`OpenIvy` of that file. The kinds of the manifest are the
 extensions of the format. To add a reference, add a route or a renderer in
 `test/review/refs.go`.

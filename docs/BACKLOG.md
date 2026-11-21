@@ -246,16 +246,116 @@ was built.
    of expansion, the depth of the input and the size of a paragraph. Today
    the engine keeps its own limits, and the context stops a run. Source:
    phase 8a, 2026-11-21.
-8. Add the corpus of LaTeX documents to `test/review/corpus.tsv`, and the
-   format to the review command. Source: phase 8a, 2026-11-21.
-9. Update the copy from upstream, which merges about 10 changes each day,
+8. Update the copy from upstream, which merges about 10 changes each day,
    as `docs/UPSTREAM.md` says. Source: D62.
-10. The tests of the test module and the review command give the folder
-    `fonts` to the formats with `os.DirFS`, and the folder now holds `lm`,
-    which `fonts.FS` leaves out (D65). `test/cmd/perf` hides it, so that its
-    hashes stay those of `fonts.FS`. Hide it in the others too, such as
-    `test/review/render.go` and `test/galley_test.go`. Source: phase 8a,
-    2026-11-21.
+9. The tests of the test module and the review command give the folder
+   `fonts` to the formats with `os.DirFS`, and the folder now holds `lm`,
+   which `fonts.FS` leaves out (D65). `test/cmd/perf` hides it, so that its
+   hashes stay those of `fonts.FS`. Hide it in the others too, such as
+   `test/review/render.go` and `test/galley_test.go`. The review now gives
+   Latin Modern to a TeX document through `Config.TeX` too. Source: phase
+   8a, 2026-11-21.
+10. Write LaTeX with `latex/latexenc`, phase 8e of `PLAN.md`: the HTML of a
+    document of the layout as LaTeX source. Nothing of it is built. Source:
+    D62, 2026-11-21.
+11. Report what the engine skips. In the mode that ivy uses, the engine skips
+    a command or a package that it does not model, and the page loses that
+    part with no error. Give the program the list of what was skipped, for
+    example through `Describe`, and count it in the review. Source: the README
+    of go-tex/engine, 2026-11-21.
+12. Load the real files of the packages that the engine emulates: `geometry`,
+    `tikz`, `hyperref`, `graphicx` and the font encodings. The engine has its
+    own code for the common uses of each, and other uses of them are lost.
+    Source: the README of go-tex/engine, 2026-11-21.
+13. Put a `\marginpar` note in the margin, and break the page at a
+    `\pagebreak` inside a paragraph. Both need the primitive `\vadjust`, which
+    the engine does not have. Today the note is not placed in the margin, and
+    the break inside a paragraph has no effect. Source: the README of
+    go-tex/engine, 2026-11-21.
+14. Hyphenate languages other than American English. The copy holds only the
+    patterns of American English. The patterns of other languages come from
+    hyph-utf8 under several licenses, so a program can give them, or the
+    maintainers choose which ones ivy holds. Source: phase 8a, 2026-11-21.
+15. Find the documents that stop early. By the count of upstream, about one
+    real paper in a thousand still stops before its end, and the step limits
+    can stop a long figure of pgf, such as the output of tikzDevice. Measure
+    this on the corpus of LaTeX documents of the review. Source: the README of
+    go-tex/engine, 2026-11-21.
+16. Draw a formula that holds a command that `texmath` of okage (okage D78)
+    does not know. Today the engine drops that one formula. Count these
+    formulas in the review, and ask okage for the commands that real documents
+    use. Source: phase 8a, 2026-11-21.
+
+## Found by the review of LaTeX
+
+The review of 2026-11-21 renders the 14 TeX documents of
+`test/review/corpus.tsv` beside pdfLaTeX of TeX Live 2026, with `-tex base`.
+Each item names a file of the corpus.
+
+1. Read the `.bbl` file of a document. The engine reads `\jobname.bbl`,
+   and `latex` gives the engine no job name, so the name is `texput`. A
+   program gives ivy a `Source` without a name. In
+   `repo/tex/report.tex`, the bibliography and the numbers of `\cite` are
+   missing. Find a way to give the name, such as an option of `latex`.
+   Source: the review of LaTeX, 2026-11-21.
+2. Draw the headers and the footers of fancyhdr. In
+   `repo/tex/report.tex`, pdfLaTeX draws `\leftmark`, "Test Report" and
+   "Page N" with their rules on each page. ivy draws an empty page with a
+   header after the title page, and draws the header on two pages only.
+   Source: the review of LaTeX, 2026-11-21.
+3. Turn an image of `\includegraphics` with the key `angle`. In
+   `repo/tex/report.tex`, ivy draws both images of the section
+   "Transforms" without the turn. Source: the review of LaTeX, 2026-11-21.
+4. Take the names of babel for a language that `\babelprovide` loads. In
+   `repo/tex/livre.tex`, ivy writes "Contents", "Chapter" and
+   "Bibliography" where pdfLaTeX writes "Table des matières", "Chapitre"
+   and "Bibliographie". ivy also leaves out the blank pages of `openright`
+   of the class book, its running heads, and the roman numbers of the
+   front matter, so it gives 6 pages where pdfLaTeX gives 11. Source: the
+   review of LaTeX, 2026-11-21.
+5. Indent the environments quote, quotation and verse, and break the lines
+   of verse at `\\`. Draw `\LaTeX` as the logo, not as text. Draw a prime
+   in math, `x'`, as the glyph prime, not as a quote in a superscript. All
+   three are on page 2 of `latex2e/tex/sample2e.tex`, whose page breaks
+   then differ. Source: the review of LaTeX, 2026-11-21.
+6. Draw the end of a proof of amsthm as an open box, as amsthm does, and
+   keep the page breaks of pdfLaTeX. `latex2e/tex/testmath.tex` gives 40
+   pages where pdfLaTeX gives 41, and its pages differ by 3 to 9 after the
+   blur, most by the place of the break. Source: the review of LaTeX,
+   2026-11-21.
+7. Set a document of a class that the tree of `-tex base` does not hold.
+   `latex2e/tex/cfgguide.tex` uses the class ltxguide: ivy shows the
+   characters `|` of its short verbatim, numbers the sections, and gives 18
+   pages where pdfLaTeX gives 12. With `-tex dist`, the engine loads
+   `ltxguide.cls` and loses the text: it gives 2 pages. The same happens to
+   `latex2e/tex/grfguide.tex`, 51 pages with `base` and 2 with `dist`. It is
+   item 2 of "Left by phase 8a" with other files. Source: the review of
+   LaTeX, 2026-11-21.
+8. Make the engine faster on `latex2e/tex/rotex.tex` with `-tex dist`. One
+   run takes about 260 seconds, and the other documents wait for it,
+   because `Compile` runs one engine at a time (item 6 of "Left by phase
+   8a"). With `-tex base` it takes 2 seconds. Source: the review of LaTeX,
+   2026-11-21.
+9. Give a slide of beamer its size, 128 by 96 millimeters, and its theme.
+   ivy draws the 23 frames of `beamer/tex/beamerexample-conference-talk.tex`
+   as pages of US Letter with the text of the frames only. Give a picture
+   of the class standalone the size of the picture.
+   `janosh/tex/multilayer-perceptron.tex` is a small framed box at the top
+   of a page of US Letter (item 5 of "Left by phase 8a"). Source: the
+   review of LaTeX, 2026-11-21.
+10. Give a document of plain TeX the page of US Letter. ivy gives a page of
+    the text with margins of one inch, 8.5 by 10.9 inches, so the pages of
+    `repo/tex/plain.tex` and `knuth/tex/story.tex` are 10 pixels shorter
+    than the pages of pdfTeX at 96 dots per inch. Source: the review of
+    LaTeX, 2026-11-21.
+11. Install pgf, the packages of `collection-latexextra` and `repstopdf` in
+    the TeX Live of the machine of the review. Without pgf, the documents
+    of beamer and of TikZ have no reference. Without `standalone.cls`,
+    `csquotes.sty` and `imakeidx.sty`, a document that loads them has no
+    reference. Without `repstopdf`, a document with an EPS figure has no
+    reference, such as `latex2e/tex/rotex.tex` and
+    `latex2e/tex/grfguide.tex`. Then run `render` with `-retry`. Source: the
+    review of LaTeX, 2026-11-21.
 
 ## Left by the charts
 

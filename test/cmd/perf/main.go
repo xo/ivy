@@ -5,7 +5,7 @@
 //
 //	perf [-cache DIR] [-manifest FILE] [-match REGEXP] [-kind LIST]
 //		[-pages N] [-dpi N] [-count N] [-timeout DUR]
-//		[-cpuprofile FILE] [-memprofile FILE] [-hash]
+//		[-cpuprofile FILE] [-memprofile FILE] [-hash] [-tex TREE]
 //
 // perf reads each file of the corpus into memory, and then, for each run,
 // opens it, renders its first page, counts its pages and renders its first
@@ -74,6 +74,8 @@ type options struct {
 	cpu      string
 	mem      string
 	hash     bool
+	// tex is the tree of TeX files of a TeX document (D65).
+	tex fs.FS
 }
 
 func run(ctx context.Context, args []string) error {
@@ -93,6 +95,7 @@ func run(ctx context.Context, args []string) error {
 	cpu := fl.String("cpuprofile", "", "write a CPU profile to this file")
 	mem := fl.String("memprofile", "", "write a profile of the allocations to this file")
 	hash := fl.Bool("hash", false, "write a hash of the pixels of the pages")
+	tex := fl.String("tex", review.TeXBase, "the tree of TeX files of a TeX document: base, dist or none, as review takes it")
 	if err := fl.Parse(args); err != nil {
 		return fmt.Errorf("reading the flags: %w", err)
 	}
@@ -109,6 +112,9 @@ func run(ctx context.Context, args []string) error {
 	}
 	if *kinds != "" {
 		opts.kinds = strings.Split(*kinds, ",")
+	}
+	if opts.tex, err = review.TeXTree(ctx, *tex, repo); err != nil {
+		return err
 	}
 	return measure(ctx, opts)
 }
@@ -168,7 +174,7 @@ func measure(ctx context.Context, opts options) error {
 	}
 	// The folder lm holds the fonts of TeX, which fonts.FS of the module
 	// fonts leaves out (D65).
-	cfg := ivy.Config{Fonts: withoutTeX{os.DirFS(filepath.Join(opts.repo, "fonts"))}}
+	cfg := ivy.Config{Fonts: withoutTeX{os.DirFS(filepath.Join(opts.repo, "fonts"))}, TeX: opts.tex}
 	fmt.Println("name\tkind\tsize\tpages\topen_ms\tfirst_ms\tcount_ms\tpage_ms\ttotal_ms\talloc_mb\tallocs\terror\thash")
 	for _, e := range entries {
 		if e.Kind == "asset" || (opts.match != nil && !opts.match.MatchString(e.Name)) ||

@@ -67,6 +67,10 @@ type RenderOptions struct {
 	FontDirs []string
 	// Faults are the known faults of the references.
 	Faults []Fault
+	// TeX is the tree of TeX files of a TeX document, see TeXTree, or nil
+	// for none (D65). TeXMode names it in the report.
+	TeX     fs.FS
+	TeXMode string
 }
 
 // Report holds the results of a run, as report.json holds them.
@@ -84,6 +88,9 @@ type Report struct {
 	Papers      []Paper  `json:"papers,omitempty"`
 	SystemFonts bool     `json:"system_fonts"`
 	FontDirs    []string `json:"font_dirs,omitempty"`
+	// TeX is the tree of TeX files of a TeX document: TeXBase, TeXDist or
+	// TeXNone (D65).
+	TeX string `json:"tex,omitempty"`
 	// Kinds sums the documents of each kind.
 	Kinds []KindSummary `json:"kinds"`
 }
@@ -289,7 +296,7 @@ func Render(ctx context.Context, entries []Entry, opts RenderOptions) (*Report, 
 	rep := &Report{
 		Created: start.UTC(), DPI: opts.DPI, Pages: opts.Pages, Timeout: opts.Timeout.String(),
 		Notes: notes, Counts: map[string]int{}, Papers: opts.Papers, SystemFonts: opts.SystemFonts,
-		FontDirs: opts.FontDirs,
+		FontDirs: opts.FontDirs, TeX: opts.TeXMode,
 	}
 	var mu sync.Mutex
 	done := 0
@@ -563,7 +570,7 @@ func (jb docJob) name() string {
 // ivyConfig returns the configuration of ivy for a document with the
 // password password and the paper paper.
 func ivyConfig(opts RenderOptions, fonts fs.FS, password string, paper *Paper) ivy.Config {
-	cfg := ivy.Config{Password: password, Fonts: fonts, SystemFonts: opts.SystemFonts}
+	cfg := ivy.Config{Password: password, Fonts: fonts, SystemFonts: opts.SystemFonts, TeX: opts.TeX}
 	if paper != nil {
 		cfg.Paper = paper.Size()
 	}
@@ -1195,7 +1202,7 @@ func hashFile(path string) (string, int64, error) {
 // linkInput makes a symbolic link to the file path in the folder tmp, with
 // the extension of the kind, because some programs read the extension.
 func linkInput(tmp, path string, e Entry) (string, error) {
-	if e.Kind == "html" || e.Kind == "md" {
+	if e.Kind == "html" || e.Kind == "md" || contains(texKinds, e.Kind) {
 		// A document that links to other files must stay in its folder.
 		abs, err := filepath.Abs(path)
 		if err != nil {

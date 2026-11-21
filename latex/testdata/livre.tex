@@ -1,0 +1,55 @@
+\documentclass[a4paper,11pt]{book}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{babel}
+\babelprovide[import,main]{french}
+
+\title{Un petit livre}
+\author{L'équipe des tests}
+\date{1\textsuperscript{er} janvier 2026}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+\tableofcontents
+
+\chapter{Avant-propos}
+
+Ce livre essaie la classe \emph{book} avec le paquet babel en français :
+les guillemets, les espaces avant la ponctuation haute et les noms des
+parties du livre.
+
+\mainmatter
+
+\chapter{Le début}\label{chap:debut}
+
+\section{Les caractères}
+
+Le français a des accents : é, è, ê, à, ù, ç, ï et œ. Il met des
+guillemets autour d'une citation : « Bonjour ! » dit-il. Une question
+finit par un point d'interrogation ? Une note de bas de page donne un
+détail\footnote{Une note courte, en bas de la page.}.
+
+\section{Une liste}
+
+Les étapes du travail :
+\begin{enumerate}
+  \item lire le fichier ;
+  \item composer les pages ;
+  \item dessiner les pages.
+\end{enumerate}
+
+\chapter{La suite}
+
+Le chapitre~\ref{chap:debut} commence à la page~\pageref{chap:debut}.
+Les livres de Knuth~\cite{knuth} et de Lamport~\cite{lamport} décrivent
+\TeX{} et \LaTeX.
+
+\begin{thebibliography}{9}
+\bibitem{knuth} Donald E. Knuth, \emph{The \TeX book}, Addison-Wesley, 1984.
+\bibitem{lamport} Leslie Lamport, \emph{\LaTeX: A Document Preparation
+  System}, Addison-Wesley, 1994.
+\end{thebibliography}
+
+\end{document}
