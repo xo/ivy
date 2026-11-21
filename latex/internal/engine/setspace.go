@@ -1,0 +1,238 @@
+// Copied from github.com/go-tex/engine, the file setspace.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements the setspace package (line spacing): \singlespacing,
+// \onehalfspacing and \doublespacing, plus \setstretch{factor} and LaTeX's
+// \linespread{factor}, and the spacing environment \begin{spacing}{factor}. Each
+// multiplies the single-spaced baseline skip (captured at start-up as
+// baseBaselineskip) by the factor and sets \baselineskip accordingly, so subsequent
+// paragraphs are set with wider (or tighter) leading. The named commands use
+// factors 1 / 1.5 / 2, a documented approximation of setspace's exact values.
+
+import "strconv"
+
+// setLineStretch sets \baselineskip to the single-spaced reference times f. It also
+// records that an explicit spacing command has run, so applyBaselineStretch does not
+// re-apply the \baselinestretch macro over a setspace-chosen (size-adjusted) skip.
+func (e *Engine) setLineStretch(f float64) {
+	if f <= 0 {
+		f = 1
+	}
+	e.prevBaselineskip = e.baselineskip
+	e.baselineskip = int(float64(e.baseBaselineskip)*f + 0.5)
+	e.explicitStretch = true
+	e.syncNormalBaselineskip()
+	e.refreshStrutBox()
+}
+
+// refreshStrutBox re-runs the substrate's \gotex@setstrutbox, which rebuilds
+// \strutbox from the leading now in force. The reference does the same thing from
+// the same place: latex.ltx keeps the \setbox inside size@update (l.8544) and runs
+// it from \selectfont, so \linespread — which goes through \set@fontsize — resets
+// the strut too, and \ht\strutbox is .7 x 18 = 12.59995pt under \linespread{1.5}.
+//
+// The rule lives in ONE place, the substrate macro, and this pushes a call to it
+// rather than rebuilding the box in Go: a second copy of the .7/.3 arithmetic here
+// would be a copy to keep in step, and \@setfontsize already calls the same macro.
+//
+// Every caller is a primitive handler (\linespread, \setstretch, \singlespacing,
+// \onehalfspacing, \doublespacing), so the token is read by the main loop as if
+// the command had expanded to it.
+func (e *Engine) refreshStrutBox() {
+	e.push([]tok{csTok("gotex@setstrutbox")})
+}
+
+// syncNormalBaselineskip keeps \normalbaselineskip equal to \baselineskip, which
+// is what \selectfont does at every size selection (latex.ltx set@fontsize,
+// l.8543: "\normalbaselineskip\baselineskip"). It is not decoration:
+// \@arrayparboxrestore sets \baselineskip FROM it inside every array cell and
+// parbox, and classes measure struts with it.
+func (e *Engine) syncNormalBaselineskip() {
+	e.setNamedSkip("normalbaselineskip", glueSpec{width: e.baselineskip})
+}
+
+// applyBaselineStretch honors LaTeX's NATIVE line-spacing mechanism at
+// \begin{document}: a document that sets its spacing with a plain
+// \renewcommand{\baselinestretch}{f} (rather than setspace's \onehalfspacing /
+// \setstretch / \linespread, which set the baseline skip themselves) had that
+// setting ignored — real LaTeX applies \baselinestretch inside \@setfontsize, which
+// the engine stubs to a no-op. 2683 corpus papers set it this way (most a stretch >1,
+// so the engine was under-spacing them). Skipped when an explicit spacing command
+// already ran, so setspace's size-adjusted value is not clobbered, and a value of 1
+// (the default, or an explicit single-spacing) changes nothing.
+func (e *Engine) applyBaselineStretch() {
+	if e.explicitStretch {
+		return
+	}
+	m := e.eq["baselinestretch"]
+	if m == nil || m.kind != mMacro {
+		return
+	}
+	f, ok := parseFloatArg(e.toksToString(m.body))
+	if !ok || f <= 0 || f == 1 {
+		return
+	}
+	e.setLineStretch(f)
+}
+
+// ptsizeCode returns the class base-size code \@ptsize — 0/1/2 for 10/11/12pt,
+// defaulting to 0 — read from the macro setPtsize defines. setspace's named
+// spacing commands tune their stretch to this size.
+func (e *Engine) ptsizeCode() int {
+	m := e.eq["@ptsize"]
+	if m == nil || m.kind != mMacro {
+		return 0
+	}
+	switch trimSpaces(e.toksToString(m.body)) {
+	case "1":
+		return 1
+	case "2":
+		return 2
+	}
+	return 0
+}
+
+// onehalfStretch / doubleStretch give the \baselinestretch setspace.sty selects
+// for \onehalfspacing and \doublespacing. The factor is size-dependent — setspace
+// tunes it per \@ptsize so the visual leading, not the raw multiple, is one-and-a-
+// half / double the single-spaced body. A flat 1.5 / 2.0 overstated the leading (at
+// 12pt real \onehalfspacing is 1.241, not 1.5), which inflated the page count of
+// every setspace document by roughly a fifth.
+func onehalfStretch(ptsize int) float64 {
+	switch ptsize {
+	case 1:
+		return 1.213
+	case 2:
+		return 1.241
+	}
+	return 1.25
+}
+
+func doubleStretch(ptsize int) float64 {
+	switch ptsize {
+	case 1:
+		return 1.618
+	case 2:
+		return 1.655
+	}
+	return 1.667
+}
+
+// doSetstretch implements \setstretch{f} and \linespread{f}: read the factor and
+// apply it. A malformed factor leaves the spacing unchanged.
+func (e *Engine) doSetstretch() {
+	if f, ok := parseFloatArg(e.readBraceName()); ok {
+		e.setLineStretch(f)
+		// \setstretch / \linespread are the two setspace commands a document uses
+		// INSIDE a group to space one piece of the page — a title block, a quotation
+		// — and real LaTeX restores \baselinestretch at the closing brace. Record the
+		// old skip so the group does too. The named commands and the spacing
+		// environment are left alone: they are used for stretches of the document,
+		// and making them group-local as well regressed the corpus (issue #247).
+		e.markBaselineskipGroupLocal()
+	}
+}
+
+// markBaselineskipGroupLocal records the value \baselineskip had before the
+// caller changed it, so the enclosing group restores it. The write itself has
+// already happened, so the saved value is reconstructed from the reference and
+// the stretch in force when the group opened — which is what \baselinestretch
+// being a macro gives real LaTeX for free.
+func (e *Engine) markBaselineskipGroupLocal() {
+	if len(e.groups) == 0 {
+		return
+	}
+	e.save = append(e.save, saveItem{kind: saveBaselineskip, oldd: e.prevBaselineskip})
+}
+
+// doSpacing implements \begin{spacing}{f}: save the current \baselineskip so
+// \end{spacing} can restore it, then apply the factor.
+func (e *Engine) doSpacing() {
+	e.spacingSaved = append(e.spacingSaved, e.baselineskip)
+	if f, ok := parseFloatArg(e.readBraceName()); ok {
+		e.setLineStretch(f)
+	}
+}
+
+// endSpacing restores the \baselineskip saved by the matching \begin{spacing}.
+func (e *Engine) endSpacing() {
+	if n := len(e.spacingSaved); n > 0 {
+		e.baselineskip = e.spacingSaved[n-1]
+		e.spacingSaved = e.spacingSaved[:n-1]
+	}
+}
+
+// parseFloatArg parses a decimal factor (e.g. "1.5"); ok is false when malformed.
+func parseFloatArg(s string) (float64, bool) {
+	f, err := strconv.ParseFloat(trimSpaces(s), 64)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
+}
+
+// doSetfontsize is what \@setfontsize reports to: the command being defined and
+// the baseline skip it asks for. The
+// engine has no NFSS and leaves the SIZE to the font system (setPtsize rescales
+// the bound faces from the class's base option), but it does take the leading
+// when the command being defined is \normalsize: a conference style states its
+// body leading there and nowhere else, and the arguments must be consumed in any
+// case or the redefinition recurses.
+//
+// neurips_2024.sty is the pattern: \@setfontsize\normalsize\@xpt\@xipt — 10pt on
+// an 11pt skip, where the article default is 12pt. Ignoring it set 24 of the
+// corpus's 157 papers 10% loose, worth 12 pages on a 26-page paper.
+func (e *Engine) doSetfontsize() {
+	skip := e.grabUndelimited()
+	f, ok := parseFloatArg(e.toksToString(e.expandList(skip)))
+	if !ok || f <= 0 {
+		return
+	}
+	// \@setfontsize's third argument is \f@baselineskip, the UNSTRETCHED skip;
+	// \selectfont then sets \baselineskip to \baselinestretch times it and
+	// \normalbaselineskip to the result (latex.ltx set@fontsize, l.8540-8543). The
+	// first version of this took the argument as the final skip, which silently
+	// dropped a document's \linespread whenever its class stated the leading here.
+	// The factor must be read BEFORE the reference it is computed from is replaced.
+	stretch := e.baselineStretchFactor()
+	base := ptToSP(f)
+	// Scoped, like \baselineskip beside it. While this ran for \normalsize only,
+	// a raw assignment was harmless — the value it wrote was the body leading
+	// anyway. Called for every size it must come back at the closing brace, or
+	// baselineStretchFactor (which recovers the factor as baselineskip /
+	// baseBaselineskip) reads 12/9.5 after a \footnotesize group and concludes the
+	// document asked for 1.26 line spacing, compounding at every later switch.
+	e.setEngineDimen(saveBaseBaselineskip, &e.baseBaselineskip, base, false)
+	e.setEngineDimen(saveBaselineskip, &e.baselineskip, int(float64(base)*stretch+0.5), false)
+	e.syncNormalBaselineskip()
+}
+
+// baselineStretchFactor is the line-spacing factor in force — what \selectfont
+// multiplies the font's skip by (\baselinestretch, latex.ltx l.8542).
+//
+// In this engine the factor is not kept in the \baselinestretch MACRO: \linespread
+// and setspace's commands are bound to setLineStretch, which writes the two skips
+// directly. So it is recovered where it actually lives, as the ratio of the current
+// skip to the single-spacing reference — and the macro is consulted only when no
+// spacing command has run, which is the case a plain
+// \renewcommand{\baselinestretch}{1.25} preamble leaves.
+func (e *Engine) baselineStretchFactor() float64 {
+	if e.baseBaselineskip > 0 && e.baselineskip > 0 {
+		if f := float64(e.baselineskip) / float64(e.baseBaselineskip); f > 0 {
+			return f
+		}
+	}
+	m := e.eq["baselinestretch"]
+	if m == nil || m.kind != mMacro {
+		return 1
+	}
+	f, ok := parseFloatArg(e.toksToString(m.body))
+	if !ok || f <= 0 {
+		return 1
+	}
+	return f
+}

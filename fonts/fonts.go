@@ -7,6 +7,14 @@
 // It draws the Chinese, Japanese and Korean (CJK) characters that the other
 // fonts do not draw.
 //
+// The package also holds Latin Modern and Latin Modern Math, the fonts of
+// TeX, under the GUST Font License (D62). TeX gives them apart from FS, so
+// that the other formats do not take them for a font of Office. The package
+// latex sets the text and the math of a LaTeX document with them, as TeX
+// does:
+//
+//	cfg := ivy.Config{Fonts: fonts.FS(), TeX: fonts.TeX()}
+//
 // A program gives the fonts to a format with the field Fonts of ivy.Config:
 //
 //	cfg := ivy.Config{Fonts: fonts.FS()}
@@ -26,7 +34,7 @@
 // of a PDF file that does not embed its font.
 //
 // The fonts are in their own module, so that a program that does not import
-// it does not hold them. They make a program larger by about 10.9 MB.
+// it does not hold them. They make a program larger by about 14.1 MB.
 package fonts
 
 import (
@@ -38,6 +46,11 @@ import (
 //
 //go:embed liberation carlito caladea droid
 var files embed.FS
+
+// tex holds the folder of Latin Modern.
+//
+//go:embed lm
+var tex embed.FS
 
 // FS returns the font files and their licenses. Each folder holds the
 // TrueType files of one project, and the license of the project. The fonts
@@ -54,4 +67,18 @@ var files embed.FS
 // read from it.
 func FS() fs.FS {
 	return files
+}
+
+// TeX returns the fonts of TeX, in the folder lm: the OpenType files of
+// Latin Modern Roman and Latin Modern Mono at their optical sizes, and Latin
+// Modern Math. The license is in GUST-FONT-LICENSE.txt, the notices of the
+// authors are in README-Latin-Modern.txt and README-Latin-Modern-Math.txt,
+// and the manifests are in MANIFEST-Latin-Modern.txt and
+// MANIFEST-Latin-Modern-Math.txt. A program gives them to the format latex
+// with the field TeX of ivy.Config, as the tree of a TeX distribution holds
+// them (D65).
+//
+// Each call returns the same value.
+func TeX() fs.FS {
+	return tex
 }

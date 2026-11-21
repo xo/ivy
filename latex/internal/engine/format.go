@@ -1,0 +1,148 @@
+// Copied from github.com/go-tex/engine, the file format.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// MiniLaTeX is a small LaTeX-flavoured kernel written *in TeX* — the engine runs
+// these macro definitions through its gullet exactly as a real format does; they
+// are not reimplemented in Go. It is deliberately tiny (the road to parity is to
+// grow this by loading the real latex.ltx, not to hand-code commands).
+const MiniLaTeX = `
+\def\LaTeX{LaTeX}
+\def\TeX{TeX}
+\def\newcommand#1#2{\def#1{#2}}
+\def\renewcommand#1#2{\def#1{#2}}
+\def\emph#1{#1}
+\def\textbf#1{#1}
+\def\textit#1{#1}
+\def\ldots{...}
+`
+
+// Plain is a small set of plain-TeX structural macros, written *in TeX* on top
+// of the box/glue primitives (\hbox to, \hfil, \vskip). Loaded with LoadPlain,
+// they let a document use the familiar commands without any Go-side support — the
+// same growth path as the kernel: add macros, do not hand-code commands.
+const Plain = `
+% Plain TeX's category-code constants. \active is the one a package reaches for
+% by name: it makes a character active, and asks whether one already is
+% (\ifnum\catcode of a character = \active). Without it such a block does not
+% run, and everything defined after it in that file is lost with it.
+\chardef\active=13
+\def\TeX{TeX}
+\def\LaTeX{LaTeX}
+\def\empty{}
+\def\centerline#1{\hbox to\hsize{\hfil#1\hfil}}
+\def\leftline#1{\hbox to\hsize{#1\hfil}}
+\def\rightline#1{\hbox to\hsize{\hfil#1}}
+\def\llap#1{\hbox to0pt{\hss#1}}
+\def\rlap#1{\hbox to0pt{#1\hss}}
+\def\bigskip{\vskip12pt}
+\def\medskip{\vskip6pt}
+\def\smallskip{\vskip3pt}
+% ltspace.dtx:1501-1503 defines the three together, and \relax is part of each:
+%
+%	\def\enskip{\hskip.5em\relax}
+%	\def\quad{\hskip1em\relax}
+%	\def\qquad{\hskip2em\relax}
+%
+% \enskip was the one missing. Its absence is not a silent width error: \enskip is
+% a document command, so strict mode ABORTS the compilation and -lenient drops it,
+% which glues the words on either side together ("gauchedroite" in the witness).
+%
+% The \relax is what stops the glue scan. \hskip.5em with nothing after it leaves
+% TeX looking for "plus"/"minus" in the document's own text, so "\quad plus" reads
+% the following word as a stretch component and eats it. The three had no \relax
+% here; the reference puts one on every one of them.
+\def\enskip{\hskip.5em\relax}
+\def\quad{\hskip1em\relax}
+\def\qquad{\hskip2em\relax}
+% \enspace is a KERN in the reference (ltspace.dtx:1469, and l.1489 for the
+% pre-2018 form): \DeclareRobustCommand\enspace{\leavevmode@ifvmode\kern.5em}.
+% A kern cannot be broken at and cannot stretch; the \hskip here could do both.
+% Left as glue for now with the divergence named, because every list item in this
+% format goes through \llap{#2\enspace} and changing its breakability is a corpus
+% question, not a one-line one.
+\def\enspace{\hskip.5em}
+\def\thinspace{\hskip.16667em}
+\def\negthinspace{\hskip-.16667em}
+% TeX's four spacing commands, named by punctuation. They are measured in math
+% units, where 18mu is 1em: \, is 3mu, \: is 4mu, \; is 5mu and \! is −3mu. The
+% engine sets them as ordinary horizontal space of the same width, which is what
+% a real LaTeX produces in text — a\,b measures 1/6 em wider than ab there.
+% \, is by far the most common command in a mathematical paper, and all four
+% were undefined.
+\let\,\thinspace
+\let\!\negthinspace
+\def\:{\hskip.22222em}
+\def\;{\hskip.27778em}
+\def\raggedright{\rightskip=0pt plus 1fil\leftskip=0pt\parindent=0pt\relax}
+\def\justified{\rightskip=0pt\relax}
+% \vfill is a PRIMITIVE here (primitives.go), bound to fill_glue = 0pt plus 1fill as
+% tex.web §20559/§20601/§3319 has it. The macro that used to sit on this line spelt it
+% "plus 1fil" — order ONE — and shadowed the primitive, so \vfill shared the leftover
+% space with the page style's own \vfil instead of taking all of it.
+%
+% ⛔ No backquotes in this comment: it lives inside a Go RAW STRING, where one ends the
+% preamble. Fourth time in this repository.
+\def\eject{\par\penalty-10000 }
+\def\supereject{\par\penalty-10000 }
+\def\break{\penalty-10000 }
+\def\nobreak{\penalty10000 }
+\def\goodbreak{\par\penalty-500 }
+\def\smallbreak{\par\penalty-100 \smallskip}
+\def\medbreak{\par\penalty-100 \medskip}
+\def\bigbreak{\par\penalty-100 \bigskip}
+\def\bye{\par\vfill\penalty-10000 }
+\def\%{\char37\relax}
+\def\${\char36\relax}
+\def\&{\char38\relax}
+\def\#{\char35\relax}
+\def\_{\char95\relax}
+\def\{{\char123\relax}
+\def\}{\char125\relax}
+\def\S{\char167\relax}
+\def\P{\char182\relax}
+\def\copyright{\char169\relax}
+\def\dag{\char134\relax}
+\def\ddag{\char135\relax}
+\def\pounds{\char163\relax}
+\def\oe{\char339\relax}
+\def\OE{\char338\relax}
+\def\ae{\char230\relax}
+\def\AE{\char198\relax}
+\def\o{\char248\relax}
+\def\O{\char216\relax}
+\def\aa{\char229\relax}
+\def\AA{\char197\relax}
+\def\ss{\char223\relax}
+\def\l{\char322\relax}
+\def\L{\char321\relax}
+\def\i{\char305\relax}
+\def\j{\char567\relax}
+`
+
+// LoadPlain defines the Plain structural macros in the engine.
+func (e *Engine) LoadPlain() error { return e.LoadFormat(Plain) }
+
+// LoadFormat executes a string of TeX definitions (a format/preamble) through
+// the gullet, defining its macros in the engine's eqtb without typesetting.
+func (e *Engine) LoadFormat(src string) error {
+	// Save/restore the base input (and its source-position state) so a subsequent
+	// Run/Typeset starts clean and reports its own line numbers.
+	oldBase, oldPos := e.base, e.bpos
+	oldStarts, oldSP, oldLine, oldCol := e.lineStarts, e.srcPos, e.curSrcLine, e.curSrcCol
+	e.base, e.bpos = []rune(src), 0
+	e.lineStarts = nil
+	e.buildLineStarts()
+	// A format/substrate body is package code, not document content: lenient
+	// recovery may discard an undefined command's arguments here (skipUndefined).
+	oldInPkg := e.inPkg
+	e.inPkg = true
+	e.mainLoop()
+	e.inPkg = oldInPkg
+	e.base, e.bpos = oldBase, oldPos
+	e.lineStarts, e.srcPos, e.curSrcLine, e.curSrcCol = oldStarts, oldSP, oldLine, oldCol
+	return e.err
+}

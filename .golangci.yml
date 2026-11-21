@@ -54,3 +54,10 @@ linters:
       - internal/goldmark
       - internal/gowemf
       - djvu/internal
+      - latex/internal/linebreak
+      - latex/internal/hyphenation
+      # The files of upstream in the copy of go-tex/engine. The files of
+      # ivy in the folder start with ivy_, and golangci-lint checks them.
+      - latex/internal/engine/(?:[^i/][^/]*|i[^v/][^/]*|iv[^y/][^/]*)$
+      # These files of ivy hold code of upstream with few changes.
+      - latex/internal/engine/ivy_(?:image|svg|hyperlink)\.go$

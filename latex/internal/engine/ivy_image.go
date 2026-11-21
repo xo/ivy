@@ -1,0 +1,782 @@
+// This file of ivy holds image.go of go-tex/engine at the commit
+// 8234996d66f827438f248e8b0059031f52cb9964, without the decoders of go-gfx
+// and without the reads of the disk (D62). The changes are marked with
+// "ivy:".
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements LaTeX's \includegraphics (the graphicx package): it loads a
+// PNG, JPEG or SVG — from disk, or straight from a data: URI so the browser build
+// needs no filesystem — sizes it from the [width=…, height=…, scale=…] options (or
+// its intrinsic pixels), and places it as an image box. Both drivers embed a raster
+// image verbatim (SVG driver: a data-URI <image>; PDF driver: an image XObject). An
+// SVG image is embedded verbatim by the SVG driver (nested data-URI <image>) and
+// drawn as vector paths by the PDF driver — see svgimage.go.
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"image"
+	_ "image/gif"  // ivy: the formats of image.DecodeConfig
+	_ "image/jpeg" // ivy: the formats of image.DecodeConfig
+	_ "image/png"  // ivy: the formats of image.DecodeConfig
+	"io/fs"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// RasterizePDF, when set by a consumer, rasterises a PDF figure (the bytes of an
+// included .pdf) to an image at the given DPI. It is the seam for \includegraphics
+// of vector PDFs: a pure-Go PDF renderer is a heavy dependency, so the engine core
+// stays free of it — the CLI and loom inject one (see go-tex/pdfrender), while the
+// browser/wasm build leaves it nil and shows a placeholder. EPS is not handled here.
+var RasterizePDF func(data []byte, dpi float64) (image.Image, error)
+
+// pdfFigureDPI is the resolution at which an injected renderer rasterises a PDF
+// figure; the resulting pixels are the figure's intrinsic size, then scaled to the
+// \includegraphics box like any raster.
+const pdfFigureDPI = 200
+
+// errNoPDFRasterizer is returned for a PDF figure when no renderer is wired, so the
+// caller frames a placeholder (the browser build's behaviour).
+var errNoPDFRasterizer = errors.New("texengine: PDF figure needs a rasteriser (none wired)")
+
+// imgFormat is the embedded-image format an imageNode carries.
+type imgFormat uint8
+
+const (
+	imgPNG  imgFormat = iota // raster, embedded/re-encoded as PNG
+	imgJPEG                  // raster, embedded verbatim (DCT)
+	imgSVG                   // vector: data-URI in the SVG driver, paths in the PDF driver
+	// ivy: a PDF figure and an EPS figure, which the driver of ivy draws as
+	// vectors with the decoders of ivy (D62).
+	imgPDF
+	imgEPS
+)
+
+// mime returns the data-URI media type for the format.
+func (f imgFormat) mime() string {
+	switch f {
+	case imgJPEG:
+		return "image/jpeg"
+	case imgSVG:
+		return "image/svg+xml"
+	case imgPDF:
+		return "application/pdf" // ivy
+	case imgEPS:
+		return "application/postscript" // ivy
+	}
+	return "image/png"
+}
+
+// imageNode is a placed image: the original file bytes (PNG/JPEG embedded verbatim;
+// SVG embedded verbatim by the SVG driver, vector-drawn by the PDF driver) and the
+// box it occupies (sp), sitting on the baseline.
+type imageNode struct {
+	data          []byte
+	format        imgFormat
+	width, height int
+	depth         int
+	srcLine       int
+}
+
+func (imageNode) isNode() {}
+
+// mime returns the data-URI media type for the image format.
+func (n imageNode) mime() string { return n.format.mime() }
+
+// dataURI returns the image as a base64 data: URI for the SVG <image> href.
+func (n imageNode) dataURI() string {
+	return "data:" + n.mime() + ";base64," + base64.StdEncoding.EncodeToString(n.data)
+}
+
+// doIncludegraphics implements \includegraphics[opts]{name}. The image sits on the
+// baseline (height above, no depth); a load failure is a SourceError at this line.
+func (e *Engine) doIncludegraphics() {
+	wReq, hReq, scale := e.scanGraphicsOpts()
+	name := e.readBraceName()
+	if name == "" {
+		return
+	}
+	// Size an un-rasterisable PDF placeholder to the figure's TRUE aspect (not a blind
+	// square) whenever GOTEX_PDFASPECT is set OR the page is set in two columns. In
+	// two-column mode the relative-width floats reserve real space (see
+	// scanGraphicsOpts) and a square over-reserves a wide figure's height, so the true
+	// aspect is what keeps a figure-heavy two-column page's count right.
+	// Noted by the NAME the document wrote, not by the path loadImage resolves to:
+	// loadImage is a free function with no engine to report through. An absolute name
+	// or one walking out with ../ is caught; a bare name that a search path resolves
+	// outside the tree is not, and that is a stated limit rather than an oversight.
+	e.noteRead(name)
+	data, format, iw, ih, dpiX, dpiY, err := e.loadImage(name, pdfAspectOptIn() || e.twoColumn) // ivy: a method, for the resolver
+	if err != nil {
+		if e.tolerant() {
+			// Best-effort preview: a real document's figure files are not shipped
+			// with its .tex (or use a format we can't decode). Reserve the box with
+			// a framed placeholder sized from the requested dimensions so the
+			// surrounding text still flows, instead of aborting the whole compile.
+			// For a PDF figure loadImage still recovers the page box (iw/ih), so the
+			// placeholder keeps the figure's real aspect instead of a blind square.
+			e.recordFigureDrop(err)
+			e.placeholderImage(wReq, hReq, iw, ih, scale, dpiX, dpiY, name)
+			return
+		}
+		e.fail("includegraphics " + name + ": " + err.Error())
+		return
+	}
+	w, h := graphicsSize(iw, ih, wReq, hReq, scale, dpiX, dpiY)
+	e.startImage()
+	e.parList = append(e.parList, imageNode{
+		data: data, format: format, width: w, height: h, srcLine: e.curSrcLine,
+	})
+}
+
+// placeholderImage appends a framed empty box standing in for an image that could
+// not be loaded (lenient mode). It sizes the box from the requested width/height
+// (or scale), falling back to a default figure size when none was given, so the
+// page keeps a sensibly-sized gap where the graphic would sit.
+func (e *Engine) placeholderImage(wReq, hReq, iw, ih int, scale, dpiX, dpiY float64, name string) {
+	// iw/ih carry the figure's intrinsic size when it was recoverable (a PDF page
+	// box); with them, a width-only \includegraphics keeps the figure's true aspect
+	// instead of collapsing to a square.
+	//
+	// When they are absent, the file itself may still SAY how big it is — an EPS in
+	// its %%BoundingBox, a PDF in its /MediaBox — and reading that costs no rendering
+	// at all. It is what makes the reserved box the right SHAPE: with only [width=…]
+	// given, the height then follows the figure's own aspect instead of a fixed
+	// default, and the text around it breaks where it should.
+	if iw <= 0 || ih <= 0 {
+		if dw, dh := e.figureDeclaredSize(name); dw > 0 && dh > 0 { // ivy: a method, for the resolver
+			iw, ih, dpiX, dpiY = dw, dh, 72, 72 // a declared box is in PostScript points
+		}
+	}
+	w, h := graphicsSize(iw, ih, wReq, hReq, scale, dpiX, dpiY)
+	if w <= 0 {
+		w = 120 * unity // a default figure width when the source gave none
+	}
+	if h <= 0 {
+		h = 90 * unity
+	}
+	e.startImage()
+	// The frame is drawn INSIDE the space the figure asked for, not around it.
+	//
+	// frameNode grows its inner box by sep+rule on every side, so a placeholder
+	// built at the requested size occupies 2*(3+0.4) = 6.8pt MORE than the figure
+	// would in both directions. Measured against tectonic on one corpus figure
+	// (1242.96x409.92pt at width=\textwidth=345pt): the reference sets it 113.8pt
+	// tall and we reserved 120.5. A width=\textwidth placeholder was also 6.8pt
+	// WIDER than the text block, which overfills the line it sits on. 84 of the
+	// corpus's 157 papers hold a figure the engine cannot rasterise, one of them
+	// 33 of them, so the surplus is a systematic drift and not a rounding.
+	pad := 2 * (fboxSep + fboxRule)
+	bw, bh := w, h
+	if bw > pad {
+		bw -= pad
+	}
+	if bh > pad {
+		bh -= pad
+	}
+	// The frame adds sep+rule on EVERY side, so a frame around a depth-0 box has
+	// that much DEPTH — and #350 made the total right while leaving it below the
+	// baseline. A real \includegraphics box has depth 0: the figure sits ON the
+	// baseline, entirely above it. Measured against tectonic, \includegraphics
+	// [height=50pt] gives h=50 d=0 there and gave h=46.6 d=3.4 here, so a document
+	// asking for a 50pt figure got a 46.6pt height even though the total was right.
+	//
+	// Giving the inner box the frame's own sep+rule as NEGATIVE depth cancels it:
+	// frameNode.depth() is inner.depth+sep+rule, which is then 0, and height() takes
+	// the same amount back, so the total is untouched and the box sits on the
+	// baseline. See #366.
+	edge := fboxSep + fboxRule
+	inner := &boxNode{kind: hbox, width: bw, height: bh + edge, depth: -edge}
+	e.parList = append(e.parList, frameNode{inner: inner, sep: fboxSep, rule: fboxRule})
+}
+
+// recordFigureDrop tallies a figure the engine could not load, by REASON.
+//
+// It used to be tallied as a skipped "includegraphics", which said the opposite of
+// what happened: the command is defined and did its job — it reserved the box — and
+// what failed was the FILE. A report that names the command sends a reader looking
+// for a missing macro, and the three real causes (no rasteriser, absent file,
+// format we cannot decode) are worth telling apart, since only the first is a
+// feature the engine could grow.
+func (e *Engine) recordFigureDrop(err error) {
+	if e.figuresDropped == nil {
+		e.figuresDropped = map[string]int{}
+	}
+	e.figuresDropped[figureDropReason(err)]++
+}
+
+// pictureDropReason is the cause recorded for a picture environment the engine
+// gobbles and stands a framed box in for — a TikZ/PGF/tikz-cd diagram. It is one
+// bucket for every such environment rather than one per name, so the count
+// aggregates over a corpus the way the other causes do.
+const pictureDropReason = "picture environment, not drawn"
+
+// recordPictureDrop tallies one gobbled picture environment.
+func (e *Engine) recordPictureDrop() {
+	if e.figuresDropped == nil {
+		e.figuresDropped = map[string]int{}
+	}
+	e.figuresDropped[pictureDropReason]++
+}
+
+// figureDropReason buckets a load failure into a cause a reader can act on. The
+// filename is deliberately left out so the counts aggregate over a corpus.
+func figureDropReason(err error) string {
+	switch {
+	case errors.Is(err, errNoPDFRasterizer):
+		return "PDF figure, no rasteriser wired"
+	case errors.Is(err, fs.ErrNotExist):
+		return "file not found"
+	default:
+		return "unreadable or unsupported format"
+	}
+}
+
+// startImage ensures a paragraph is open so the image joins horizontal mode.
+func (e *Engine) startImage() {
+	if !e.inPar {
+		e.beginParagraph(true)
+	}
+}
+
+// natSP converts an intrinsic pixel count to scaled points at resolution dpi.
+// A raster figure's natural TeX size is its pixels divided by its resolution
+// (px / dpi = inches), times 72.27pt per inch. When dpi is 0 the image declared
+// no resolution, and the historical fallback — one pixel to one TeX point (~72.27
+// dpi) — is kept, so only images that actually carry a pHYs/JFIF resolution move.
+func natSP(px int, dpi float64) int {
+	if dpi > 0 {
+		return int(float64(px)*72.27/dpi*unity + 0.5)
+	}
+	return px * unity
+}
+
+// graphicsSize resolves the image box from its intrinsic pixels (converted to a
+// TeX length through the image's own resolution dpiX/dpiY, see natSP) and the
+// width/height/scale options, preserving aspect ratio when only one of
+// width/height is given.
+func graphicsSize(iw, ih, wReq, hReq int, scale float64, dpiX, dpiY float64) (w, h int) {
+	natW, natH := natSP(iw, dpiX), natSP(ih, dpiY)
+	switch {
+	case scale > 0:
+		return int(float64(natW)*scale + 0.5), int(float64(natH)*scale + 0.5)
+	case wReq > 0 && hReq > 0:
+		return wReq, hReq
+	case wReq > 0:
+		if iw == 0 {
+			return wReq, wReq
+		}
+		if dpiX > 0 && dpiY > 0 {
+			return wReq, int(float64(wReq)*float64(ih)*dpiX/(float64(iw)*dpiY) + 0.5)
+		}
+		return wReq, wReq * ih / iw
+	case hReq > 0:
+		if ih == 0 {
+			return hReq, hReq
+		}
+		if dpiX > 0 && dpiY > 0 {
+			return int(float64(hReq)*float64(iw)*dpiY/(float64(ih)*dpiX) + 0.5), hReq
+		}
+		return hReq * iw / ih, hReq
+	default:
+		return natW, natH
+	}
+}
+
+// loadImage reads an image from a data: URI or a file path and returns its bytes,
+// format ("png"/"jpeg"/"svg"), intrinsic pixel dimensions, and the resolution
+// (dpiX/dpiY) it declares — 0 when it declares none, so graphicsSize keeps the
+// pixels-as-points fallback. An SVG source (a ".svg" file, a data:image/svg+xml
+// URI, or content sniffed as SVG) is handled by loadSVGImage; everything else
+// goes through the go-gfx codec (PNG/JPEG/…).
+// graphicsSearchExts is the order an extension-less \includegraphics reference is
+// searched — pdf first, matching pdftex's \Gin@extensions — with both cases so a
+// case-sensitive filesystem finds fig.PNG for {fig} too.
+var graphicsSearchExts = []string{
+	".pdf", ".png", ".jpg", ".jpeg", ".svg", ".gif",
+	".PDF", ".PNG", ".JPG", ".JPEG", ".SVG", ".GIF",
+}
+
+// hasKnownGraphicsExt reports whether name already ends in a graphics extension,
+// which graphicx honours verbatim rather than searching past.
+func hasKnownGraphicsExt(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".pdf", ".png", ".jpg", ".jpeg", ".svg", ".gif", ".eps", ".ps", ".bmp", ".tif", ".tiff":
+		return true
+	}
+	return false
+}
+
+// resolveGraphicsPath resolves an \includegraphics reference to a file the way
+// graphicx does: an exact hit wins; otherwise, when the reference carries no
+// known graphics extension, each extension is appended in turn and the first that
+// exists is used.
+//
+// ivy: it reads the file with the resolver of the options, not from the disk
+// (D5), and returns its bytes.
+func (e *Engine) resolveGraphicsPath(name string) (string, []byte, bool) {
+	if data, ok := e.readGraphicsFile(name); ok {
+		return name, data, true
+	}
+	if hasKnownGraphicsExt(name) {
+		return "", nil, false
+	}
+	for _, ext := range graphicsSearchExts {
+		if data, ok := e.readGraphicsFile(name + ext); ok {
+			return name + ext, data, true
+		}
+	}
+	return "", nil, false
+}
+
+// readGraphicsFile reads a figure with the resolver of the options.
+//
+// ivy: this replaces os.Stat and os.ReadFile of upstream.
+func (e *Engine) readGraphicsFile(name string) ([]byte, bool) {
+	if e.resolve == nil || name == "" {
+		return nil, false
+	}
+	return e.resolve(name)
+}
+
+// loadImage reads an image from a data: URI or a file and returns its bytes,
+// its format, its intrinsic size and the resolution that it declares.
+//
+// ivy: the figure is not decoded here. The driver of ivy draws it with the
+// decoders of ivy: PNG, JPEG and GIF as pixels, PDF and EPS as vectors, and
+// SVG with the SVG of okage (D62). This reads only the size of the figure.
+func (e *Engine) loadImage(name string, aspect bool) (data []byte, format imgFormat, iw, ih int, dpiX, dpiY float64, err error) {
+	svgHint := false
+	if strings.HasPrefix(name, "data:") {
+		svgHint = svgDataURI(name)
+		data, err = decodeDataURI(name)
+	} else {
+		path, d, ok := e.resolveGraphicsPath(name)
+		if !ok {
+			return nil, 0, 0, 0, 0, 0, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+		}
+		svgHint = strings.EqualFold(filepath.Ext(path), ".svg")
+		data = d
+	}
+	if err != nil {
+		return nil, 0, 0, 0, 0, 0, err
+	}
+	if svgHint || looksLikeSVG(data) {
+		out, f, w, h, e := loadSVGImage(data)
+		return out, f, w, h, 0, 0, e
+	}
+	switch {
+	case bytes.HasPrefix(data, []byte("%PDF-")):
+		// The page box is in big points, which is pixels at 72 dpi.
+		w, h, ok := pdfIntrinsicPoints(data)
+		if !ok {
+			return nil, 0, 0, 0, 0, 0, errSVGLike("malformed PDF figure")
+		}
+		_ = aspect
+		return data, imgPDF, int(w + 0.5), int(h + 0.5), 72, 72, nil
+	case bytes.HasPrefix(data, []byte("%!PS")), bytes.HasPrefix(data, []byte{0xC5, 0xD0, 0xD3, 0xC6}):
+		head := data
+		if len(head) > 64<<10 {
+			head = head[:64<<10]
+		}
+		w, h := epsBoundingBox(head)
+		if w <= 0 || h <= 0 {
+			return nil, 0, 0, 0, 0, 0, errSVGLike("EPS figure without a bounding box")
+		}
+		return data, imgEPS, w, h, 72, 72, nil
+	}
+	cfg, kind, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, 0, 0, 0, err
+	}
+	dx, dy := rasterResolution(data)
+	switch kind {
+	case "jpeg":
+		return data, imgJPEG, cfg.Width, cfg.Height, dx, dy, nil
+	default:
+		return data, imgPNG, cfg.Width, cfg.Height, dx, dy, nil
+	}
+}
+
+// errSVGLike is a graphicsError with a message.
+//
+// ivy: an error of a figure that the decoders of ivy cannot size.
+func errSVGLike(msg string) error { return &graphicsError{msg} }
+
+// rasterResolution parses the pixel resolution a PNG or JPEG declares, returning
+// (dpiX, dpiY) in dots per inch, or (0, 0) when the file states none (or states a
+// non-positive/aspect-only resolution the drivers ignore). A figure's TeX size is
+// its pixels at this resolution; without it the pixels are taken as points.
+func rasterResolution(data []byte) (dpiX, dpiY float64) {
+	switch {
+	case bytes.HasPrefix(data, pngMagic):
+		return pngResolution(data)
+	case bytes.HasPrefix(data, []byte{0xFF, 0xD8}):
+		return jpegResolution(data)
+	}
+	return 0, 0
+}
+
+var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+
+// pngResolution reads a PNG's pHYs chunk (pixels-per-unit X, Y, unit specifier).
+// Only unit 1 (metre) gives a physical resolution; it is converted to dpi. Unit 0
+// (aspect ratio only) and a chunk-less file return 0.
+func pngResolution(data []byte) (dpiX, dpiY float64) {
+	p := len(pngMagic)
+	for p+8 <= len(data) {
+		length := int(binary.BigEndian.Uint32(data[p:]))
+		typ := data[p+4 : p+8]
+		body := p + 8
+		if length < 0 || body+length > len(data) {
+			return 0, 0
+		}
+		if string(typ) == "pHYs" {
+			if length < 9 {
+				return 0, 0
+			}
+			ppuX := binary.BigEndian.Uint32(data[body:])
+			ppuY := binary.BigEndian.Uint32(data[body+4:])
+			if data[body+8] != 1 { // unit 1 == metre; 0 == aspect only
+				return 0, 0
+			}
+			// dpi = pixels-per-metre × 0.0254 m/inch.
+			return float64(ppuX) * 0.0254, float64(ppuY) * 0.0254
+		}
+		if string(typ) == "IDAT" {
+			return 0, 0 // pHYs, if present, precedes the pixel data
+		}
+		p = body + length + 4 // skip body and the trailing CRC
+	}
+	return 0, 0
+}
+
+// jpegResolution reads the JFIF APP0 density (units 1 = dpi, 2 = dots/cm). Units 0
+// is a pixel aspect ratio with no physical size and returns 0.
+func jpegResolution(data []byte) (dpiX, dpiY float64) {
+	p := 2 // past the SOI marker
+	for p+4 <= len(data) {
+		if data[p] != 0xFF {
+			return 0, 0
+		}
+		marker := data[p+1]
+		if marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7) { // EOI / RSTn: no length
+			return 0, 0
+		}
+		segLen := int(binary.BigEndian.Uint16(data[p+2:]))
+		if segLen < 2 || p+2+segLen > len(data) {
+			return 0, 0
+		}
+		seg := data[p+4 : p+2+segLen]
+		if marker == 0xE0 && len(seg) >= 12 && bytes.HasPrefix(seg, []byte("JFIF\x00")) {
+			units := seg[7]
+			xd := binary.BigEndian.Uint16(seg[8:])
+			yd := binary.BigEndian.Uint16(seg[10:])
+			if xd == 0 || yd == 0 {
+				return 0, 0
+			}
+			switch units {
+			case 1: // dots per inch
+				return float64(xd), float64(yd)
+			case 2: // dots per centimetre
+				return float64(xd) * 2.54, float64(yd) * 2.54
+			}
+			return 0, 0 // units 0: aspect ratio only
+		}
+		if marker == 0xDA { // start of scan: headers are done
+			return 0, 0
+		}
+		p += 2 + segLen
+	}
+	return 0, 0
+}
+
+// decodeDataURI extracts the bytes from a data: URI. A ";base64" payload is base64-
+// decoded; any other payload (e.g. data:image/svg+xml,<svg…>) is treated as
+// percent-encoded text, so both encodings of an inline SVG are accepted.
+func decodeDataURI(uri string) ([]byte, error) {
+	comma := strings.IndexByte(uri, ',')
+	if comma < 0 {
+		return nil, errDataURI
+	}
+	meta, payload := uri[:comma], uri[comma+1:]
+	if strings.Contains(meta, ";base64") {
+		return base64.StdEncoding.DecodeString(payload)
+	}
+	if s, err := url.PathUnescape(payload); err == nil {
+		return []byte(s), nil
+	}
+	return []byte(payload), nil
+}
+
+var errDataURI = &graphicsError{"malformed data: URI"}
+
+type graphicsError struct{ msg string }
+
+func (e *graphicsError) Error() string { return e.msg }
+
+// scanGraphicsOpts parses the optional [width=…,height=…,scale=…] argument.
+// Unknown keys are ignored. Missing bracket → all zero.
+func (e *Engine) scanGraphicsOpts() (w, h int, scale float64) {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok {
+		return 0, 0, 0
+	}
+	if t.cs_ || t.ch != '[' {
+		e.back(t)
+		return 0, 0, 0
+	}
+	// Collect the bracket content as a TOKEN list (control sequences KEPT) up to the
+	// closing ']' at brace level 0. Keeping the tokens is what lets a value like
+	// width=0.48\textwidth be evaluated as a real TeX dimension: a raw-text scan
+	// dropped the \textwidth control sequence and read "0.48" as 0.48pt, collapsing
+	// every \columnwidth/\textwidth/\linewidth-relative figure — the overwhelming
+	// majority in real papers — to a fraction of a point, so it reserved almost no
+	// vertical space.
+	var toks []tok
+	depth := 0
+	for {
+		u, ok := e.getNext()
+		if !ok {
+			break
+		}
+		if !u.cs_ {
+			switch u.ch {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			case ']':
+				if depth <= 0 {
+					goto scan
+				}
+			}
+		}
+		toks = append(toks, u)
+	}
+scan:
+	// The correct token evaluation is the default in TWO-COLUMN mode. There, figures set
+	// to a fraction of \columnwidth/\textwidth are the norm and their reserved height is
+	// the binding constraint on pagination (a figure-heavy reprint under-paginates
+	// badly when they collapse — 2601.22272: 51pp vs 62).
+	//
+	// In ONE-COLUMN mode it is additionally applied under the GOTEX_FLOATS faithful
+	// figure mode: a reader who opted into real float placement (and, with it, real
+	// figure rasters) needs figures to reserve their true \linewidth-relative height
+	// rather than collapse. With the flag OFF, one-column keeps the legacy raw-text read
+	// (control sequences dropped) byte-for-byte — evaluating it correctly there shifts
+	// every single-column class-emulation baseline (revtex preprint, IEEEtran, acmart,
+	// amsart) at once, which were tuned against the collapse — so that broad re-tuning
+	// stays behind the opt-in flag instead of moving the default.
+	evalDimen := func(val []tok) int {
+		if e.twoColumn || floatsEnabled() {
+			return e.evalDimenTokens(val)
+		}
+		return parseDimenStr(tokensToText(val))
+	}
+	for _, seg := range splitTokensAtComma(toks) {
+		key, val, ok := splitKeyValueTokens(seg)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "width":
+			w = evalDimen(val)
+		case "height":
+			h = evalDimen(val)
+		case "scale":
+			scale, _ = strconv.ParseFloat(strings.TrimSpace(tokensToText(val)), 64)
+		}
+	}
+	return w, h, scale
+}
+
+// splitTokensAtComma splits a token list on comma tokens at brace level 0.
+func splitTokensAtComma(toks []tok) [][]tok {
+	var out [][]tok
+	var cur []tok
+	depth := 0
+	for _, t := range toks {
+		if !t.cs_ {
+			switch t.ch {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			case ',':
+				if depth <= 0 {
+					out = append(out, cur)
+					cur = nil
+					continue
+				}
+			}
+		}
+		cur = append(cur, t)
+	}
+	return append(out, cur)
+}
+
+// splitKeyValueTokens splits one key=value segment at its first '=' (brace level 0),
+// returning the trimmed key text and the value tokens. A segment with no '=' is not a
+// key/value pair (ok=false).
+func splitKeyValueTokens(seg []tok) (key string, val []tok, ok bool) {
+	depth := 0
+	for i, t := range seg {
+		if !t.cs_ {
+			switch t.ch {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			case '=':
+				if depth <= 0 {
+					return strings.TrimSpace(tokensToText(seg[:i])), seg[i+1:], true
+				}
+			}
+		}
+	}
+	return "", nil, false
+}
+
+// tokensToText renders a token list as its literal characters (control sequences
+// contribute nothing), for a key name or a plain numeric value like scale=0.7.
+func tokensToText(toks []tok) string {
+	var b strings.Builder
+	for _, t := range toks {
+		if !t.cs_ {
+			b.WriteRune(t.ch)
+		}
+	}
+	return b.String()
+}
+
+// evalDimenTokens evaluates a token list as a TeX <dimen>, in isolation from the
+// surrounding input so a value like 0.48\textwidth or \columnwidth is resolved
+// through the engine's real dimension scanner (coercing \textwidth to the full text
+// width, \columnwidth/\linewidth to the column measure). The token list is made the
+// only input for the scan and the base string is fenced off (noBase), so nothing the
+// scanner reads past the value can leak into or out of the graphics option list.
+func (e *Engine) evalDimenTokens(toks []tok) int {
+	if len(toks) == 0 {
+		return 0
+	}
+	savedLists, savedNoBase := e.lists, e.noBase
+	e.lists = [][]tok{append([]tok(nil), toks...)}
+	e.noBase = true
+	v := e.scanDimen()
+	e.lists, e.noBase = savedLists, savedNoBase
+	return v
+}
+
+// parseDimenStr converts a TeX dimension string ("5cm", "100pt", "1.5in") to scaled
+// points. An unknown or missing unit is treated as points.
+func parseDimenStr(s string) int {
+	s = strings.TrimSpace(s)
+	i := 0
+	for i < len(s) && (s[i] == '.' || s[i] == '-' || s[i] == '+' || (s[i] >= '0' && s[i] <= '9')) {
+		i++
+	}
+	num, err := strconv.ParseFloat(s[:i], 64)
+	if err != nil {
+		return 0
+	}
+	unit := strings.TrimSpace(s[i:])
+	ptPerUnit := map[string]float64{
+		"pt": 1, "bp": 7227.0 / 7200, "pc": 12,
+		"in": 72.27, "cm": 72.27 / 2.54, "mm": 72.27 / 25.4,
+		"em": 10, "ex": 4.3,
+	}
+	f, ok := ptPerUnit[unit]
+	if !ok {
+		f = 1 // default: points
+	}
+	return int(num*f*float64(unity) + 0.5)
+}
+
+// figureDeclaredSize returns the size a figure file states for itself, in whole
+// PostScript points (bp), or (0, 0) when it states none or cannot be read. Two
+// formats state one and neither can be decoded here:
+//
+//   - EPS, in its %%BoundingBox (or the more precise %%HiResBoundingBox) comment,
+//     which is what dvips and the graphics package read;
+//   - PDF, in the page's /MediaBox — used when no rasteriser is wired (the browser
+//     build), since a rasterised figure carries its size in its pixels.
+//
+// An EPS declares its box in the head, so only the head is read for one. A PDF does
+// NOT: its page dictionary sits wherever the producer put it, and reading only the
+// first 64KB missed the box on 132 of the arXiv corpus's 1401 figure PDFs. Those
+// figures were then reserved at a DEFAULT size while the file said otherwise, so
+// the whole file is read for a PDF — bounded, because a figure can be tens of
+// megabytes and no page dictionary is that far in.
+//
+// ivy: it reads the file with the resolver of the options, not from the disk.
+func (e *Engine) figureDeclaredSize(name string) (w, h int) {
+	_, head, ok := e.resolveGraphicsPath(name)
+	if !ok {
+		return 0, 0
+	}
+	switch {
+	case bytes.HasPrefix(head, []byte("%PDF-")):
+		wPt, hPt, ok := pdfIntrinsicPoints(head)
+		if !ok {
+			return 0, 0
+		}
+		return int(wPt + 0.5), int(hPt + 0.5)
+	case bytes.HasPrefix(head, []byte("%!PS")), bytes.Contains(head[:min(len(head), 64<<10)], []byte("%%BoundingBox")):
+		return epsBoundingBox(head[:min(len(head), 64<<10)])
+	}
+	return 0, 0
+}
+
+// epsBoundingBox reads %%HiResBoundingBox in preference to %%BoundingBox (the
+// first is in real numbers, the second rounded to integers), skipping the
+// "(atend)" form an EPS may use to defer the box to its trailer — which is past
+// the head this reads.
+func epsBoundingBox(head []byte) (w, h int) {
+	for _, key := range []string{"%%HiResBoundingBox:", "%%BoundingBox:"} {
+		i := bytes.Index(head, []byte(key))
+		if i < 0 {
+			continue
+		}
+		line := head[i+len(key):]
+		if j := bytes.IndexAny(line, "\r\n"); j >= 0 {
+			line = line[:j]
+		}
+		if x, y, ok := boxExtent(strings.Fields(string(line))); ok {
+			return x, y
+		}
+	}
+	return 0, 0
+}
+
+// boxExtent turns four numbers "llx lly urx ury" into the box's width and height,
+// rounded to whole points. A degenerate or reversed box yields ok=false, so the
+// caller keeps its own default rather than reserving nothing.
+func boxExtent(f []string) (w, h int, ok bool) {
+	if len(f) < 4 {
+		return 0, 0, false
+	}
+	var v [4]float64
+	for i := range v {
+		x, err := strconv.ParseFloat(f[i], 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		v[i] = x
+	}
+	dx, dy := v[2]-v[0], v[3]-v[1]
+	if dx <= 0 || dy <= 0 {
+		return 0, 0, false
+	}
+	return int(dx + 0.5), int(dy + 0.5), true
+}

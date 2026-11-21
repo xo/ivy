@@ -1,0 +1,557 @@
+// Copied from github.com/go-tex/engine, the file boxrender.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+)
+
+// This file renders the stomach's scaled-point box tree (boxNode) to SVG. It is
+// the driver that makes an explicit \hbox/\vbox *visible*: rules paint as filled
+// rectangles, glue and kern advance the cursor (glue at its set width), and boxes
+// nest recursively. Coordinates are emitted in points (1pt = 1 user unit), so the
+// geometry is exactly the sp box tree divided by 65536. A PDF driver (go-pdfkit)
+// will consume the same tree; SVG is the self-contained way to see it.
+
+// spToPt converts scaled points to points as a float for output coordinates.
+func spToPt(sp int) float64 { return float64(sp) / float64(unity) }
+
+// f formats a coordinate for SVG output: two decimals with trailing zeros (and a
+// bare decimal point) trimmed, so "3.00" prints "3" and "3.50" prints "3.5".
+func f(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	return strings.TrimSuffix(s, ".")
+}
+
+// RenderBox renders box register i to an SVG string with a uniform margin (pt).
+// Empty if the register is void.
+func (e *Engine) RenderBox(i int, margin float64) string {
+	return renderBoxSVG(e.getBox(i), margin, margin, 0, 0, e.renderFont(), e.pageFill())
+}
+
+// pageFill returns the SVG/CSS background colour for a page: the \pagecolor when
+// set, otherwise white.
+func (e *Engine) pageFill() string {
+	if e.hasPageColor {
+		return hexColor(e.pageColor)
+	}
+	return "white"
+}
+
+// Page vpacks the main vertical list (everything contributed at top level) into a
+// single vbox at natural height. Empty (nil) if nothing was contributed.
+func (e *Engine) Page() *boxNode {
+	if len(e.mvl) == 0 {
+		return nil
+	}
+	return vpackSP(e.mvl, packNatural, 0)
+}
+
+// RenderPage renders the main vertical list to an SVG page with the given margin.
+func (e *Engine) RenderPage(margin float64) string {
+	pw, ph, _ := e.paperSizePt()
+	return renderBoxSVG(e.Page(), margin, e.renderVMargin(margin), pw, ph, e.renderFont(), e.pageFill())
+}
+
+// renderBoxSVG paints a packed box onto an SVG sized to the box plus its margins
+// (in points): margin at the left and right, vmargin above and below. The box's
+// reference point (left edge, baseline) sits at (margin, vmargin+height). The two
+// are equal unless a class asks for a page whose side and top margins differ.
+// font (may be nil) draws character glyphs; bg is the page-background colour
+// ("white" unless \pagecolor set one).
+func renderBoxSVG(b *boxNode, margin, vmargin, paperW, paperH float64, font fontFace, bg string) string {
+	if b == nil {
+		return ""
+	}
+	// A stated paper size wins: the page is the paper, not the text block plus a
+	// margin (see paperSizePt). Zero means the document never said, and the page is
+	// derived from the content as before.
+	pageW := spToPt(b.width) + 2*margin
+	pageH := spToPt(b.height+b.depth) + 2*vmargin
+	if paperW > 0 && paperH > 0 {
+		pageW, pageH = paperW, paperH
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `<svg xmlns="http://www.w3.org/2000/svg" width="%spt" height="%spt" viewBox="0 0 %s %s">`,
+		f(pageW), f(pageH), f(pageW), f(pageH))
+	fmt.Fprintf(&sb, `<rect width="100%%" height="100%%" fill="%s"/>`, bg)
+	// The glyph outlines are painted into their own builder so the selectable
+	// text layer can be written BEFORE them: a selection paints its background
+	// with the text it belongs to, and a layer above the outlines would hide the
+	// very words it highlights. Underneath, the highlight sits behind the glyphs
+	// with no CSS required of the page showing it.
+	var glyphs strings.Builder
+	layer := newTextLayerFor(font)
+	paintBoxSP(&glyphs, b, margin, vmargin+spToPt(b.height), font, layer)
+	sb.WriteString(layer.String())
+	sb.WriteString(`<g fill="black">`)
+	sb.WriteString(glyphs.String())
+	sb.WriteString(`</g></svg>`)
+	// Driver literals may refer back to a picture origin declared by an earlier
+	// one; that is resolved over the finished page (see special.go).
+	return resolveSpecialOrigins(sb.String())
+}
+
+// paintBoxSP paints a box whose left edge is at x and whose baseline is at the
+// given y (SVG coordinates, points).
+// tl is the searchable text layer every box on the page contributes to. See
+// [textLayer].
+func paintBoxSP(sb *strings.Builder, b *boxNode, x, baseline float64, font fontFace, tl *textLayer) {
+	if b.kind == hbox {
+		paintHListSP(sb, b, x, baseline, font, tl)
+	} else {
+		paintVListSP(sb, b, x, baseline-spToPt(b.height), font, tl)
+	}
+}
+
+// paintHListSP lays an hbox's material along the baseline, advancing the cursor
+// by each item's (set) width.
+func paintHListSP(sb *strings.Builder, b *boxNode, x, baseline float64, font fontFace, tl *textLayer) {
+	cx := x
+	// Group consecutive glyphs sharing a source line into a <g data-l="N"> so the
+	// SVG preview can map a click → source line (and a line → its output). Kerns
+	// and inter-word glue are transparent (they stay inside a run); boxes, rules
+	// and math close the current run (they manage their own annotation).
+	lg := lineGrouper{sb: sb, line: -1, tl: tl}
+	// Every glyph this hlist paints shares one baseline, so the text layer the
+	// grouper accumulates is positioned once here.
+	lg.text.baseline = baseline
+	for _, n := range b.list {
+		switch c := n.(type) {
+		case kernNode:
+			if c.space {
+				// A space the author typed, held as a kern so it cannot stretch
+				// (verbatim). The text layer is told, exactly as it is for glue —
+				// the geometric guess below cannot see a space this narrow.
+				lg.space()
+			}
+			cx += spToPt(c.width)
+		case glueNode:
+			w := spToPt(b.setWidth(c.spec))
+			if c.leader != leaderNone {
+				lg.close()
+			}
+			paintLeader(sb, c.leader, x, cx, baseline, w, spToPt(c.cell), font)
+			if c.leader == leaderNone {
+				// Ordinary inter-word glue: the space a reader would type.
+				lg.space()
+			}
+			cx += w
+		case charNode:
+			lg.set(c.srcLine)
+			// The glyph's OWN face, which is the one its width came from: a bold or
+			// typewriter run was measured in that face and drawn in the roman before
+			// charNode carried it (#590).
+			gf, gsc := charFace(c, font)
+			if gf != nil && !c.covered { // covered: it holds its place and draws nothing
+				if d := gf.glyphPathAt(c.ch); d != "" {
+					fill := ""
+					if c.color != 0 { // override the enclosing <g fill="black">
+						fill = ` fill="` + hexColor(c.color) + `"`
+					}
+					// The glyph path is at the render font's size; scale it to the
+					// glyph's own size (from \large/\small/…) about the baseline.
+					if gsc != 1 {
+						fmt.Fprintf(sb, `<path%s transform="translate(%s,%s) scale(%s)" d="%s"/>`, fill, f(cx), f(baseline), f(gsc), d)
+					} else {
+						fmt.Fprintf(sb, `<path%s transform="translate(%s,%s)" d="%s"/>`, fill, f(cx), f(baseline), d)
+					}
+					// The character behind the outline just painted, for the
+					// selectable layer. Only a glyph that was drawn is recorded:
+					// the layer must describe what is on the page.
+					lg.text.addChar(c.ch, cx, spToPt(c.width), charSizePt(c, gf))
+				}
+			}
+			cx += spToPt(c.width)
+		case mathNode:
+			lg.close()
+			// ⛔ The formula's group carries its SOURCE LINE, like the prose
+			// around it. It used to carry none: lg.close() ends the open
+			// <g data-l="N"> and the formula went into a bare group, so every
+			// consumer that reads those groups — the playground measures each
+			// one's box in the DOM to build its click-to-source bands — saw a
+			// page where the equations did not exist. Measured: five line
+			// groups on a page, two formulas, both outside all of them.
+			//
+			// It is a group of its own rather than material inside the
+			// surrounding line's, because a display formula is not on that line
+			// and an inline one still wants its own box rather than its
+			// neighbours'.
+			// ⛔ AND ITS RANGE, because a LINE cannot be edited. data-l answers
+			// "scroll the source here"; it cannot say which characters are the
+			// formula, and two formulas on one line share it exactly. data-m
+			// carries the range the way the editor counts — 1-based line,
+			// 0-based RUNE column, both ends being the delimiters' own
+			// positions — so a tap can select the equation rather than its
+			// neighbourhood. Omitted entirely when the formula carries no
+			// stamp: an attribute reading "0:0-0:0" is a position, and a
+			// consumer would act on it.
+			fmt.Fprintf(sb, `<g data-l="%d"%s transform="translate(%s,%s)">%s</g>`,
+				c.srcLine, mathRangeAttr(c), f(cx), f(baseline-spToPt(c.height)), c.svg)
+			// What the formula SAYS, over the formula: its own outlines carry no
+			// characters either, and without this the sentence around it reads with
+			// a silent hole where the equation was.
+			tl.addPhrase(c.src, cx, spToPt(c.width), baseline, mathLayerSize(c))
+			cx += spToPt(c.width)
+		case imageNode:
+			lg.close()
+			// the image sits on the baseline: top at baseline-height, no depth
+			fmt.Fprintf(sb, `<image x="%s" y="%s" width="%s" height="%s" href="%s"/>`,
+				f(cx), f(baseline-spToPt(c.height)), f(spToPt(c.width)), f(spToPt(c.height)), c.dataURI())
+			cx += spToPt(c.width)
+		case ruleNode:
+			lg.close()
+			h := ruleHeight(c, b)
+			d := ruleDepth(c, b)
+			w := spToPt(c.width) // an hbox never has a running-width rule
+			rect(sb, cx, baseline-spToPt(h), w, spToPt(h+d))
+			cx += w
+		case *boxNode:
+			lg.close()
+			paintBoxSP(sb, c, cx, baseline+spToPt(c.shift), font, tl) // shift>0 lowers the box
+			cx += spToPt(c.width)
+		case frameNode:
+			lg.close()
+			paintFrameSP(sb, c, cx, baseline, font, tl)
+			cx += spToPt(c.width())
+		case linkNode:
+			lg.close()
+			paintLinkSP(sb, c, cx, baseline, font, tl)
+			cx += spToPt(c.width())
+		case internalLinkNode:
+			lg.close()
+			paintInternalLinkSP(sb, c, cx, baseline, font, tl)
+			cx += spToPt(c.width())
+		case decoNode:
+			lg.close()
+			paintDecoSP(sb, c, cx, baseline, font, tl)
+			cx += spToPt(c.width())
+		case transformNode:
+			lg.close()
+			paintTransformSP(sb, c, cx, baseline, font, tl)
+			cx += spToPt(c.width())
+		case specialNode:
+			// A driver literal: emitted verbatim at its reference point, taking no
+			// space. Groups it opens bracket the material painted after it (the
+			// dvisvgm model pgf's SVG driver is written against), so the run of
+			// glyphs is closed first to keep the elements properly nested.
+			lg.close()
+			if lit, ok := specialLiteral(c.text, cx, baseline); ok {
+				sb.WriteString(lit)
+			}
+		}
+	}
+	lg.close()
+}
+
+// paintDecoSP paints an under/over/strike-out decoration: the inner box on the
+// baseline, then a thin rule at the decoration's y position, in the rule's colour.
+func paintDecoSP(sb *strings.Builder, dn decoNode, x, baseline float64, font fontFace, tl *textLayer) {
+	paintBoxSP(sb, dn.inner, x, baseline, font, tl)
+	crect(sb, x, baseline+spToPt(dn.decoRuleTop()), spToPt(dn.width()), spToPt(decoRule), dn.color)
+}
+
+// paintLinkSP paints a hyperlink: an SVG <a href="URL"> element wrapping the inner
+// box, so a click on the content opens the URL. SVG supports <a> natively, which
+// makes the engine's SVG a genuinely clickable document in a browser. x is the
+// link's left edge; baseline is the content baseline.
+func paintLinkSP(sb *strings.Builder, ln linkNode, x, baseline float64, font fontFace, tl *textLayer) {
+	fmt.Fprintf(sb, `<a href="%s" target="_blank" rel="noopener">`, escapeXMLAttr(ln.url))
+	paintBoxSP(sb, ln.inner, x, baseline, font, tl)
+	sb.WriteString(`</a>`)
+}
+
+// paintFrameSP draws a framed box: four thin rules of thickness fr.rule form the
+// border, then the inner box is painted on the same baseline, inset by rule+sep
+// from the left edge. x is the frame's left edge; baseline is the content baseline.
+func paintFrameSP(sb *strings.Builder, fr frameNode, x, baseline float64, font fontFace, tl *textLayer) {
+	w := spToPt(fr.width())
+	top := baseline - spToPt(fr.height())
+	total := spToPt(fr.height() + fr.depth())
+	if fr.bg != 0 { // \colorbox/\fcolorbox background fills the whole box first
+		crect(sb, x, top, w, total, fr.bg)
+	}
+	if fr.rule > 0 { // the border (\fbox/\framebox black, \fcolorbox coloured)
+		ru := spToPt(fr.rule)
+		crect(sb, x, top, w, ru, fr.ruleColor)          // top edge
+		crect(sb, x, top+total-ru, w, ru, fr.ruleColor) // bottom edge
+		crect(sb, x, top, ru, total, fr.ruleColor)      // left edge
+		crect(sb, x+w-ru, top, ru, total, fr.ruleColor) // right edge
+	}
+	paintBoxSP(sb, fr.inner, x+spToPt(fr.rule+fr.sep), baseline, font, tl)
+}
+
+// mathRangeAttr renders a formula's source range as a data-m attribute, or
+// nothing at all when the formula carries no stamp.
+//
+// ⛔ NOTHING, rather than zeros. "0:0-0:0" is a well-formed position and a
+// consumer would act on it — scrolling to the top of the file and selecting
+// nothing, which looks like a bug in the consumer rather than a missing stamp
+// in the producer. An absent attribute is a question the consumer can ask;
+// a zero is an answer it cannot doubt.
+func mathRangeAttr(c mathNode) string {
+	if c.srcLine <= 0 || c.srcEndLine <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(` data-m="%d:%d-%d:%d"`, c.srcLine, c.srcCol, c.srcEndLine, c.srcEndCol)
+}
+
+// mathLayerSize is the font size the text layer gives a formula's source: the
+// formula's own height, so a selection over a big display equation is the size
+// of what it covers rather than of the body text.
+func mathLayerSize(c mathNode) float64 {
+	if h := spToPt(c.height + c.depth); h > 0 {
+		return h
+	}
+	return 10
+}
+
+// crect fills a rectangle in the given colour (0xRRGGBB), or black when color is 0
+// (using the enclosing <g fill="black">).
+func crect(sb *strings.Builder, x, y, w, h float64, color uint32) {
+	if color == 0 {
+		rect(sb, x, y, w, h)
+		return
+	}
+	fmt.Fprintf(sb, `<rect x="%s" y="%s" width="%s" height="%s" fill="%s"/>`, f(x), f(y), f(w), f(h), hexColor(color))
+}
+
+// lineGrouper emits <g data-l="N"> … </g> wrappers around runs of glyphs that
+// share a source line, opening a new group only when the line changes and closing
+// on demand. A line of 0 (unknown) still groups, without the attribute.
+type lineGrouper struct {
+	sb   *strings.Builder
+	tl   *textLayer // the page-wide searchable text layer
+	line int        // current open group's line; -1 = none open
+	text textRun    // the characters painted since the group opened
+}
+
+// space records an inter-word space for the text layer, wherever it falls.
+//
+// ⛔⛔ GLUE ARRIVING WHILE THE RUN IS EMPTY USED TO BE DISCARDED, and that threw
+// away the only EXACT information about a word boundary.
+//
+// textRun.addSpace ignores glue before the run's first word, on the grounds that
+// "the boundary in front of a run is the cursor's decision" — but the cursor was
+// never told, so it had nothing to decide with and fell back to the geometric
+// guess. That is the case after a formula: the math closes the run, THEN the
+// inter-word glue arrives, and `$E = mc^2$ exactly` came out as `mc^2exactly`
+// whenever the line's spaces were narrow enough for the gap to read as a kern.
+//
+// ⚠ IT WAS THE SPACING THAT CHANGED, NOT THE LAYER. The gap only fell below the
+// bar once the line was set at the width the reference sets it — on this witness
+// tectonic ends that line at x1=408.21 and the engine now ends it at 406.91,
+// where it used to end at 477.50, almost 70pt wide. A threshold tuned against
+// our own loose spacing passed for years; the exact signal has to be used
+// instead of widened.
+func (g *lineGrouper) space() {
+	if len(g.text.words) > 0 {
+		g.text.addSpace()
+		return
+	}
+	// The run is empty: tell the cursor, which is what decides the boundary in
+	// front of the next run. wantsSpace reads `owed` before any gap test.
+	if g.tl != nil {
+		g.tl.cur.owed = true
+	}
+}
+
+func (g *lineGrouper) set(line int) {
+	if g.line == line && g.line != -1 {
+		return
+	}
+	g.close()
+	if line > 0 {
+		fmt.Fprintf(g.sb, `<g data-l="%d">`, line)
+	} else {
+		g.sb.WriteString(`<g>`)
+	}
+	g.line = line
+}
+
+func (g *lineGrouper) close() {
+	if g.line != -1 {
+		g.text.flush(g.tl)
+		g.sb.WriteString(`</g>`)
+		g.line = -1
+	}
+}
+
+// paintVListSP stacks a vbox's material from the top edge (top), advancing the
+// vertical cursor by each item's size and carrying the running depth.
+func paintVListSP(sb *strings.Builder, b *boxNode, x, top float64, font fontFace, tl *textLayer) {
+	cy := top
+	for _, n := range b.list {
+		switch c := n.(type) {
+		case kernNode:
+			cy += spToPt(c.width)
+		case glueNode:
+			cy += spToPt(b.setWidth(c.spec))
+		case ruleNode:
+			w := ruleWidth(c, b)
+			hd := spToPt(c.height + c.depth)
+			rect(sb, x, cy, spToPt(w), hd)
+			cy += hd
+		case *boxNode:
+			paintBoxSP(sb, c, x+spToPt(c.shift), cy+spToPt(c.height), font, tl)
+			cy += spToPt(c.height + c.depth)
+		case frameNode:
+			paintFrameSP(sb, c, x, cy+spToPt(c.height()), font, tl)
+			cy += spToPt(c.height() + c.depth())
+		case decoNode:
+			paintDecoSP(sb, c, x, cy+spToPt(c.height()), font, tl)
+			cy += spToPt(c.height() + c.depth())
+		case transformNode:
+			paintTransformSP(sb, c, x, cy+spToPt(c.height()), font, tl)
+			cy += spToPt(c.height() + c.depth())
+		case linkNode:
+			paintLinkSP(sb, c, x, cy+spToPt(c.height()), font, tl)
+			cy += spToPt(c.height() + c.depth())
+		case internalLinkNode:
+			paintInternalLinkSP(sb, c, x, cy+spToPt(c.height()), font, tl)
+			cy += spToPt(c.height() + c.depth())
+		case mathNode: // display math on its own line
+			// ⚠ THIS PAINTER APPEARS TO BE UNREACHABLE, and it is left alone
+			// deliberately rather than "fixed" to match its horizontal twin.
+			//
+			// Probed by panicking here and running the engine's own maths
+			// corpus: 131 tests matching Math/Display/Align/Equation, and the
+			// panic never fired. Every formula measured — inline, `\[…\]`, and
+			// an `align` environment — reaches the page through the HORIZONTAL
+			// painter instead, which is the one that now stamps data-l.
+			//
+			// Stamping a line here too would have been one line and would have
+			// looked like thoroughness. It would have been unexercised code
+			// carrying a confident comment, which is worse than an honest gap:
+			// whether this branch is dead or merely untested is its own
+			// question, and answering it by editing it would have hidden it.
+			fmt.Fprintf(sb, `<g transform="translate(%s,%s)">%s</g>`, f(x), f(cy), c.svg)
+			tl.addPhrase(c.src, x, spToPt(c.width), cy+spToPt(c.height), mathLayerSize(c))
+			cy += spToPt(c.height + c.depth)
+		case specialNode: // a driver literal between two vertical items
+			if lit, ok := specialLiteral(c.text, x, cy); ok {
+				sb.WriteString(lit)
+			}
+		}
+	}
+}
+
+// paintLeader draws a glue node's set width as a leader: leaderRule fills the
+// span with a thin baseline rule (\hrulefill), leaderDots tiles a row of dots
+// (\dotfill). leaderNone (ordinary glue) paints nothing. w is the set width (pt).
+func paintLeader(sb *strings.Builder, kind glueLeader, edge, x, baseline, w, cell float64, font fontFace) {
+	if w <= 0 {
+		return
+	}
+	switch kind {
+	case leaderRule:
+		th := spToPt(defaultRule)
+		rect(sb, x, baseline-th, w, th)
+	case leaderDots:
+		paintDotLeader(sb, edge, x, baseline, w, cell, font)
+	}
+}
+
+// dotLeaderOrigins is where the tiles of an ALIGNED leader start. \leaders (not
+// \cleaders or \xleaders) lays its boxes on a grid anchored to the left edge of the
+// enclosing box, not to the glue (tex.web §626: cur_h = left_edge + leader_wd *
+// ((cur_h - left_edge) div leader_wd), and a tile is set only if it fits whole). So
+// the dots of a contents line line up from one entry to the next, and the first one
+// is NOT at the end of the title: tectonic sets "Un détail . . ." where the engine,
+// tiling from the glue's own start, set "Un détail. . .".
+func dotLeaderOrigins(edge, x, w, cell float64) []float64 {
+	if cell <= 0 || w <= 0 {
+		return nil
+	}
+	var out []float64
+	for o := edge + math.Ceil((x-edge)/cell-1e-9)*cell; o+cell <= x+w+1e-9; o += cell {
+		out = append(out, o)
+	}
+	return out
+}
+
+// dotLeaderGeom returns how many dot cells fit across width w (pt) and the cell
+// width, for a font of design size emPt (pt). A positive cell is the caller's
+// own tile width (LaTeX's TOC leader); zero asks for plain TeX's .44em \dotfill
+// box. It yields zero cells for a non-positive width or size, guarding the
+// renderers against a zero-size font.
+func dotLeaderGeom(w, emPt, cell float64) (int, float64) {
+	if cell <= 0 {
+		cell = 0.44 * emPt // .44em dot box, as in plain.tex's \dotfill
+	}
+	if w <= 0 || cell <= 0 {
+		return 0, cell
+	}
+	return int(w / cell), cell
+}
+
+// paintDotLeader tiles '.' glyphs centred in successive .44em cells across
+// [x, x+w], approximating TeX's \dotfill (\leaders\hbox to .44em{\hss.\hss}).
+func paintDotLeader(sb *strings.Builder, edge, x, baseline, w, cell float64, font fontFace) {
+	if font == nil {
+		return
+	}
+	d := font.glyphPathAt('.')
+	if d == "" {
+		return
+	}
+	_, cell = dotLeaderGeom(w, float64(font.sizePt()), cell)
+	dotW := spToPt(func() int { w, _, _ := font.charDimsSP('.'); return w }())
+	for _, o := range dotLeaderOrigins(edge, x, w, cell) {
+		fmt.Fprintf(sb, `<path transform="translate(%s,%s)" d="%s"/>`, f(o+(cell-dotW)/2), f(baseline), d)
+	}
+}
+
+// glyphScale is the factor applied to a glyph path so it renders at the char's own
+// size instead of the render font's size (1 when they match or the size is unset).
+func glyphScale(c charNode, font fontFace) float64 {
+	base := font.sizePt()
+	if c.size <= 0 || base <= 0 || c.size == base {
+		return 1
+	}
+	return float64(c.size) / float64(base)
+}
+
+// A running rule dimension follows the enclosing box; these resolve it.
+func ruleWidth(r ruleNode, b *boxNode) int {
+	if r.widthRun {
+		return b.width
+	}
+	return r.width
+}
+func ruleHeight(r ruleNode, b *boxNode) int {
+	if r.heightRun {
+		return b.height
+	}
+	return r.height
+}
+func ruleDepth(r ruleNode, b *boxNode) int {
+	if r.depthRun {
+		return b.depth
+	}
+	return r.depth
+}
+
+// rect writes one filled rectangle (points). A rectangle with no area is skipped:
+// it is filled, not stroked, so it paints nothing, and TeX asks for one routinely —
+// \strut is \vrule height.7\baselineskip depth.3\baselineskip width\z@, a rule
+// wanted for its METRICS alone (latex.ltx:8544). Emitting it put a
+// <rect width="0"> in the page for every strut: one corpus paper went from 1 to 20
+// the moment \strut started working, and it would be one per row and per footnote
+// once anything else measures with \strutbox.
+//
+// The metrics are unaffected — this is the renderer, and the node keeps its height
+// and depth in the box either way.
+func rect(sb *strings.Builder, x, y, w, h float64) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	fmt.Fprintf(sb, `<rect x="%s" y="%s" width="%s" height="%s"/>`, f(x), f(y), f(w), f(h))
+}

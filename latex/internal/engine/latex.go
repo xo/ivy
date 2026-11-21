@@ -1,0 +1,2703 @@
+// Copied from github.com/go-tex/engine, the file latex.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import "strings"
+
+// This file is a minimal LaTeX layer written in TeX on top of the Plain macros:
+// the \begin/\end environment mechanism (via \csname, exactly as latex.ltx does),
+// sectioning, the common text-formatting commands, and list/quote environments.
+// It is deliberately small — the road to full LaTeX is to grow this toward the
+// real latex.ltx, not to hand-code commands in Go. \documentclass/\usepackage are
+// argument-gobbling primitives (they accept an optional [options] and a {name}).
+
+// MiniLaTeXKernel is the LaTeX-flavoured macro layer loaded by LoadLaTeX (after
+// the Plain macros).
+const MiniLaTeXKernel = `
+\catcode64=11
+% \begin{env} … \end{env} is a GROUP. ltmiscen.dtx:
+%
+%   \protected\def\begin#1{… \begingroup\@endpefalse\reserved@a}
+%   where \reserved@a is \def\@currenvir{#1}… \csname #1\endcsname
+%   \def\end#1{\csname end#1\endcsname\@checkend{#1}\expandafter\endgroup …}
+%
+% so \begingroup comes FIRST and \@currenvir is defined INSIDE it. Without the
+% group, \@currenvir was never restored, and a class that leaves an environment
+% early by closing its group could not: beamer's fragile frame does exactly that —
+%
+%   \def\beamer@checkforfragile#1fragile#2\relax{… \endgroup% end environment
+%     \expandafter\beamer@framecommand\beamer@frameoptions\bgroup}
+%
+% and then calls \frame, which picks its syntax with \ifx\@currenvir\beamer@frametext.
+% With \@currenvir still "frame" the command form took the ENVIRONMENT path a second
+% time, and \beamer@doseveralframes was handed the bare \bgroup instead of the
+% frame's body — the frame went on the page empty and its body was typeset after it,
+% into a box nothing places.
+%
+% The group is opened and closed by the Go-side probes \gotex@checkenv and
+% \gotex@endenv rather than by \begingroup/\endgroup tokens, because \begin and
+% \end must stay fully EXPANDABLE here: written as tokens, they would print as
+% literal text wherever \begin is only expanded (inside \message or \edef).
+% \@currenvir is defined inside that group (see doCheckEnv), as LaTeX's own \def is.
+\def\@currenvir{}
+\def\begin#1{\gotex@checkenv{#1}\csname #1\endcsname}
+\def\end#1{\csname end#1\endcsname\gotex@endenv{#1}}
+\def\document{\if1\gotexatasked\else\catcode64=12 \fi}
+\def\enddocument{\par\vfill\penalty-10000 }
+\def\rm{}
+\def\bf{}
+\def\it{}
+\def\sl{}
+\def\tt{}
+\def\sf{}
+% \text… go through the NFSS declarations (\bfseries/\itshape/…), which the
+% engine aliases to the real font switches (see aliasFontSwitches). Using the
+% NFSS names — not the deprecated \bf/\it/… — keeps \textbf working even when a
+% document does \renewcommand{\bf}{\textbf}, which would otherwise make \textbf
+% recurse into itself and swallow the rest of the input.
+\def\textbf#1{{\bfseries #1}}
+\def\textit#1{{\itshape #1}}
+% \textsl was missing, and the corpus asks for it: 5 papers, 50 uses, and the only
+% SHAPE command the census of undefined commands reports — every other \text… it
+% names is a textgreek or tipa symbol, one paper each.
+\def\textsl#1{{\slshape #1}}
+\def\texttt#1{{\ttfamily #1}}
+\def\textsf#1{{\sffamily #1}}
+\def\textrm#1{{\rmfamily #1}}
+\def\emph#1{{\itshape #1}}
+% \textcolor takes the same optional MODEL as \color, and its parameter text in the
+% reference is "#1#" — delimited by the next brace — so the bracket, if any, lands
+% in #1 and the name in #2 (color.sty:103-104, xcolor.sty:758-759):
+%
+%	\protected\def\textcolor#1#{\@textcolor{#1}}
+%	\def\@textcolor#1#2#3{\protect\leavevmode{\color#1{#2}#3}}
+%
+% Taking two plain arguments instead bound #1=[HTML] and #2={FF0000} and left the
+% TEXT unconsumed. \leavevmode is deliberately NOT copied here: the two-argument
+% form never had it, and adding it in the same change would make the measurement
+% unreadable.
+% \textcolor is a Go PRIMITIVE (color.go): see doTextcolor for why neither the
+% reference's "#1#" parameter text nor an \@ifnextbracket dispatcher can live here.
+% colortbl's cell/row/column backgrounds. The engine paints no cell background,
+% so these typeset nothing — but they MUST still eat their arguments, or the
+% colour name reaches the page. Measured against tectonic:
+%
+%   reference   A C EF        B D
+%   ours        lightgray A B gray C D E[rgb]1,0,0F
+%
+% 166 \cellcolor and 77 \rowcolor over 9 of the 200 corpus papers.
+%
+% The signatures are NOT the same, and the difference was taken from the
+% reference rather than assumed. \rowcolor and \columncolor accept the two
+% overhang arguments; \cellcolor does not, and tectonic proves it by SETTING
+% them — inside a tabular as well as outside:
+%
+%   \cellcolor{gray}[1pt][2pt] X   ->   reference prints "[1pt][2pt] X"
+%   \rowcolor{blue}[1pt][2pt] P    ->   reference prints "P"
+%
+% So eating the overhangs everywhere would have swallowed text the reference
+% keeps. Consuming what a command HAS is required; consuming more is a new
+% defect, silent because an unread argument raises nothing in the census.
+\def\gotex@eatcolor#1{\@ifnextchar[{\gotex@eatcolor@m{#1}}{\gotex@eatcolor@c{#1}}}
+\def\gotex@eatcolor@m#1[#2]#3{#1}
+\def\gotex@eatcolor@c#1#2{#1}
+% \relax after the colour: nothing more to eat (\cellcolor).
+% \gotex@eatover: also eat [left] and then [right] (\rowcolor, \columncolor).
+\def\gotex@eatover{\@ifnextchar[\gotex@eatover@i{}}
+\def\gotex@eatover@i[#1]{\@ifnextchar[\gotex@eatover@ii{}}
+\def\gotex@eatover@ii[#1]{}
+\def\cellcolor{\gotex@eatcolor\relax}
+\def\rowcolor{\gotex@eatcolor\gotex@eatover}
+\def\columncolor{\gotex@eatcolor\gotex@eatover}
+\def\tiny{\gotexsize500\relax}
+\def\scriptsize{\gotexsize700\relax}
+\def\footnotesize{\gotexsize800\relax}
+\def\small{\gotexsize900\relax}
+\def\normalsize{\gotexsize1000\relax}
+\def\large{\gotexsize1200\relax}
+\def\Large{\gotexsize1440\relax}
+\def\LARGE{\gotexsize1728\relax}
+\def\huge{\gotexsize2074\relax}
+\def\Huge{\gotexsize2488\relax}
+\def\mbox#1{\hbox{#1}}
+\newcount\c@section
+\newcount\c@subsection
+\newcount\c@equation
+\long\def\theequation{\the\c@equation}
+\def\equation{\global\advance\c@equation by1\relax\edef\@currentlabel{\theequation}\@equationbody}
+\def\endequation{}
+\def\@currentlabel{}
+\long\def\thesection{\the\c@section}
+\long\def\thesubsection{\the\c@section.\the\c@subsection}
+\long\def\section{\@ifstar\@ssection\@nsection}
+\def\@nsection#1{\par\medskip\advance\c@section by1 \c@subsection=0 \edef\@currentlabel{\thesection}\sectionmark{#1}\noindent{\Large\bf\thesection\quad#1}\par\nobreak\smallskip}
+\def\@ssection#1{\par\medskip\noindent{\Large\bf#1}\par\nobreak\smallskip}
+\long\def\subsection{\@ifstar\@ssubsection\@nsubsection}
+\def\@nsubsection#1{\par\smallskip\advance\c@subsection by1 \edef\@currentlabel{\thesubsection}\noindent{\large\bf\thesubsection\quad#1}\par\nobreak}
+\def\@ssubsection#1{\par\smallskip\noindent{\large\bf#1}\par\nobreak}
+\long\def\subsubsection{\@ifstar\@ssubsubsection\@nsubsubsection}
+\def\@nsubsubsection#1{\par\smallskip\noindent#1\par\nobreak}
+\def\@ssubsubsection#1{\par\smallskip\noindent#1\par\nobreak}
+\long\def\paragraph#1{\par\noindent#1\quad}
+% \title and \author accept an OPTIONAL short form — \title[short]{full} — in the
+% amsart family (used for the running head). The short argument is only STORED
+% (in \@shorttitle / \@shortauthor); executing it would run any font or spacing
+% command it carries in global scope. A real paper writes \title[\tiny …]{…}, and
+% taking that short form as the mandatory argument let the \tiny escape into the
+% document body and set every following paragraph half-size. Detect the bracket and
+% keep the short form unexpanded; with no bracket the plain one-argument form holds.
+\def\title{\@ifnextchar[{\@titleopt}{\@titlemand}}
+% \long: latex.ltx:12747 declares \title with \DeclareRobustCommand (no star), and
+% \@star@or@long (latex.ltx:1173) makes the unstarred form \long. \author on the very
+% next line IS starred, so it is deliberately NOT \long here either — a \par in an
+% author block IS a runaway in real LaTeX, for article and amsart.
+%
+% ⛔ That is a statement about latex.ltx, not about the corpus, and it was read as both.
+% A CLASS may declare \author \long, and IEEEtran does, with its reason on the line
+% above: "V1.7 allow \author to contain \par's. This is needed to allow \thanks to
+% contain \par." (IEEEtran.cls:4881-4882). Its papers are therefore not in error and
+% their references compile; keeping the strict form for them cost a whole title block.
+% The class's own definition is installed in packages.go. Before concluding that a
+% corpus paper is at fault here, check what its CLASS says.
+\long\def\@titleopt[#1]#2{\def\@shorttitle{#1}\def\@title{#2}}
+\long\def\@titlemand#1{\def\@title{#1}}
+\def\author{\@ifnextchar[{\@authoropt}{\@authormand}}
+\def\@authoropt[#1]#2{\def\@shortauthor{#1}\def\@author{#2}}
+\def\@authormand#1{\def\@author{#1}}
+\def\date#1{\def\@date{#1}}
+\def\@title{}
+\def\@author{}
+\def\@date{}
+\def\@shorttitle{}
+\def\@shortauthor{}
+% authblk's \affil[n]{text} TYPESETS NOTHING where it stands: it accumulates, and
+% the class's \@maketitle sets the accumulated list through \@author, which authblk
+% redefines to "authors \\[\affilsep] affiliations" (authblk.sty:148-171). Declared
+% here as a stub taking a mandatory #1, it grabbed the "[" instead and the rest
+% LEAKED into the running text — "1,5,6]Institute for Modelling and Simulation…"
+% opened a page of its own before the title, and 708 papers of the 22127-paper pool
+% write \affil[.
+%
+% Discarding it is not the fix either: measured, that costs a page to ten documents
+% already too short, because the leaked text was filling — in the wrong place — a
+% height the reference fills in the right one. It is set here instead, under the
+% authors, where \@maketitle puts it.
+% This is authblk's own design: the affiliation is appended to \@author, separated
+% by \\, so whatever \@maketitle the class has typesets it — article.cls sets
+% \@author inside \begin{tabular}[t]{c}, whose rows are exactly \\-separated
+% (article.cls:246-248), and the engine's own generic \maketitle centres it.
+% Appending to a \@author that was never given would break, so an absent one
+% starts empty and takes no separator.
+\long\def\gotex@affiladd#1{\ifx\@author\@empty\gdef\@author{#1}\else
+  \g@addto@macro\@author{\\ #1}\fi}
+% \multirow IS implemented — buildMultirow (tabular.go) parses \multirow{n}{width}{text}
+% and spans the cell over n rows — but only for a cell that BEGINS with it: isMultirow
+% inspects the cell's raw tokens. Anywhere else the control sequence was undefined, and a
+% skipped command leaves its ARGUMENTS behind: on 2304.06819 the table cells read
+%
+%	\parbox[t]{0mm}{\multirow{3}{*}{\rotatebox[origin=c]{90}{WSI}}}
+%
+% and we printed "3*WSI" — the row count and the width marker as literal text beside the
+% content. 8 corpus papers, 20 occurrences, and 2304.06819 alone has 10.
+%
+% This is the fallback for those positions: consume multirow.sty's signature and typeset the
+% TEXT. multirow.sty:70 declares
+%
+%	\multirow[vpos]{nrows}[bigstruts]{width}[vmove]{text}
+%
+% so every optional argument is read and dropped, and the three mandatory ones are read with
+% only the last kept. The row span is lost — that needs the tabular builder, which already
+% has it for the position where it can be done — but the content survives and the row count
+% stops appearing on the page.
+%
+% ⛔ It does not shadow the real implementation: isMultirow tests the raw token \multirow
+% before any expansion, so a cell that begins with \multirow still takes the spanning path.
+% Both positions are asserted in multirowanywhere_test.go.
+\def\multirow{\@ifnextbracket\gotex@mrvpos\gotex@mrrows}
+\long\def\gotex@mrvpos[#1]{\gotex@mrrows}
+\long\def\gotex@mrrows#1{\@ifnextbracket\gotex@mrstruts\gotex@mrwidth}
+\long\def\gotex@mrstruts[#1]{\gotex@mrwidth}
+\long\def\gotex@mrwidth#1{\@ifnextbracket\gotex@mrmove\gotex@mrtext}
+\long\def\gotex@mrmove[#1]{\gotex@mrtext}
+\long\def\gotex@mrtext#1{#1}
+\def\affil{\@ifnextbracket\gotex@affilopt\gotex@affilmand}
+\long\def\gotex@affilopt[#1]#2{\gotex@affiladd{#2}}
+\long\def\gotex@affilmand#1{\gotex@affiladd{#1}}
+% \maketitle defers to the CLASS's \@maketitle when it has one, which is what
+% article.cls does (classes.dtx, \maketitle):
+%
+%	\if@twocolumn
+%	  \ifnum \col@number=\@ne \@maketitle \else \twocolumn[\@maketitle]\fi
+%	\else \newpage \global\@topnum\z@ \@maketitle \fi
+%
+% ⛔ Without this the class's own title layout NEVER RUNS. paper.cls (PNAS) redefines
+% only \@maketitle — 5104 papers of the arXiv pool define their own, 58 of the 154
+% measured — and the generic block below set \@author inside a \centerline, an \hbox
+% that nothing line-breaks. On 2310.11517 that hbox came out 1787.88pt wide on a 612pt
+% sheet, carrying one author and four affiliations (go-tex/engine#629).
+%
+% ⚠ The \centerline form is KEPT as the fallback for a document whose class defines no
+% \@maketitle at all — a bare \documentclass{article} through this engine's own
+% emulation, which is most of the test suite. Replacing it outright would have been a
+% change to every such document for the sake of the 58.
+% ⛔⛔ THE TITLE BLOCK'S FOOTNOTES ARE SYMBOLS, NOT NUMBERS. article.cls:203-223 wraps
+% the whole of \maketitle in a group that redefines the REPRESENTATION, and resets the
+% COUNTER after it:
+%
+%	\newcommand\maketitle{\par
+%	  \begingroup
+%	    \renewcommand\thefootnote{\@fnsymbol\c@footnote}%
+%	    … \@thanks
+%	  \endgroup
+%	  \setcounter{footnote}{0}%
+%
+% ⛔ The reset is OUTSIDE the group and explicit, and it has to be in LaTeX: counter
+% commands are \global, so \endgroup does not restore \c@footnote there.
+%
+% ⚠ ON THIS ENGINE NO WITNESS DISTINGUISHES IT, AND THAT IS AN OPEN QUESTION, NOT A
+% RESULT. Removing this \setcounter changes nothing on three probes: with \thanks alone,
+% with a \footnote before the title, and with both. \c@footnote reads 0 after \maketitle
+% either way — while the \thanks mark is built from the value 1, so the mark and the
+% counter disagree about what happened. A plain \footnote inside \begingroup…\endgroup
+% DOES leave the counter stepped (measured, and matching tectonic), so the engine's
+% global step is right; something on the \maketitle path is not. The line is kept
+% because it is the reference's shape and cited, not because a measurement asked for it.
+%
+% Measured against tectonic on a paper with \thanks: the title mark is ∗ and the body's
+% first note is 1; this engine gave 1 and 2. The mark is what this change fixes.
+\long\def\maketitle{\par
+  \begingroup
+  \def\thefootnote{\@fnsymbol\c@footnote}%
+  \@ifundefined{@maketitle}{\gotex@genericmaketitle}{%
+    \if@twocolumn\twocolumn[\@maketitle]\else\@maketitle\fi}%
+  \@thanks\global\def\@thanks{}%
+  \endgroup
+  \setcounter{footnote}{0}}
+\long\def\gotex@genericmaketitle{\bigskip\centerline{\@title}\smallskip
+  \centerline{\@author}\smallskip\centerline{\@date}\bigskip}
+\def\bullet{\char8226\relax}
+\def\cdot{\char183\relax}
+% Per-level counters and depth trackers for nested itemize/enumerate. Because
+% count/skip registers are group-local, \begingroup + \advance means each level
+% of nesting accumulates its indentation and its depth, then unwinds cleanly at
+% \endgroup — enclosing levels keep their own counters intact.
+\newcount\c@enumi
+\newcount\c@enumii
+\newcount\c@enumiii
+\newcount\c@enumiv
+\newcount\c@enumdepth
+\newcount\c@itemdepth
+\def\@alph#1{\ifcase#1\or a\or b\or c\or d\or e\or f\or g\or h\or i\or j\or k\or l\or m\or n\or o\or p\or q\or r\or s\or t\or u\or v\or w\or x\or y\or z\fi}
+\def\@Alph#1{\ifcase#1\or A\or B\or C\or D\or E\or F\or G\or H\or I\or J\or K\or L\or M\or N\or O\or P\or Q\or R\or S\or T\or U\or V\or W\or X\or Y\or Z\fi}
+% ⛔ THE DECORATION BELONGS TO THE LABEL, NOT TO THE COUNTER. These read
+%
+%	\theenumi{\the\c@enumi.}  \theenumii{(\@alph\c@enumii)}  …
+%
+% with the period and the parentheses built in, which is the opposite of what
+% every standard class does — article.cls:344-351 renews the four \the<ctr> to
+% the BARE counter and puts the decoration in \label<ctr>:
+%
+%	\renewcommand\theenumi{\@arabic\c@enumi}   \newcommand\labelenumi{\theenumi.}
+%	\renewcommand\theenumii{\@alph\c@enumii}   \newcommand\labelenumii{(\theenumii)}
+%
+% \the<ctr> is what \ref prints (\refstepcounter composes \@currentlabel from
+% \p@<ctr>\the<ctr>, ltcounts.dtx), so a decorated counter puts the period
+% inside every cross-reference. It was invisible only because a class overrides
+% all four; a document whose class does not — and every test here that writes
+% \begin{enumerate} with no \documentclass — got the kernel's version.
+%
+% So the kernel now holds article's doctrine rather than its inverse, and
+% carries the four \label<ctr> that a class-less document would otherwise find
+% undefined the moment an item asks for its label by name (#845).
+\long\def\theenumi{\the\c@enumi}
+\long\def\theenumii{\@alph\c@enumii}
+\long\def\theenumiii{\romannumeral\c@enumiii}
+\long\def\theenumiv{\@Alph\c@enumiv}
+\long\def\labelenumi{\theenumi.}
+\long\def\labelenumii{(\theenumii)}
+\long\def\labelenumiii{\theenumiii.}
+\long\def\labelenumiv{\theenumiv.}
+\long\def\labelitemi{\bullet}
+\long\def\labelitemii{--}
+\long\def\labelitemiii{*}
+\long\def\labelitemiv{\cdot}
+\let\if@listfirst\iffalse
+\def\@listfirsttrue{\let\if@listfirst\iftrue}
+\def\@listfirstfalse{\let\if@listfirst\iffalse}
+% Between items: \itemsep, as latex.ltx's \@item adds (l.11567), PLUS \parsep —
+% inside a list \parskip is \parsep, so the paragraph break between two items
+% carries it too. \itemsep alone put items 18.1pt apart where the reference has 22.5.
+\def\@iteminterspace{\if@listfirst\@listfirstfalse\else
+  \@tempskipa\itemsep\advance\@tempskipa\parsep
+  \ifdim\@tempskipa>\z@\vskip\@tempskipa\fi\fi}
+% \@listitem{counter}{what \ref prints}{what the PAGE shows}: a numbered item.
+%
+% The third argument exists because the first two uses were ONE. It read
+%
+%	\def\@listitem#1#2{...\edef\@currentlabel{#2}\llap{#2\enspace}}
+%
+% and every call site handed it \the<ctr>, so the page showed the bare counter:
+% \labelenumi is \theenumi. and \labelenumii is (\theenumii), and neither was
+% ever expanded. Measured against tectonic, one document, unfiltered page:
+%
+%	what is set          reference   ours
+%	label, level 1       1.          1
+%	label, level 2       (a)         a
+%	\ref to level 1      1           1      <- already right
+%
+% LaTeX prints \makelabel{\@itemlabel} with \@itemlabel taken from
+% \labelenum<level> (ltlists.dtx, \@item), which is why its decoration differs
+% per level and a counter cannot carry it. \itemize three lines below was
+% already right — \@bulletitem takes \labelitemi, the LABEL — so the two
+% environments disagreed about which macro an item is named by.
+%
+% ⛔ AND THE TWO USES MUST NOT BE MERGED BACK. \@currentlabel is what \ref
+% prints, and \refstepcounter composes it from \p@<ctr>\the<ctr>, never from the
+% label (ltcounts.dtx). Row 3 above is the control: \ref to a level-one item is
+% "1" in BOTH engines already, so passing \labelenumi for both would print "1."
+% on the page and turn that \ref into "1." as well — a visible defect traded for
+% a quieter one in every cross-reference. go-tex/engine#845.
+\def\@listitem#1#2#3{\par\noindent\advance#1 by1\relax\edef\@currentlabel{#2}\llap{#3\enspace}}
+\def\@bulletitem#1{\par\noindent\llap{#1\enspace}}
+% \@itemopt reads the optional [label] of an \item in itemize/enumerate and uses
+% it verbatim in place of the default bullet/number. \@descitem does the same for
+% description, but emboldens the term. Both are delimited macros, so they consume
+% the bracket that \@ifnextbracket has already confirmed is present.
+\def\@itemopt[#1]{\par\noindent\llap{#1\enspace}}
+\def\@descitem[#1]{\par\noindent\llap{{\bf #1}\enspace}}
+% \gotex@listtopspace: the vertical space a list environment opens with, and the
+% value \@topsepadd keeps for closing with too.
+%
+% ⛔⛔ \partopsep IS ADDED ONLY IN VERTICAL MODE. ltlists.dtx:596-603:
+%
+%	\def\@trivlist{%
+%	  \if@noskipsec \leavevmode \fi
+%	  \@topsepadd \topsep
+%	  \ifvmode
+%	    \advance\@topsepadd \partopsep
+%	  \else
+%	    \unskip \par
+%	  \fi
+%
+% so a list that starts a FRESH paragraph gets \topsep+\partopsep and one that
+% runs on from a sentence gets \topsep alone. \itemize, \enumerate and
+% \description each opened with
+%
+%	\par\@topsepadd\topsep\advance\@topsepadd\partopsep
+%
+% — the \par FIRST, which forces vertical mode, so even a conditional written
+% after it would have fired every time, and then \partopsep unconditionally.
+% ⭐ And \@topsepadd is set ONCE and spent at BOTH ends (\end… closes with
+% \addvspace\@topsepadd), so one wrong value is paid twice.
+%
+% Measured against tectonic, one document, two lists differing ONLY in the mode
+% they start in — the first runs on from a sentence, the second has a blank line
+% before it. Baselines in points:
+%
+%	                    mode         reference   ours (before)
+%	gap into item       horizontal     19.93        21.92
+%	gap out of list     horizontal     19.93        21.92
+%	gap into item       vertical       21.92        21.92
+%	gap out of list     vertical       21.92        21.92
+%
+% The vertical-mode list already agreed, because both engines add \partopsep
+% there; only the horizontal one diverged, by 1.99pt at each end against a
+% \partopsep of 2.0pt. ⭐ Note the reference's own two rows differ from each
+% other: LaTeX really does charge the two cases differently and we charged both
+% the higher way. go-tex/engine#685.
+%
+% ⭐ AND THE ENGINE ALREADY KNEW THIS. \@trivlist (classprims.go) carries the
+% mode test, correctly, and has since it was ported — these three environments
+% reimplemented the same space BESIDE it and got it wrong. That is why this is
+% ONE macro now, used by all four, rather than the same line written four times:
+% a second copy is what made the first copy's divergence invisible.
+%
+% ⚠ Still missing against the reference, deliberately: the \unskip in the \else
+% branch, which removes the glue before the \par. \@trivlist omits it here too,
+% so this macro keeps the engine's existing behaviour rather than mixing a
+% second change into a measured one.
+\def\gotex@listtopspace{\@topsepadd\topsep
+  \ifvmode\advance\@topsepadd\partopsep\else\par\fi
+  \addvspace\@topsepadd}
+\def\itemize{\gotex@listtopspace\begingroup\@listfirsttrue\advance\leftskip by24pt\advance\c@itemdepth by1\relax\ifcase\c@itemdepth\or\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@bulletitem\labelitemi}}\or\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@bulletitem\labelitemii}}\or\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@bulletitem\labelitemiii}}\else\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@bulletitem\labelitemiv}}\fi\@enumitemopt{itemize}}
+\def\enditemize{\par\endgroup\addvspace\@topsepadd}
+\def\enumerate{\gotex@listtopspace\begingroup\@listfirsttrue\advance\leftskip by24pt\advance\c@enumdepth by1\relax\ifcase\c@enumdepth\or\c@enumi=0\relax\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@listitem\c@enumi\theenumi\labelenumi}}\or\c@enumii=0\relax\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@listitem\c@enumii\theenumii\labelenumii}}\or\c@enumiii=0\relax\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@listitem\c@enumiii\theenumiii\labelenumiii}}\else\c@enumiv=0\relax\def\item{\par\@iteminterspace\@ifnextbracket{\@itemopt}{\@listitem\c@enumiv\theenumiv\labelenumiv}}\fi\@enumitemopt{enumerate}}
+\def\endenumerate{\par\@enumitemrec\endgroup\addvspace\@topsepadd}
+% description: each \item[term] sets the bold term in the left margin, with the
+% following text indented like the other list environments. \item here always
+% takes a [label]; the label may overflow the 24pt margin (not reflowed onto a
+% separate line as full LaTeX would) — acceptable for this kernel.
+\long\def\description{\gotex@listtopspace\begingroup\@listfirsttrue\advance\leftskip by24pt\def\item{\@descitem}\@enumitemopt{description}}
+\long\def\enddescription{\par\endgroup\addvspace\@topsepadd}
+\newcount\c@bibitem
+\def\thebibitem{\the\c@bibitem}
+\long\def\thebibliography#1{\par\bigskip\noindent\bf References\rm\par\smallskip\c@bibitem=0\begingroup\leftskip=24pt}
+\long\def\endthebibliography{\par\endgroup\smallskip}
+% \bibitem[⟨label⟩]{⟨key⟩}: a one-argument \bibitem read the "[" as its mandatory
+% key and printed the rest of the [label] and the {key} as body text, desyncing the
+% entry. The optional argument is the entry's citation label — an author-year string
+% in natbib (\bibitem[Smith et~al.(2020)…]{Smith2020}), the \citenamefont author
+% list in REVTeX/apsrev. Standard LaTeX prints it as the marker; this numbered
+% kernel keeps the running [N] marker but typesets the label at the head of the
+% entry, so its author/year content is recovered even for a .bbl whose entry BODY
+% (apsrev's \bibinfo{author}{…}) this kernel renders only in part. \bibitem{⟨key⟩}
+% (no bracket) is unchanged.
+% ⛔⛔ THE MARKER'S BRACKETS WERE WRITTEN INTO THESE TWO MACROS, so a class could not
+% change them. latex.ltx:13324 makes the marker a macro of its own —
+%
+%	\def\@biblabel#1{[#1]}
+%
+% — and article.cls:568 calls it to build the list's label. 2961 papers of the arXiv
+% pool and 19 of the measured 154 carry a CLASS that redefines it — \def\@biblabel#1{#1.}
+% and the like; this engine executes those classes, so the definition was reaching the
+% eqtb and being ignored at the one point that mattered. Measured before: a document
+% writing \def\@biblabel#1{<<#1>>} rendered BYTE-IDENTICALLY to one that did not.
+\def\@biblabel#1{[#1]}
+\def\bibitem{\@ifnextbracket\@bibitemopt\@bibitemnoopt}
+\def\@bibitemopt[#1]#2{\par\noindent\advance\c@bibitem by1\relax\edef\@currentlabel{\thebibitem}\label{#2}\llap{\@biblabel{\thebibitem}\enspace}}
+\def\@bibitemnoopt#1{\par\noindent\advance\c@bibitem by1\relax\edef\@currentlabel{\thebibitem}\label{#1}\llap{\@biblabel{\thebibitem}\enspace}}
+% xstring's \IfSubStr[<n>]{<string>}{<substring>}{<true>}{<false>} — four mandatory
+% arguments after an optional occurrence number (xstring.tex:444,
+% \xs_newmacro*3\IfSubStr{1}{2}{0}). Undefined it consumed nothing, and acmart opens
+% its \author with
+%
+%	\IfSubStr{\detokenize{#2}}{,}{\ClassWarning{…}}{}      acmart.cls:1314
+%
+% so \author{A Name} in the PREAMBLE printed "A Name," as body text — the detokenized
+% name and the comma it was being tested for. On a two-column paper that text lands in
+% the main vertical list ahead of \maketitle's \twocolumn[...], which starts a new
+% column region, so it took a page of its own (go-tex/engine#319, the same shape as
+% #316 and #318).
+%
+% The test is REAL, not a guessed branch: \in@{<search>}{<in>} is the kernel's own
+% substring test and sets \ifin@. Answering "false" always would be a stub that drops
+% whichever branch it did not pick, and a branch is content.
+\long\def\IfSubStr{\@ifnextchar[{\gotex@ifsubstr}{\gotex@ifsubstr[1]}}
+\long\def\gotex@ifsubstr[#1]#2#3#4#5{\in@{#3}{#2}\ifin@#4\else#5\fi}
+% \fancypagestyle{name}[base]{definitions} names a page style and STORES its field
+% assignments under \ps@name (fancyhdr.sty:438-450):
+%
+%	\newcommand{\fancypagestyle}[1]{%
+%	  \@ifnextchar[{\f@nch@pagestyle{#1}}{\f@nch@pagestyle{#1}[f@nch@fancyproto]}}
+%	\long\def\f@nch@pagestyle#1[#2]#3{… \@namedef{ps@#1}{…#3\relax} …}
+%
+% \pagestyle{name} then runs them (latex.ltx:13326-13329, see doPagestyle).
+%
+% Undefined, it consumed nothing, so a class that declares its own styles printed
+% their NAMES on the page — acmart.cls:2589 declares standardpagestyle and
+% firstpagestyle — and their definitions were executed where they landed rather
+% than when the style was selected. On a two-column paper the names land in the
+% main vertical list ahead of \maketitle's \twocolumn[...], which starts a new
+% column region, so they took a page of their own (go-tex/engine#318).
+\def\fancypagestyle#1{\@ifnextchar[{\gotex@fancyps{#1}}{\gotex@fancyps{#1}[f@nch@fancyproto]}}
+\long\def\gotex@fancyps#1[#2]#3{\expandafter\def\csname ps@#1\endcsname{#3}}
+% natbib's key=value parser, verbatim (natbib.sty:344-345):
+%
+%	\def\NAT@find@eq#1=#2\@nil{\def\@tempa{#1}\def\@tempc{#2}}
+%	\def\NAT@rem@eq#1={\def\@tempc{#1}}
+%
+% They are DELIMITED macros, so an undefined \NAT@find@eq consumes nothing and the
+% key list it was handed is typeset instead. natbib itself is emulated here rather
+% than loaded, but a class may bring its own \setcitestyle whose body still calls
+% these — acmart.cls:273 renews \setcitestyle and acmart.cls:347 calls it with
+%
+%	\setcitestyle{numbers,sortcompress,open={[},close={]},citesep={,},notesep={, }}
+%
+% so every acmart paper opened with "numbers=sortcompress=open=[=close=]=citesep=,="
+% on the page — one "<key>=" per iteration of the loop. On a two-column paper that
+% junk sits in the main vertical list BEFORE \maketitle's \twocolumn[...], which
+% starts a new region, so it took a page of its own and pushed the title and the
+% whole first column of text onto page 2 (go-tex/engine#316).
+%
+% \@tempa and \@tempc are the names natbib's own \setcitestyle body reads back.
+\def\NAT@find@eq#1=#2\@nil{\def\@tempa{#1}\def\@tempc{#2}}
+\def\NAT@rem@eq#1={\def\@tempc{#1}}
+% \newblock separates the logical blocks of a bibliography entry (author / title /
+% publication); in a .bbl it appears hundreds of times. It is an interword space
+% here — left undefined it was skipped, which merely lost the space between blocks.
+\long\def\newblock{\space}
+% harvard.sty's .bbl entry head. \harvarditem[⟨abbrev⟩]{⟨author⟩}{⟨year⟩}{⟨key⟩}
+% opens a reference exactly where \bibitem does, so it is routed to the same entry
+% renderer with "author (year)" as the label. Left undefined, a harvard-style
+% bibliography lost EVERY entry: one thesis in the corpus (2402.04711) carries 252 of
+% them, and its reference list — a fifth of the document — was simply not there.
+% \harvardand joins the last two authors; \harvardyearleft/right bracket the year.
+\def\harvarditem{\@ifnextbracket\@hvitemopt\@hvitemnoopt}
+\def\@hvitemopt[#1]#2#3#4{\@bibitemopt[#2 (#3)]{#4}}
+\def\@hvitemnoopt#1#2#3{\@bibitemopt[#1 (#2)]{#3}}
+\def\harvardand{and}
+\def\harvardyearleft{(}
+\def\harvardyearright{)}
+% \harvardurl is the URL line harvard.sty writes at the end of an entry
+% (harvard.sty:28, the branch taken without hyperref):
+%     \newcommand{\harvardurl}[1]{\textbf{URL:} \textit{#1}}
+% Its hyperref branch only adds the link around the same words. Left undefined it
+% was the last of the family still missing, and the census counted 25 of them in
+% one paper alone: every entry of its reference list lost the line that says where
+% the work is.
+\def\harvardurl#1{\textbf{URL:} \textit{#1}}
+% glossaries: \newacronym[⟨opts⟩]{⟨label⟩}{⟨short⟩}{⟨long⟩} declares an acronym and
+% \gls{⟨label⟩} prints it. This engine keeps only the SHORT form (what the expansion
+% is after first use, and what the running text reads as); an unknown label prints
+% its own name rather than nothing, so a missing declaration costs a word, not a
+% sentence. Left undefined, \gls dropped its argument silently — 235 times in one
+% corpus thesis.
+\def\newacronym{\@ifnextbracket\@newacroopt\@newacronoopt}
+\def\@newacroopt[#1]#2#3#4{\expandafter\gdef\csname gls@#2\endcsname{#3}}
+\def\@newacronoopt#1#2#3{\expandafter\gdef\csname gls@#1\endcsname{#2}}
+\def\gls#1{\@ifundefined{gls@#1}{#1}{\csname gls@#1\endcsname}}
+\def\Gls#1{\gls{#1}}
+\def\glspl#1{\gls{#1}s}
+\def\Glspl#1{\gls{#1}s}
+\def\acrshort#1{\gls{#1}}
+\def\acrlong#1{\gls{#1}}
+\def\glsentryshort#1{\gls{#1}}
+% bibunits: a document with per-part bibliographies wraps each in
+% \begin{bibunit}…\putbib[db]…\end{bibunit}. \putbib \input's the current unit's
+% pre-generated bu<N>.bbl (see doPutbib); the [db] database name is consumed. The
+% environment is otherwise transparent — its body is ordinary text — and tolerates
+% the optional [style] some documents pass. \defaultbibliographystyle is a no-op.
+\def\bibunit{\@ifnextbracket\@gobbleoptonly\relax}
+\def\endbibunit{}
+\def\putbib{\@ifnextbracket\@putbibopt\gotex@putbib}
+\def\@putbibopt[#1]{\gotex@putbib}
+\def\defaultbibliographystyle#1{}
+\newcount\c@figure
+\newcount\c@table
+\long\def\thefigure{\the\c@figure}
+\long\def\thetable{\the\c@table}
+% \fnum@figure / \fnum@table go through \figurename / \tablename, which is how every
+% class renames its floats — article.cls:457 and :469 are
+%
+%	\def\fnum@figure{\figurename\nobreakspace\thefigure}
+%	\def\fnum@table{\tablename\nobreakspace\thetable}
+%
+% The name was spelt out here instead, so \figurename existed NOWHERE in the engine and a
+% class or a document that renames a float could not. IEEEtran calls them "Fig." and "TABLE"
+% (IEEEtran.cls:2607-2608) and its references never say "Figure": eleven corpus papers, every
+% caption in each.
+\providecommand\figurename{Figure}
+\providecommand\tablename{Table}
+\def\fnum@figure{\figurename\nobreakspace\thefigure}
+\def\fnum@table{\tablename\nobreakspace\thetable}
+\long\def\figure{\par\bigskip\begingroup\centering\def\@captype{figure}\@discardopt}
+\long\def\endfigure{\par\endgroup\bigskip}
+\long\def\table{\par\bigskip\begingroup\centering\def\@captype{table}\@discardopt}
+\long\def\endtable{\par\endgroup\bigskip}
+% ─── the float package: \newfloat / \floatname / \floatstyle / … ─────────────
+% \newfloat{type}{placement}{ext}[within] declares a NEW float type that reuses
+% the same one-column float path as figure/table, so \begin{type}…\end{type}
+% typesets its body and \caption numbers it "Name N" via \fnum@<type>. Placement,
+% the list-of extension and [within] are ignored (floats render inline; there is
+% no separate list-of-floats pass). Without this a \newfloat-declared environment
+% (program, listing, procedure, …) is undefined and its whole body — often a tall
+% block — is dropped, shifting every following page. See float.sty (Lingnau).
+\def\newfloat#1#2#3{\@ifnextchar[{\gotex@newfloat{#1}}{\gotex@newfloat{#1}[]}}
+\def\gotex@newfloat#1[#2]{%
+  \@ifundefined{c@#1}{\expandafter\newcount\csname c@#1\endcsname}{}%
+  \expandafter\def\csname the#1\endcsname{\expandafter\the\csname c@#1\endcsname}%
+  \@ifundefined{#1name}{\@namedef{#1name}{#1}}{}%
+  \expandafter\def\csname fnum@#1\endcsname{\csname #1name\endcsname\space\csname the#1\endcsname}%
+  \expandafter\long\expandafter\def\csname #1\endcsname{\par\bigskip\begingroup\centering\def\@captype{#1}\@discardopt}%
+  \expandafter\long\expandafter\def\csname end#1\endcsname{\par\endgroup\bigskip}%
+}
+% \floatname sets the caption label of an already-declared type; the others are
+% styling/listing directives with no effect on inline float rendering.
+\def\floatname#1#2{\@namedef{#1name}{#2}}
+\def\floatstyle#1{}
+\def\restylefloat{\@ifstar\@gobble\@gobble}
+\def\floatplacement#1#2{}
+\def\listof#1#2{}
+% ─── algorithm float + algorithmic/algpseudocode body ───────────────────────────
+% The algorithms / algorithmicx (algpseudocode) packages. \begin{algorithm} is a
+% float exactly like figure/table (caption "Algorithm N"). \begin{algorithmic}
+% typesets pseudocode: each \STATE/\State starts a line at the current indent, and
+% the block keywords (\IF…\ENDIF, \FOR…\ENDFOR, …) bracket an indented body — the
+% keywords bolded, the indent stepped with \leftskip (the same idiom as the list
+% environments). Both the UPPERCASE (algorithmic) and MixedCase (algorithmicx)
+% spellings are installed. Without this the whole block is an undefined environment,
+% dropped — an algorithm is a tall block, so its loss shifts every following page.
+% listings' own counter and name for a captioned lstlisting. A caption= option
+% numbers the listing — listings.sty allocates \c@lstlisting and sets
+% \lstlistingname to "Listing" — and a label= option then points at that number.
+% Neither existed here, so \refstepcounter{lstlisting} had nothing to step and
+% every \ref to a labelled listing printed "??": 21 of them over 8 corpus papers,
+% against 4 in the references.
+\newcount\c@lstlisting
+\long\def\thelstlisting{\the\c@lstlisting}
+\providecommand\lstlistingname{Listing}
+\newcount\c@algorithm
+\long\def\thealgorithm{\the\c@algorithm}
+\def\fnum@algorithm{Algorithm \thealgorithm}
+\long\def\algorithm{\par\bigskip\begingroup\def\@captype{algorithm}\@discardopt}
+\long\def\endalgorithm{\par\endgroup\bigskip}
+\expandafter\let\csname algorithm*\endcsname\algorithm
+\expandafter\let\csname endalgorithm*\endcsname\endalgorithm
+\def\@algkw#1{\textbf{#1}}
+\newcount\@alglevel
+% \leftskip for the CURRENT nesting level, set right AFTER a line's \par so it
+% governs the line just started (not the one just ended — \leftskip is applied
+% paragraph-wide at \par). Nesting is tracked in the count \@alglevel; openers bump
+% it after emitting their line, closers drop it before.
+\def\@algsetleft{\ifcase\@alglevel\leftskip0pt\or\leftskip12pt\or\leftskip24pt\or\leftskip36pt\or\leftskip48pt\or\leftskip60pt\or\leftskip72pt\else\leftskip84pt\fi}
+% \begin{algorithmic}[N] numbers every N-th line, and N defaults to 0 meaning no
+% numbers at all (algorithmic.sty:123). The optional argument was DISCARDED here, so
+% every numbered algorithm lost its numbers — and the surrounding prose refers to them
+% ("see line 7"). Measured on 999 arXiv papers: 230 \begin{algorithmic} carry the
+% argument, over 109 papers, against 35 that do not.
+%
+% The pair below is algorithmic.sty's \ALC@it (line 146) and \ALC@lno (line 127):
+% step a remainder, reset it to 0 when it reaches N, step the line number, and print
+% the number only when the remainder is 0. N=0 therefore never resets and never prints,
+% which is exactly the unnumbered default.
+%
+% N is compared as a STRING, as upstream does with \ifthenelse{\equal{…}}: no number is
+% ever scanned, so no value of the argument can raise "Missing number", and a value that
+% never matches behaves as 0 — upstream's own degradation. All 230 corpus uses are
+% numeric ([1] 229 times, [2] once).
+\newcount\@algrem
+\newcount\@algno
+\def\@algevery{0}
+\def\@algnumreset{\@algrem0\relax\@algno0\relax\def\@algevery{0}}
+\def\@algopt[#1]{\def\@algevery{#1}}
+% The empty box in the else branch is not decoration: upstream sets an unnumbered line's
+% text at the same leftmargin as a numbered one (\labelwidth 1.2em + \labelsep 0.5em,
+% algorithmic.sty:221-225), so without it every skipped number would shift its line.
+\def\@alglno{\def\@algzero{0}\ifx\@algevery\@algzero\else
+\advance\@algrem by1\relax
+\edef\@algcur{\the\@algrem}%
+\ifx\@algcur\@algevery\@algrem0\relax\fi
+\advance\@algno by1\relax
+\ifnum\@algrem=0 \hbox to1.2em{\hss{\footnotesize\the\@algno:}}\else\hbox to1.2em{}\fi
+\hskip0.5em\fi}
+% An unnumbered line keeps the indent but takes no number: algorithmicx's \Statex, and
+% algorithmic.sty's \REQUIRE/\ENSURE, which use \item[<label>] and never reach \ALC@it.
+\def\@algnolno{\def\@algzero{0}\ifx\@algevery\@algzero\else\hbox to1.2em{}\hskip0.5em\fi}
+\long\def\@algline{\par\@algsetleft\noindent\@alglno}
+\long\def\@alglinex{\par\@algsetleft\noindent\@algnolno}
+\long\def\@algif#1{\par\@algsetleft\noindent\@alglno\@algkw{if} #1 \@algkw{then}\advance\@alglevel by1}
+\long\def\@algelsif#1{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{else if} #1 \@algkw{then}\advance\@alglevel by1}
+\def\@algelse{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{else}\advance\@alglevel by1}
+\def\@algendif{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end if}}
+\long\def\@algfor#1{\par\@algsetleft\noindent\@alglno\@algkw{for} #1 \@algkw{do}\advance\@alglevel by1}
+\long\def\@algforall#1{\par\@algsetleft\noindent\@alglno\@algkw{for all} #1 \@algkw{do}\advance\@alglevel by1}
+\def\@algendfor{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end for}}
+\long\def\@algwhile#1{\par\@algsetleft\noindent\@alglno\@algkw{while} #1 \@algkw{do}\advance\@alglevel by1}
+\def\@algendwhile{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end while}}
+\def\@algrepeat{\par\@algsetleft\noindent\@alglno\@algkw{repeat}\advance\@alglevel by1}
+\long\def\@alguntil#1{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{until} #1}
+\def\@algloop{\par\@algsetleft\noindent\@alglno\@algkw{loop}\advance\@alglevel by1}
+\def\@algendloop{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end loop}}
+\long\def\@algreq{\par\@algsetleft\noindent\@algnolno\@algkw{Require:} }
+\long\def\@algens{\par\@algsetleft\noindent\@algnolno\@algkw{Ensure:} }
+\long\def\@alginput{\par\@algsetleft\noindent\@algnolno\@algkw{Input:} }
+\long\def\@algoutput{\par\@algsetleft\noindent\@algnolno\@algkw{Output:} }
+\long\def\@algreturn{\par\@algsetleft\noindent\@alglno\@algkw{return} }
+\long\def\@algfunction#1#2{\par\@algsetleft\noindent\@alglno\@algkw{function} #1(#2)\advance\@alglevel by1}
+\def\@algendfunction{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end function}}
+\long\def\@algprocedure#1#2{\par\@algsetleft\noindent\@alglno\@algkw{procedure} #1(#2)\advance\@alglevel by1}
+\def\@algendprocedure{\advance\@alglevel by-1\par\@algsetleft\noindent\@alglno\@algkw{end procedure}}
+\long\def\@algcomment#1{\quad{\small #1}}
+\long\def\@algcall#1#2{\@algkw{call} #1(#2)}
+\long\def\algorithmic{\par\begingroup\parindent0pt\@alglevel0\relax\@algsetup\@algnumreset\@ifnextchar[{\@algopt}{}}
+\def\@algsetup{%
+\let\STATE\@algline\let\State\@algline\let\STATEx\@alglinex\let\Statex\@alglinex
+\let\IF\@algif\let\If\@algif\let\ELSIF\@algelsif\let\ElsIf\@algelsif\let\ELSE\@algelse\let\Else\@algelse\let\ENDIF\@algendif\let\EndIf\@algendif
+\let\FOR\@algfor\let\For\@algfor\let\FORALL\@algforall\let\ForAll\@algforall\let\ENDFOR\@algendfor\let\EndFor\@algendfor
+\let\WHILE\@algwhile\let\While\@algwhile\let\ENDWHILE\@algendwhile\let\EndWhile\@algendwhile
+\let\REPEAT\@algrepeat\let\Repeat\@algrepeat\let\UNTIL\@alguntil\let\Until\@alguntil
+\let\LOOP\@algloop\let\Loop\@algloop\let\ENDLOOP\@algendloop\let\EndLoop\@algendloop
+\let\REQUIRE\@algreq\let\Require\@algreq\let\ENSURE\@algens\let\Ensure\@algens
+\let\INPUT\@alginput\let\Input\@alginput\let\OUTPUT\@algoutput\let\Output\@algoutput
+\let\RETURN\@algreturn\let\Return\@algreturn
+\let\FUNCTION\@algfunction\let\Function\@algfunction\let\ENDFUNCTION\@algendfunction\let\EndFunction\@algendfunction
+\let\PROCEDURE\@algprocedure\let\Procedure\@algprocedure\let\ENDPROCEDURE\@algendprocedure\let\EndProcedure\@algendprocedure
+\let\COMMENT\@algcomment\let\Comment\@algcomment\let\CALL\@algcall\let\Call\@algcall}
+\long\def\endalgorithmic{\par\endgroup}
+\expandafter\let\csname algpseudocode\endcsname\algorithmic
+\expandafter\let\csname endalgpseudocode\endcsname\endalgorithmic
+\def\caption#1{\par\smallskip\global\expandafter\advance\csname c@\@captype\endcsname by1\relax\edef\@currentlabel{\csname the\@captype\endcsname}{\captionfont{\captionlabelfont\csname fnum@\@captype\endcsname:} #1}\par}
+\long\def\quote{\par\begingroup\leftskip=20pt\rightskip=20pt\smallskip}
+\long\def\endquote{\par\endgroup\smallskip}
+\long\def\quotation{\par\begingroup\leftskip=20pt\rightskip=20pt\smallskip}
+\long\def\endquotation{\par\endgroup\smallskip}
+\long\def\verse{\par\begingroup\leftskip=20pt\smallskip}
+\long\def\endverse{\par\endgroup\smallskip}
+% \centering and \raggedleft also zero \parfillskip, and all three alignment
+% commands zero \parindent (latex.ltx:11014-11028):
+%
+%	\DeclareRobustCommand\centering{\let\\\@centercr
+%	  \rightskip\@flushglue\leftskip\@flushglue
+%	  \finalhyphendemerits=\z@ \parindent\z@\parfillskip\z@skip}
+%
+% Without \parfillskip=0 the LAST line of a centred paragraph carries THREE
+% infinite glues — \leftskip, \rightskip and \parfillskip — so its text settles a
+% third of the way across instead of halfway. Measured against tectonic on one
+% centred word in an article: reference at x=287.6 (the page centre), ours at
+% x=238.2, which is exactly the one-third point. \raggedright is the exception
+% and keeps \parfillskip, as the reference does: its line is flush left either way.
+% \@rightskip and \@flushglue are the kernel's own registers behind those three:
+% "\newskip\@rightskip \@rightskip \z@skip" (latex.ltx:11029) and \@flushglue =
+% 0pt plus 1fil. \raggedright sets \@rightskip and copies it to \rightskip
+% (l.11020), \@arrayparboxrestore zeroes it (l.11831), and \list reads it back
+% (l.11474) — so a class that goes through the kernel's own alignment code needs
+% it to EXIST. acmart does: 38 uses of \@rightskip surface as undefined the moment
+% its real option machinery runs (#306).
+\newskip\@rightskip \@rightskip=0pt
+\newskip\@flushglue \@flushglue=0pt plus 1fil
+\def\centering{\leftskip=0pt plus 1fil\rightskip=0pt plus 1fil\parindent=0pt\parfillskip=0pt\relax}
+\def\raggedleft{\leftskip=0pt plus 1fil\rightskip=0pt\parindent=0pt\parfillskip=0pt\relax}
+% center/flushleft/flushright are TRIVLISTS (latex.ltx:11012-11013, 11030-11033):
+%
+%	\def\center{\trivlist \centering\item\relax}
+%	\def\endcenter{\endtrivlist}
+%
+% so each one carries \topsep above and below like any list — 10pt at either end
+% at 10pt, \topsep plus \partopsep. As a bare group they carried none, and
+% \begin{center} is one of the most common environments there is: nearly every
+% figure and table body is inside one. Measured against tectonic, the vertical
+% cost of one center holding a single line: reference 31.88pt, ours 12.00pt.
+%
+% The \par is ours, and it has to be there: this engine's \endtrivlist closes the
+% group before it breaks the paragraph, so without it the last line is broken with
+% \centering already restored and comes out flush left.
+\def\center{\trivlist \centering\item\relax}
+\def\endcenter{\par\endtrivlist}
+\def\flushleft{\trivlist \raggedright\item\relax}
+\def\endflushleft{\par\endtrivlist}
+\def\flushright{\trivlist \raggedleft\item\relax}
+\def\endflushright{\par\endtrivlist}
+\def\item{\par\noindent\quad-- }
+% ⛔⛔ \\ IN VERTICAL MODE CONTRIBUTES NOTHING. ltspace.dtx:517-522, \@gnewline:
+%
+%	\def\@gnewline #1{%
+%	  \ifvmode \@nolnerr
+%	  \else \unskip \reserved@e {\reserved@f#1}\nobreak \hfil \break \fi}
+%
+% \@nolnerr is "There's no line here to end" — an error, after which LaTeX has
+% contributed nothing and carries on. There is no line to end, so there is nothing
+% to do.
+%
+% As a bare \penalty-10000 this reached the MAIN VERTICAL list outside a paragraph,
+% where −10000 is a FORCED PAGE BREAK. Measured against tectonic on three paragraphs
+% separated by a bare \\ in vertical mode: the reference reports the error twice and
+% sets the three on ONE page; we emitted THREE pages, one per paragraph. A stray \\
+% between paragraphs ejected a page.
+%
+% We do not raise the error: -lenient is how the corpus is swept, and the document
+% LaTeX produces after the error is dismissed is the one with nothing contributed.
+% ⛔⛔ AND IN HORIZONTAL MODE IT IS NOT A BARE PENALTY EITHER. The reference's
+% \@gnewline is \unskip \nobreak \hfil \break — four things, and each one does work:
+%
+%	\unskip   removes the glue before the \\, so the line does not end on a space
+%	\nobreak  \penalty10000: the \hfil that follows must not be a breakpoint
+%	\hfil     absorbs the slack, which is why a \\ line is NOT justified
+%	\break    \penalty-10000: the forced break itself
+%
+% Only \break was here. The \hfil is the one that shows: a \linebreak line IS
+% justified (its interword glue stretches to the margin) and a \\ line is NOT, and
+% that difference is entirely this \hfil. Measured against tectonic, x of the second
+% word on the broken line: \linebreak 465.52, \\ 155.64.
+%
+% ⛔ Two errors were cancelling here. Without the \hfil our \\ lines should have
+% stretched to the margin — and they did not, because endParagraph gave every
+% forced-break FRAGMENT its own \parfillskip, which did the \hfil's job by accident.
+% Removing that spurious glue (one paragraph, one \parfillskip, tex.web §16066-16084)
+% is what exposes the missing \hfil, so the two changes have to land together: either
+% one alone is a regression.
+% \\ is the Go primitive \gotex@cr, which scans the star and the optional [length]
+% itself — see its comment in primitives.go for the three measurements that settled
+% that choice, and why a macro here put \@ifstar into every formula containing a
+% matrix row separator (go-tex/engine#662).
+\let\\\gotex@cr
+% \newline is \\ without the optional argument or the star (ltspace.dtx:476-492: it is
+% \@gnewline\relax, not \@xnewline). Scanning one anyway would eat a bracket that
+% belongs to the text: "\newline [1] introduces" is ordinary prose.
+\def\newline{\ifvmode\else\unskip\nobreak\hfil\break\fi}
+% \@normalcr is the kernel's INTERNAL name for \\ (latex.ltx:6453, \let\\\@normalcr),
+% and a class that line-breaks through the internal rather than through \\ found it
+% undefined: 2607.18707 skipped it three times. \let keeps the two in step whatever
+% \\ is bound to here.
+\expandafter\let\csname @normalcr\endcsname\\
+% orcidlink's \orcidlink{<id>} sets the ORCID logo as a tikz picture sized to the
+% current X height (orcidlink.sty:51-59), and the identifier itself is NEVER typeset —
+% it only goes into the \href target and into the empty second branch of
+% \texorpdfstring.
+%
+% ⛔ Undefined, it was skipped — and skipping RELEASES the argument, so the bare
+% identifier was set next to the author's name: "Author0009-0003-9684-6966 wrote this"
+% here against "Author wrote this" from tectonic. Measured on 999 papers: 3147 uses.
+%
+% The logo is a tikz picture this engine does not draw, as it draws none; what changes is
+% that the identifier stops being typeset. Consuming the argument is therefore the whole
+% of the fix, and it is what the reference's own PDF-string branch does.
+\newcommand\orcidlink[1]{}
+\def\LaTeXe{LaTeX2e}
+\def\ldots{...}
+\def\dots{...}
+\def\newpage{\par\penalty-10000 }
+% \clearpage opens with LaTeX's empty \hbox (latex.ltx:15065), contributed only
+% while the main vertical list is still empty. That box is why \prevdepth is
+% 0.0pt rather than -1000pt at a document body's start in the reference (#699):
+% nothing assigns \prevdepth, appending a BOX sets it. article.cls:640 runs
+% \onecolumn at class load, \onecolumn runs \clearpage, and that is the whole
+% chain. See clearpagestrut.go for why the reference's \pagetotal guard is not
+% ported as written.
+\def\clearpage{\gotex@clearpagestrut\par\penalty-10000 }
+% \cleardoublepage starts a page, and in TWOSIDE also leaves a blank one when the
+% next page would be even (LaTeX: \clearpage\if@twoside\ifodd\c@page\else
+% \hbox{}\newpage\fi\fi). The engine decides page numbers in the page builder and
+% not in the mouth, so \ifodd\c@page cannot be asked here; the blank page is
+% therefore omitted and the command reduces to \clearpage, which is EXACT under
+% oneside. Undefined it was skipped entirely in lenient mode — so a book's parts
+% and chapters did not start a new page AT ALL, which is 23 missing page breaks in
+% one 333-page thesis of the corpus.
+\def\cleardoublepage{\clearpage}
+% \include{FILE}/\includeonly. LaTeX's \include starts a fresh page, reads
+% FILE.tex, then starts another fresh page (it also keeps a per-file .aux, which
+% the engine has no equivalent for), so it reduces to \clearpage\input\clearpage.
+% Without it, \include is an undefined control sequence: in lenient mode the
+% command is dropped and its {FILE} argument is typeset as stray text, so a paper
+% whose whole body lives in \include'd files (the LaTeX \include/\includeonly
+% convention for splitting a manuscript) renders zero pages. \includeonly only
+% narrows which files \include loads; honouring it would need comma-list
+% membership the mini-kernel has no \@for for, and over-including merely adds
+% content it would have skipped, so it is a safe no-op for best-effort rendering.
+\def\include#1{\clearpage\input{#1}\clearpage}
+\def\includeonly#1{}
+% The float mechanism's list registers. LaTeX holds pending floats in these
+% token-list macros and empties them as the floats are placed; the engine has no
+% float mechanism, so they simply stay empty — but they must be DEFINED (as
+% \@empty) all the same. placeins's \FloatBarrier forms
+% \edef\@tempa{\@fb@botlist\@deferlist\@dbldeferlist} and only no-ops when that
+% expands to nothing; with the lists undefined the test never matches empty and its
+% "dump a float, \newpage, and recurse" branch runs without end — one forced page
+% break per turn, a 5000-page runaway on an ordinary article that loads placeins
+% and gives \section a \FloatBarrier (its [section] option).
+% Defined directly as empty (not \let\@empty): this kernel loads before \@empty
+% itself is defined, so a \let would capture an undefined meaning.
+\def\@botlist{}
+\def\@deferlist{}
+\def\@dbldeferlist{}
+\def\@toplist{}
+\def\@midlist{}
+\def\@currlist{}
+% \subfile{file} / \subfileinclude{file} (subfiles package): typeset file.tex as
+% part of this document. A subfile is often bare section content, but it may carry
+% its own \documentclass[main]{subfiles} … \begin{document} … \end{document}
+% wrapper. Neutralise that wrapper for the duration of the input — gobble the
+% \documentclass line's [option]{class}, and make \begin{document}/\end{document}
+% (\document/\enddocument) no-ops so the subfile's \end{document} does not end the
+% WHOLE document — then \input the file. Grouping restores the three afterwards, so
+% the outer document's real \end{document} still fires. Without \subfile the whole
+% body of a paper split into subfiles is silently dropped (118 corpus papers use it).
+\long\def\subfile#1{{%
+  \let\documentclass\subfile@gobbleclass
+  \let\document\@empty \let\enddocument\@empty
+  \input{#1}}}
+\let\subfileinclude\subfile
+\def\subfile@gobbleclass{\@ifnextchar[{\subfile@gc}{\subfile@gc[]}}
+\def\subfile@gc[#1]#2{}
+\def\hline{}
+\def\cline#1{}
+% amsthm-style theorem support. \newtheorem (a Go primitive) generates, per
+% environment, \the<env> and the \<env>/\end<env> macros; those hand the shared
+% formatting to the fixed macros below. \@begintheorem sets the bold heading
+% "Heading N", then \@ifnextbracket picks the with-note or plain continuation —
+% both switch to italic for the body (amsthm's "plain" style). \@endtheorem ends
+% the paragraph, closes the environment group (reverting \it) and adds space.
+\def\@begintheorem#1#2{\noindent{\bf #1\ #2}\@ifnextbracket{\@opargbegintheorem}{\@stdbegintheorem}}
+% \newtheorem*'s unnumbered head: the same heading with no number, so no space
+% before the period ("Theorem." rather than "Theorem .").
+\def\@beginthmnonum#1{\noindent{\bf #1}\@ifnextbracket{\@opargbegintheorem}{\@stdbegintheorem}}
+\def\@stdbegintheorem{{\bf .}\ \it }
+% An EMPTY note is no note: \@oparg supplies [] when the document gave none, so
+% this arm now runs for every theorem and must not set an empty pair of
+% parentheses.
+\def\@opargbegintheorem[#1]{\def\gotex@thmnote{#1}\ifx\gotex@thmnote\@empty\@stdbegintheorem\else{\bf\ (#1).}\ \it \fi}
+% amsgen's \@oparg: call #1 with the bracket group the document supplies, or with
+% [#2] when it supplies none. \newtheorem's generated macro routes its call to
+% \@begintheorem through this, exactly as amsthm does (amsthm.sty:143), because a
+% class is allowed to redefine \@begintheorem with a DELIMITED third parameter —
+% \def\@begintheorem#1#2[#3] is amsthm's own signature and journal classes copy
+% it. Called with no bracket, such a macro scans the document for the next [ and
+% swallows everything up to it.
+\def\@oparg#1[#2]{\@ifnextbracket{#1}{#1[#2]}}
+\def\@endtheorem{\par\endgroup\medskip}
+% proof: an italic "Proof." head (overridable via \begin{proof}[Proof of …]), a
+% roman body, and a QED box flushed to the right margin at \end{proof}.
+\def\qedsymbol{\rule{6pt}{6pt}}
+\def\qed{\hfill\qedsymbol\par}
+\def\proof{\par\medskip\begingroup\@ifnextbracket{\@opargproof}{\@stdproof}}
+\def\@stdproof{\noindent{\it Proof.}\ }
+\def\@opargproof[#1]{\noindent{\it #1.}\ }
+\def\endproof{\qed\endgroup\medskip}
+% amsthm's QED stack and \proofname, verbatim (amsthm.sty:280-289, :441). A paper
+% that REDEFINES the proof environment — three of the 200 corpus papers do, to add
+% an optional title or a diamond QED — writes amsthm's own internals, and without
+% them the head is lost:
+%
+%   reference   AVANT Proof. Le corps de la preuve. APRES
+%   ours        AVANT .     Le corps de la preuve. APRES
+%
+% \proofname vanished and only \@addpunct's argument survived. 148 \pushQED, 148
+% \popQED and 112 \proofname over the corpus.
+%
+% The stack exists so nested proofs each get their own symbol; \qedhere is not
+% here, since no corpus paper writes it and it needs \mathqed.
+\let\QED@stack\@empty
+\let\qed@elt\relax
+\def\pushQED#1{%
+  \toks@{\qed@elt{#1}}\@temptokena\expandafter{\QED@stack}%
+  \xdef\QED@stack{\the\toks@\the\@temptokena}}
+\def\popQED{%
+  \begingroup\let\qed@elt\popQED@elt \QED@stack\relax\relax\endgroup}
+\def\popQED@elt#1#2\relax{#1\gdef\QED@stack{#2}}
+\providecommand\proofname{Proof}
+% \@addpunct adds punctuation unless the space factor says the text already ended
+% with some (amsthm.sty:49, which overrides amsgen's by also testing \ifhmode).
+\def\@addpunct#1{\relax\ifhmode\ifnum\spacefactor>\@m \else#1\fi\fi}
+% ─── table of contents (feat/toc) ───────────────────────────────────────────
+% \@tocentry{kind}{level}{number}{title} (a Go primitive) records one contents
+% line on the auxiliary pass. The numbered sectioning and caption macros are
+% redefined here — as new \def lines, to avoid touching the originals above — so
+% they emit an entry in addition to typesetting their heading. Starred forms
+% (\@ssection/\@ssubsection) are untouched and never record, matching LaTeX.
+\newcount\c@tocdepth
+% A sectioning command sets the running MARK, which is how a head shows the
+% section it is on: \@sect runs \csname #1mark\endcsname{#7} (latex.ltx:12796),
+% and the marks default to \@gobble (:12870-12872) so they cost nothing until a
+% page style redefines them — \ps@headings does
+% \def\sectionmark##1{\markboth{\MakeUppercase{…##1}}{}}.
+% ⛔⛔ \def, NOT \let\…\@gobble, BECAUSE \@gobble DOES NOT EXIST YET HERE.
+% latex.ltx:12870-12872 writes \let\sectionmark\@gobble and that is right for LaTeX,
+% where \@gobble is defined long before. In this engine \@gobble lives in
+% LaTeX2eKernelHelpers (kernelhelpers.go:71), which LoadLaTeX loads AFTER this block
+% — so \let copied an UNDEFINED meaning into all three marks and they stayed
+% undefined for the whole run. \meaning\sectionmark says so from before
+% \documentclass to the end of the body.
+%
+% The consequence is not a missing running head — this engine has no output routine
+% to show one — it is that \@gxnum calls \csname #1mark\endcsname{⟨title⟩} on every
+% NUMBERED heading (classprims.go), so an undefined control sequence met its
+% argument and lenient mode set that argument AS TEXT. Measured against tectonic:
+%
+%	\subsection{BBBTITREBBB}
+%	reference   "0.1 BBBTITREBBB"
+%	before      "BBBTITREBBB 0.1 BBBTITREBBB"
+%
+% Every numbered \section, \subsection and \subsubsection in every document set its
+% own title an extra time, in body type, ahead of the heading. \section* was never
+% affected: \@gxstar goes straight to \@gxhead and never touches a mark.
+%
+% ⚠ gotex -report-skipped said "no undefined commands skipped" on the very document
+% that proves it, so the instrument built to find exactly this kind of gap could not
+% see it. That is its own defect and is filed separately.
+%
+% ⛔⛔ FIVE LEVELS, NOT THREE. ltsect.dtx:681-685 is the whole initialisation:
+%
+%	\let\sectionmark\@gobble
+%	\let\subsectionmark\@gobble
+%	\let\subsubsectionmark\@gobble
+%	\let\paragraphmark\@gobble
+%	\let\subparagraphmark\@gobble
+%
+% The fix above stopped at the third, so \paragraph and \subparagraph kept the
+% very defect it removed. They are UNNUMBERED in the standard classes —
+% \c@secnumdepth is 3 and they are levels 4 and 5 — so they take \@gxnum's
+% \ifnum#2>\c@secnumdepth branch, which calls \csname #1mark\endcsname{⟨title⟩}
+% just as the numbered branch does. Measured against tectonic:
+%
+%	\paragraph{Palfa}Body after paragraph.
+%	reference   "Palfa Body after paragraph."
+%	before      "Palfa Palfa Body after paragraph."
+%	\subparagraph{Sbeta}Body after subparagraph.
+%	reference   "Sbeta Body after subparagraph."
+%	before      "Sbeta Sbeta Body after subparagraph."
+%
+% ⚠ \chapter does NOT take this path and was never affected — checked, not
+% assumed: a book's \chapter{Chalfa} sets its title once before and after. It is
+% not \@startsection-based in any class (see classkernel.go), which is also why
+% \chaptermark's absence here does not double anything.
+\long\def\sectionmark#1{}
+\long\def\subsectionmark#1{}
+\long\def\subsubsectionmark#1{}
+\long\def\paragraphmark#1{}
+\long\def\subparagraphmark#1{}
+% The two page styles the standard classes declare, verbatim from article.cls's
+% one-sided branch (\ps@headings) and latex.ltx (\ps@myheadings). doPagestyle
+% RUNS \ps@name, so defining them here is all a document needs: \@oddhead is read
+% back at page assembly (latexHead, fancyhdr.go).
+%
+% \ps@headings is the one that tracks the document — it \let's \@mkboth to
+% \markboth and redefines \sectionmark, so each \section sets the mark its head
+% shows. \ps@myheadings leaves the marks to the author's own \markboth/\markright.
+\def\ps@headings{%
+  \let\@oddfoot\@empty
+  \def\@oddhead{{\slshape\rightmark}\hfil\thepage}%
+  \let\@mkboth\markboth
+  \def\sectionmark##1{\markright{\MakeUppercase{\thesection\quad##1}}}%
+  \def\subsectionmark##1{}}
+\def\ps@myheadings{%
+  \let\@oddfoot\@empty
+  \def\@oddhead{{\slshape\rightmark}\hfil\thepage}%
+  \let\@mkboth\@gobbletwo
+  \let\sectionmark\@gobble
+  \let\subsectionmark\@gobble}
+% …and the two that have no head, which must CLEAR one a previous style set.
+\def\ps@empty{\let\@oddhead\@empty\let\@oddfoot\@empty\let\@mkboth\@gobbletwo}
+\def\ps@plain{\let\@oddhead\@empty\let\@mkboth\@gobbletwo}
+\def\@nsection#1{\par\medskip\advance\c@section by1 \c@subsection=0 \edef\@currentlabel{\thesection}\@tocentry{toc}{1}{\thesection}{#1}\sectionmark{#1}\noindent{\Large\bf\thesection\quad#1}\par\nobreak\smallskip}
+\def\@nsubsection#1{\par\smallskip\advance\c@subsection by1 \edef\@currentlabel{\thesubsection}\@tocentry{toc}{2}{\thesubsection}{#1}\subsectionmark{#1}\noindent{\large\bf\thesubsection\quad#1}\par\nobreak}
+\def\caption#1{\par\smallskip\global\expandafter\advance\csname c@\@captype\endcsname by1\relax\edef\@currentlabel{\csname the\@captype\endcsname}\@tocentry{\@captype}{1}{\csname the\@captype\endcsname}{#1}{\captionfont{\captionlabelfont\csname fnum@\@captype\endcsname:} #1}\par}
+% ─── LaTeX counter interface (feat/counters) ─────────────────────────────────
+% Value-reading and counter-formatting commands. The mutating commands
+% (\newcounter/\setcounter/\addtocounter/\stepcounter/\refstepcounter) and the
+% \@Roman helper are Go primitives (see counters.go / primitives.go); these are
+% the pure-macro one-liners, added as new \def lines to avoid touching the
+% originals above. \value{c} expands to the register \c@c, so it is usable as a
+% <number> (e.g. \setcounter{x}{\value{y}}, \ifnum\value{x}>0). \arabic/\roman/
+% \Roman feed the register to a number-scanning operator (\number, \romannumeral,
+% \@Roman). \alph/\Alph/\fnsymbol feed it to an \ifcase macro, so \expandafter
+% first turns \csname c@c\endcsname into the single \c@c token that \ifcase reads.
+\def\value#1{\csname c@#1\endcsname}
+\def\arabic#1{\number\csname c@#1\endcsname}
+\def\roman#1{\romannumeral\csname c@#1\endcsname}
+\def\Roman#1{\@Roman\csname c@#1\endcsname}
+\def\alph#1{\expandafter\@alph\csname c@#1\endcsname}
+\def\Alph#1{\expandafter\@Alph\csname c@#1\endcsname}
+\def\@fnsymbol#1{\ifcase#1\or *\or †\or ‡\or §\or ¶\or ‖\or **\or ††\or ‡‡\fi}
+% latex.ltx:13164-13165 declares the footnote counter and its representation:
+%
+%	\@definecounter{footnote}
+%	\def\thefootnote{\@arabic\c@footnote}
+%
+% ⛔⛔ The engine kept this count as a Go int on the Engine, which made TWO defects
+% unfixable at once: \thefootnote had no \c@footnote to read, so the mark was always
+% arabic digits built in Go; and \setcounter{footnote}{0} could not reach it, because
+% every LaTeX counter command goes through \c@<name>. article.cls:223 performs exactly
+% that reset right after \maketitle.
+% ⛔ The register itself already existed — classkernel.go:244, \newcount\c@footnote —
+% and declaring it again here with \newcounter allocated a SECOND register under the
+% same name. Nothing was stepping either of them; what was missing is the
+% representation below, not the counter.
+\def\thefootnote{\@arabic\c@footnote}
+% latex.ltx:13168 — the mark itself, as a macro a class or a document can replace:
+%
+%	\def\@makefnmark{\hbox{\@textsuperscript{\normalfont\@thefnmark}}}
+%
+% \@thefnmark is not declared here: the reference sets it per note with
+% \protected@xdef (latex.ltx:13179), and queueFootnoteText does the same in the note's
+% own group. A default would be a mark no footnote ever asked for.
+% ⚠ \@textsuperscript is the identity in this engine (classprims.go:260), so the mark
+% comes out at text size and on the baseline where the reference raises it. That is a
+% SEPARATE divergence from where the mark sits, and it is unchanged by this block.
+\def\@makefnmark{\hbox{\@textsuperscript{\normalfont\@thefnmark}}}
+% ⛔⛔ \footnoterule WAS THREE HARD-CODED NODES IN assemblePage, so a class could not
+% change it — and 60 of the 154 measured papers redefine it. The shape below is
+% article.cls:605-608's, which is what this engine already drew, so defining it changes
+% nothing by itself and makes every redefinition take effect:
+%
+%	\renewcommand\footnoterule{\kern-3\p@ \hrule\@width.4\columnwidth \kern2.6\p@}
+%
+% The KERNEL's own rule is a fixed 2in (latex.ltx:13162-13163) — a different number —
+% so the agreement was with article and its relatives, not with LaTeX.
+\def\footnoterule{\kern-3\p@ \hrule\@width.4\columnwidth \kern2.6\p@}
+\def\fnsymbol#1{\expandafter\@fnsymbol\csname c@#1\endcsname}
+% ─── length interface (feat/lengths) ─────────────────────────────────────────
+% \fill and \stretch, from the same block of the reference:
+%
+%	\newskip\fill
+%	\fill = 0pt plus 1fill			ltspace.dtx:1445-1446
+%	\def\stretch#1{\z@ \@plus #1fill\relax}	ltspace.dtx:1454
+%
+% ⛔ BOTH are "fill", the SECOND order of infinity, not "fil". \stretch was spelt
+% \def\stretch#1{0pt plus #1fil} here, which is a different glue: against any
+% \vfil or \hfil on the same list, the reference's \stretch WINS the whole
+% leftover space and ours only SHARES it. Nothing fails; the box is laid out at
+% the wrong place. The order is the one thing a comment cannot be trusted on — the
+% comment here said "order-1 infinite stretch", and it was describing the defect.
+%
+% \fill was absent entirely, and it is a document command: \hspace{\fill} and
+% \vspace{\fill} are how a source pushes text to a margin or to the bottom of a
+% page. In strict mode its absence ABORTED the compilation; with -lenient the
+% \hspace got no length at all and the words on either side were set adjoining
+% ("gauchedroite" in the witness, 188.50 where the reference puts 477.48).
+%
+% \newskip, not \def: \fill is a LENGTH, so \setlength\x\fill, \advance\fill and
+% \the\fill all have to work on it.
+\newskip\fill \fill=0pt plus 1fill
+\def\stretch#1{0pt plus #1fill\relax}
+% ─── amsmath subequations ────────────────────────────────────────────────────
+% \begin{subequations} numbers the equations inside as Na, Nb, … : it steps the
+% parent equation number, freezes it in \@parentequation, then temporarily reuses
+% \c@equation as the sub-counter (from 0) with \theequation set to parent+letter,
+% so every inner \begin{equation} advances the letter. \end{subequations} restores
+% \c@equation to the parent number (so the next equation is N+1) and \theequation.
+% Because \c@equation stays the active counter, \label/\eqref and \tag work inside.
+\newcount\@saveeq
+\def\subequations{\global\advance\c@equation by1\relax\edef\@parentequation{\the\c@equation}\@saveeq=\c@equation\relax\c@equation=0\relax\long\def\theequation{\@parentequation\@alph\c@equation}}
+\def\endsubequations{\c@equation=\@saveeq\relax\long\def\theequation{\the\c@equation}}
+% ─── sectioning extensions (feat/sectioning) ─────────────────────────────────
+% \part, \appendix and the abstract/titlepage environments. All are new \def
+% lines (later definition wins), so the \section/\@nsection/\thesection lines
+% above are left untouched. In particular \appendix retargets numbering purely
+% by REDEFINING the formatting macros \thesection/\thesubsection to letters — it
+% never touches \@nsection (which a later block bound to \@tocentry), so both the
+% heading and the contents line pick up "A"/"A.1" unchanged. \part numbers with
+% \c@part (Roman) and freezes \@currentlabel so \label/\ref resolve to "I".
+\newcount\c@part
+\long\def\thepart{\@Roman\c@part}
+\long\def\part{\@ifstar\@spart\@npart}
+\def\@npart#1{\par\bigskip\advance\c@part by1 \edef\@currentlabel{\thepart}\centerline{\Large\bf Part \thepart}\smallskip\centerline{\Large\bf#1}\par\bigskip}
+\def\@spart#1{\par\bigskip\centerline{\Large\bf#1}\par\bigskip}
+\long\def\appendix{\par\c@section=0 \c@subsection=0 \long\def\thesection{\@Alph\c@section}\long\def\thesubsection{\thesection.\the\c@subsection}}
+\long\def\abstract{\par\bigskip\begingroup\centerline{\small\bf Abstract}\smallskip\leftskip=20pt\rightskip=20pt\small}
+\long\def\endabstract{\par\endgroup\bigskip}
+\long\def\titlepage{\par\penalty-10000 \begingroup}
+\long\def\endtitlepage{\par\endgroup\penalty-10000 }
+% ─── booktabs rules (feat/booktabs) ──────────────────────────────────────────
+% \toprule/\midrule/\bottomrule/\cmidrule are consumed raw inside the tabular
+% body (collectTabularBody matches them by name and draws the rules directly), so
+% these definitions are only a harmless fallback that keeps the commands from
+% being "undefined" if they appear outside a tabular — mirroring \hline/\cline.
+\def\toprule{}
+\def\midrule{}
+\def\bottomrule{}
+\def\cmidrule#1{}
+% ─── typed cross-references (feat/typedrefs) ─────────────────────────────────
+% \autoref/\nameref (hyperref) and \cref/\Cref (cleveref) print a reference with
+% the NAME of what it points to ("Section 1", "Equation (1)"). To type a ref, the
+% engine must record — beside the number (\@currentlabel) — the KIND of thing the
+% last counter-stepping command produced (\@currentreftype) and its title text
+% (\@currentlabelname, for \nameref). Rather than touch the originals, the
+% number-freezing macros are redefined here as NEW \def lines (later definition
+% wins) that additionally set those two macros; \label freezes all three (see
+% typedrefs.go). The sectioning/caption redefinitions preserve the \@tocentry call
+% that feat/toc bound, so the table of contents is unaffected. \@currentreftype
+% and \@currentlabelname default to empty so a \label with no typed context still
+% resolves (\autoref/\cref then fall back to a bare number).
+\def\@currentreftype{}
+\def\@currentlabelname{}
+\def\equation{\global\advance\c@equation by1\relax\edef\@currentlabel{\theequation}\def\@currentreftype{equation}\def\@currentlabelname{}\@equationbody}
+\def\@nsection#1{\par\medskip\advance\c@section by1 \c@subsection=0 \edef\@currentlabel{\thesection}\def\@currentreftype{section}\def\@currentlabelname{#1}\@tocentry{toc}{1}{\thesection}{#1}\noindent{\Large\bf\thesection\quad#1}\par\nobreak\smallskip}
+\def\@nsubsection#1{\par\smallskip\advance\c@subsection by1 \edef\@currentlabel{\thesubsection}\def\@currentreftype{subsection}\def\@currentlabelname{#1}\@tocentry{toc}{2}{\thesubsection}{#1}\noindent{\large\bf\thesubsection\quad#1}\par\nobreak}
+% A caption is preceded by \abovecaptionskip, not by a \smallskip: article.cls
+% sets it to 10pt (l.478) and \@makecaption opens with \vskip\abovecaptionskip
+% (l.481). Ours put 3pt there, and a figure[h] with a caption cost 48.62pt against
+% tectonic's 67.81; with the real skip, 56.30.
+%
+% This still typesets the caption itself rather than calling the class's
+% \@makecaption, which is what LaTeX does and what a class redefines to style its
+% captions. Routing through it is the faithful thing and recovers the same space,
+% but measured over the corpus it dropped 49231 glyphs across 15 papers — the
+% class definitions use box and measurement primitives this engine does not carry
+% far enough yet. See the issue; the skip is the part that can be had safely now.
+%
+% \captionfont is the SIZE, and it is empty by default because article.cls's
+% \@makecaption sets "#1: #2" at the CURRENT size (l.482) — no \small anywhere. We
+% hard-coded \small for every caption in the corpus, and a census says that is the
+% minority rule: of the 200 arXiv papers, 149 never redefine \@makecaption at all
+% (so article.cls's rule is theirs) and 19 redefine it at the current size — 168
+% against the 32 that ask for \small or smaller, plus 16 more that ask through the
+% caption package. A caption set one step too small is vertical material removed
+% from every figure-bearing page, which is the shape #356 is chasing.
+%
+% The name is caption.sty's own: its small/footnotesize/scriptsize options are
+% literally \def\captionfont{\small} and friends. So a document that loads the real
+% package, or writes \renewcommand\captionfont{\small} itself, is honoured here for
+% free, and the 48 that want a smaller caption have somewhere to say so.
+\def\captionfont{}
+% \captionlabelfont is the LABEL's font — "Figure 7:" — and it is empty by
+% default for the same reason \captionfont is: article.cls's \@makecaption sets
+% the whole caption with \sbox\@tempboxa{#1: #2} (classes.dtx:3554-3562) and
+% changes no font at all.
+%
+% ⛔ WE SET IT BOLD, AND NOT ONE OF THE CLASSES THIS ENGINE EMBEDS DOES. Censused
+% in texmf/:
+%
+%	article.cls:482  \sbox\@tempboxa{#1: #2}        — no font
+%	book.cls:568     \sbox\@tempboxa{#1: #2}        — no font
+%	report.cls       the same
+%	amsart.cls:1376  \@captionfont\@captionheadfont — and :1341 is \scshape
+%
+% Three set nothing and the fourth sets SMALL CAPS. So bold was not even
+% accidentally right for the class-styled case, which is the argument I had
+% assumed held before counting.
+%
+% Measured against tectonic on an article at 11pt, a figure[h!] with a rule:
+% our caption ran x 201.17–409.10 against the reference's 204.45–405.81 — 207.93pt
+% against 201.36pt, +6.57pt, and the caption is centred so it overhung by 3.28pt
+% on each side. Identical on all sixty captions of the witness.
+%
+% The name is caption.sty's own, as \captionfont's is: a document that loads the
+% real package, or writes \renewcommand\captionlabelfont{\bfseries}, is honoured
+% here for free — which is how a class that does want a bold label says so, since
+% this engine does not run \@makecaption (#281).
+\def\captionlabelfont{}
+% The TYPE is checked first, because without one this macro used to put TeX
+% SOURCE on the page: \@captype undefined makes \csname c@\@captype\endcsname
+% into \c@, which is undefined and therefore \relax, and \advance\relax stops
+% BEFORE its keyword — so the literal "by1" was typeset and the caption read
+% "by1: X". Real LaTeX raises "\caption outside float", so there is no correct
+% number to print; lenient, the caption's TEXT is what the document wanted on the
+% page and that is kept. go-tex/engine#558.
+%
+% ⛔ The branch is only safe because doSCfloat no longer expands the body while
+% looking for its optionals (sidecap.go): with the expanding scan, this test ran
+% BEFORE \figure had set \@captype and every sidecap caption lost its number.
+% That is the order to check if this ever regresses.
+% ⛔ \caption* IS A CAPTION WITHOUT A NUMBER, and reading a mandatory #1 straight
+% away turns its star into the argument: "\caption*{Some text}" bound #1 to "*",
+% typeset "Figure 1: *", and left "{Some text}" to fall into the body as prose.
+% 382 papers of the arXiv pool write \caption* (go-tex/engine#636).
+%
+% The starred branch is the UNTYPED one, which already sets a caption's text with
+% no number, no counter step and no contents entry — which is exactly what
+% \caption* means. caption.sty documents it as "the caption without label and
+% without entry in the list of figures/tables", and the float package's \caption*
+% is the same.
+\def\caption{\@ifnextchar*{\gotex@caption@star}{\gotex@caption@plain}}
+\def\gotex@caption@star*#1{\gotex@caption@untyped{#1}}
+\def\gotex@caption@plain#1{\expandafter\gotex@caption@dispatch\csname c@\@captype\endcsname{#1}}
+\def\gotex@caption@dispatch#1#2{\ifx#1\relax\gotex@caption@untyped{#2}\else\gotex@caption@typed{#2}\fi}
+\def\gotex@caption@untyped#1{\par\vskip\abovecaptionskip{\captionfont #1}\par\vskip\belowcaptionskip}
+\def\gotex@caption@typed#1{\par\vskip\abovecaptionskip\global\expandafter\advance\csname c@\@captype\endcsname by1\relax\edef\@currentlabel{\csname the\@captype\endcsname}\edef\@currentreftype{\@captype}\def\@currentlabelname{#1}\@tocentry{\@captype}{1}{\csname the\@captype\endcsname}{#1}{\captionfont{\captionlabelfont\csname fnum@\@captype\endcsname:} #1}\par\vskip\belowcaptionskip}
+% The typed-reference layer's \@listitem REDEFINES the one above, so it takes the
+% same three arguments or every numbered item loses its label again the moment
+% this layer loads. #2 is what \ref prints, #3 is what the page shows (#845).
+\def\@listitem#1#2#3{\par\noindent\advance#1 by1\relax\edef\@currentlabel{#2}\def\@currentreftype{item}\def\@currentlabelname{}\llap{#3\enspace}}
+\def\@npart#1{\par\bigskip\advance\c@part by1 \edef\@currentlabel{\thepart}\def\@currentreftype{part}\def\@currentlabelname{#1}\centerline{\Large\bf Part \thepart}\smallskip\centerline{\Large\bf#1}\par\bigskip}
+% A theorem's reference type is the ENVIRONMENT's name, not the word "theorem"
+% and not the counter's: cleveref keys its naming on it, and it is what
+% \crefname{theo}{thm.}{thm.} in a document addresses. \newtheorem's generated
+% macro announces it in \gotex@thmtype (theorem.go); the fallback below is for a
+% class that calls \@begintheorem itself.
+%
+% \refstepcounter cannot supply it, because \newtheorem{theo}[definition]{Theorem}
+% steps the DEFINITION counter: before this, \Cref{thm} printed "Theorem 2" where
+% the reference prints "Thm. 2", and \Cref of an actual definition printed
+% "Theorem 1" for "Definition 1" — both labels had taken the same type.
+\def\gotex@thmtype{theorem}
+\def\@begintheorem#1#2{\edef\@currentreftype{\gotex@thmtype}\def\@currentlabelname{}\noindent{\bf #1\ #2}\@ifnextbracket{\@opargbegintheorem}{\@stdbegintheorem}}
+\def\@beginthmnonum#1{\edef\@currentreftype{\gotex@thmtype}\def\@currentlabelname{}\noindent{\bf #1}\@ifnextbracket{\@opargbegintheorem}{\@stdbegintheorem}}
+% ── siunitx unit-name macros ────────────────────────────────────────────────
+% Standalone expansions for the unit/prefix/power macros. \si, \unit, \SI, \qty
+% and \ang read their arguments raw (no expansion) and resolve names in Go, so
+% these definitions matter only when a unit macro is used outside those commands.
+\def\meter{m}
+\def\metre{m}
+\def\second{s}
+\def\kilogram{kg}
+\def\gram{g}
+\def\kelvin{K}
+\def\ampere{A}
+\def\mole{mol}
+\def\candela{cd}
+\def\newton{N}
+\def\pascal{Pa}
+\def\joule{J}
+\def\watt{W}
+\def\volt{V}
+\def\ohm{Ω}
+\def\hertz{Hz}
+\def\percent{\char37\relax}
+\def\hour{h}
+\def\minute{min}
+\def\liter{L}
+\def\litre{L}
+\def\coulomb{C}
+\def\farad{F}
+\def\tesla{T}
+\def\weber{Wb}
+\def\henry{H}
+\def\siemens{S}
+\def\radian{rad}
+\def\steradian{sr}
+\def\becquerel{Bq}
+\def\gray{Gy}
+\def\sievert{Sv}
+\def\lumen{lm}
+\def\lux{lx}
+\def\kilo{k}
+\def\milli{m}
+\def\micro{µ}
+\def\centi{c}
+\def\nano{n}
+\def\mega{M}
+\def\giga{G}
+\def\deci{d}
+\def\deca{da}
+\def\hecto{h}
+\def\pico{p}
+\def\femto{f}
+\def\tera{T}
+\def\peta{P}
+\def\per{/}
+\def\squared{²}
+\def\cubed{³}
+% ── end siunitx unit-name macros ────────────────────────────────────────────
+% Width lengths used as the target of \begin{tabularx}{...} (and tabular*):
+% \linewidth IS the current measure, so it resolves to \hsize wherever a rigid
+% <dimen> is scanned: a minipage sets it from \hsize (latex.ltx:11861) and so does
+% \begin{document} (6688).
+%
+% \textwidth and \columnwidth are NOT. Each is its own \newdimen in LaTeX
+% (\columnwidth at latex.ltx:15020) and each is its own engine dimension parameter
+% here: \textwidth is the whole text block — both columns and the gutter — and
+% \columnwidth is ONE column. \hsize is set FROM \columnwidth (6688, 15079, 15113),
+% never the reverse, which is what a class relies on when it sets \hsize for a block
+% of front matter and then asks how wide a column is (acmart.cls:2712 then :2718).
+% In single-column mode all three coincide, so nothing changes there.
+\let\linewidth\hsize
+% ─── sub-captions / \captionof / \captionsetup (feat/subcaption) ─────────────
+% A pragmatic subset of the caption / subcaption packages. Everything here is
+% pure macro glue that REUSES the existing counter, \caption and \parbox
+% machinery — none of the \caption / \figure / \table / \c@figure lines above are
+% edited; the two environment openers are only re-\def'd additively (later
+% definition wins) to zero the sub-panel counter.
+%
+%   \captionof{TYPE}{TEXT}
+%       A caption used OUTSIDE a float. It sets \@captype to TYPE (figure/table)
+%       and defers to \caption, so it steps \c@TYPE, prints "Figure N: TEXT" and
+%       freezes \@currentlabel — \label/\ref then resolve to the plain number "N",
+%       exactly as an in-float \caption does. This is the caption package's key
+%       feature (a caption for non-float material, e.g. inside a minipage).
+%
+%   \subcaptionbox{SUBCAP}{CONTENT}
+%       One lettered sub-panel of a figure. It steps \c@subfigure and typesets
+%       CONTENT (typically an \includegraphics, \fbox or \rule) above a centred
+%       "(a) SUBCAP" inside a \parbox whose width is the NATURAL width of CONTENT
+%       (measured with \settowidth into \subcaptionwidth), so several panels
+%       placed in a row sit side by side and the sub-caption wraps to the panel.
+%       A \label inside the panel resolves to parent+letter ("1a"): the
+%       frozen \@currentlabel is \the\@subparent\thesubfigure, where \@subparent
+%       is the number the pending main \caption will assign to the figure
+%       (\c@figure + 1) and \thesubfigure is \alph{subfigure}. The reference type
+%       is recorded as "subfigure" (for \autoref/\cref). This is the sub-panel
+%       command that is FULLY implemented; \subfloat (below) is an alias.
+%
+%   \subfloat[SUBCAP]{CONTENT}
+%       subfig-package spelling, mapped onto \subcaptionbox. The sub-caption is
+%       the OPTIONAL argument (\subfloat{CONTENT} gives an unlettered-caption
+%       panel that still steps the counter), matching subfig's signature.
+%
+%   \captionsetup[FLOAT]{OPTIONS}
+%       Accepted and ignored: it gobbles an optional [float type] and the required
+%       {options} group so caption-configuring documents do not break. Caption
+%       STYLING options are not modelled (LIMITATION).
+%
+% CONVENTIONS & LIMITATIONS. Sub-panels must appear BEFORE the figure's main
+% \caption (the usual layout), so that \c@figure + 1 is the figure's eventual
+% number; the panel is sized to the natural width of its content (a caption
+% longer than the content wraps to that width, with no manual [width] option);
+% and caption styling requested through \captionsetup is not modelled.
+\newcount\c@subfigure
+\newcount\@subparent
+\newdimen\subcaptionwidth
+\def\thesubfigure{\@alph\c@subfigure}
+\def\p@subfigure{\the\@subparent}
+% \caption inside a subfigure/subtable environment (see doSubfigure) prints the
+% lettered sub-caption "(a)" via these \fnum@ hooks, reusing the kernel \caption.
+\def\fnum@subfigure{(\thesubfigure)}
+\newcount\c@subtable
+\def\thesubtable{\@alph\c@subtable}
+\def\p@subtable{\the\@subparent}
+\def\fnum@subtable{(\thesubtable)}
+% article.cls:476-479 allocates and sets these; the format defines them too so a
+% class the engine EMULATES rather than reads still has them. Order makes that
+% safe: the format is loaded first, so a class's own \newlength rebinds the name
+% to its own register and its \setlength writes the one \caption then reads.
+\newlength\abovecaptionskip \setlength\abovecaptionskip{10pt}
+\newlength\belowcaptionskip \setlength\belowcaptionskip{0pt}
+\def\captionof#1#2{\def\@captype{#1}\caption{#2}}
+% \long: the body reaches this through \newcommand\caption@ibox[3] (caption.sty:457,
+% unstarred, so \long) and \long\def\subcaption@@@subfloat#1#2#3 (subcaption.sty:270).
+% Ours stands in for both, and grabs the body itself.
+\long\def\subcaptionbox#1#2{\global\advance\c@subfigure by1\relax\@subparent=\c@figure \advance\@subparent by1\relax\edef\@currentlabel{\p@subfigure\thesubfigure}\def\@currentreftype{subfigure}\def\@currentlabelname{}\settowidth\subcaptionwidth{#2}\noindent\parbox[b]{\subcaptionwidth}{\centering #2\\{\small(\thesubfigure) #1}}\quad}
+\def\subfloat{\@ifnextbracket{\@subfloatopt}{\@subfloatnoopt}}
+% \long: subfig.sty:350 and :354 declare \sf@@subfloat and \sf@@@subfloat \long. A
+% subfigure body is a float's contents and routinely holds a \par; without the prefix
+% tex.web §392 abandons the call and the whole subfigure goes. 13 in the corpus.
+\long\def\@subfloatopt[#1]#2{\subcaptionbox{#1}{#2}}
+\long\def\@subfloatnoopt#1{\subcaptionbox{}{#1}}
+\long\def\figure{\par\bigskip\begingroup\centering\def\@captype{figure}\global\advance\c@subfigure by-\c@subfigure\relax\@discardopt}
+\long\def\table{\par\bigskip\begingroup\centering\def\@captype{table}\global\advance\c@subfigure by-\c@subfigure\relax\@discardopt}
+% ─── end sub-captions / \captionof / \captionsetup ───────────────────────────
+% ─── real-world preamble robustness ──────────────────────────────────────────
+% Real papers configure many packages in the preamble with commands that do not
+% affect this engine's output. Rather than abort on an "undefined control
+% sequence", accept the common ones: define them as no-ops that gobble their
+% arguments, and the usual page-layout dimensions / pdfTeX counters as registers,
+% so a document gets past its preamble to the body. This is best-effort robustness,
+% NOT package emulation — a command that genuinely draws (a TikZ picture) still
+% cannot render, it just no longer aborts the preamble. (Derived from an arXiv
+% compatibility study: these were the commands most often blocking real papers.)
+% ⛔ \makeatletter records that the DOCUMENT asked for it, because \document has to tell a
+% preamble that asked from one that did not.
+%
+% Real LaTeX leaves the at-sign alone at begin-document: latex.ltx:6672-6712 assigns no
+% catcode there, so whatever the preamble left is what the body gets. This engine loads its
+% formats with the at-sign as a LETTER and never hands it back (classkernel.go and
+% amssubstrate.go both end that way), so \document forced catcode 12 to compensate — and the
+% compensation also undid a \makeatletter that the preamble had asked for and never revoked.
+%
+% Measured against tectonic on five lines — documentclass, \makeatletter, begin document,
+% then printing the at-sign's catcode: tectonic 11, this engine 12. 21 of the 154 corpus
+% papers open \makeatletter in their preamble.
+%
+% ⛔ Handing the at-sign back at the end of the last format is the faithful shape and it
+% breaks 37 tests in this package: the engine's own witnesses probe @-names without asking
+% for them. Hence the flag, which changes nothing except for a document that DID ask.
+\def\gotexatasked{0}
+\def\makeatletter{\catcode64=11\relax\def\gotexatasked{1}}
+\def\makeatother{\catcode64=12\relax\def\gotexatasked{0}}
+\newcount\pdfoutput
+\newcount\pdfminorversion
+\newdimen\voffset\newdimen\hoffset
+\newdimen\topmargin\newdimen\oddsidemargin\newdimen\evensidemargin
+\newdimen\headheight\newdimen\headsep\newdimen\footskip
+% \textheight is the page's text height, i.e. the page builder's \vsize — the
+% same identity \textwidth has with \hsize above. The standard classes size the
+% text block by assigning \textheight (\setlength\textheight{\@tempcnta
+% \baselineskip}\addtolength\textheight{\topskip}); aliasing it to \vsize makes
+% that assignment set the page-break budget, instead of leaving \vsize at the
+% plain-TeX 8.9in default and overfilling every page.
+\let\textheight\vsize
+\newdimen\marginparwidth\newdimen\marginparsep\newdimen\marginparpush
+% ⛔⛔ \marginpar WAS ABSENT, AND IN -lenient ITS ARGUMENT LEAKED INTO THE BODY.
+%
+% 52 of the 154 measured corpus papers use it (5985 in the archive). Strict mode
+% aborted; -lenient skipped the command name and then SET ITS ARGUMENT AS TEXT.
+% Measured against tectonic:
+%
+%	source                                     oracle                    avant
+%	AVANTUN\marginpar{NOTEUN}APRESUN           AVANTUNAPRESUN            AVANTUNNOTEUNAPRESUN
+%	                                           + NOTEUN en marge, x=488.44
+%	AVANTTROIS\marginpar[GAUCHE]{DROITE}…      AVANTTROISAPRESTROIS      AVANTTROIS[GAUCHE]DROITEAPRESTROIS
+%	                                           + DROITE en marge
+%
+% The second row is the one to look at: BOTH arguments landed in the running text, the
+% optional one with its literal brackets. That is not a missing marginal note, it is
+% corrupted body text — and body text is what the corpus measures.
+%
+% The reference, ltfloat.dtx:951-967, 973-985:
+%
+%	\def\marginpar{\ifhmode \@bsphack \@floatpenalty -\@Mii
+%	  \else \@floatpenalty-\@Miii \fi
+%	  \ifinner \@parmoderr \@floatpenalty\z@ \else …\@next… \fi
+%	  \@ifnextchar [\@xmpar\@ympar}
+%	\long\def\@xmpar[#1]#2{\@savemarbox\@marbox{#1}\@savemarbox\@currbox{#2}\@xympar}
+%	\long\def\@ympar#1{\@savemarbox\@marbox{#1}\global\setbox\@currbox\copy\@marbox
+%	  \@xympar}
+%
+% \@savemarbox (1013-1025) sets the note in a \vtop at \hsize=\marginparwidth, and
+% \@xympar (1098-1106) conses it onto \@currlist and hands it to the float machinery,
+% which is what puts it in the margin. On the normal side the box shown is the SECOND
+% argument; \if@reversemargin shows the first.
+%
+% ⛔ THE NOTE IS NOT PLACED HERE, AND THAT IS NAMED, NOT HIDDEN. Putting a box in the
+% margin from inside a paragraph needs \vadjust, which this engine does not have
+% (go-tex/engine#665) — the alternative is the float machinery, which is its own piece
+% of work. What this does is read both arguments correctly and emit NOTHING, which
+% makes the body text EXACTLY the reference's: AVANTUNAPRESUN. A note in the margin is
+% a note; a note in the middle of a sentence is a wrong sentence.
+%
+% \@bsphack…\@esphack keeps the spacing around an invisible command right, as the
+% reference does for the horizontal-mode case.
+\def\marginpar{\@ifnextbracket\gotex@mparopt\gotex@mpar}
+\long\def\gotex@mparopt[#1]#2{\@bsphack\@esphack}
+\long\def\gotex@mpar#1{\@bsphack\@esphack}
+\def\em{\it}
+\def\normalem{}
+\def\ULforem{}
+\def\useunder{}
+% \sloppy and \fussy, verbatim from latex.ltx:13367-13378.
+%
+% ⛔ BOTH WERE EMPTY, AND \sloppy IS IN 775 OF THE 2935 CORPUS PAPERS — 26.4%,
+% measured with TeX comments stripped. A quarter of the corpus asked the line
+% breaker to loosen and this engine answered by doing nothing.
+%
+% \tolerance is live here (paragraph.go:195 reads it through namedInt), so this
+% takes effect rather than being decoration. \emergencystretch, \hfuzz and
+% \vfuzz are accept-and-ignore parameters, which is exactly what they already
+% are when a document assigns them directly — writing them here changes nothing
+% about how they behave and keeps the commands' definitions honest for a
+% document that reads them back.
+%
+% ⚠ \sloppy's effect is CONDITIONAL, which is worth knowing before expecting
+% much from it: measured against tectonic, the same paragraph at \hsize=100pt
+% comes out IDENTICAL under \fussy and \sloppy, because it already fits within
+% \tolerance=200. It takes a paragraph that genuinely fails at 200 — \hsize=45pt
+% on a witness here — before the two part, and there the reference goes from 5
+% lines to 8.
+%
+% ⚠ And a larger divergence sits beside this one: our DEFAULT breaking is
+% already about as loose as the reference's \sloppy (5 lines against our 8 on
+% that witness). That is #768 and is not addressed here.
+\def\sloppy{\tolerance 9999\emergencystretch 3em\hfuzz .5pt\vfuzz\hfuzz}
+\def\fussy{\emergencystretch 0pt\tolerance 200\hfuzz .1pt\vfuzz\hfuzz}
+% ltpage.dtx:376-386, verbatim in effect. \raggedbottom gives the text block a
+% stretchable glue at its FOOT, so the block's own glue never has to stretch and
+% the page keeps its natural height; \flushbottom takes it away and the block
+% stretches to \textheight. They were both \def...{} here, which made the two
+% modes identical: measured against the reference, they differ by 36.9pt on the
+% last line of the same page and by 0 here (#721).
+%
+% ⛔ .0001fil AND NOT \vfil, for the reason ltpage.dtx:372-373 states: "to avoid
+% interfering with the 1fil space of \newpage". Two first-order fils share the
+% page's slack half and half, so a \vfil here would take half of what a \newpage
+% asked for.
+\def\raggedbottom{\def\@textbottom{\vskip 0pt plus 0.0001fil}\let\@texttop\relax}
+\def\flushbottom{\let\@textbottom\relax\let\@texttop\relax}
+% classes.dtx:4477-4480: a class that is not \@twoside is \raggedbottom.
+%
+%	\if@twoside \else \raggedbottom \fi
+%
+% \@twosidefalse is this engine's standing state (classkernel.go), so the rule
+% evaluates to \raggedbottom for every document it sets today — which is also
+% what article.cls gives a plain \documentclass{article}. ⚠ twocolumn is the other
+% half of that passage (classes.dtx:4486-4489 calls \flushbottom) and this engine
+% tracks two columns in Go, not through \if@twocolumn, so that half is not
+% expressed here.
+\raggedbottom
+\def\MFUhyphentrue{}
+\def\allowdisplaybreaks{\@ifnextbracket\@gobbleoptonly\relax}
+\def\@gobbleoptonly[#1]{}
+% \hypersetup is a real primitive (see hyperstyle.go) that reads hyperref's
+% link-styling options (colorlinks, urlcolor, linkcolor); it is not stubbed here.
+% xcolor's colour-model machinery, as a package reads it. This engine keeps
+% colours in RGB rather than xcolor's model tables, but a package that draws asks
+% which model is in force so it can pick the right device (pgf does this to choose
+% between RGB, CMYK and gray shadings). Answering "rgb" is both true here and what
+% lets those packages load at all — the TikZ fadings library stops on the very
+% first of these names otherwise.
+% \color hands the colour on to the drawing package when one is loaded and a
+% picture is open, so a mark it puts on the page is coloured like the text
+% around it (this is how TikZ's \draw[red] shorthand reaches the driver — it
+% asks the colour package, not pgf, to set the colour).
+\def\gotex@pgfcolor#1{\ifdefined\pgfsetcolor\ifpgfpicture\pgfsetcolor{#1}\fi\fi}
+\def\XC@sdef#1#2{\edef#1{#2}}
+\def\XC@tgt@mod#1{rgb}
+\def\XC@mod@rgb{rgb}
+\def\XC@mod@cmyk{cmyk}
+\def\XC@mod@gray{gray}
+% \extractcolorspec{name}{\cmd} hands back a colour as {model}{values}, and
+% \convertcolorspec converts one to another model. Both read the stored form this
+% engine publishes for every named colour (see colorbridge.go); since that form is
+% RGB, a conversion to RGB is the value itself, and any other target is answered
+% in RGB — the only model this engine has.
+\def\extractcolorspec#1#2{%
+  \expandafter\ifx\csname\string\color@#1\endcsname\relax
+    \def#2{{rgb}{0,0,0}}%
+  \else
+    \expandafter\expandafter\expandafter\gotex@extractspec
+    \csname\string\color@#1\endcsname{#2}%
+  \fi}
+\def\gotex@extractspec#1#2#3#4#5#6{\def#6{{#4}{#5}}}
+\def\convertcolorspec#1#2#3#4{\def#4{#2}}
+% The pgf system layer picks its driver from \pgfsysdriver when one is already
+% defined, so naming this engine's own (texmf/pgfsys-gotex.def) here is what makes
+% the real pgf/TikZ draw rather than load and define nothing. Harmless when pgf is
+% never loaded.
+\def\pgfsysdriver{pgfsys-gotex.def}
+\def\usetikzlibrary#1{}
+\def\pgfplotsset#1{}
+\def\tikzset#1{}
+% \lstdefinelanguage and \lstdefinestyle (listings). Undefined, the command is
+% skipped and everything it was given is ORDINARY MATERIAL, so a language
+% definition is TYPESET — the name, then the whole key=value body:
+%
+%	MonLangage morekeywords=MOTCLEFUITE, AUTREFUITE, sensitive=false, …
+%
+% where the reference sets nothing at all. 13 corpus papers define a language.
+%
+% The manual's full shape is
+%   \lstdefinelanguage[<dialect>]{<language>}[<base dialect>]{<base>}{<keys>}[<list>]
+% and every corpus use is the bare {name}{keys}. Taking a FIXED two arguments would
+% still be wrong the first time a document writes the dialect form — a gobbler of the
+% wrong arity fails silently, which is worse than being undefined, because an
+% undefined command at least shows up in the report (that is what \algnewcommand#1#2
+% did to \algnewcommand\algorithmiccomment[1]{…}, #378). So the optional parts are
+% scanned, not assumed away.
+\def\lstdefinelanguage{\@ifnextbracket\@lstdeflopt\@lstdeflname}
+\def\@lstdeflopt[#1]{\@lstdeflname}
+\def\@lstdeflname#1{\@ifnextbracket\@lstdeflbase\@lstdeflbody}
+\def\@lstdeflbase[#1]#2{\@lstdeflbody}
+\long\def\@lstdeflbody#1{\@ifnextbracket\@lstdeflkeys\relax}
+\def\@lstdeflkeys[#1]{}
+\def\microtypesetup#1{}
+\def\microtypecontext#1{}
+\def\zcsetup#1{}
+\def\setdisplayskipstretch#1{}
+\def\bibpunct#1{}
+% \gotex@maybegroup eats a following {..} only if one is really there, so a stub
+% whose argument is entirely optional cannot swallow the text after it.
+\def\gotex@maybegroup{\@ifnextchar\bgroup\@gobble\relax}
+% \gotex@optone eats an optional [..] then one {..}, or just the {..} when no
+% bracket follows. It is the shape of every configuration command whose first
+% argument is optional.
+\def\gotex@optone{\@ifnextbracket\gotex@optone@a\@gobble}
+\long\def\gotex@optone@a[#1]#2{}
+\def\address#1{}
+% \email{a@b} is PRINTED in the title block by every class in this corpus that does not
+% define its own — measured against the reference PDFs: 57 of 68 \email values appear in
+% their reference, and of the 32 papers that have both an \email and a reference, 20 print
+% it on PAGE 1 (acmart 8, llncs 4, sagej 2, revtex4-1 2, article 2, achemso, sn-jnl). The
+% eleven values that do NOT appear are template placeholders the author never replaced —
+% firstname.lastname@phillips.org, iauthor@gmail.com, davejudysteve@university.edu.
+%
+% ⛔ Discarded here since the beginning, and nothing could see it: a stub the engine DEFINES
+% is not an undefined command, so no census channel counts it. go-tex/measure's gobblers.py
+% is the inventory; \email leads it at 44 papers and 100 uses.
+%
+% It takes authblk's route, the one \affil above already uses: append to \@author, separated
+% by \\, and let whatever \@maketitle the class has typeset it — article.cls sets \@author
+% inside \begin{tabular}[t]{c} whose rows are \\-separated (article.cls:246-248), and this
+% engine's own generic \maketitle centres it.
+%
+% ⛔ amsart is the exception and needs no branch here: it prints \email in its BOTTOM matter,
+% after the bibliography (amsart.cls:509, :525 — "Email address"), and the 3 corpus papers
+% whose reference shows it on the LAST page are amsart and mathincs. \documentclass{amsart}
+% loads the real embedded class, which defines \email itself and overrides this.
+\long\def\email#1{\gotex@emailadd{#1}}
+\long\def\gotex@emailadd#1{\ifx\@author\@empty\gdef\@author{#1}\else
+  \g@addto@macro\@author{\\ #1}\fi}
+\def\keywords#1{}
+\def\AtBeginDocument#1{}
+\def\AtEndDocument#1{}
+\def\newboolean#1{}
+\def\setboolean#1#2{}
+\def\numberwithin#1#2{}
+\def\newaliascnt#1#2{}
+% \DeclareMathOperator{\Aut}{Aut} now DEFINES \Aut as \operatorname{Aut} (the
+% starred form uses \operatorname* for display limits). In math the raw scanner
+% emits \Aut verbatim; go-tex/math does not know it, but the math-source macro
+% resolver expands the zero-parameter \Aut to \operatorname{Aut}, which it renders
+% — so a paper's custom operators typeset instead of being dropped.
+\def\DeclareMathOperator{\@ifstar\@gtxdeclmathopstar\@gtxdeclmathop}
+\def\@gtxdeclmathop#1#2{\def#1{\operatorname{#2}}}
+\def\@gtxdeclmathopstar#1#2{\def#1{\operatorname*{#2}}}
+% \DeclarePairedDelimiter\cmd{L}{R} (mathtools) defines \cmd{x} as the auto-sized
+% \left L x \right R — real papers use it for \abs \norm \ceil \floor \set. It is a
+% plain one-argument macro so the math resolver can expand it textually (a runtime
+% \@ifstar for the * variant cannot survive that string substitution). The auto-size
+% \left…\right already matches what the starred form asks for.
+\def\DeclarePairedDelimiter#1#2#3{\newcommand#1[1]{\left#2 ##1\right#3}}
+% \DeclareMathSizes{<text>}{<math>}{<script>}{<scriptscript>} sets the maths sizes
+% a text size selects. latex.ltx:7523-7527 is \@ifstar then FOUR arguments, and it
+% is preamble-only. 11 corpus papers, 53 occurrences: each left "1010 7 5" behind.
+\def\DeclareMathSizes{\@ifstar\@gtxdeclmathsizes\@gtxdeclmathsizes}
+\def\@gtxdeclmathsizes#1#2#3#4{}
+% \newtheoremstyle takes NINE arguments (amsthm.sty: \newcommand{...}[9]) — name,
+% above/below skip, body font, indent, head font, punctuation, head space, head
+% spec. 3 corpus papers; undefined, most of the nine landed on the page.
+\def\newtheoremstyle#1#2#3#4#5#6#7#8#9{}
+% \setcitestyle{<keys>} — natbib, one argument. acmart's own \setcitestyle is served
+% by the \NAT@find@eq pair above, but a document that calls natbib's directly (we
+% emulate natbib rather than loading it) had its key list typeset. 4 papers.
+\def\setcitestyle#1{}
+% \definecolorset[<type>]{<model>}{<head>}{<tail>}{<set>} — xcolor.sty:616-618 is
+% \@testopt then four. 2 papers.
+\def\definecolorset{\@ifnextbracket\@gtxdefcolsetopt\@gtxdefcolset}
+\def\@gtxdefcolsetopt[#1]{\@gtxdefcolset}
+\def\@gtxdefcolset#1#2#3#4{}
+% \mprset{<keys>} — mathpartir's layout options, one argument.
+\def\mprset#1{}
+% \DeclareCaptionLabelFormat{<name>}{<code>} — caption3.sty:725 is \newcommand*[2].
+% 2408.02845 declares two of them in its preamble, and undefined they printed their
+% own names and bodies on page 1: "adja-page", then "#1 #2 (previous page)" with the
+% \hrulefill drawn across the sheet, pushing the title to page 2.
+\def\DeclareCaptionLabelFormat#1#2{}
+% \DeclareCaptionFormat[*]{<name>}[<single-line>]{<code>} — caption3.sty:696-706:
+%   \newcommand*\DeclareCaptionFormat{\caption@teststar\caption@declareformat…}
+%   \newcommand*\caption@declareformat[2]{\@dblarg{\caption@@declareformat#1{#2}}}
+%   \long\def\caption@@declareformat#1#2[#3]#4{…}
+% so: an optional star, the name, an OPTIONAL single-line variant that \@dblarg
+% defaults to the mandatory one, and the format body. paper.cls (PNAS) writes
+%   \DeclareCaptionFormat{pnasformat}{…#1#2#3}
+%   \captionsetup*{format=pnasformat}
+% and undefined, the first leaked its name and the second its star and key — page 1
+% of 2310.11517 reads "*format=pnasformat" in the body text. Caption FORMATS are not
+% modelled here (the caption head goes through \fnum@<type>, see doCaptionsetup), so
+% the declaration is consumed and nothing is kept: what matters is that it stops
+% reaching the page.
+\def\DeclareCaptionFormat{\@ifstar\@gtxdeclcapfmt\@gtxdeclcapfmt}
+\def\@gtxdeclcapfmt#1{\@ifnextbracket\@gtxdeclcapfmtopt\@gtxdeclcapfmtplain}
+\def\@gtxdeclcapfmtopt[#1]#2{}
+\def\@gtxdeclcapfmtplain#1{}
+% mdframed's style registry. The frames themselves are not modelled, but these three
+% commands STORE a key list — they typeset nothing — and undefined they left their
+% arguments on the page:
+%
+%	\newrobustcmd*\mdfdefinestyle[2]{\csdef{mdf@definestyle@#1}{#2}}     % mdframed.sty:564
+%	\newrobustcmd*\mdfapptodefinestyle[2]{…\csappto{mdf@definestyle@#1}{,#2}}  % :567
+%	\newrobustcmd*{\mdfsetup}{\kvsetkeys{mdf}}                            % :386
+%
+% researchpaper.sty (PNAS) writes \mdfdefinestyle{pnassigstyle}{linewidth=0.7pt,…} at
+% :23, and page 1 of 2310.11517 carried "pnassigstylelinewidth=0.7pt,backgroundcolor=
+% pnasblueback…" as a 797pt line on a 612pt sheet (go-tex/engine#629). 144 papers of
+% the arXiv pool write one of them.
+\def\mdfdefinestyle#1#2{}
+\def\mdfapptodefinestyle#1#2{}
+\def\mdfsetup#1{}
+% And the environment they style. Its BODY is document content and must be set — the
+% PNAS significance statement lives in one — so only the optional key list is
+% consumed; the frame itself is not drawn. Undefined, "[style=pnassigstyle]" stood on
+% page 1 of 2310.11517 as ordinary text.
+\newenvironment{mdframed}[1][]{}{}
+% \DeclareVoidOption{<name>}{<code>} — kvoptions.sty:370, \newcommand*[2].
+\def\DeclareVoidOption#1#2{}
+% \ProcessKeyvalOptions — kvoptions.sty:619 is \@ifstar then the family name, so
+% \ProcessKeyvalOptions* takes nothing and the plain form takes one group.
+\def\ProcessKeyvalOptions{\@ifstar{}\@gtxprockvopt}
+\def\@gtxprockvopt#1{}
+% \define@key{<family>}{<key>}[<default>]{<code>} — keyval.sty:81-86: two groups,
+% then \@ifnextchar[ for the default, then the code.
+\def\define@key#1#2{\@ifnextbracket\@gtxdefkeyopt\@gtxdefkey}
+\def\@gtxdefkeyopt[#1]#2{}
+\def\@gtxdefkey#1{}
+% \contentsmargin[<corr>]{<width>} — titletoc.sty:188. The body ENDS with a bare
+% "\def\@pnumwidth", which swallows the following group as that macro's body, so
+% the command really takes an optional bracket AND a group.
+\def\contentsmargin{\@ifnextbracket\@gtxcontmargo\@gtxcontmarg}
+\def\@gtxcontmargo[#1]#2{}
+\def\@gtxcontmarg#1{}
+% \titlecontents[*]{<sec>}[<left>]{<above>}{<numbered>}{<numberless>}{<filler>}
+% [<below>][<extra>] — titletoc.sty:203-238: \@ifstar, one group, a bracket, four
+% groups, then up to two trailing brackets. wlscirep.cls declares three of them.
+\def\titlecontents{\@ifstar\@gtxtitlecont\@gtxtitlecont}
+\def\@gtxtitlecont#1[#2]#3#4#5#6{\@ifnextbracket\@gtxtitlecontb\relax}
+\def\@gtxtitlecontb[#1]{\@ifnextbracket\@gtxtitlecontc\relax}
+\def\@gtxtitlecontc[#1]{}
+% \defaultbibliography{<files>} / \defaultbibliographystyle{<style>} — the
+% "default" pair a journal class offers so a document can name its .bib once.
+\def\defaultbibliography#1{}
+\def\defaultbibliographystyle#1{}
+% \phantomsection — hyperref's anchor, no arguments and nothing to draw.
+\def\phantomsection{}
+% titletoc's partial tables of contents. Each takes an optional list NAME
+% (titletoc.sty:455, 465, 472, 497), and \printcontents takes three more groups —
+% prefix, start level, and the toc code. Undefined, 2406.13839's
+%
+%	\startcontents[sections] \printcontents[sections]{l}{1}{…}
+%
+% printed "[sections] [sections]l1" on a page of its own.
+\def\startcontents{\@ifnextbracket\@gtxstartcontso\relax}
+\def\@gtxstartcontso[#1]{}
+\def\stopcontents{\@ifnextbracket\@gtxstopcontso\relax}
+\def\@gtxstopcontso[#1]{}
+\def\resumecontents{\@ifnextbracket\@gtxresumecontso\relax}
+\def\@gtxresumecontso[#1]{}
+\def\printcontents{\@ifnextbracket\@gtxprintcontso\@gtxprintcont}
+\def\@gtxprintcontso[#1]{\@gtxprintcont}
+\def\@gtxprintcont#1#2#3{}
+% \SetKwInput{\Cmd}{Label} (algorithm2e.sty) defines \Cmd{text} to print
+% "Label: text" as a line of the algorithm. It was a gobbler, and that left the
+% four commands algorithm2e DECLARES WITH IT undefined — \KwIn, \KwOut, \KwData
+% and \KwResult — because we emulate the package rather than loading its .sty.
+% An undefined \KwIn is skipped with its argument, and that argument is PROSE:
+% 2206.00339 writes about fifty words of it per use ("Right-hand side F of
+% Equation (3) defining the ODE system, start time …"), 13 uses over 6 papers.
+%
+% The reference prints the label and the text on one line, measured on a witness
+% with [ruled]algorithm2e: "Input: alpha beta gamma" / "Output: delta epsilon".
+% The label is bold here where algorithm2e uses \KwSty, which is bold by default;
+% a document that redefines \KwSty does not reach this.
+\def\SetKwInput#1#2{\def#1##1{\par\noindent\textbf{#2: }##1\par}}
+\SetKwInput{\KwIn}{Input}
+\SetKwInput{\KwOut}{Output}
+\SetKwInput{\KwData}{Data}
+\SetKwInput{\KwResult}{Result}
+% \algnewcommand / \algrenewcommand (algorithmicx.sty:621-622) define the language
+% keywords: \algrenewcommand\algorithmicwhile{\textbf{While}}. Undefined, the command
+% is skipped and its braced argument is ORDINARY MATERIAL, so the keyword is TYPESET —
+% 2406.02421 opens on a page carrying nothing but "While For Do If Then Else End
+% Return", 38 characters, and runs a page long (#293).
+%
+% The real pair routes through \ALG@defbasecmd, which binds the name into a
+% per-LANGUAGE slot (\ALG@cmd@<lang>@<name>) so algorithmicx can carry several
+% pseudocode languages at once. No corpus document uses more than one, so the
+% visible behaviour is \newcommand/\renewcommand on the name itself — including the
+% [n]-argument form algorithmicx's own \algnewcommand\algorithmiccomment[1]{…} uses.
+%
+% The definition is KEPT rather than gobbled: a document that writes
+% \algorithmicwhile itself then gets what it asked for. Our own keyword output does
+% not consult these yet — \@algkw prints its word directly — so a document's
+% capitalisation is still ours. That is a smaller gap than a page of leaked keywords.
+%
+% This REPLACES a \def\algnewcommand#1#2{} further down the same format, which took
+% exactly two arguments: on \algnewcommand\algorithmiccomment[1]{…} — the form
+% algorithmicx uses itself — #2 grabbed the "[1]" and the body leaked. The pair lives
+% beside that former gobbler so a later line of this format cannot shadow it again.
+\let\algnewcommand\newcommand
+\let\algrenewcommand\renewcommand
+\def\setlist{\@ifnextbracket\@setlistopt\@setlistarg}
+\def\@setlistopt[#1]#2{}
+\def\@setlistarg#1{}
+\def\RequirePackage{\usepackage}
+\def\and{\quad}
+% CONFIGURATION commands that carry no content. Since #302 an undefined control
+% sequence no longer swallows the groups after it — tex.web forgets the command and
+% the following {…} is an ordinary group, which is TYPESET — so each of these left
+% its arguments on the page. In a preamble that opens a page of its own: measured,
+% \setcellgapes{2pt} alone gave one paper a first page carrying "2pt" and pushed its
+% title to page 2.
+%
+% They are declared HERE, one by one with their real arity, rather than by putting
+% the generic swallow back: #302 removed that because it cut real content
+% (\juanggr{<a paragraph>} took the paragraph with it, 89586 glyphs over 74 papers).
+% The distinction is what these commands ARE — a length, a counter name, a hook —
+% never text to set.
+%
+%   fancyhdr   \fancyheadoffset[LE,RO]{0.5cm}     13 corpus papers leak "[LE,RO]0.5cm"
+%   manyfoot   \DeclareNewFootnote[para]{A}[ctr]  12          leak "[para]A[ctr]"
+%   etoolbox   \AtBeginEnvironment{env}{code}     10, 109 uses; the hook is lost, its
+%                                                 argument no longer printed
+%   chngcntr   \counterwithout{footnote}{section}    leaked "footnotesection"
+%   makecell   \setcellgapes{2pt}                    leaked "2pt"
+\def\fancyheadoffset{\@ifnextbracket\gotex@optone\@gobble}
+\def\fancyfootoffset{\@ifnextbracket\gotex@optone\@gobble}
+\def\DeclareNewFootnote{\@ifnextbracket\gotex@dnfopt\gotex@dnfmand}
+\long\def\gotex@dnfopt[#1]#2{\gotex@maybeopt}
+\long\def\gotex@dnfmand#1{\gotex@maybeopt}
+\def\gotex@maybeopt{\@ifnextbracket\@gobbleoptonly\relax}
+\long\def\AtBeginEnvironment#1#2{}
+\long\def\AtEndEnvironment#1#2{}
+\long\def\counterwithout#1#2{}
+\long\def\counterwithin#1#2{}
+\def\setcellgapes{\@ifnextbracket\gotex@optone\@gobble}
+\def\makegapedcells{}
+\def\urlstyle#1{}
+\def\urladdr#1{}
+\def\aliascntresetthe#1{}
+\def\subjclass{\@ifnextbracket\@subjclassopt\@subjclassarg}
+\def\@subjclassopt[#1]#2{}
+\def\@subjclassarg#1{}
+% Break hints and math-boldness / spacing switches: this engine does its own
+% page and line breaking and has no bold-math or spacing modes, so these are
+% accepted as no-ops. \pagebreak & co. gobble their optional [priority].
+% \vspace is a MACRO in LaTeX (\def\vspace{\@ifstar\@vspacer\@vspace}), and packages
+% DEPEND on that. lineno.sty installs its wrappers with
+%
+%   \def\@tempa#1#2{\expandafter\def\expandafter#2\expandafter{\expandafter
+%     \ifLineNumbers\expandafter#1\expandafter\fi#2}}
+%   \@tempa\@LN@changevadjust\vspace
+%
+% whose \expandafter chain expands #2 ONE step, so the new body holds the command's
+% OLD MEANING rather than its name. A primitive cannot be expanded: the body kept the
+% token \vspace and the wrapper called itself. Measured: 400 turns into the runaway
+% guard on three corpus papers of class aa with lineno — 2607.18707, 2607.28723 and
+% 2607.29488 — each stopping at ONE page. \pagebreak and \nopagebreak, which lineno
+% wraps the same way, were already macros here and never had the problem.
+\expandafter\let\csname gotex@vspace\endcsname\vspace
+\def\vspace{\gotex@vspace}
+% ⛔⛔ THE FOUR BREAK COMMANDS WERE COMPLETE NO-OPS.
+%
+% They were \@ifnextbracket\@gobbleoptonly\relax, so
+%
+%	un deux\linebreak trois quatre
+%
+% came out as the single word "deuxtrois": with no break, and no glue either — a
+% control word absorbs the spaces after it, in the REFERENCE too — the two words landed
+% adjacent. Measured against tectonic: the reference puts "deux" at x=456.72 with
+% "trois quatre" on the next line; we had one line and one word. On a short first
+% paragraph followed by \pagebreak the reference makes TWO pages and we made ONE.
+% 18 of the 154 measured corpus papers use one of these four.
+%
+% ⛔ The eaten space was MY misreading while diagnosing, and it is retracted: asked
+% directly, tectonic joins "sixsept" in six\nolinebreak sept exactly as we do, and
+% separates them only when a {} stops the absorption. A test that had demanded a space
+% there would have been demanding a divergence.
+%
+% ⛔⛔ AND NO BACKQUOTES IN THIS COMMENT. It lives inside a Go RAW STRING, so a
+% backquote ENDS the preamble here and the file stops compiling with errors that point
+% at TeX words ("unexpected name six after top level declaration"). Third time in this
+% repository.
+%
+% The reference reduces all four to a PENALTY (ltspace.dtx:294-306, 344-375, 527-531):
+%
+%	\DeclareRobustCommand\pagebreak{\@testopt{\@no@pgbk-}4}
+%	\DeclareRobustCommand\nopagebreak{\@testopt\@no@pgbk4}
+%	\DeclareRobustCommand\linebreak{\@testopt{\@no@lnbk-}4}
+%	\DeclareRobustCommand\nolinebreak{\@testopt\@no@lnbk4}
+%
+% The default argument is 4, and the sign is the whole difference between forcing and
+% forbidding: \pagebreak passes "-" so \penalty -\@getpen{4} = -10000 forces the break,
+% \nopagebreak passes nothing so +10000 forbids it.
+% ⛔ \def, not \DeclareRobustCommand: that macro is not yet defined at this point in
+% this format's preamble — the build fails with "Undefined control sequence
+% \DeclareRobustCommand" on this very line — and every neighbour here uses \def. The
+% difference is robustness inside a moving argument (\protected), which is a real but
+% separate divergence, shared with \pagebreak's and \vspace's existing definitions.
+\def\pagebreak{\@testopt{\@no@pgbk-}4}
+\def\nopagebreak{\@testopt\@no@pgbk4}
+\def\linebreak{\@testopt{\@no@lnbk-}4}
+\def\nolinebreak{\@testopt\@no@lnbk4}
+% \allowbreak, latex.ltx:600 verbatim — a break opportunity of penalty 0 and nothing
+% else. It was undefined in text: strict mode aborted on \texttt{a\_\allowbreak b}.
+\def\allowbreak{\penalty \z@}
+% \@getpen, ltspace.dtx:529-531 verbatim. The optional argument is a DEGREE, not a
+% penalty: 0 means "no opinion" and 4 means "absolutely".
+\def\@getpen#1{\ifcase #1 \z@ \or \@lowpenalty\or
+         \@medpenalty \or \@highpenalty
+         \else \@M \fi}
+% \@no@lnbk, ltspace.dtx:364-375 verbatim.
+%
+% ⛔ \lastskip is saved, \unskip removes it, the penalty goes in, and the glue is put
+% back — in that order. A \penalty placed AFTER the interword glue is not a legal
+% breakpoint for it (tex.web's precedes_break), so \linebreak would do nothing at all
+% without the \unskip. And the \ignorespaces is what stops the space that follows the
+% command from becoming a second one.
+\def\@no@lnbk #1[#2]{%
+  \ifvmode
+    \@nolnerr
+  \else
+    \@tempskipa\lastskip
+    \unskip
+    \penalty #1\@getpen{#2}%
+    \ifdim\@tempskipa>\z@
+      \hskip\@tempskipa
+      \ignorespaces
+    \fi
+  \fi}
+% \@nolnerr, lterror.dtx:641-642, and \@eha, lterror.dtx:602-606 — the help text, which
+% was absent here while \@ehc was present:
+%
+%	\gdef\@nolnerr{\@latex@error{There's no line here to end}\@eha}
+%
+% ⛔ The reference ERRORS on \linebreak in vertical mode rather than ignoring it. Note
+% that \\ in vertical mode goes through \@gnewline, which calls the same \@nolnerr
+% (ltspace.dtx:517-522) — go-tex/engine#661 made that case silent instead, on a witness
+% of its own. The two are not reconciled here and #661 says so.
+\gdef\@eha{Your command was ignored.\MessageBreak
+  Type \space I <command> <return> \space to replace it with another command,\MessageBreak
+  or \space <return> \space to continue without it.}
+\gdef\@nolnerr{\@latex@error{There's no line here to end}\@eha}
+% \@no@pgbk, ltspace.dtx:348-355, now VERBATIM in both branches:
+%
+%	\def\@no@pgbk #1[#2]{%
+%	  \ifvmode \penalty #1\@getpen{#2}%
+%	  \else \@bsphack \vadjust{\penalty #1\@getpen{#2}}\@esphack \fi}
+%
+% ⭐ The horizontal branch was the one divergence #667 knowingly left, because the
+% penalty has to reach the VERTICAL list: written straight into the horizontal list it
+% would be a LINE-break penalty, the same number meaning a different thing — a
+% different command with the same spelling. \vadjust is what carries it across, and it
+% exists now (go-tex/engine#665; tex.web §2994-3001, §12900-12903, §17413-17418,
+% §21195, §21199-21231).
+\def\@no@pgbk #1[#2]{%
+  \ifvmode
+    \penalty #1\@getpen{#2}%
+  \else
+    \@bsphack
+    \vadjust{\penalty #1\@getpen{#2}}%
+    \@esphack
+  \fi}
+% \samepage, ltspace.dtx:314-322 verbatim, nine penalties set to \@M:
+%
+%	\DeclareRobustCommand\samepage{\interlinepenalty\@M
+%	   \predisplaypenalty\@M \postdisplaypenalty\@M \interdisplaylinepenalty\@M
+%	   \@beginparpenalty\@M \@endparpenalty\@M \@itempenalty\@M
+%	   \@secpenalty\@M \interfootnotelinepenalty\@M}
+%
+% The reference documents it as a DECLARATION, so a bare \samepage inside a group
+% is its usage. It was undefined here, and strict mode aborted on it (probed:
+% "Undefined control sequence \samepage"). Whether \begin{samepage} also has to
+% work is a separate question about \end's handling of a declaration with no
+% \endsamepage, and ltspace.dtx does not answer it — so nothing is claimed here.
+%
+% ⛔ \@M and all four \@…penalty registers were already here. grep found them only
+% inside COMMENTS, which read as "not implemented"; a probe that SET each one
+% compiled clean. The code shape and the behaviour disagreed, and the behaviour is
+% the one that answers.
+\def\samepage{\interlinepenalty\@M
+  \predisplaypenalty\@M
+  \postdisplaypenalty\@M
+  \interdisplaylinepenalty\@M
+  \@beginparpenalty\@M
+  \@endparpenalty\@M
+  \@itempenalty\@M
+  \@secpenalty\@M
+  \interfootnotelinepenalty\@M}
+\def\boldmath{}
+\def\unboldmath{}
+% \frenchspacing / \nonfrenchspacing, latex.ltx:554-557 verbatim. They were empty
+% because nothing read \sfcode; it is a real table now (spacefactor.go).
+\def\frenchspacing{\sfcode46=1000 \sfcode63=1000 \sfcode33=1000 \sfcode58=1000 \sfcode59=1000 \sfcode44=1000 }
+\def\nonfrenchspacing{\sfcode46=3000 \sfcode63=3000 \sfcode33=3000 \sfcode58=2000 \sfcode59=1500 \sfcode44=1250 }
+% latex.ltx:641 — a closing delimiter leaves the factor ALONE (sfcode 0), so
+% "end.)" still ends a sentence and "(Mr.)" does not start one.
+\sfcode41=0 \sfcode39=0 \sfcode93=0
+% ...and LaTeX's default is \nonfrenchspacing, which it runs when the format is
+% built. Without this line every sfcode would stay at INITEX's 1000 and the whole
+% table would be inert.
+\nonfrenchspacing
+% \@ is latex.ltx:6626 — \def\@{\spacefactor\@m{}} — and it exists for one
+% reason: every UPPERCASE letter has sfcode 999 (tex.web §232), so a period after
+% a capital does not end a sentence. "NASA\@. The" is how a document says that it
+% does. \@m is 1000.
+\def\@{\spacefactor1000 {}}
+% \qedhere (amsthm): the end-of-proof square requested mid-line/mid-display is
+% dropped here (the proof's trailing \qed still sets the mark).
+\def\qedhere{}
+% \newcolumntype{x}[n]{spec}: accepted and gobbled whole (optional [.] plus the
+% required group) instead of leaking its body.
+% \long: array.sty's column rewrites are \long (array.sty:273). A gobbler that refuses
+% a \par does not gobble less — the abandoned call leaks the body it was meant to
+% swallow onto the page.
+%
+% ⛔ \footnotetext used to sit on this same gobbler, and that was a silent LOSS, not a
+% gobble: \footnotetext[n]{text} is the note whose MARK \footnotemark placed elsewhere,
+% so the whole note went in the bin while every census channel read the macro as
+% working. It is a Go primitive now (footnote.go, primitives.go). go-tex/measure's
+% gobblers.py is the inventory that question produced — 144 definitions of this shape,
+% 62 of them used by the corpus.
+\long\def\@gobbleoptarg[#1]#2{}
+\def\newcolumntype#1{\@ifnextbracket\@gobbleoptarg\@gobble}
+% Body-level commands seen across the corpus that, left undefined, DROP real
+% content rather than mere configuration (from the skip census):
+% \ensuremath{x} typesets x in math — undefined, its argument fell into text mode
+% and its sub/superscripts were lost; \texorpdfstring{tex}{pdf} keeps the TeX form
+% (hyperref bookmarks); \xspace is a smart space that here is a harmless no-op.
+\def\ensuremath#1{\ifmmode#1\else$#1$\fi}
+\def\texorpdfstring#1#2{#1}
+% \pdfstringdefDisableCommands{<code>} appends <code> to hyperref's
+% \pdfstringdefPreHook, run only while a title is being flattened into the STRING
+% a bookmark carries — never while typesetting. Its whole purpose is to silence
+% commands in that string, so a document's code is read and dropped. It is a
+% preamble regular in beamer talks, and undefined it spills its whole body,
+% \def and all, onto the page.
+\long\def\pdfstringdefDisableCommands#1{}
+% translator (which beamer requires) looks a word up in a dictionary for the
+% reader's language: \translate{Theorem} is "Theorem", "Théorème" or "Satz". The
+% real package is fetched with beamer and redefines both of these — this is what
+% answers when it is not there, so a theorem still says what it is instead of
+% losing its own word. \usedictionary names a dictionary file to load.
+\newcommand\translate[2][]{#2}
+\def\usedictionary#1{}
+\def\xspace{}
+% algorithmicx / algpseudocode (algorithm bodies in CS papers): best-effort so the
+% pseudocode reads as lines with keywords instead of being dropped command-by-
+% command. Not the real indented layout — each control word starts a line and
+% prints its keyword; conditions/bodies that follow render as ordinary text.
+\def\State{\par\noindent}
+\def\Statex{\par\noindent}
+\def\Require{\par\noindent\textbf{Require: }}
+\def\Ensure{\par\noindent\textbf{Ensure: }}
+\def\Input{\par\noindent\textbf{Input: }}
+\def\Output{\par\noindent\textbf{Output: }}
+\def\Return{\textbf{return} }
+\def\Comment#1{}
+\def\If#1{\par\noindent\textbf{if} #1 \textbf{then}}
+\def\ElsIf#1{\par\noindent\textbf{else if} #1 \textbf{then}}
+\def\Else{\par\noindent\textbf{else}}
+\def\EndIf{}
+\def\For#1{\par\noindent\textbf{for} #1 \textbf{do}}
+\def\ForAll#1{\par\noindent\textbf{for all} #1 \textbf{do}}
+\def\EndFor{}
+\def\While#1{\par\noindent\textbf{while} #1 \textbf{do}}
+\def\EndWhile{}
+\def\Repeat{\par\noindent\textbf{repeat}}
+\def\Until#1{\par\noindent\textbf{until} #1}
+\def\Loop{\par\noindent\textbf{loop}}
+\def\EndLoop{}
+\def\Function#1#2{\par\noindent\textbf{function} #1(#2)}
+\def\EndFunction{}
+\def\Procedure#1#2{\par\noindent\textbf{procedure} #1(#2)}
+\def\EndProcedure{}
+% ─── end real-world preamble robustness ──────────────────────────────────────
+`
+
+// LoadLaTeX loads the Plain macros (if not already) and the minimal LaTeX kernel.
+func (e *Engine) LoadLaTeX() error {
+	if err := e.LoadPlain(); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(MiniLaTeXKernel); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(LaTeX2eKernelHelpers); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(LaTeXHooks); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(LaTeX2eClassKernel); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(LaTeX2eClassLead); err != nil {
+		return err
+	}
+	if err := e.LoadFormat(AMSClassSubstrate); err != nil {
+		return err
+	}
+	// Real single-column float placement (figure/table): loaded LAST and ONLY under
+	// GOTEX_FLOATS, so it overrides the classic inline \@float from LaTeX2eClassLead. With
+	// the flag off this substrate is never loaded and \@float keeps its untouched inline
+	// definition, so the default output is byte-for-byte unchanged. See floatplace.go.
+	if floatsEnabled() {
+		return e.LoadFormat(FloatPlacementSubstrate)
+	}
+	return nil
+}
+
+// doNewcommand implements LaTeX's \newcommand / \renewcommand / \providecommand:
+//
+//	\newcommand{\name}[nargs][default]{body}   (braces optional around \name)
+//
+// It defines \name as a macro of nargs undelimited parameters (#1…#nargs in the
+// body). When a second bracket [default] is present, the FIRST of the nargs
+// parameters becomes optional: at call time #1 comes from a bracketed [..]
+// argument if one is supplied, otherwise from default (standard LaTeX semantics).
+func (e *Engine) doNewcommand() { e.doNewcommandMode(false) }
+
+// doProvidecommand implements \providecommand: it reads and consumes the same
+// grammar as \newcommand but only defines \name when it is not already defined,
+// so a fallback definition never clobbers a real one.
+func (e *Engine) doProvidecommand() { e.doNewcommandMode(true) }
+
+func (e *Engine) doNewcommandMode(provide bool) {
+	// ltdefns.dtx: \newcommand and friends go through \@star@or@long, which sets
+	//
+	//	\@ifstar{\let\l@ngrel@x\relax …}{\let\l@ngrel@x\long …}
+	//
+	// so the PLAIN form defines a \long macro and only the STARRED form defines a
+	// short one. Getting this wrong is not academic: with every \newcommand macro
+	// short, the \par check of tex.web §392 fires on ordinary documents — measured,
+	// 10 of 12 real talks tripped it.
+	star := e.peekStar() // \newcommand* / \renewcommand* / \providecommand*: short form
+	name := e.scanCmdName()
+	nargs := e.scanOptBracketInt()
+	optDefault, optArg := e.scanOptBracketToks() // optional [default]: 1st arg optional
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok || !(t.cat == catBegin && !t.cs_) {
+		if ok {
+			e.back(t)
+		}
+		return
+	}
+	body := e.scanBody() // always consume the body, even when we won't (re)define
+	if provide && name != "" && e.eq[name] != nil {
+		return // \providecommand: keep the existing definition
+	}
+	var params []tok
+	for i := 1; i <= nargs && i <= 9; i++ {
+		params = append(params, tok{ch: rune('0' + i), cat: catParam})
+	}
+	if name != "" {
+		m := &meaning{
+			kind: mMacro, params: params, body: body,
+			optArg: optArg && nargs >= 1, optDefault: optDefault,
+			long: !star,
+		}
+		e.define(name, m, false)
+		// A command WITH an optional argument is a "robust" LaTeX command: latex.ltx
+		// splits it into a front end (\name) and an internal (the control sequence
+		// literally named "\name", reached as \csname\string\name\endcsname) that holds
+		// the [#1]#2… body. Class code rebinds the front end to a wrapper that calls
+		// that internal — amsart does exactly this for \title / \author
+		// (\edef\title{\@dblarg\@xp\@nx\csname\string\title\endcsname}). Bind the
+		// internal to the same body so the wrapper resolves to real code instead of an
+		// undefined \relax (which would leak the arguments and derail \maketitle).
+		if m.optArg {
+			e.define("\\"+name, m, false)
+		}
+	}
+}
+
+// doNewenvironment implements \newenvironment{name}[nargs][default]{begin}{end}:
+// it defines \name (a macro of nargs parameters whose body is the begin-code) and
+// \endname (a 0-parameter macro whose body is the end-code), so \begin{name} and
+// \end{name} run them via \csname. When a [default] bracket follows [nargs], the
+// environment's first argument is optional (as for \newcommand).
+func (e *Engine) doNewenvironment() {
+	// ltdefns.dtx: \newenvironment goes through \@star@or@long too, so the plain form
+	// is \long and only \newenvironment* is short.
+	star := e.peekStar()
+	name := e.readBraceName()
+	nargs := e.scanOptBracketInt()
+	optDefault, optArg := e.scanOptBracketToks()
+	begin := e.readBodyGroup()
+	end := e.readBodyGroup()
+	if name == "" {
+		return
+	}
+	var params []tok
+	for i := 1; i <= nargs && i <= 9; i++ {
+		params = append(params, tok{ch: rune('0' + i), cat: catParam})
+	}
+	e.define(name, &meaning{
+		kind: mMacro, params: params, body: begin,
+		optArg: optArg && nargs >= 1, optDefault: optDefault,
+		long: !star,
+	}, false)
+	e.define("end"+name, &meaning{kind: mMacro, body: end, long: !star}, false)
+}
+
+// doRuleNode builds a node for LaTeX's \rule[lift]{width}{height}: a filled
+// rectangle of the given width and height, raised by the optional lift.
+//
+// The lift moves the rule ACROSS the baseline; it does not make it taller.
+// latex.ltx:11900-11907 is explicit about which dimension takes it:
+//
+//	\def\@rule[#1]#2#3{%
+//	  \leavevmode
+//	  \hbox{%
+//	    \setlength\@tempdima{#1}%   lift
+//	    \setlength\@tempdimb{#2}%   width
+//	    \setlength\@tempdimc{#3}%   height
+//	    \advance\@tempdimc\@tempdima
+//	    \vrule\@width\@tempdimb\@height\@tempdimc\@depth-\@tempdima}}
+//
+// so height = #3 + lift and depth = -lift. Both signs were the wrong way round
+// here, which for a NEGATIVE lift — the only kind that does anything visible —
+// added the lift to the height and asked for a negative depth that the packer
+// clamped to zero: \rule[-2mm]{3mm}{6mm} packed 8mm tall and 0mm deep where TeX
+// makes it 4mm above the baseline and 2mm below. A lift of zero, which is what
+// \rule{w}{h} supplies, is unaffected either way.
+func (e *Engine) doRuleNode() ruleNode {
+	lift := 0
+	e.skipOptSpace()
+	if t, ok := e.getXToken(); ok {
+		if !t.cs_ && t.ch == '[' {
+			lift = e.scanDimen()
+			if c, ok := e.getXToken(); ok && !(!c.cs_ && c.ch == ']') {
+				e.back(c)
+			}
+		} else {
+			e.back(t)
+		}
+	}
+	w := e.readBraceDimen()
+	h := e.readBraceDimen()
+	return ruleNode{width: w, height: h + lift, depth: -lift}
+}
+
+// readBraceDimen reads a {dimen} group and returns the dimension in sp.
+func (e *Engine) readBraceDimen() int {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok || !(t.cat == catBegin && !t.cs_) {
+		if ok {
+			e.back(t)
+		}
+		return 0
+	}
+	// calc makes this argument an arithmetic expression; without the package both
+	// hooks are inert and this is TeX's own behaviour (see calc.go).
+	d, ok := e.calcLeadDimen()
+	if !ok {
+		d = e.scanDimen()
+	}
+	d = e.calcTailDimen(d)
+	if c, ok := e.getXToken(); ok && !(c.cat == catEnd && !c.cs_) {
+		e.back(c)
+	}
+	return d
+}
+
+// readBodyGroup reads a {…} group as a macro body (converting #n to parameters).
+func (e *Engine) readBodyGroup() []tok {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok || !(t.cat == catBegin && !t.cs_) {
+		if ok {
+			e.back(t)
+		}
+		return nil
+	}
+	return e.scanBody()
+}
+
+// scanCmdName reads the command name for \newcommand: either {\name} or \name.
+// It reads raw (no expansion) so a \renewcommand target that is already defined
+// is not expanded before its name is captured.
+func (e *Engine) scanCmdName() string {
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok {
+		return ""
+	}
+	if t.cat == catBegin && !t.cs_ {
+		n, ok := e.getNext()
+		name := ""
+		if ok && n.cs_ {
+			name = n.cs
+		}
+		if c, ok := e.getNext(); ok && !(c.cat == catEnd && !c.cs_) {
+			e.back(c)
+		}
+		return name
+	}
+	if t.cs_ {
+		return t.cs
+	}
+	e.back(t)
+	return ""
+}
+
+// scanOptBracketInt reads an optional [n] and returns n (0 if absent).
+func (e *Engine) scanOptBracketInt() int {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok {
+		return 0
+	}
+	if !t.cs_ && t.ch == '[' {
+		// The count may arrive BRACED — \newcommand\foo[{1}]… — because the caller
+		// built the call by expansion rather than typing it. TeX strips the braces
+		// of an argument that is entirely one group, so read the bracket's content
+		// and take the number from what is left.
+		// The '[' goes back so the bracket reader (which applies TeX's
+		// brace-stripping rule) can take the whole thing; it is there, so the
+		// reader always finds it.
+		e.back(t)
+		toks, _ := e.scanOptBracketToks()
+		// A control sequence in the brackets NAMES the number instead of spelling
+		// it: \newcommand\foo[\beamer@argscount]{…}. Reading only the digits made
+		// that command take ZERO arguments, and every argument the caller passed was
+		// then left in the input to be typeset. beamer generates its whole overlay
+		// layer this way, so \defbeamertemplate printed each template's body onto the
+		// page instead of storing it.
+		//
+		// Hand such a bracket to the engine's own integer scanner, on an ISOLATED
+		// input stack so nothing it leaves unread can escape into the document.
+		for _, u := range toks {
+			if u.cs_ {
+				saved := e.lists
+				e.lists = nil
+				e.push(append(append([]tok{}, toks...), csTok("relax")))
+				n := e.scanInt()
+				e.lists = saved
+				return n
+			}
+		}
+		n := 0
+		neg := false
+		for _, u := range toks {
+			switch {
+			case u.ch == '-':
+				neg = !neg
+			case u.ch >= '0' && u.ch <= '9':
+				n = n*10 + int(u.ch-'0')
+			}
+		}
+		if neg {
+			n = -n
+		}
+		return n
+	}
+	e.back(t)
+	return 0
+}
+
+// scanOptBracketToks reads an optional [...] group and returns its token content
+// together with whether the bracket was present. Brace groups nested inside are
+// tracked by depth so that a ] appearing within {…} does not close the group
+// early. When no bracket follows, it pushes back the peeked token and reports
+// (nil, false).
+func (e *Engine) scanOptBracketToks() ([]tok, bool) {
+	return e.scanOptBracketToksX(true)
+}
+
+// scanOptBracketToksNoExpand is the same scan without EXPANDING to find the "[".
+// That is what LaTeX does — \@ifnextchar looks at the next token with
+// \futurelet, which never expands — and the difference is not academic:
+//
+//	\begin{figure}
+//	 \begin{subfigure}{...}x\end{subfigure}
+//	 \caption{f}\label{f:a}
+//	\end{figure}
+//
+// Here \@float{figure} looks for its [placement], the next token is
+// \begin{subfigure}, and expanding it RUNS THE WHOLE SUB-PANEL during the scan —
+// \begin sets \@currenvir to "subfigure", so when \@float resumes it no longer
+// believes it is in a standard float environment, takes the inline path and never
+// sets \@captype. The enclosing \caption then builds
+// \csname the\@captype\endcsname out of an undefined \@captype and the page
+// carries the literal text "\the@captype": 9 of the 154 corpus papers, 31 times.
+//
+// Putting any text before the sub-panel hides it, because then the lookahead
+// stops at a letter and expands nothing — which is also why a \meaning probe
+// placed there made the defect disappear.
+func (e *Engine) scanOptBracketToksNoExpand() ([]tok, bool) {
+	return e.scanOptBracketToksX(false)
+}
+
+func (e *Engine) scanOptBracketToksX(expand bool) ([]tok, bool) {
+	e.skipOptSpace()
+	var t tok
+	var ok bool
+	if expand {
+		t, ok = e.getXToken()
+	} else {
+		t, ok = e.getNext()
+	}
+	if !ok {
+		return nil, false
+	}
+	if !t.cs_ && t.ch == '[' {
+		var toks []tok
+		depth := 0
+		for {
+			u, ok := e.getNext()
+			if !ok {
+				return toks, true
+			}
+			switch {
+			case !u.cs_ && u.cat == catBegin:
+				depth++
+			case !u.cs_ && u.cat == catEnd:
+				if depth > 0 {
+					depth--
+				}
+			case depth == 0 && !u.cs_ && u.ch == ']':
+				return stripOuterGroup(toks), true
+			}
+			toks = append(toks, u)
+		}
+	}
+	e.back(t)
+	return nil, false
+}
+
+// stripOuterGroup removes the braces of an argument that is ENTIRELY one group,
+// which is what TeX does when it grabs a delimited parameter (§399): \def\d[#1]{}
+// called as \d[{g}] sees "g", while \d[{a}{b}] — two groups, not one enclosing
+// them — keeps its braces. Checked against real TeX.
+//
+// The engine reads [optional arguments] in Go rather than through a delimited
+// macro, so the rule has to be applied here. It matters at once for
+// \newcommand: the kernel's own \@testopt hands the default over BRACED, and
+// beamer builds a definition as \newcommand\foo[{1}][{}]{…} through a chain of
+// \expandafter — with the braces left on, the argument count was not a number and
+// \foo came out as a macro with no arguments at all, which put the body of every
+// beamer template on the page instead of storing it.
+func stripOuterGroup(toks []tok) []tok {
+	if len(toks) < 2 || toks[0].cs_ || toks[0].cat != catBegin {
+		return toks
+	}
+	depth := 0
+	for i, t := range toks {
+		switch {
+		case !t.cs_ && t.cat == catBegin:
+			depth++
+		case !t.cs_ && t.cat == catEnd:
+			depth--
+			if depth == 0 {
+				if i != len(toks)-1 {
+					return toks // the group ends before the argument does
+				}
+				return toks[1 : len(toks)-1]
+			}
+		}
+	}
+	return toks
+}
+
+// doGobbleOptAndGroup swallows an [options]{group} pair, both optional in
+// practice, without acting on either.
+func (e *Engine) doGobbleOptAndGroup() {
+	e.skipOptSpace()
+	// optional [options]
+	if t, ok := e.getXToken(); ok {
+		if !t.cs_ && t.ch == '[' {
+			for {
+				u, ok := e.getNext()
+				if !ok || (!u.cs_ && u.ch == ']') {
+					break
+				}
+			}
+		} else {
+			e.back(t)
+		}
+	}
+	// required {name}
+	e.skipOptSpace()
+	if t, ok := e.getXToken(); ok {
+		if t.cat == catBegin && !t.cs_ {
+			e.grabGroup()
+		} else {
+			e.back(t)
+		}
+	}
+}
+
+// doGobbleEnv discards the body of a non-renderable environment (tikzpicture,
+// pgfpicture, tikzcd, …) whole and leaves a framed placeholder box in its place.
+// It is reached via \begin{name} — already expanded to the \name control sequence
+// — so the input cursor sits just past it. See gobbleEnvBody.
+func (e *Engine) doGobbleEnv(name string) {
+	e.gobbleEnvBody(name, true)
+}
+
+// doGobbleEnvSilent discards an environment body whole and emits NOTHING — for
+// content that must vanish entirely rather than reserve space: the comment
+// package's \begin{comment}…\end{comment} (and any env made with
+// \excludecomment). Typesetting such a body instead of gobbling it lets stray
+// \item, \\, or an unbalanced brace inside the comment leak out and can leave a
+// group open at end of document, dropping the page it sits on (a whole-body
+// swallow on real papers).
+func (e *Engine) doGobbleEnvSilent(name string) {
+	e.gobbleEnvBody(name, false)
+}
+
+// gobbleEnvBody consumes tokens up to and including the matching \end{name},
+// honouring nested \begin{name}…\end{name} of the same name. The scan is at the
+// token level (via getNext), so it works whether the environment sits in the raw
+// source or is replayed from a macro/box body; nothing from the body is emitted,
+// so no command inside it can leak into the typeset output. When placeholder is
+// true a framed box is left where the environment sat; when false nothing is.
+func (e *Engine) gobbleEnvBody(name string, placeholder bool) {
+	depth := 1
+	for {
+		t, ok := e.getNext()
+		if !ok {
+			return // unterminated: input exhausted
+		}
+		if !t.cs_ {
+			continue
+		}
+		if e.runsCsname(t) {
+			// \csname may build this environment's \end (see runsCsname).
+			e.runCsname(t)
+			continue
+		}
+		// ⛔ An environment has TWO spellings of its own boundary, and this saw only one.
+		// \begin{X} and \end{X} EXPAND to \X and \endX, so an \edef over a macro that
+		// contains an environment leaves the one-token form — measured:
+		// \def\zzs{Author\begin{tikzpicture}\end{tikzpicture}} then \edef gives
+		// "Author\tikzpicture \endtikzpicture". Executing that runs \tikzpicture, which
+		// lands here looking for a \end followed by a braced name, finds none, and reads
+		// to the end of the document.
+		//
+		// \MakeUppercase is exactly that shape — \edef\@MakeCase@a{#1} then
+		// \uppercase\expandafter{…} (classkernel.go) — so \MakeUppercase of a macro
+		// holding an environment swallowed everything after it and left a group open
+		// (#535). \MakeLowercase did the same, which is what says the case shift is not
+		// the cause; and \protected@edef does not help, because \begin carries no
+		// \protect.
+		if t.cs == "end"+name {
+			depth--
+			if depth == 0 {
+				if placeholder {
+					e.emitPicturePlaceholder(name)
+				}
+				e.endEnvGroup()
+				return
+			}
+			continue
+		}
+		if t.cs == name {
+			depth++
+			continue
+		}
+		switch t.cs {
+		case "begin":
+			if e.gobbleEnvName() == name {
+				depth++
+			}
+		case "end":
+			if e.gobbleEnvName() == name {
+				depth--
+				if depth == 0 {
+					if placeholder {
+						e.emitPicturePlaceholder(name)
+					}
+					// This \end was swallowed here, so \end — and the \gotex@endenv
+					// that closes the group \begin opened — never runs.
+					e.endEnvGroup()
+					return
+				}
+			}
+		}
+	}
+}
+
+// registerExcludedComment makes `name` a silently-gobbled environment: its
+// \begin{name} triggers doGobbleEnvSilent(name) and its \end is consumed
+// literally by that scan (the endname prim is a no-op, defined for safety).
+func (e *Engine) registerExcludedComment(name string) {
+	e.prim(name, func(e *Engine) { e.doGobbleEnvSilent(name) })
+	e.prim("end"+name, func(e *Engine) {})
+}
+
+// grabEnvNameArg reads a required {name} argument as a plain string (the
+// environment name for \excludecomment / \includecomment), or "" if the next
+// token is not an opening brace (input left untouched in that case).
+func (e *Engine) grabEnvNameArg() string {
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok || !(t.cat == catBegin && !t.cs_) {
+		if ok {
+			e.back(t)
+		}
+		return ""
+	}
+	return trimSpaces(e.toksToString(e.grabGroup()))
+}
+
+// emitPicturePlaceholder stands a gobbled picture environment (TikZ/PGF/tikz-cd)
+// in for the diagram it would have drawn: a framed empty box of a modest, fixed
+// figure size. Reserving this space — rather than emitting nothing — keeps the
+// surrounding text flowing where the real diagram sat, which is both more
+// faithful than a blank and keeps pagination stable.
+//
+// It is tallied as a DROPPED FIGURE, not as an undefined command. The engine
+// defines \tikzpicture, consumes its body whole and reserves a box for it —
+// nothing about that is undefined — and tallying it in Skipped said otherwise
+// to every reader of the report, which prints "undefined command(s) skipped".
+// On the 154-paper corpus that put \tikzpicture at the TOP of that channel,
+// 21 papers and 138 occurrences, ahead of every command the engine really does
+// not know; a census used to choose what to implement next therefore named
+// TikZ first, for a construct that is handled. FiguresDropped is where it
+// belongs and says what it is: the picture is lost, the layout is not.
+func (e *Engine) emitPicturePlaceholder(name string) {
+	e.recordPictureDrop()
+	e.startImage()
+	inner := &boxNode{kind: hbox, width: 96 * unity, height: 60 * unity}
+	e.parList = append(e.parList, frameNode{inner: inner, sep: fboxSep, rule: fboxRule})
+}
+
+// gobbleEnvName consumes a following {name} group (skipping leading spaces) and
+// returns the environment name it spells. It always consumes the group so the
+// caller can discard it; a missing group yields "" with the token pushed back.
+func (e *Engine) gobbleEnvName() string {
+	t, ok := e.getNext()
+	for ok && t.cat == catSpace && !t.cs_ {
+		t, ok = e.getNext()
+	}
+	if !ok {
+		return ""
+	}
+	if !(t.cat == catBegin && !t.cs_) {
+		e.back(t)
+		return ""
+	}
+	var sb strings.Builder
+	depth := 1
+	for {
+		u, ok := e.getNext()
+		if !ok {
+			break
+		}
+		if u.cs_ {
+			continue
+		}
+		if u.cat == catBegin {
+			depth++
+		} else if u.cat == catEnd {
+			if depth--; depth == 0 {
+				break
+			}
+		} else {
+			sb.WriteRune(u.ch)
+		}
+	}
+	return sb.String()
+}

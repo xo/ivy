@@ -9,6 +9,15 @@ program that does not import it does not hold the fonts (D6).
 The module also holds Droid Sans Fallback. It draws the Chinese, Japanese
 and Korean (CJK) characters that the other fonts do not draw.
 
+The module also holds Latin Modern and Latin Modern Math, the fonts of TeX
+(D62). `TeX` gives them apart from `FS`, so that the other formats do not
+take them for a font of Office. The package `latex` sets the text and the
+math of a LaTeX document with them:
+
+```go
+cfg := ivy.Config{Fonts: fonts.FS(), TeX: fonts.TeX()}
+```
+
 A program gives the fonts to every format with the field `Fonts` of
 `ivy.Config`:
 
@@ -24,6 +33,7 @@ cfg := ivy.Config{Fonts: fonts.FS()}
 | Carlito | Calibri | `carlito/` |
 | Caladea | Cambria | `caladea/` |
 | Droid Sans Fallback | a CJK font that a document does not embed | `droid/` |
+| Latin Modern Roman, Latin Modern Mono and Latin Modern Math | Computer Modern, the fonts of TeX | `lm/` |
 
 A format that lays out text uses a font of `Config.Fonts` when a document
 names it. It also uses it when a document names the font of Office that it
@@ -40,9 +50,17 @@ the four collections.
 ## The license
 
 Liberation, Carlito and Caladea are under the SIL Open Font License 1.1.
-Droid Sans Fallback is under the Apache License 2.0. Each folder keeps the
+Droid Sans Fallback is under the Apache License 2.0. Latin Modern is under the
+GUST Font License, which is the LaTeX Project Public License 1.3c with a
+request: a font that is changed takes another name. ivy does not change
+the fonts. `lm/GUST-FONT-LICENSE.txt` holds the license, and
+`lm/README-Latin-Modern.txt` and `lm/README-Latin-Modern-Math.txt` hold the
+notices of the authors. The manifests of the two works are
+`lm/MANIFEST-Latin-Modern.txt` and `lm/MANIFEST-Latin-Modern-Math.txt`. Each folder keeps the
 license of its fonts, with the copyright notices: `liberation/LICENSE`,
-`carlito/OFL.txt`, `caladea/OFL.txt` and `droid/NOTICE`. `FS` gives the
+`carlito/OFL.txt`, `caladea/OFL.txt`, `droid/NOTICE` and
+`lm/GUST-FONT-LICENSE.txt`. `FS` gives the license files with the fonts of
+Office and Droid Sans Fallback, and `TeX` with Latin Modern. `FS` gives the
 license files with the fonts. The fonts are the files of their projects,
 byte for byte, so the names that the licenses reserve are not changed.
 
@@ -73,6 +91,15 @@ Fallback has the regular style only.
    `data/fonts/`. `NOTICE` comes from the same folder. The folder also holds
    `DroidSansFallbackFull.ttf`. ivy does not use that file, because it has
    no Korean syllables (Hangul).
+5. Latin Modern 2.004 and Latin Modern Math 1.959 come from the folder
+   `fonts/lm` of `github.com/go-tex/engine`, at the commit
+   `8234996d66f827438f248e8b0059031f52cb9964`. Those are the unchanged
+   OpenType files of the distribution Latin Modern 2.005 of GUST, at
+   `http://www.gust.org.pl/projects/e-foundry/latin-modern/`. `lm/` holds
+   the 24 files of Latin Modern Roman and Latin Modern Mono at their
+   optical sizes that the package `latex` uses, Latin Modern Math, the
+   license, the two manifests and the two files of notices. The manifests
+   list each file of the works, and the folder holds a part of them.
 
 The URL of each file of Carlito is
 `https://raw.githubusercontent.com/googlefonts/carlito/a46ae30787d4a0c9817afd4056c0042fbcfbafd6/fonts/ttf/<file>`.
@@ -107,12 +134,38 @@ blob of `DroidSansFallback.ttf` is
 | `caladea/Caladea-Italic.ttf` | Caladea | 1.001 | 83780 | `4359a8e24f748b6447b1ff6d7a174febe70961d29f8bb8634b56dacd740a3deb` |
 | `caladea/Caladea-BoldItalic.ttf` | Caladea | 1.001 | 83356 | `ccabaa7b7e2fdf253d2b1a5fa699dd8a3df8d835a9eb285ad82631a677eb76c0` |
 | `droid/DroidSansFallback.ttf` | Droid Sans Fallback | 2.55b | 3451900 | `21b96a0377f067833a93af3082eb28d4ffab7a8cd46bfd513286f1d64b7b0949` |
+| `lm/latinmodern-math.otf` | Latin Modern Math | 1.959 | 733736 | `6075562b771f8b82f0c179e363389684f2dd09de30038269e2628e504bd7be0f` |
+| `lm/lmmono10-regular.otf` | Latin Modern Mono | 2.004 | 64684 | `22deb6d3be3ffcb40b33f0e010afb256c677d97c2a2bdee1f5740cdc97751558` |
+| `lm/lmmono12-regular.otf` | Latin Modern Mono | 2.004 | 63012 | `b826e490fa671f254840abe88afea0975b606f57fb4a8b93f53787c26d8ac319` |
+| `lm/lmmono8-regular.otf` | Latin Modern Mono | 2.004 | 66268 | `17319490d20f24e192bd7e7999484b95111a4654ac2620e7aa215591142ae997` |
+| `lm/lmmono9-regular.otf` | Latin Modern Mono | 2.004 | 63076 | `cdd53c7dc01a1d25f21eaf7cae44bfb8a9665e4cbd60e5f8da14287aca819bb9` |
+| `lm/lmroman10-bold.otf` | Latin Modern Roman | 2.004 | 111240 | `102fe06c430a8b681b2bf6876b7cd967ae4d47b4b6b41d915eb7913b726d9fb1` |
+| `lm/lmroman10-italic.otf` | Latin Modern Roman | 2.004 | 118828 | `c1fce25075567bb8dbf2151658c3b442690041db17a2d49fc9e55905ea5b7169` |
+| `lm/lmroman10-regular.otf` | Latin Modern Roman | 2.004 | 111536 | `1aa18cfefa58132c52ce5de70db1fd1154201c19cd2b2cdaffba4906a33e6852` |
+| `lm/lmroman12-bold.otf` | Latin Modern Roman | 2.004 | 110496 | `28c8782ac2b6486958b5dc7610ada7800c53546ff7f36bc65909a876e1cd338e` |
+| `lm/lmroman12-italic.otf` | Latin Modern Roman | 2.004 | 117732 | `ada6b3f451238784e5a5ea75d43efa1eb4329cd75ce65bf047ed2f31b7b5e2f3` |
+| `lm/lmroman12-regular.otf` | Latin Modern Roman | 2.004 | 110400 | `e6be218ae83e61aa8a29990d3cdc401c678c1962188cb9a4a8b6359e4f5e5870` |
+| `lm/lmroman17-regular.otf` | Latin Modern Roman | 2.004 | 110248 | `ed048c80fb4b67663b80899b89fe5fba17d7442e1286d61fd08fe5689c6b7c3c` |
+| `lm/lmroman5-bold.otf` | Latin Modern Roman | 2.004 | 109564 | `6326fb955d07bedcc8f73684e6b6bfa76706d38f3a85bd89c0659504ace366a1` |
+| `lm/lmroman5-regular.otf` | Latin Modern Roman | 2.004 | 111872 | `954bd9c376597c7043e7b616430163e0158155edf7434fd70082cf8460c08533` |
+| `lm/lmroman6-bold.otf` | Latin Modern Roman | 2.004 | 112452 | `f1ebd52916182bfc2e3f9d4b5ba847ad6acc6c7761354c0dc052fb01ec14f73c` |
+| `lm/lmroman6-regular.otf` | Latin Modern Roman | 2.004 | 112212 | `501396c437f76c260b8724265b8495f318a640ee5a4674852ecbb20daf256696` |
+| `lm/lmroman7-bold.otf` | Latin Modern Roman | 2.004 | 110212 | `063ea9e378b4fca4fd59771cf522faa21eb7c8516c89464745c79725b384fb9a` |
+| `lm/lmroman7-italic.otf` | Latin Modern Roman | 2.004 | 117960 | `19d20f2bb00fbffe5d3d66e9b6a54f0108289068029e9d88649d981d53613ddf` |
+| `lm/lmroman7-regular.otf` | Latin Modern Roman | 2.004 | 110792 | `48c4b46ab255eec96588fb992fba1ed6102e53d051da480738a61cc6cdb328c3` |
+| `lm/lmroman8-bold.otf` | Latin Modern Roman | 2.004 | 112404 | `04d4f633c3da31a169f4c54a7fe8c7e63925b39d030381f8d3eab955f16be7b2` |
+| `lm/lmroman8-italic.otf` | Latin Modern Roman | 2.004 | 117248 | `fb0536b5c3eee5b5622cd827ceb410e6514e36512ebdc51d2cf98a96c06d44e8` |
+| `lm/lmroman8-regular.otf` | Latin Modern Roman | 2.004 | 111948 | `f73015c3827596586faa380c398501caf9b5bcbb6f40b46af6a51277ca97c9fc` |
+| `lm/lmroman9-bold.otf` | Latin Modern Roman | 2.004 | 113040 | `f72feac9ea12eb858d8093d6c0ee710a6c25f59b61278c88ec41c0a680838415` |
+| `lm/lmroman9-italic.otf` | Latin Modern Roman | 2.004 | 118380 | `2106cffcdc9f9cb411d7c3441e34d77a168b998a58b40e727ab5b815437d1975` |
+| `lm/lmroman9-regular.otf` | Latin Modern Roman | 2.004 | 112680 | `8ab7b017fc67ea0e30cbf9e7ebd940010442ea67b40cf65f87d73f3ca11b0e6f` |
 
-The fonts hold 10878536 bytes in all, about 10.9 MB. Droid Sans Fallback
-holds 3.5 MB of them. `fonts_test.go` makes sure that each file has this
-SHA-256 and this family, and that Droid Sans Fallback draws a character of
-each CJK collection.
+The fonts hold 14130556 bytes in all, about 14.1 MB. Droid Sans Fallback
+holds 3.5 MB of them, and Latin Modern 3.3 MB. `fonts_test.go` makes sure
+that each file has this SHA-256 and this family, and that Droid Sans
+Fallback draws a character of each CJK collection.
 
-The files are TrueType, as their projects release them. WOFF2 would make
+The files are TrueType, and the files of Latin Modern OpenType with CFF, as
+their projects release them. WOFF2 would make
 them smaller, and ivy can read WOFF2. But no project releases its fonts in
 WOFF2, so a WOFF2 file would not be a file of its project.

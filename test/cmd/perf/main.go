@@ -36,6 +36,7 @@ import (
 	"hash"
 	"image"
 	"image/color"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -165,7 +166,9 @@ func measure(ctx context.Context, opts options) error {
 	if opts.mem != "" {
 		runtime.MemProfileRate = 64 << 10
 	}
-	cfg := ivy.Config{Fonts: os.DirFS(filepath.Join(opts.repo, "fonts"))}
+	// The folder lm holds the fonts of TeX, which fonts.FS of the module
+	// fonts leaves out (D65).
+	cfg := ivy.Config{Fonts: withoutTeX{os.DirFS(filepath.Join(opts.repo, "fonts"))}}
 	fmt.Println("name\tkind\tsize\tpages\topen_ms\tfirst_ms\tcount_ms\tpage_ms\ttotal_ms\talloc_mb\tallocs\terror\thash")
 	for _, e := range entries {
 		if e.Kind == "asset" || (opts.match != nil && !opts.match.MatchString(e.Name)) ||
@@ -318,4 +321,30 @@ func hashImage(h hash.Hash, img image.Image) {
 // ms returns d in milliseconds.
 func ms(d time.Duration) float64 {
 	return float64(d) / float64(time.Millisecond)
+}
+
+// withoutTeX is a folder of fonts without its folder lm, as fonts.FS gives
+// it.
+type withoutTeX struct {
+	fs.FS
+}
+
+// Open satisfies the fs.FS interface.
+func (w withoutTeX) Open(name string) (fs.File, error) {
+	if name == "lm" || strings.HasPrefix(name, "lm/") {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+	}
+	return w.FS.Open(name) //nolint:wrapcheck // the error of the folder
+}
+
+// ReadDir satisfies the fs.ReadDirFS interface.
+func (w withoutTeX) ReadDir(name string) ([]fs.DirEntry, error) {
+	entries, err := fs.ReadDir(w.FS, name)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the error of the folder
+	}
+	if name == "." {
+		entries = slices.DeleteFunc(entries, func(e fs.DirEntry) bool { return e.Name() == "lm" })
+	}
+	return entries, nil
 }

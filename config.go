@@ -40,6 +40,12 @@ type Config struct {
 	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
 	// WOFF2 files within Limits, and ignores the other files.
 	Fonts fs.FS
+	// TeX holds the files of TeX that a LaTeX document reads by name, such
+	// as its class and its packages: a tree of a TeX distribution, or a
+	// folder of .cls and .sty files. The format latex finds a file by its
+	// base name, anywhere in the tree, within Limits. The module of ivy
+	// holds no file of LaTeX (D62, D65).
+	TeX fs.FS
 	// Paper is the page of a document whose file gives none, such as a
 	// text file, an HTML file or an ebook. The zero Paper keeps the default
 	// of the format, US Letter in portrait (D32).

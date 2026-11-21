@@ -120,6 +120,93 @@ func TestLicenses(t *testing.T) {
 	}
 }
 
+// latinModern holds each OpenType file of Latin Modern in FS, with the
+// SHA-256 that README.md gives.
+var latinModern = map[string]string{
+	"lm/latinmodern-math.otf":  "6075562b771f8b82f0c179e363389684f2dd09de30038269e2628e504bd7be0f",
+	"lm/lmmono10-regular.otf":  "22deb6d3be3ffcb40b33f0e010afb256c677d97c2a2bdee1f5740cdc97751558",
+	"lm/lmmono12-regular.otf":  "b826e490fa671f254840abe88afea0975b606f57fb4a8b93f53787c26d8ac319",
+	"lm/lmmono8-regular.otf":   "17319490d20f24e192bd7e7999484b95111a4654ac2620e7aa215591142ae997",
+	"lm/lmmono9-regular.otf":   "cdd53c7dc01a1d25f21eaf7cae44bfb8a9665e4cbd60e5f8da14287aca819bb9",
+	"lm/lmroman10-bold.otf":    "102fe06c430a8b681b2bf6876b7cd967ae4d47b4b6b41d915eb7913b726d9fb1",
+	"lm/lmroman10-italic.otf":  "c1fce25075567bb8dbf2151658c3b442690041db17a2d49fc9e55905ea5b7169",
+	"lm/lmroman10-regular.otf": "1aa18cfefa58132c52ce5de70db1fd1154201c19cd2b2cdaffba4906a33e6852",
+	"lm/lmroman12-bold.otf":    "28c8782ac2b6486958b5dc7610ada7800c53546ff7f36bc65909a876e1cd338e",
+	"lm/lmroman12-italic.otf":  "ada6b3f451238784e5a5ea75d43efa1eb4329cd75ce65bf047ed2f31b7b5e2f3",
+	"lm/lmroman12-regular.otf": "e6be218ae83e61aa8a29990d3cdc401c678c1962188cb9a4a8b6359e4f5e5870",
+	"lm/lmroman17-regular.otf": "ed048c80fb4b67663b80899b89fe5fba17d7442e1286d61fd08fe5689c6b7c3c",
+	"lm/lmroman5-bold.otf":     "6326fb955d07bedcc8f73684e6b6bfa76706d38f3a85bd89c0659504ace366a1",
+	"lm/lmroman5-regular.otf":  "954bd9c376597c7043e7b616430163e0158155edf7434fd70082cf8460c08533",
+	"lm/lmroman6-bold.otf":     "f1ebd52916182bfc2e3f9d4b5ba847ad6acc6c7761354c0dc052fb01ec14f73c",
+	"lm/lmroman6-regular.otf":  "501396c437f76c260b8724265b8495f318a640ee5a4674852ecbb20daf256696",
+	"lm/lmroman7-bold.otf":     "063ea9e378b4fca4fd59771cf522faa21eb7c8516c89464745c79725b384fb9a",
+	"lm/lmroman7-italic.otf":   "19d20f2bb00fbffe5d3d66e9b6a54f0108289068029e9d88649d981d53613ddf",
+	"lm/lmroman7-regular.otf":  "48c4b46ab255eec96588fb992fba1ed6102e53d051da480738a61cc6cdb328c3",
+	"lm/lmroman8-bold.otf":     "04d4f633c3da31a169f4c54a7fe8c7e63925b39d030381f8d3eab955f16be7b2",
+	"lm/lmroman8-italic.otf":   "fb0536b5c3eee5b5622cd827ceb410e6514e36512ebdc51d2cf98a96c06d44e8",
+	"lm/lmroman8-regular.otf":  "f73015c3827596586faa380c398501caf9b5bcbb6f40b46af6a51277ca97c9fc",
+	"lm/lmroman9-bold.otf":     "f72feac9ea12eb858d8093d6c0ee710a6c25f59b61278c88ec41c0a680838415",
+	"lm/lmroman9-italic.otf":   "2106cffcdc9f9cb411d7c3441e34d77a168b998a58b40e727ab5b815437d1975",
+	"lm/lmroman9-regular.otf":  "8ab7b017fc67ea0e30cbf9e7ebd940010442ea67b40cf65f87d73f3ca11b0e6f",
+}
+
+// TestLatinModern makes sure that each OpenType file of TeX is a file of
+// Latin Modern with the bytes that README.md gives, that the folder lm
+// holds the GUST Font License and the notices, and that FS holds no file
+// of Latin Modern.
+func TestLatinModern(t *testing.T) {
+	t.Parallel()
+	seen := map[string]bool{}
+	err := fs.WalkDir(TeX(), ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || path.Ext(name) != ".otf" {
+			return err
+		}
+		seen[name] = true
+		want, ok := latinModern[name]
+		if !ok {
+			t.Errorf("%s: unexpected font", name)
+			return nil
+		}
+		data, err := fs.ReadFile(TeX(), name)
+		if err != nil {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		if len(data) < 4 || string(data[:4]) != "OTTO" {
+			t.Errorf("%s: not an OpenType font with CFF", name)
+		}
+		if sum := sha256.Sum256(data); hex.EncodeToString(sum[:]) != want {
+			t.Errorf("%s: SHA-256 %x, expected %s", name, sum, want)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range latinModern {
+		if !seen[name] {
+			t.Errorf("%s: missing", name)
+		}
+	}
+	for name, text := range map[string]string{
+		"lm/GUST-FONT-LICENSE.txt":          "GUST Font License",
+		"lm/README-Latin-Modern.txt":        "Copyright 2003--2021 by B. Jackowski and J.M. Nowacki",
+		"lm/README-Latin-Modern-Math.txt":   "Copyright 2012--2014",
+		"lm/MANIFEST-Latin-Modern.txt":      "lmroman10-regular.otf",
+		"lm/MANIFEST-Latin-Modern-Math.txt": "latinmodern-math.otf",
+	} {
+		data, err := fs.ReadFile(TeX(), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), text) {
+			t.Errorf("%s: does not hold %q", name, text)
+		}
+	}
+	if _, err := fs.Stat(FS(), "lm"); err == nil {
+		t.Error("expected no folder lm in FS")
+	}
+}
+
 // cjk holds a character of each of the four CJK character collections of
 // Adobe: Japan1, GB1, CNS1 and Korea1.
 var cjk = []rune{'あ', '这', '這', '한'}

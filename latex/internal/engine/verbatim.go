@@ -1,0 +1,224 @@
+// Copied from github.com/go-tex/engine, the file verbatim.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements LaTeX's verbatim material: the verbatim environment and
+// the \verb command. Both set their content literally — no macro expansion, no
+// category-code interpretation, spaces and line breaks preserved — in the tt
+// font when one is bound (otherwise the current font). Because the content is
+// read raw from the base input rather than tokenized, the usual catcodes of \, {,
+// $, %, … do not apply, exactly as \verbatim demands.
+
+import "strings"
+
+// doVerbatim typesets a verbatim environment. It is reached via \begin{verbatim},
+// so the input cursor sits just past "{verbatim}"; it copies the raw source up to
+// the literal "\end{verbatim}" and sets each line on its own, left-aligned.
+func (e *Engine) doVerbatim() {
+	const end = `\end{verbatim}`
+	startOff := e.bpos
+	rest := string(e.base[e.bpos:])
+	idx := strings.Index(rest, end)
+	var content string
+	if idx < 0 {
+		content = rest
+		e.bpos = len(e.base)
+	} else {
+		content = rest[:idx]
+		e.bpos += len([]rune(rest[:idx])) + len([]rune(end))
+	}
+	e.endEnvGroup() // this environment reads its own \end, so it closes \begin's group
+	// Verbatim ignores the newline right after \begin{verbatim} and the one just
+	// before \end{verbatim}.
+	leadingNL := strings.HasPrefix(content, "\n")
+	content = strings.TrimPrefix(content, "\n")
+	content = strings.TrimSuffix(content, "\n")
+
+	// The source line the first content character lives on (for stamping).
+	line, _ := e.lineColAt(startOff)
+	if leadingNL {
+		line++
+	}
+
+	e.endParagraph() // flush any open paragraph before the verbatim block
+	font := e.verbFont()
+	if font == nil {
+		return
+	}
+	e.mvlAppendGap() // a little space above the block
+	for _, ln := range strings.Split(content, "\n") {
+		e.appendToPage(e.verbatimLine(ln, font, line))
+		line++
+	}
+	e.mvlAppendGap()
+}
+
+// doVerb implements \verb<c>…<c>: the delimiter is the first character after the
+// command, and the literal text runs to its next occurrence. The text joins the
+// current paragraph inline.
+func (e *Engine) doVerb() {
+	if e.bpos >= len(e.base) {
+		return
+	}
+	delim := e.base[e.bpos]
+	e.bpos++
+	start := e.bpos
+	for e.bpos < len(e.base) && e.base[e.bpos] != delim {
+		e.bpos++
+	}
+	text := string(e.base[start:e.bpos])
+	if e.bpos < len(e.base) {
+		e.bpos++ // consume the closing delimiter
+	}
+	font := e.verbFont()
+	if font == nil {
+		return
+	}
+	if !e.inPar {
+		e.beginParagraph(true)
+	}
+	e.parList = append(e.parList, e.verbNodes(text, font, e.curSrcLine)...)
+}
+
+// doVerbFancy implements fancyvrb's \Verb[options]{text} and \Verb[options]|text|.
+// The braced form is the one modern fancyvrb documents, and it is the one this
+// engine must read from TOKENS rather than from the character buffer: a paper
+// writes \newcommand{\jl}[1]{\small\Verb{#1}} and uses it a hundred times, so by
+// the time \Verb runs its argument is a macro parameter, long gone from the file.
+// Undefined, those hundred fragments of code were skipped with their text.
+//
+// The delimited form still reads the buffer, exactly as \verb does.
+func (e *Engine) doVerbFancy() {
+	// While the argument is still in the FILE, everything is peeked raw: reading a
+	// token to look ahead would move the buffer cursor past the delimiter and push
+	// the token onto the list, and \Verb|code| would then take the character after
+	// the bar as its delimiter (measured: "|autre_code()|" came out "utre_code()||").
+	if len(e.lists) == 0 {
+		e.skipRawSpace()
+		if e.bpos < len(e.base) && e.base[e.bpos] == '[' {
+			for e.bpos < len(e.base) && e.base[e.bpos] != ']' {
+				e.bpos++
+			}
+			if e.bpos < len(e.base) {
+				e.bpos++
+			}
+			e.skipRawSpace()
+		}
+		if e.bpos < len(e.base) && e.base[e.bpos] != '{' {
+			e.doVerb() // \Verb|text|: the classic delimited form
+			return
+		}
+	} else {
+		e.scanOptBracketToks() // [commandchars=…, fontsize=…]: no verbatim styling here
+	}
+	text := e.toksToString(e.readBraceToksRaw())
+	font := e.verbFont()
+	if font == nil {
+		return
+	}
+	if !e.inPar {
+		e.beginParagraph(true)
+	}
+	e.parList = append(e.parList, e.verbNodes(text, font, e.curSrcLine)...)
+}
+
+// skipRawSpace advances past spaces in the character buffer, without tokenising:
+// a look-ahead that goes through the mouth cannot be undone for \verb-like
+// scanning, which reads characters rather than tokens.
+func (e *Engine) skipRawSpace() {
+	for e.bpos < len(e.base) && (e.base[e.bpos] == ' ' || e.base[e.bpos] == '\t') {
+		e.bpos++
+	}
+}
+
+// verbFont returns the tt font when one is bound, else the current font.
+func (e *Engine) verbFont() fontFace {
+	if m := e.eq["tt"]; m != nil && m.kind == mFont && m.font != nil {
+		return m.font
+	}
+	return e.curFont
+}
+
+// verbatimLine packs one literal line into a left-aligned hbox in the verbatim
+// font, preserving spaces as fixed-width kerns (no kerning, no ligatures).
+func (e *Engine) verbatimLine(s string, font fontFace, line int) *boxNode {
+	return hpackSP(e.verbNodes(s, font, line), packNatural, 0)
+}
+
+// verbNodes turns literal text into a node list: each character is a charNode in
+// the verbatim font, each space/tab a fixed kern the width of the font's space.
+func (e *Engine) verbNodes(s string, font fontFace, line int) []node {
+	space := e.spaceGlueOf(font).width
+	var out []node
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			out = append(out, kernNode{width: space, space: true})
+			continue
+		}
+		w, h, d := font.charDimsSP(r)
+		// Stamp the current colour like ordinary text (see appendChar): \color
+		// applies to verbatim too, so \textcolor{red}{\verb|x|} — and a coloured
+		// \url under hyperref's colorlinks — reach the drivers in that colour.
+		// The face is the one the width came from — the typewriter font, when
+		// there is one. Without it the driver measured in mono and drew in roman.
+		out = append(out, charNode{ch: r, width: w, height: h, depth: d, srcLine: line, size: font.sizePt(), face: font, color: e.curColor})
+	}
+	return out
+}
+
+// mvlAppendGap adds the vertical space that surrounds a verbatim block.
+//
+// It is ADDED to the ordinary interline glue, not put in its place. \trivlist
+// opens with \addvspace\@topsepadd and the item's first line then goes onto the
+// page through the normal path; nothing sets prev_depth to ignore_depth around it,
+// any more than it does around a display (tex.web:22602, and see placeDisplay).
+// Suppressing it cost the interline glue at BOTH ends: measured against tectonic,
+// one verbatim block of one line cost 23.86pt against the reference's 31.88.
+func (e *Engine) mvlAppendGap() { e.mvlAppendBlockGap(false) }
+
+// mvlAppendBlockGap is mvlAppendGap for a block that may not be a \trivlist.
+// listings.sty:1694 defaults lstlisting's aboveskip/belowskip to \medskipamount
+// and applies them as plain \vspace (:1724, :1777) — 6pt, where the list
+// separation is \topsep+\partopsep, 10pt at the 10pt class. Measured against
+// tectonic on one block of six lines, the baseline-to-baseline gap into the block
+// is 17.93pt in the reference against our 22.0: exactly the 4pt difference, at
+// both ends of every listing.
+func (e *Engine) mvlAppendBlockGap(medskip bool) {
+	sep := e.trivlistSep()
+	if medskip {
+		if v, ok := e.namedDimen("medskipamount"); ok {
+			sep = v
+		} else {
+			sep = 6 * unity
+		}
+	}
+	e.mvl = append(e.mvl, glueNode{spec: glueSpec{width: sep}})
+}
+
+// trivlistSep is the vertical space LaTeX puts above and below a verbatim block.
+// verbatim is built on \trivlist, so what surrounds it is \topsep + \partopsep —
+// about 12pt at 11pt, where this used to put a flat 3pt. Measured against real
+// LaTeX on a document of three verbatim blocks, the gap above went 25.8pt in the
+// reference against our 13.4, and below 25.2 against 10.9: the block cost us
+// 24.2pt where it costs 51.0, and a document of them came out a page short in
+// four.
+//
+// The named lengths are read rather than hard-coded because setPtsize scales
+// \topsep with the class size (8/9/10pt for 10/11/12pt) and a package may reset
+// them; the fallback is the 10pt class value, which is what the engine starts
+// from before a class runs.
+func (e *Engine) trivlistSep() int {
+	sep := 8 * unity
+	if v, ok := e.namedDimen("topsep"); ok {
+		sep = v
+	}
+	if v, ok := e.namedDimen("partopsep"); ok {
+		sep += v
+	} else {
+		sep += 2 * unity
+	}
+	return sep
+}

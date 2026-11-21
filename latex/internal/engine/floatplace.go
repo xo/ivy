@@ -1,0 +1,807 @@
+// Copied from github.com/go-tex/engine, the file floatplace.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import (
+	// ivy: no file system and no environment, in latex/internal/nofs (D5, D62).
+	os "github.com/xo/ivy/latex/internal/nofs"
+	"strconv"
+	"strings"
+)
+
+// This file implements real single-column float placement (figure/table), correcting the
+// engine's long-standing simplification of typesetting floats INLINE where they appear.
+// Real LaTeX collects a float into a box and places it at the TOP (or bottom, or on a
+// float page) of a page, deferring it to a later page when it does not fit with at least
+// \textfraction of text; a float-heavy document therefore paginates to MORE pages than
+// the inline packing gives (measured: 2606.18084, figure-heavy, gotex 48pp inline vs
+// tectonic 56). This attacks that under-pagination while rendering figures where TeXLive
+// puts them (page top/bottom, float pages) rather than inline where written.
+//
+// It is ON by default; GOTEX_FLOATS=0 restores the inline path, where the float macros
+// keep their untouched classic inline definitions (LaTeX2eClassLead), the
+// FloatPlacementSubstrate is never loaded and Pages() never dispatches here. Measured
+// over the 157 arXiv papers with a tectonic reference, placing floats and letting a
+// figure state its own size (see figureDeclaredSize) beats setting them inline: Σ page
+// error 616 → 586, papers within TWO pages 83 → 93, the median document 2 pages out
+// either way. The yardstick is RENDERING and page count against tectonic, not the
+// word-position mean: a float moved to the top of its page displaces every word below
+// it, which that mean reads as divergence even when the page is now right.
+//
+// Reference parameters, read from latex.ltx \@xfloat / \@addtocurcol via tectonic
+// \meaning: default placement `tbp`; \topfraction .7, \bottomfraction .3, \textfraction
+// .2, \floatpagefraction .5; \topnumber 2, \bottomnumber 1, \totalnumber 3; \floatsep
+// 12pt, \textfloatsep 20pt, \intextsep 12pt. This increment covers the standard figure/
+// table environments (single column); figure*/table* keep the two-column band path
+// (twocolumn.go) and [h]/[H] floats stay inline (LaTeX keeps them roughly where written).
+
+// floatsEnabled reports whether the real float placer (this file) is active. It is the
+// default; GOTEX_FLOATS=0 opts back out to the inline path.
+func floatsEnabled() bool { return os.Getenv("GOTEX_FLOATS") != "0" }
+
+// FloatPlacementSubstrate routes the figure/table environments through the placer. It is
+// loaded by LoadLaTeX ONLY when floatsEnabled(), so with the flag off the environments
+// keep their untouched LaTeX2eClassLead definitions and the default output is unchanged.
+// It redefines only \@float (not \@dblfloat, which keeps its two-column band path, nor
+// \end@float, whose group would leak): \@float is the class float mechanism every
+// figure/table funnels through and the point that SURVIVES \documentclass — a class
+// redefines \figure to \@float{figure} at \documentclass time but leaves \@float itself
+// the base one. \gotex@inlinefloat reproduces the classic inline begin-code for the
+// two-column / [h] fall-back path (@ a letter, so \@captype / \@ifnextchar are real
+// control sequences).
+//
+// @ is already a letter here (this loads after AMSClassSubstrate, which — like this
+// substrate — defines @-names with no \makeatletter), and LoadFormat does NOT save and
+// restore catcodes, so this must NOT emit a \makeatother: doing so would flip @ to
+// catother for everything loaded afterwards and for a bare New()+LoadLaTeX() document,
+// breaking later \@-name control sequences. It leaves @ a letter, exactly as the default
+// (substrate-free) end of LoadLaTeX does.
+const FloatPlacementSubstrate = `
+% \intextsep goes BOTH above and below a float the output routine sets in the running
+% column — latex.ltx:15675-15678, \@addtocurcol:
+%
+%	\vskip \intextsep  \box\@currbox  \penalty\interlinepenalty  \vskip\intextsep
+%
+% The closing half is put on \end@float HERE, inside this group, so it applies to the
+% INLINE path only: \end@float is shared with the captured-float path, where the
+% output routine supplies the space instead, and giving it \intextsep there cost 15892
+% glyphs when it was tried. The \endgroup restores the shared definition.
+%
+% Measured against tectonic, ink to ink from a figure[h]'s caption to the next line of
+% text: reference 17.28pt, ours 9.60 with the \medskip \end@float carried.
+\long\def\gotex@inlinefloat#1{\par\addvspace\intextsep\begingroup\def\end@float{\par\endgroup\addvspace\intextsep}\centering\def\@captype{#1}\@ifnextchar[\@gobbleopt\relax}
+\def\@float#1{\gotex@floatbegin{#1}}
+`
+
+// floatNode marks a captured float in the main vertical list: its rendered box, the
+// placement bits from the optional [tbp!h] argument (default "tbp"), and its anchor
+// position (filled by pagesWithFloats). The page builder relocates it to a page top or
+// bottom, or defers it to a float page.
+type floatNode struct {
+	box   *boxNode
+	place string // placement bits (h/t/b/p), lower-cased; "" means default "tbp"
+	kind  string // caption type: "figure" or "table" — floats of one type keep their order
+}
+
+func (*floatNode) isNode() {}
+
+// doFloatBegin implements the redefined \@float (kind = the caption type, "figure" or
+// "table"). It runs only when the placer is enabled. The placer is single-column, so
+// inside a two-column region, for an [h]/[H] (here) float, or a non-standard \@float box,
+// it hands the type to the inline helper — exactly the classic behaviour. Otherwise it
+// captures the float environment's body (delimited by \end{\@currenvir}) into a box and
+// contributes a floatNode for pagesWithFloats to place.
+func (e *Engine) doFloatBegin() {
+	kind := e.readBraceNameX() // caption type: "figure" or "table"
+	place := "tbp"
+	// The lookahead must NOT expand: \@ifnextchar uses \futurelet. Expanding it
+	// runs a \begin{subfigure} that follows immediately, which reassigns
+	// \@currenvir and sends this float down the inline path with no \@captype —
+	// see scanOptBracketToksNoExpand for the whole shape.
+	if toks, ok := e.scanOptBracketToksNoExpand(); ok {
+		if s := placementBits(toks); s != "" {
+			place = s
+		}
+	}
+	// Capture is only safe when \@float is the body of a STANDARD float environment
+	// (\@currenvir is figure/table/figure*/table*): then \end{\@currenvir} bounds the
+	// body. A class that calls \@float itself for a non-standard box (neurips's
+	// \@float{noticebox}) leaves \@currenvir as the enclosing environment, so capturing
+	// would collect to the wrong \end and swallow the document. Such calls, floats asking
+	// for h/H (here) placement, and everything in a two-column region stay INLINE — LaTeX
+	// keeps an [h]/[ht]/[H] float roughly where written, so floating it would misplace it
+	// against the reference. Only a standard-env t/b/p float is captured.
+	env := e.currentEnvName()
+	if e.inTwoColumnRegion() || strings.ContainsAny(place, "hH") || !isStandardFloatEnv(env) {
+		// The [placement] was consumed above, so the inline helper just typesets the body.
+		e.push(append([]tok{csTok("gotex@inlinefloat")}, braceNameToks(kind)...))
+		return
+	}
+	e.define("@captype", &meaning{kind: mMacro, body: stringToToks(kind)}, true)
+	body := e.collectEnvBody(env)
+	// The body is a BOX being built, so what it assigns must stay inside it: \@xfloat
+	// sets the float in \vbox\bgroup…\egroup (latex.ltx:12950), and the engine's own
+	// inline \@float opens a \begingroup that \end@float closes. Capturing the body
+	// and running it with no group of its own let an assignment escape into the
+	// document. One real paper shows the cost: a figure holding
+	// \put(-0.33\textwidth,0.5\textwidth){…} — \put undefined, so \textwidth reads as
+	// the start of an assignment and takes the missing number as zero — left \hsize
+	// at 0pt for the remaining 230 pages, which then set ONE WORD PER LINE and ran to
+	// 1439 pages against a reference of 333.
+	e.beginGroup()
+	box := e.typesetGroupToVbox(append([]tok{csTok("centering")}, body...))
+	e.endGroup()
+	box.width = e.hsize
+	e.contribute(&floatNode{box: box, place: place, kind: kind})
+}
+
+// inTwoColumnRegion reports whether the material being set right now belongs to a
+// two-column region — the single-column placer must leave those to the column pager.
+// A \onecolumn region counts as ONE column: merely having regions at all does not make
+// the page two-column, and reading it that way sent every float of an ordinary article
+// back to the inline path as soon as the column machinery was live.
+func (e *Engine) inTwoColumnRegion() bool {
+	if e.twoColumn {
+		return true
+	}
+	if n := len(e.colRegions); n > 0 {
+		return e.colRegions[n-1].cols > 1
+	}
+	return false
+}
+
+// hasTwoColumnRegion reports whether any region of the document is set in two columns.
+func (e *Engine) hasTwoColumnRegion() bool {
+	for _, r := range e.colRegions {
+		if r.cols > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// isStandardFloatEnv reports whether name is one of the standard float environments,
+// whose \end bounds a capturable body.
+func isStandardFloatEnv(name string) bool {
+	switch name {
+	case "figure", "figure*", "table", "table*":
+		return true
+	}
+	return false
+}
+
+// currentEnvName is the value of \@currenvir (the environment \begin opened), used to end
+// the captured float body at the matching \end. Falls back to the caption type's plain
+// name when \@currenvir is unset.
+func (e *Engine) currentEnvName() string {
+	if n, ok := e.currentEnvir(); ok {
+		return n
+	}
+	return "figure"
+}
+
+// currentEnvir is \@currenvir — the environment \begin opened — and whether it is
+// set at all. Callers that have no sensible fallback (\lrbox reached through a
+// class's own environment) need the second result: currentEnvName's "figure" would
+// be a wrong guess for them, not a neutral one.
+func (e *Engine) currentEnvir() (string, bool) {
+	m := e.eq["@currenvir"]
+	if m == nil {
+		return "", false
+	}
+	var b []rune
+	for _, t := range m.body {
+		if !t.cs_ {
+			b = append(b, t.ch)
+		}
+	}
+	if len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
+}
+
+// kindDeferred reports whether a float of this caption type is still waiting, which
+// forbids a later one of the same type from being placed first (\@bitor\@currtype
+// \@deferlist in \@addtocurcol): figure 3 must never appear before figure 2.
+func kindDeferred(deferred []anchoredFloat, kind string) bool {
+	for _, af := range deferred {
+		if af.f.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// mvlHasFloats reports whether the main vertical list carries any captured floatNode.
+func (e *Engine) mvlHasFloats() bool {
+	for _, n := range e.mvl {
+		if _, ok := n.(*floatNode); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// floatClass is a float's resolved placement preference, derived once from its bits.
+type floatClass struct {
+	allowTop, allowBot, allowPage bool
+	// urgent is the "!" of [!t]: LaTeX records the placement in \@fpstype with 16
+	// ADDED when there is no "!" (latex.ltx:12990), and every fraction test is
+	// guarded by \ifnum\@fpstype<\sixt@@n. \@flsettextmin (l.15929) is the plainest
+	// of them:
+	//
+	//	\ifnum \@fpstype<\sixt@@n  \@textmin \z@  \else  \@textmin \textfraction\@colht  \fi
+	//
+	// So "!" means: ignore \textfraction, \topfraction, \bottomfraction and the
+	// per-area counts — place it here if it fits the page at all.
+	urgent bool
+}
+
+// classifyFloat resolves a float's placement bits (default "tbp") into the areas it may go.
+func classifyFloat(place string) floatClass {
+	if place == "" {
+		place = "tbp"
+	}
+	return floatClass{
+		allowTop:  strings.ContainsRune(place, 't'),
+		allowBot:  strings.ContainsRune(place, 'b'),
+		allowPage: strings.ContainsRune(place, 'p'),
+		urgent:    strings.ContainsRune(place, '!'),
+	}
+}
+
+// allUrgent reports whether every float in the list carries "!". An empty list is
+// vacuously urgent, which is what makes a page of only-urgent tops keep no text
+// minimum while a page mixing them with an ordinary float still does.
+func allUrgent(fs []anchoredFloat) bool {
+	for _, af := range fs {
+		if !af.c.urgent {
+			return false
+		}
+	}
+	return true
+}
+
+// anchoredFloat pairs a captured float with the text position it was written at.
+type anchoredFloat struct {
+	f  *floatNode
+	c  floatClass
+	at int // index into the text stream where the float appeared
+}
+
+// pagesWithFloats paginates a main vertical list carrying floatNodes: each page opens
+// with the top floats reached so far (subject to \topnumber and \topfraction) and closes
+// with any bottom floats (\bottomnumber, \bottomfraction); the text fills the height left
+// between them, and floats that do not fit — or ask for [p] — defer to a float page. It
+// is the float-aware counterpart of paginateSingleList, built on the same findPageBreak
+// cost breaker so text is never over-packed or lost.
+func (e *Engine) pagesWithFloats() []*boxNode {
+	vsize := e.effectiveVsize()
+	// Read from the class, never restated here: see floatFraction below.
+	frac := func(name string, def float64) int { return int(float64(vsize) * e.floatFraction(name, def)) }
+	topCap := frac("topfraction", 0.7)
+	botCap := frac("bottomfraction", 0.3)
+	textMin := frac("textfraction", 0.2)           // a page mixing floats and text keeps this much text
+	floatPageMin := frac("floatpagefraction", 0.5) // a float page must be this full
+	topMax := e.floatCount("topnumber", 2)
+	botMax := e.floatCount("bottomnumber", 1)
+	totalMax := e.floatCount("totalnumber", 3)
+	flTrace("colht = %s, topfraction room = %s, bottomfraction room = %s, textmin = %s",
+		spToStr(vsize), spToStr(topCap), spToStr(botCap), spToStr(textMin))
+	flTrace("topnumber = %d, bottomnumber = %d, totalnumber = %d, floatsep = %s, textfloatsep = %s",
+		topMax, botMax, totalMax, spToStr(e.floatSep()), spToStr(e.textFloatSep()))
+
+	// Split the floats out of the text stream, remembering each float's anchor.
+	var text []node
+	var floats []anchoredFloat
+	for _, n := range e.mvl {
+		if fn, ok := n.(*floatNode); ok {
+			floats = append(floats, anchoredFloat{f: fn, c: classifyFloat(fn.place), at: len(text)})
+		} else {
+			text = append(text, n)
+		}
+	}
+
+	flTrace("%d flottant(s) extraits du flux, %d nœud(s) de texte", len(floats), len(text))
+
+	var pages []*boxNode
+	var deferred []anchoredFloat // floats reached but not yet placed (FIFO)
+	// ⛔ PAGE ONE STARTS AT ITS FIRST BOX HERE TOO. While page_contents is empty,
+	// build_page DISCARDS a glue, kern or penalty outright (tex.web:19495-19502); the
+	// page proper begins when a box arrives. #698 gave paginateSingleList that start
+	// (pagebuilder.go:240) and this pager kept `start := 0`, so a float document was
+	// charging page one for the interline glue in front of its very first line — 5.76pt
+	// on the witness below, where the reference has none.
+	start, fi := skipDiscardable(text, 0), 0
+	savedVsize := e.vsize
+
+	fh := func(af anchoredFloat) int { return af.f.box.height + af.f.box.depth }
+
+	emitFloatPage := func(items []anchoredFloat) {
+		var vlist []node
+		for i, af := range items {
+			if i > 0 {
+				vlist = append(vlist, glueNode{spec: glueSpec{width: e.floatSep()}})
+			}
+			vlist = append(vlist, af.f.box)
+		}
+		pages = append(pages, e.assemblePage(vlist, len(pages)+1))
+	}
+
+	for start < len(text) || len(deferred) > 0 || fi < len(floats) {
+		// Absorb every float whose anchor has been reached into the deferred queue.
+		for fi < len(floats) && floats[fi].at <= start {
+			flTrace("absorbé: flottant %d, ancre %d <= start %d, haut %s, place %q",
+				fi, floats[fi].at, start, spToStr(fh(floats[fi])), floats[fi].f.place)
+			deferred = append(deferred, floats[fi])
+			fi++
+		}
+		flTrace("tour: start=%d/%d, fi=%d/%d, en attente=%d, pages=%d",
+			start, len(text), fi, len(floats), len(deferred), len(pages))
+
+		// A float taller than any top/bottom area gets its own float page immediately —
+		// unless it was asked for with "!", which suppresses those fractions.
+		if len(deferred) > 0 && !deferred[0].c.urgent &&
+			fh(deferred[0]) > topCap && fh(deferred[0]) > botCap {
+			emitFloatPage(deferred[:1])
+			deferred = deferred[1:]
+			if len(pages) >= maxPages {
+				e.notePageLimit()
+				break
+			}
+			continue
+		}
+
+		// If the text is exhausted, flush the remaining floats onto float pages: pack as
+		// many as fit a page (up to \totalnumber), which keeps a trailing run of figures
+		// from each taking a near-empty page.
+		if start >= len(text) {
+			if len(deferred) == 0 {
+				break
+			}
+			var pageFloats []anchoredFloat
+			h := 0
+			for len(deferred) > 0 && len(pageFloats) < totalMax {
+				need := fh(deferred[0])
+				if len(pageFloats) > 0 {
+					need += e.floatSep()
+				}
+				if len(pageFloats) > 0 && h+need > vsize {
+					break
+				}
+				h += need
+				pageFloats = append(pageFloats, deferred[0])
+				deferred = deferred[1:]
+			}
+			emitFloatPage(pageFloats)
+			if len(pages) >= maxPages {
+				e.notePageLimit()
+				break
+			}
+			continue
+		}
+
+		// Choose top floats: reached floats that allow top, within \topfraction and
+		// \topnumber (2), each taken from the FRONT of the queue so document order holds.
+		//
+		// ⛔⛔ THE GATE IS LaTeX'S \@toproom, AND THE SEPARATION IS CHARGED TO IT.
+		//
+		// ltoutput.dtx:6016-6018 refuses the float unless the room left STRICTLY exceeds
+		// its height:
+		//
+		//	\ifdim \@colroom>\@reqcolroom
+		//	  \ifdim #1>\ht\@currbox  \@tempswatrue
+		//
+		// with #1 = \@toproom, which starts at \topfraction\@colht and is decremented by
+		// the float's height PLUS \textfloatsep for the first one and \floatsep for each
+		// one after it (ltoutput.dtx:6009, \ifx#2\@empty \textfloatsep \else \floatsep).
+		//
+		// This charged \floatsep between floats and NOTHING for the first, so the top
+		// budget was 20pt more generous than LaTeX's — \textfloatsep's whole width. The
+		// reference's own fltrace output on a three-figure witness, which is what
+		// located it:
+		//
+		//	Space OK: \@toproom = 384.99832pt > 144.05998pt      ← figure 1 accepted
+		//	Fail---no room: \@toproom = 220.93834pt. Ht float: 224.05998pt   ← figure 2
+		//
+		// 384.998 − 220.938 = 164.06 = 144.06 + 20pt. We had 385 − 144.06 = 240.94,
+		// which admits a 224.06pt float; LaTeX, at 220.94, defers it to the next page.
+		//
+		// topUsed is kept apart from topH on purpose: topH is the float stack's own
+		// height, which assembleMixedPage and the \textfraction reserve below both need,
+		// and folding the separation into it would charge \textfloatsep twice.
+		var top, bottom []anchoredFloat
+		topH, topUsed := 0, 0
+		flTrace("***Start page %d: %d flottant(s) en attente", len(pages)+1, len(deferred))
+		i := 0
+		for i < len(deferred) && len(top) < topMax && len(top) < totalMax {
+			af := deferred[i]
+			if !af.c.allowTop {
+				i++
+				continue
+			}
+			sep := e.textFloatSep() // \textfloatsep for the first, \floatsep after it
+			if len(top) > 0 {
+				sep = e.floatSep()
+			}
+			cap := topCap
+			if af.c.urgent {
+				cap = vsize // "!" drops \topfraction; it must still fit the page
+			}
+			// \ifdim \@toproom > \ht\@currbox — strictly greater, so a float that
+			// exactly fills the remaining room is deferred, as LaTeX defers it.
+			if cap-topUsed <= fh(af) {
+				flTrace("Fail---no room: toproom = %s. Ht float: %s (top)",
+					spToStr(cap-topUsed), spToStr(fh(af)))
+				break
+			}
+			flTrace("Space OK: toproom = %s > %s (top, sep %s)",
+				spToStr(cap-topUsed), spToStr(fh(af)), spToStr(sep))
+			topUsed += fh(af) + sep
+			if len(top) > 0 {
+				topH += e.floatSep()
+			}
+			topH += fh(af)
+			top = append(top, af)
+			deferred = append(deferred[:i], deferred[i+1:]...)
+		}
+
+		// Choose bottom floats from what is left: allow bottom, within \bottomfraction and
+		// \bottomnumber (1).
+		botH := 0
+		i = 0
+		for i < len(deferred) && len(bottom) < botMax && len(top)+len(bottom) < totalMax {
+			af := deferred[i]
+			if !af.c.allowBot {
+				i++
+				continue
+			}
+			if botH+fh(af) > botCap {
+				i++
+				continue
+			}
+			botH += fh(af)
+			bottom = append(bottom, af)
+			deferred = append(deferred[:i], deferred[i+1:]...)
+		}
+
+		reserve := topH + botH
+		if topH > 0 {
+			reserve += e.textFloatSep()
+		}
+		if botH > 0 {
+			reserve += e.textFloatSep()
+		}
+
+		// Keep at least \textfraction of the page for text: if the floats leave too little
+		// room, push the last-added top float (then bottom) back to the queue for a later
+		// page rather than starving the text or forcing an overfull page. A float asked
+		// for with "!" sets \@textmin to zero (latex.ltx:15929), so a page carrying only
+		// urgent floats keeps no text minimum.
+		keep := textMin
+		if allUrgent(top) && allUrgent(bottom) {
+			keep = 0
+		}
+		for reserve > vsize-keep && (len(top) > 0 || len(bottom) > 0) {
+			if len(top) > 0 {
+				af := top[len(top)-1]
+				top = top[:len(top)-1]
+				deferred = append([]anchoredFloat{af}, deferred...)
+				topH -= fh(af)
+				if len(top) > 0 {
+					topH -= e.floatSep()
+				}
+			} else {
+				af := bottom[len(bottom)-1]
+				bottom = bottom[:len(bottom)-1]
+				deferred = append([]anchoredFloat{af}, deferred...)
+				botH -= fh(af)
+			}
+			reserve = topH + botH
+			if topH > 0 {
+				reserve += e.textFloatSep()
+			}
+			if botH > 0 {
+				reserve += e.textFloatSep()
+			}
+			if allUrgent(top) && allUrgent(bottom) {
+				keep = 0
+			} else {
+				keep = textMin
+			}
+		}
+
+		// If the deferred backlog is large enough to fill a float page on its own and none
+		// of it could ride this page's top, emit a float page to drain it — this is what
+		// stops a burst of figures from trailing far past their anchors.
+		if len(top) == 0 && len(bottom) == 0 && len(deferred) > 0 {
+			h, cnt := 0, 0
+			for _, af := range deferred {
+				h += fh(af)
+				cnt++
+				if cnt >= totalMax {
+					break
+				}
+			}
+			if h >= floatPageMin && deferred[0].c.allowPage {
+				var pageFloats []anchoredFloat
+				ph := 0
+				for len(deferred) > 0 && len(pageFloats) < totalMax {
+					need := fh(deferred[0])
+					if len(pageFloats) > 0 {
+						need += e.floatSep()
+					}
+					if len(pageFloats) > 0 && ph+need > vsize {
+						break
+					}
+					ph += need
+					pageFloats = append(pageFloats, deferred[0])
+					deferred = deferred[1:]
+				}
+				emitFloatPage(pageFloats)
+				if len(pages) >= maxPages {
+					e.notePageLimit()
+					break
+				}
+				continue
+			}
+		}
+
+		// Break the text at the height left between the floats, using the real page breaker
+		// (temporarily narrowing e.vsize so findPageBreak targets that height).
+		pageVsize := vsize - reserve
+		if pageVsize < textMin {
+			pageVsize = textMin
+		}
+		e.vsize = pageVsize
+		end := e.findPageBreak(text, start)
+		e.vsize = savedVsize
+
+		// A float written INSIDE this page is a candidate for this page's own top.
+		// LaTeX contributes a float at its anchor — \@xfloat fires the output routine
+		// there with \@floatpenalty — and \@addtocurcol (latex.ltx:15636) then tests it
+		// against the room LEFT in the column: it goes to the top of the page being
+		// built whenever \@colroom exceeds the height already set plus \textfraction
+		// plus the float. That is why a figure declared halfway down a page comes out
+		// at the top of THAT page. Taking only the floats anchored before the page
+		// began pushed every one of them a page later, and at the end of the document
+		// onto float pages of their own.
+		for fi < len(floats) && floats[fi].at < end {
+			af := floats[fi]
+			fi++
+			// \@bitor\@currtype\@deferlist: a float may not overtake an earlier one
+			// of its own type that is still waiting.
+			if len(top) < 2 && af.c.allowTop && !kindDeferred(deferred, af.f.kind) {
+				need := fh(af)
+				if len(top) > 0 {
+					need += e.floatSep()
+				}
+				want := topH + need
+				wantReserve := want + botH + e.textFloatSep()
+				if botH > 0 {
+					wantReserve += e.textFloatSep()
+				}
+				// ⛔⛔ \@toproom, AND THE SEPARATION IS CHARGED TO IT.
+				//
+				// ltoutput.dtx:6016-6018 refuses the float unless the room LEFT strictly
+				// exceeds its height — \ifdim \@toproom>\ht\@currbox — and \@toproom is
+				// decremented by the height PLUS \textfloatsep for the first float of the
+				// column and \floatsep for each one after it (ltoutput.dtx:6009,
+				// \ifx#2\@empty \textfloatsep \else \floatsep).
+				//
+				// `want` charges \floatsep BETWEEN floats and nothing for the first, so
+				// the budget was 8pt more generous than LaTeX's, every time. The
+				// reference's own fltrace on a three-figure witness is what located it:
+				//
+				//	Space OK: \@toproom = 384.99832pt > 144.05998pt
+				//	Fail---no room: \@toproom = 220.93834pt. Ht float: 224.05998pt
+				//
+				// 384.998 − 220.938 = 164.06 = 144.06 + 20pt of \textfloatsep. Ours put
+				// the second figure at 144.06 + 12 + 224.06 = 380.12 against a 385pt cap
+				// and accepted it with 4.88pt to spare; LaTeX, charging 20pt instead of
+				// 12, reaches 388.12 and defers it to the next page.
+				used := topUsed + fh(af)
+				if len(top) > 0 {
+					used += e.floatSep()
+				} else {
+					used += e.textFloatSep()
+				}
+				room := topCap - topUsed
+				if af.c.urgent {
+					room = vsize - topUsed // "!" drops \topfraction
+				}
+				if room <= fh(af) {
+					flTrace("Fail---no room: toproom = %s. Ht float: %s (dans la page)",
+						spToStr(room), spToStr(fh(af)))
+					deferred = append(deferred, af)
+					continue
+				}
+				flTrace("Space OK: toproom = %s > %s (dans la page)",
+					spToStr(room), spToStr(fh(af)))
+				if wantReserve <= vsize-textMin {
+					top = append(top, af)
+					topH, topUsed, reserve = want, used, wantReserve
+					pageVsize = vsize - reserve
+					if pageVsize < textMin {
+						pageVsize = textMin
+					}
+					e.vsize = pageVsize
+					end = e.findPageBreak(text, start) // less room now: the text stops earlier
+					e.vsize = savedVsize
+					continue
+				}
+			}
+			deferred = append(deferred, af)
+		}
+		pageText := trimTrailingGlue(text[start:end])
+
+		// Emit only a non-empty page (as paginateSingleList does): an empty text break with
+		// no floats to show would otherwise leave a blank leading/interior page.
+		if len(top) > 0 || len(bottom) > 0 || len(pageText) > 0 {
+			pages = append(pages, e.assembleMixedPage(top, pageText, bottom, len(pages)+1))
+			if len(pages) >= maxPages {
+				e.notePageLimit()
+				break
+			}
+		}
+		next := skipDiscardable(text, end)
+		if next <= start {
+			next = start + 1
+		}
+		start = next
+	}
+	return pages
+}
+
+// assembleMixedPage stacks the page's top floats (separated by \floatsep, and from the
+// text by \textfloatsep) above the text, and the bottom floats (separated from the text
+// by \textfloatsep, from each other by \floatsep) below it, then hands the result to
+// assemblePage for headers/footers/margins.
+func (e *Engine) assembleMixedPage(top []anchoredFloat, text []node, bottom []anchoredFloat, pageNum int) *boxNode {
+	var vlist []node
+	for i, af := range top {
+		if i > 0 {
+			vlist = append(vlist, glueNode{spec: glueSpec{width: e.floatSep()}})
+		}
+		vlist = append(vlist, af.f.box)
+	}
+	if len(top) > 0 && (len(text) > 0 || len(bottom) > 0) {
+		vlist = append(vlist, glueNode{spec: glueSpec{width: e.textFloatSep()}})
+	}
+	// ⛔ THE TEXT STARTS A PAGE HERE, under the float block — which is what \@cflt's
+	// \unvbox\@outputbox splices in (ltoutput.dtx:3597-3604). So it gets what the top
+	// of a page gets: its leading discardables dropped (tex.web:19495-19502) and
+	// \topskip above its first box (:19509-19516), reduced by THAT box's height and
+	// not by the float's. assemblePageTopskip's header has the measurement.
+	topskipDone := false
+	if len(top) > 0 && len(text) > 0 {
+		text = e.withTopskip(text[skipDiscardable(text, 0):])
+		topskipDone = true
+	}
+	vlist = append(vlist, text...)
+	if len(bottom) > 0 {
+		if len(text) > 0 || len(top) > 0 {
+			vlist = append(vlist, glueNode{spec: glueSpec{width: e.textFloatSep()}})
+		}
+		for i, af := range bottom {
+			if i > 0 {
+				vlist = append(vlist, glueNode{spec: glueSpec{width: e.floatSep()}})
+			}
+			vlist = append(vlist, af.f.box)
+		}
+	}
+	traceVlistHead(pageNum, vlist)
+	return e.assemblePageTopskip(vlist, pageNum, !topskipDone)
+}
+
+// traceVlistHead reports the head of a float page's vertical list under
+// GOTEX_FLTRACE, because that head is where the page's first baseline is decided
+// and a PDF shows only where the baseline LANDED (see fltrace.go).
+func traceVlistHead(pageNum int, vlist []node) {
+	if !flTracing() {
+		return
+	}
+	for i, n := range vlist {
+		if i >= 8 {
+			break
+		}
+		switch c := n.(type) {
+		case *boxNode:
+			flTrace("page %d tête %d: boîte h=%s p=%s", pageNum, i, spToStr(c.height), spToStr(c.depth))
+		case glueNode:
+			flTrace("page %d tête %d: glue %s", pageNum, i, spToStr(c.spec.width))
+		case ruleNode:
+			flTrace("page %d tête %d: filet h=%s p=%s", pageNum, i, spToStr(c.height), spToStr(c.depth))
+		default:
+			flTrace("page %d tête %d: %T", pageNum, i, n)
+		}
+	}
+}
+
+// floatSep / textFloatSep are the \floatsep (between stacked floats) and
+// \textfloatsep (between the float block and the text) skips.
+//
+// ⛔⛔ THEY READ THE REGISTER AND NOTHING ELSE. Both used to fall back to LaTeX's
+// 12pt / 20pt behind `if s.width > 0`, which is a test for "did anyone set this"
+// written as a test for "is this non-zero" — and the two differ on exactly the
+// value a document is most likely to write deliberately.
+//
+// ⚠ MEASURED. article at 11pt, a [t] float, the gap from the caption's baseline
+// to the first text baseline below it:
+//
+//	\textfloatsep default   reference 33.13pt   ours 35.72pt
+//	\textfloatsep=0pt       reference 13.21pt   ours 35.72pt   ← unchanged
+//
+// The reference dropped the 19.92pt it was told to drop; we did not move, because
+// \textfloatsep=0pt made s.width zero and the guard handed back 20pt.
+//
+// The defaults now live where a real class states them (classkernel.go, from
+// classes.dtx:1440-1442), so there is nothing left for this to fall back to: no
+// class gives LaTeX's values, a class overwrites them, and a document that writes
+// zero gets zero.
+func (e *Engine) floatSep() int { return e.namedSkip("floatsep").width }
+
+func (e *Engine) textFloatSep() int { return e.namedSkip("textfloatsep").width }
+
+// notePageLimit records that pagination hit the maxPages backstop.
+func (e *Engine) notePageLimit() {
+	if e.skippedCS == nil {
+		e.skippedCS = map[string]int{}
+	}
+	e.skippedCS["gotex@pagelimit"]++
+}
+
+// ── the class states these; we used to restate them ──────────────────────────
+//
+// ⛔ Every float-placement parameter is a thing the CLASS says, and all seven
+// were hardcoded here — with article's values, whatever class was loaded.
+// article.cls:121-126 and amsart.cls:1317-1324 say:
+//
+//	                 article   amsart   here, before
+//	topnumber              2        4              2
+//	bottomnumber           1        4              1
+//	totalnumber            3        4              3
+//	topfraction           .7      .97            0.7
+//	bottomfraction        .3      .97            0.3
+//	textfraction          .2      .03            0.2
+//	floatpagefraction     .5       .9            0.5
+//
+// Measured on a witness of forty identical figures in amsart prose: the
+// reference puts FOUR floats on a page and we put three, 11 pages against 14.
+// This is the same defect as the contents ladder and the list indent, one more
+// layer down: a number the class states, restated in our own code.
+//
+// The fractions are MACROS (\renewcommand\topfraction{.7}), not registers, so
+// the value is the macro's replacement text. The counts are LaTeX counters, and
+// \setcounter is a no-op on a counter nobody declared — which is why amsart's
+// \setcounter{topnumber}{4} did nothing at all until the class kernel declared
+// them.
+func (e *Engine) floatFraction(name string, def float64) float64 {
+	m := e.eq[name]
+	if m == nil || m.kind != mMacro {
+		return def
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(e.toksToString(m.body)), 64)
+	// A fraction outside (0,1] is not one; fall back rather than paginate on it.
+	if err != nil || v <= 0 || v > 1 {
+		return def
+	}
+	return v
+}
+
+// floatCount reads a float-placement counter, or the article default when the
+// counter does not exist or holds a value that cannot bound anything.
+func (e *Engine) floatCount(name string, def int) int {
+	m := e.eq["c@"+name]
+	if m == nil || m.kind != mCountRef || m.code < 0 || m.code >= registerPoolSize {
+		return def
+	}
+	if v := e.getCount(m.code); v > 0 {
+		return v
+	}
+	return def
+}

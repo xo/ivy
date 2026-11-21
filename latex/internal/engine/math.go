@@ -1,0 +1,1758 @@
+// Copied from github.com/go-tex/engine, the file math.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import (
+	"strings"
+	"unicode/utf8"
+
+	// ivy: the API of go-tex/math on texmath of okage, in latex/internal/mathsvg (D62).
+	texmath "github.com/xo/ivy/latex/internal/mathsvg"
+)
+
+// This file gives the engine math mode. A $…$ (or $$…$$) group is delegated
+// whole to the go-tex/math typesetter — the engine does not reimplement the math
+// sub-language; it collects the raw math source, hands it to that library, and
+// embeds the resulting self-contained SVG as a math box on the current list. The
+// library reports only overall width/height (no baseline), so the box is centred
+// on the text baseline — an honest approximation until go-tex/math exposes the
+// math axis.
+
+// mathRendererT is the engine field's type (a go-tex/math renderer).
+type mathRendererT = *texmath.Renderer
+
+// mathNode is a rendered piece of math: its self-contained SVG plus the box
+// dimensions (sp) used to place and line-break it.
+type mathNode struct {
+	svg string
+	// src is the formula's LaTeX source, carried so the searchable text layer
+	// can say what the formula IS. A rendered formula is glyph outlines like any
+	// other text, and without this a page reads "The mass is exactly" with a
+	// silent hole where the equation was. The source is what the author typed
+	// and what they would type to search for it again; a spoken form ("E equals
+	// m c squared") is a separate, language-dependent problem.
+	src string
+	// srcLine is the 1-based source line the formula OPENED on, 0 when unknown —
+	// the same stamp charNode carries, for the same reason.
+	//
+	// ⛔ A FORMULA USED TO CARRY NONE, and that is a hole in the feature this
+	// file's siblings exist for. srcmap.go says the point of the stamps is
+	// "source ↔ output navigation (click a glyph → jump to its line, à la
+	// SyncTeX)"; collectHSpans skipped mathNode, so SourceSpans emitted nothing
+	// for a formula and LineAt returned 0 over one. boxrender.go closes the open
+	// <g data-l="N"> before embedding the formula's SVG, so the rendered page
+	// carried nothing either: measured on a page with one inline and one display
+	// formula, five line groups and both formulas outside all of them.
+	//
+	// A reader clicking a displayed equation to find it in their source was
+	// therefore clicking the one thing on the page that could not answer.
+	//
+	// It is the line the formula OPENS on, not the line it ends on: a display
+	// spanning three lines belongs to the one the author would look for it at.
+	srcLine int
+	// srcCol, srcEndLine and srcEndCol complete the stamp into a RANGE: where
+	// the formula starts and where it ends in the source. Columns are 0-based
+	// and counted in RUNES, which is what both ends already speak — the engine
+	// reads the document as []rune (engine.go) and the editor this feeds
+	// addresses its caret as "the 0-based rune column on its line"
+	// (go-widgets/toolkit, TextView.CursorCol). There is no byte/rune
+	// conversion anywhere along the path, and none should be invented.
+	//
+	// ⛔ A LINE IS NOT ENOUGH TO EDIT A FORMULA. srcLine answers "which line did
+	// this come from", which is what a click-to-scroll needs; it cannot answer
+	// "which characters ARE this formula", which is what selecting an equation
+	// to edit needs, and two formulas on one line are indistinguishable by it.
+	//
+	// ⚠ BOTH POSITIONS ARE THE DELIMITERS' OWN, not the body's: srcLine/srcCol
+	// is where the opening `$` (or `\[`) sits, and srcEndLine/srcEndCol is where
+	// the CLOSING one sits. The formula's body is strictly between them. The end
+	// is not advanced past the closing delimiter because its length is not one
+	// thing — `$`, `$$` and `\]` are one, two and two runes — and the engine
+	// records where a token began, never how long it was. A consumer holding the
+	// buffer can read the delimiter at that position; one that guessed a length
+	// would be wrong on two cases out of three.
+	srcCol               int
+	srcEndLine           int
+	srcEndCol            int
+	width, height, depth int
+}
+
+func (mathNode) isNode() {}
+
+// mathRenderer lazily builds the go-tex/math renderer with its embedded MATH font.
+func (e *Engine) mathRenderer() *texmath.Renderer {
+	if e.mathR == nil {
+		r, err := texmath.New(lmMath)
+		if err != nil {
+			e.fail("cannot init math renderer: " + err.Error())
+			return nil
+		}
+		e.mathR = r
+	}
+	return e.mathR
+}
+
+// mathSize is the point size at which math is rendered: the current text font's
+// size, or 10pt when no font is set.
+//
+// ⚠ It rounds, and the rounding is go-tex/math's boundary rather than a choice
+// made here: texmath.Renderer takes a whole-point size. Text faces carry the
+// table's fractional points (\Large is 14.4), so maths inside a \Large heading is
+// set at 14 where the text around it is at 14.4. That is a 2.8% mismatch on the
+// few equations that appear inside a sized heading, and it is bounded by what the
+// maths renderer accepts — widening it is a change to that module's API, not to
+// this one.
+func (e *Engine) mathSize() int {
+	if e.curFont != nil {
+		if s := e.curFont.sizePt(); s > 0 {
+			return int(s + 0.5)
+		}
+	}
+	return 10
+}
+
+// writeMathCS encodes a control sequence into go-tex/math source, as backslash-name
+// followed by a space. It is the ONE place that does so: scanMathSource,
+// substituteMathBody, collectMathUntilCS, the equation body and the alignment cells
+// all funnel through it, so a token that must not reach the maths layer is refused
+// once rather than in five places.
+//
+// A control sequence named after an END-OF-LINE character is such a token. tex.web
+// §354 makes an escape at the end of a line the EMPTY control sequence; this engine
+// names it after the \endlinechar that follows. Either way it means nothing to the
+// maths layer, and emitted verbatim it became "\<CR>": go-tex/math refuses the
+// command and the engine then drops the WHOLE equation. One appendix line ending in
+// a lone backslash cost a paper 15 formulas, and 7 of the corpus's 157 papers lose
+// 27 between them.
+func writeMathCS(b *strings.Builder, cs string) {
+	if cs == "" || cs == "\r" || cs == "\n" {
+		return
+	}
+	b.WriteByte('\\')
+	b.WriteString(cs)
+	b.WriteByte(' ')
+}
+
+// scanMathSource reads raw (unexpanded) tokens up to the closing math shift,
+// reconstructing the math source string for go-tex/math. It returns the source
+// and whether the math was display style ($$…$$).
+func (e *Engine) scanMathSource() (string, bool) {
+	display := false
+	if t, ok := e.getNext(); ok {
+		if t.cat == catMath && !t.cs_ { // opening $$ ⇒ display math
+			display = true
+		} else {
+			e.back(t)
+		}
+	}
+	var b strings.Builder
+	depth := 0 // brace nesting: a $ only ends the math at the top level
+	for {
+		t, ok := e.getNext()
+		if !ok {
+			break
+		}
+		if isFileEndSentinel(t) { // an unterminated $/$$ must not cross the file boundary
+			e.back(t)
+			break
+		}
+		// \csname can only build a control sequence, and this scanner reads raw
+		// tokens: left unexecuted it reaches the maths layer as the literal word
+		// "csname". \end{env} goes the same way — and a class that builds its
+		// display out of $$ closes it INSIDE \end<env>, so running it is the only
+		// way the closing $$ ever arrives (iopart.cls: \def\endequation{$$}).
+		// \end{array} and \end{cases}, whose \end<env> holds no math shift, stay
+		// literal for the maths layer to read.
+		if e.runsCsname(t) {
+			e.runCsname(t)
+			continue
+		}
+		if t.cs_ && t.cs == "end" {
+			if name, ok := e.peekBracedName(); ok {
+				if m := e.eq["end"+name]; m != nil && m.kind == mMacro && bodyHasMathShift(m.body) {
+					e.expandMacro(m)
+					continue
+				}
+				e.push(braceNameToks(name))
+			}
+		}
+		// A formula cannot cross a GROUP BOUNDARY or a paragraph: meeting \endgroup or
+		// \par at the top level means the $ was never closed, and TeX says so
+		// ("Missing $ inserted"). Scanning on instead swallowed whatever followed —
+		// measured on one arXiv paper, an unpaired $ inside an algorithmic block ate
+		// the block's \endgroup's, the groups desynchronised, and the \def\item that
+		// \enumerate posts in its own group was no longer in force: every later item
+		// took the generic \item, whose optional-argument grab then ran into a } (#229).
+		// The token goes back so the group closes and the document carries on.
+		if depth == 0 && e.endsUnterminatedMath(t) {
+			e.back(t)
+			break
+		}
+		// A $ inside a \mbox{…$…$…}/\text{…} group (depth > 0) is that group's own
+		// nested inline math, NOT the closing shift — treating it as the close used
+		// to truncate the math here and desynchronise every $ in the rest of the
+		// document (a runaway that swallowed paragraphs of text as "math").
+		if t.cat == catMath && !t.cs_ && depth == 0 {
+			if display { // consume the second $ of the closing $$
+				if u, ok := e.getNext(); ok && !(u.cat == catMath && !u.cs_) {
+					e.back(u)
+				}
+			}
+			break
+		}
+		if !t.cs_ {
+			switch t.cat {
+			case catBegin:
+				depth++
+			case catEnd:
+				if depth > 0 {
+					depth--
+				}
+			}
+		}
+		if t.cs_ {
+			writeMathCS(&b, t.cs)
+		} else {
+			b.WriteRune(t.ch)
+		}
+	}
+	return b.String(), display
+}
+
+// endsUnterminatedMath reports whether t proves the formula was never closed: a
+// \endgroup that would close a group the formula opened outside itself, or the \par
+// that ends a paragraph. Both are errors inside maths in real TeX.
+func (e *Engine) endsUnterminatedMath(t tok) bool {
+	if !t.cs_ {
+		return false
+	}
+	m := e.meaningOf(t)
+	if m == nil || m.kind != mPrim {
+		return false
+	}
+	return m.name == "endgroup" || m.name == "par"
+}
+
+// peekBracedName reads a {name} that follows, returning the name; when the next
+// token is not a brace the input is left exactly as it was. The caller pushes the
+// name back with braceNameToks when it decides not to act on it.
+func (e *Engine) peekBracedName() (string, bool) {
+	t, ok := e.getNext()
+	if !ok {
+		return "", false
+	}
+	if !(t.cat == catBegin && !t.cs_) {
+		e.back(t)
+		return "", false
+	}
+	var b strings.Builder
+	for {
+		u, ok := e.getNext()
+		if !ok {
+			return b.String(), true
+		}
+		if !u.cs_ && u.cat == catEnd {
+			return b.String(), true
+		}
+		if !u.cs_ {
+			b.WriteRune(u.ch)
+		}
+	}
+}
+
+// bodyHasMathShift reports whether a macro body carries a math shift ($), which is
+// what makes \end<env> the thing that closes a $$ display.
+func bodyHasMathShift(body []tok) bool {
+	for _, t := range body {
+		if !t.cs_ && t.cat == catMath {
+			return true
+		}
+	}
+	return false
+}
+
+// makeMath renders a math source string to a math box.
+func (e *Engine) makeMath(src string, display bool) mathNode {
+	r := e.mathRenderer()
+	if r == nil {
+		return mathNode{}
+	}
+	size := e.mathSize()
+	svg, m, drawn, err := e.renderMathResolvingMacros(r, src, display, size)
+	if drawn != "" {
+		src = drawn // what was DRAWN, not what was typed: this is the text layer's sentence
+	}
+	if err != nil {
+		if e.tolerant() {
+			// Best-effort preview: a real document's math may use a command
+			// go-tex/math does not yet know (a package macro, a user \def, an
+			// unimplemented symbol). Drop this one equation rather than aborting the
+			// whole compile, tallying the trigger so it can be reported/prioritised.
+			e.recordMathSkip(err.Error())
+			return mathNode{}
+		}
+		e.fail("math error in $" + src + "$: " + err.Error())
+		return mathNode{}
+	}
+	// go-tex/math paints glyphs with fill="currentColor" so a formula can follow
+	// the surrounding text colour. Bake the ACTUAL current colour in (black by
+	// default, or the active \textcolor) instead of leaving currentColor to be
+	// resolved by the host page's CSS `color` — which on a themed page (the
+	// playground) is a faint default, rendering formulas nearly invisible or, in
+	// a browser's auto-dark mode, inconsistently with the body text. An explicit
+	// colour makes math and text always render identically.
+	color := "black"
+	if e.curColor != 0 {
+		color = hexColor(e.curColor)
+	}
+	svg = strings.ReplaceAll(svg, "currentColor", color)
+	// go-tex/math reports the true box: the baseline is at y=Height in the SVG,
+	// so the math baseline aligns with the surrounding text baseline (Height above,
+	// Depth below) instead of being centred on height/2 — which dropped inline math
+	// below the line — and the tight width removes the old padding's side-space.
+	// srcLine defaults to where the reader is NOW, which for a formula on one
+	// line is the right answer. A caller that knows where the formula OPENED —
+	// the stomach, which sees the `$` before scanning past it — overwrites this,
+	// because a display spanning three lines would otherwise be stamped with its
+	// last one.
+	return mathNode{svg: svg, src: src, srcLine: e.curSrcLine,
+		width: ptToSP(m.Width), height: ptToSP(m.Height), depth: ptToSP(m.Depth)}
+}
+
+// renderMathResolvingMacros renders src, and when go-tex/math rejects a command it
+// does not know, it expands that command IN THE SOURCE when — and only when — the
+// command is a parameterless user/kernel macro (kind mMacro), then retries. This
+// recovers user math shorthands the raw-token scanner emits verbatim, e.g. a
+// document's \newcommand\F{\mathbb F} or \def\Z{\mathbb{Z}}: go-tex/math never
+// learned \F, but it does know \mathbb, so substituting the macro's replacement
+// lets the equation render instead of being dropped.
+//
+// The substitution is a strict fallback: the literal source is always tried first,
+// so every construct go-tex/math already understands (\frac, \sum, \cdot, \mathbf…)
+// renders exactly as before and is never expanded — expansion happens only on the
+// specific command that failed. That makes the pass regression-free by construction:
+// anything that used to render still renders unchanged. A per-name guard (seen) and a
+// bounded try count keep a self-referential or non-shrinking macro from looping.
+// It also returns the source AS RESOLVED — the string that actually rendered. The
+// caller keeps it for the text layer: a document's own \newcommand reaches the raw
+// scanner verbatim, so without this the layer said "\RealXtrain" (226 times on one
+// corpus paper) where the page shows X with a subscript. The rendering was already
+// right; only the phrase standing over it was not. See #372.
+func (e *Engine) renderMathResolvingMacros(r *texmath.Renderer, src string, display bool, size int) (string, texmath.Metrics, string, error) {
+	var svg string
+	var m texmath.Metrics
+	var err error
+	// The overall try bound stops a mutually-recursive pair (\a→\b→\a) that keeps
+	// changing the source forever. Progress within it is guarded per step by the
+	// fixpoint check below, not by a "seen once" set — a document's own \newcommand
+	// is often used NESTED (\prn{…\prn{…}}), so the same name must be expandable more
+	// than once as the outer occurrence exposes the inner ones.
+	for tries := 0; tries < 64; tries++ {
+		if display {
+			svg, m, err = r.RenderDisplaySVGMetrics(src, size)
+		} else {
+			svg, m, err = r.RenderSVGMetrics(src, size)
+		}
+		if err == nil {
+			return svg, m, src, nil
+		}
+		name := unknownMathCommand(err.Error())
+		if name == "" {
+			return svg, m, src, err
+		}
+		// A command whose MATHS meaning is another symbol is substituted before the
+		// macro table is consulted: \dag is a macro here (plain.tex's \mathhexbox
+		// form), and expanding it would only turn the unknown \dag into an unknown
+		// \char. LaTeX picks by mode — \ifmmode{\dagger}\else\textdagger\fi — and
+		// this path is the maths half of that test.
+		if sym, ok := mathTextSymbol[name]; ok {
+			src = replaceMathCS(src, name, sym)
+			continue
+		}
+		// A maths SPACE the layer does not know, at the width of one it does: \> is
+		// plain TeX's \:, \thinspace is \,, and so on. Here for the same reason as
+		// the symbols above — \thinspace and \negthinspace are DEFINED macros here
+		// (format.go:45-46, text-mode \hskip), so consulting the macro table first
+		// expands one into an \hskip that stripMathGlue then turns into a plain space.
+		// Measured: $a\thinspace b$ came out exactly as wide as $a b$.
+		if sy, syok := e.resolveMathSpaceSynonym(src, name); syok {
+			src = sy
+			continue
+		}
+		// A mathNoise entry carries no maths BY DEFINITION, so expanding one can
+		// never help — and when the entry is a defined MACRO the retry below expands
+		// it instead, turning one unknown command into an unrenderable source and
+		// dropping the formula whole. Strip every one of them first.
+		//
+		// This began as a guard for the text size switches alone (31 displays over
+		// two corpus papers, every one reported against \edef, a primitive the
+		// document never wrote — \small is \@setfontsize plus a run of glue
+		// assignments). \label then joined them without the guard being widened:
+		// classkernel.go redefines it as \@bsphack\gotex@rawlabel{…}\@esphack, so
+		// the retry expanded it and the maths layer was handed \@savsk, or our own
+		// internal \gotex@rawlabel. Witness: \[ E = mc^2 \label{eq:a} \].
+		// Five equations over three corpus papers (census 2026-09-26).
+		if _, isNoise := mathNoise[name]; isNoise {
+			if stripped, sok := stripMathNoise(src, name); sok {
+				src = stripped
+				continue
+			}
+		}
+		next, ok := e.expandMacroInMathSource(src, name)
+		if !ok {
+			// LaTeX's one-token look-ahead. Tried before the strippers below
+			// because it DECIDES what the rest of the formula is, and after the
+			// macro expander above so that a document which redefines
+			// \@ifnextchar as a macro of its own is expanded, not intercepted.
+			// The test is on the primitive's identity rather than the reported
+			// name, so \kernel@ifnextchar — \let to it precisely so a package
+			// cannot break the kernel (latex.ltx:1607) — is served too.
+			if m := e.eq[name]; m != nil && m.kind == mPrim && m.name == "@ifnextchar" {
+				if picked, pok := e.expandIfNextCharInMathSource(src, name); pok {
+					src = picked
+					continue
+				}
+			}
+			// An expandable primitive written DIRECTLY in the formula rather than
+			// carried in by a macro body. A substituted body is already run through
+			// the gullet by flattenMathBody, which is why
+			// \def\bb{\expandafter\aa} has worked in a formula since #174 — but a
+			// source the document wrote itself never was, and an \expandafter in it
+			// reached go-tex/math as a bare name.
+			//
+			// It arrives that way because an argument can be COLLECTED rather than
+			// expanded: aastex701.cls:2589 sets its affiliation marks with
+			// \textsuperscript{\expandafter\@affilcomma\@tempa\relax\relax}, and
+			// the superscript's argument becomes maths source verbatim. Measured on
+			// 999 papers: \expandafter 479 equations over 17 papers, the largest
+			// trigger the engine already defines (#466).
+			//
+			// Running the SAME flattener the body path uses is what keeps the two
+			// counting alike, and it runs only after the formula has already failed,
+			// so no formula that renders today can change.
+			if m := e.eq[name]; m != nil && m.kind == mPrim && expandableSet[name] {
+				if flat := e.flattenMathBody(src); flat != src {
+					src = flat
+					continue
+				}
+			}
+			// Colour commands (\color, \textcolor, …) are primitives go-tex/math
+			// cannot render. Strip them from the source — keeping any content
+			// argument — so the equation typesets in the surrounding colour instead
+			// of being dropped whole.
+			if stripped, sok := stripMathColor(src, name); sok {
+				src = stripped
+				continue
+			}
+			// Cross-reference / citation commands (\ref, \eqref, \cite …) are engine
+			// primitives that resolve to text at typeset time, so go-tex/math cannot
+			// render them. Substitute their resolved text (or a neutral placeholder)
+			// into the source, so an equation carrying a \eqref{…} still typesets.
+			if resolved, rok := e.resolveMathRef(src, name); rok {
+				src = resolved
+				continue
+			}
+			// Non-rendering commands (spacing \hspace/\mspace; metadata \label,
+			// \nonumber, …) must not drop the equation: spacing becomes a space, the
+			// rest is removed, then retry.
+			// siunitx quantities: composed here rather than dropped, with the unit
+			// upright as siunitx sets it.
+			if q, qok := e.resolveMathSIUnitx(src, name); qok {
+				src = q
+				continue
+			}
+			// The physics package: go-tex/math knows none of its commands, and one
+			// unknown command drops the whole equation (mathphysics.go).
+			if ph, pok := e.resolvePhysics(src, name); pok {
+				src = ph
+				continue
+			}
+			// leftindex: a symbol's indices set on its LEFT. Same shape as the physics
+			// package above — a package's commands, rewritten only when the document
+			// asked for the package.
+			if li, lok := e.resolveLeftIndex(src, name); lok {
+				src = li
+				continue
+			}
+			// xstring's \IfEqCase / \IfStrEqCase: a string switch whose DECISION can be
+			// taken textually even though its machinery cannot be expanded.
+			if xc, xok := e.resolveXStringCase(src, name); xok {
+				src = xc
+				continue
+			}
+			if noised, nok := stripMathNoise(src, name); nok {
+				src = noised
+				continue
+			}
+			// Glue primitives (\hskip\mathindent and friends) carry a <glue>, not a
+			// {group}: they and the glue they take are removed.
+			if glued, gok := stripMathGlue(src, name); gok {
+				src = glued
+				continue
+			}
+			// \penalty and its kin carry a <number> the same way.
+			if pen, pok := stripMathPenalty(src, name); pok {
+				src = pen
+				continue
+			}
+			return svg, m, src, err
+		}
+		if next == src {
+			// A self-referential macro (\def\x{\x}) expands to itself: no progress,
+			// so stop rather than spin. The equation is dropped and recorded.
+			return svg, m, src, err
+		}
+		src = next
+	}
+	return svg, m, src, err
+}
+
+// expandXparseInMathSource substitutes an xparse document command (\NewDocumentCommand
+// and friends) in a go-tex/math source string.
+//
+// ⛔ These commands were invisible to this whole pass. xparse binds one to a STOMACH
+// primitive, because a real \NewDocumentCommand is \protected and must not expand
+// inside an \edef; expandMacroInMathSource only ever looked at mMacro, so every such
+// macro reached the maths layer as a bare NAME. Measured on 999 papers of the arXiv
+// corpus: 99 census triggers worth 1193 equations, the largest single group in it
+// (#496).
+//
+// Only the specifications this can serve EXACTLY are served, and the rest are left
+// verbatim for go-tex/math to report:
+//
+//	{}          no arguments — replace every occurrence with the body. 37 of the 99
+//	            triggers, 293 equations, and the largest of the five groups.
+//	m … m       mandatory only — the same shape as \newcommand{\c}[n]{…}, which the
+//	            code below already parses out of the STRING. 18 triggers, 200 equations.
+//
+//	o O{def}    optional arguments, each grabbed IN ITS PLACE in the specification —
+//	            "s O{\lambda} m m" is a real corpus example, and \newcommand can only
+//	            put an optional argument first. An ABSENT one takes the specifier's own
+//	            default: the \gotex@NoValue marker for o, d for O{d}, which is what the
+//	            kernel's normalisation of o to D[]{-NoValue-} means (latex.ltx:2121).
+//	            The body then tests it with \IfNoValueTF, which is already expandable
+//	            (primitives.go's expandableSet literal lists all nine tests), so
+//	            flattenMathBody resolves the branch after substitution and the maths
+//	            layer never sees the test. 24 triggers, 324 equations.
+//
+// Refused, each because it is not the same thing as \newcommand's machinery:
+//
+//	s t<c>      a star, or a test for one character. s IS t* (latex.ltx:2131), so they
+//	            are one clause. The argument is the \gotex@BoolTrue / \gotex@BoolFalse
+//	            marker \IfBooleanTF tests — already expandable, like the NoValue tests —
+//	            and the character is consumed only on a match. 14 triggers, 234 equations.
+//
+// Refused, each because it is not the same thing as \newcommand's machinery:
+//
+//	r R d D e E v   delimited, embellished or verbatim arguments.
+//
+// Refusing is the design: a half-understood specification would substitute with the
+// wrong arity and silently mangle the formula, where a name left standing is reported
+// and the census counts it.
+func (e *Engine) expandXparseInMathSource(src, name string, m *meaning) (string, bool) {
+	// Only m and the optional kinds, and at most TeX's nine parameters.
+	//
+	// This check and parseXparseMathArgs's own default clause are LAYERED: removing
+	// this one alone changes nothing observable for a star or a delimited specifier,
+	// because the parser then refuses the same occurrence one step later. It is kept
+	// because it refuses BEFORE any string scanning and because it is where the
+	// contract reads; the nine-parameter bound below is the part only it can enforce,
+	// and a test exercises exactly that.
+	nargs := 0
+	for _, a := range m.xpSpecs {
+		switch a.kind {
+		case xpMandatory, xpOptional, xpStar, xpTest:
+		default:
+			return "", false
+		}
+		nargs++
+	}
+	if nargs > 9 {
+		return "", false
+	}
+	if nargs == 0 {
+		return replaceMathCS(src, name, e.flattenMathBody(e.toksToString(m.body))), true
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := src[i+len(needle):]
+		args, consumed, ok := e.parseXparseMathArgs(rest, m.xpSpecs)
+		if !ok {
+			out.WriteString(needle) // leave this occurrence for go-tex/math to reject
+			src = rest
+			continue
+		}
+		out.WriteString(e.flattenMathBody(e.substituteMathBody(m.body, args)))
+		src = rest[consumed:]
+		changed = true
+	}
+	if !changed {
+		return "", false
+	}
+	out.WriteString(src)
+	return out.String(), true
+}
+
+// parseXparseMathArgs grabs one argument per specifier, IN ORDER, out of a go-tex/math
+// source string. It is the ordered counterpart of parseMathArgsOpt, which can only put
+// an optional argument FIRST because that is all \newcommand can express — an xparse
+// specification puts them anywhere, and "s O{\lambda} m m" is a real corpus example.
+//
+// An absent optional argument takes the specifier's own default, which for o is the
+// \gotex@NoValue marker and for O{d} is d. That distinction is the whole reason this
+// cannot go through \newcommand's machinery: the kernel normalises o to D[]{-NoValue-}
+// (latex.ltx:2121) and the body tests it with \IfNoValueTF, where \newcommand would
+// substitute a default and make \IfNoValueF{#1}{…} take the wrong branch.
+func (e *Engine) parseXparseMathArgs(s string, specs []xpArg) ([]string, int, bool) {
+	p := 0
+	args := make([]string, 0, len(specs))
+	for _, a := range specs {
+		switch a.kind {
+		case xpMandatory:
+			got, n, ok := parseMathArgs(s[p:], 1)
+			if !ok {
+				return nil, 0, false
+			}
+			args = append(args, got[0])
+			p += n
+		case xpOptional:
+			arg, remainder, taken := takeMathOptArg(s[p:])
+			if !taken {
+				arg = e.toksToString(a.def)
+			}
+			args = append(args, arg)
+			p += len(s[p:]) - len(remainder)
+		case xpStar, xpTest:
+			// s is t* — latex.ltx:2131 normalises it to exactly that — so the two are
+			// one clause here, differing only in the character sought. The character is
+			// consumed ONLY on a match, which is what the stomach's peekChar does
+			// (xparse.go:163).
+			//
+			// ⛔ The space skip below is UNREACHABLE with today's emitter, and kept for
+			// the same reason as parseXparseMathArgs's default clause: scanMathSource
+			// writes every control sequence as backslash-name-SPACE and collapses runs,
+			// and the needle consumes that one space, so p already sits on the test
+			// character. Measured: "$\Sd*{x}$", "$\Sd *{x}$" and "$\Sd   *  {x}$" all
+			// behave identically, and an ablation of the loop breaks no test. Removing
+			// it would make a future emitter that keeps a second space read it as "no
+			// star" and take the FALSE branch — silently.
+			//
+			// The argument is a MARKER either way: \gotex@BoolTrue or \gotex@BoolFalse,
+			// which \IfBooleanTF tests. It is never the character itself, and it is
+			// never empty — an empty argument would make \IfBooleanTF{#1}{…}{…} read
+			// its branches as the test.
+			q := p
+			for q < len(s) && s[q] == ' ' {
+				q++
+			}
+			r, width := utf8.DecodeRuneInString(s[q:])
+			if width > 0 && r == a.testTok.ch {
+				args = append(args, e.toksToString(boolTrueToks()))
+				p = q + width
+			} else {
+				args = append(args, e.toksToString(boolFalseToks()))
+			}
+		default:
+			// ⛔ UNREACHABLE while expandXparseInMathSource's guard stands, and kept for
+			// that reason rather than in spite of it: without it a new specifier kind
+			// would fall through, leave args SHORT, and substitute the wrong text —
+			// silently. An ablation of this clause alone breaks no test, which is the
+			// honest state of a guard whose job is to survive a change to its caller.
+			return nil, 0, false
+		}
+	}
+	return args, p, true
+}
+
+// expandMacroInMathSource substitutes the user/kernel macro \name in a go-tex/math
+// source string. A parameterless macro's every occurrence is replaced by its
+// replacement text; an argument macro (\newcommand\abs[1]{\lvert#1\rvert},
+// \ensuremath, …) has each occurrence's brace/char/cs arguments parsed out of the
+// source and substituted into #1…#9 of the body. Primitives, undefined names, and
+// macros whose arguments cannot be parsed return ("", false) — left verbatim for
+// go-tex/math. scanMathSource emits every control sequence as backslash-name-space,
+// which this matches and reproduces.
+func (e *Engine) expandMacroInMathSource(src, name string) (string, bool) {
+	m := e.eq[name]
+	if m == nil {
+		return "", false
+	}
+	if m.kind == mPrim && m.xpDoc {
+		return e.expandXparseInMathSource(src, name, m)
+	}
+	if m.kind != mMacro {
+		return "", false
+	}
+	if len(m.params) == 0 {
+		return replaceMathCS(src, name, e.flattenMathBody(e.toksToString(m.body))), true
+	}
+	needle := "\\" + name + " "
+	n := len(m.params)
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := src[i+len(needle):]
+		// \newcommand{\cmd}[n][default] makes the FIRST of the n parameters optional:
+		// \cmd is \@protected@testopt, which supplies {default} when no [ follows
+		// (latex.ltx:1187-1199), and the remaining n-1 are grabbed as usual. Reading
+		// all n as mandatory left every such macro unexpanded, and the maths layer
+		// then refused the formula — a paper's own \qbinom[q]{N}{k} among them.
+		args, consumed, ok := parseMathArgsOpt(rest, n, m.optArg, e.toksToString(m.optDefault))
+		if !ok {
+			out.WriteString(needle) // leave this occurrence for go-tex/math to reject
+			src = rest
+			continue
+		}
+		out.WriteString(e.flattenMathBody(e.substituteMathBody(m.body, args)))
+		src = rest[consumed:]
+		changed = true
+	}
+	if !changed {
+		return "", false
+	}
+	out.WriteString(src)
+	return out.String(), true
+}
+
+// mathColorCmds are the xcolor/color commands the engine implements as primitives
+// (so the math macro-retry cannot expand them) and which go-tex/math does not
+// render. Each maps to the count of mandatory {brace} arguments and the 0-based
+// index of the one to keep as content (-1 = drop the command outright). A leading
+// optional [model] argument is skipped separately.
+var mathColorCmds = map[string]struct{ mand, keep int }{
+	"color":       {1, -1}, // \color[model]{name}
+	"pagecolor":   {1, -1},
+	"normalcolor": {0, -1},
+	"textcolor":   {2, 1}, // \textcolor[model]{name}{content}
+	"colorbox":    {2, 1}, // \colorbox[model]{name}{content}
+	"fcolorbox":   {3, 2}, // \fcolorbox[model]{frame}{bg}{content}
+}
+
+// stripMathColor removes every occurrence of the colour command \name from a
+// go-tex/math source string, keeping any content argument, and reports whether it
+// changed anything. The equation then renders in the surrounding colour rather than
+// being dropped. An occurrence whose arguments cannot be parsed is left verbatim
+// (for go-tex/math to reject) so a malformed source is never silently corrupted.
+func stripMathColor(src, name string) (string, bool) {
+	spec, ok := mathColorCmds[name]
+	if !ok {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := skipMathOptArg(src[i+len(needle):])
+		args, consumed, ok := parseMathArgs(rest, spec.mand)
+		if !ok {
+			out.WriteString(needle)
+			src = src[i+len(needle):]
+			continue
+		}
+		if spec.keep >= 0 && spec.keep < len(args) {
+			out.WriteString(args[spec.keep])
+		}
+		src = rest[consumed:]
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// mathRefArity is the set of cross-reference / citation commands the engine
+// resolves inside math source, each taking one {key} argument (plus, for the cite
+// family, an optional [note]). Their value is text, so go-tex/math cannot render
+// them; resolveMathRef substitutes the resolved label or a neutral placeholder.
+var mathRefArity = map[string]bool{
+	"ref": true, "eqref": true, "pageref": true, "autoref": true,
+	"cref": true, "Cref": true, "nameref": true, "vref": true,
+	"cite": true, "citep": true, "citet": true, "citealp": true,
+	"citealt": true, "citeauthor": true, "citeyear": true, "Citep": true, "Citet": true,
+}
+
+// mathSIUnitxArity is siunitx's quantity commands and how many braced arguments
+// each takes. The engine already composes them for text (siunitx.go); in a formula
+// they reached the maths layer as unknown commands and cost the whole equation —
+// 158 of the 4172 formulas the arXiv corpus drops are \SI.
+var mathSIUnitxArity = map[string]int{
+	"num": 1, "ang": 1, "si": 1, "unit": 1, "SI": 2, "qty": 2,
+}
+
+// resolveMathSIUnitx substitutes a siunitx quantity into a maths source string,
+// composing it with the same functions the text-mode primitives use.
+//
+// The unit goes inside \mathrm, which is siunitx's own default (unit-font-command =
+// \mathrm, siunitx.sty:6209, and \__siunitx_print_math_auxvi:Nn \mathrm at :3910)
+// and the SI rule it implements: a unit symbol is upright, never italic — which is
+// what a maths layer would otherwise make of "m/s".
+func (e *Engine) resolveMathSIUnitx(src, name string) (string, bool) {
+	n, ok := mathSIUnitxArity[name]
+	if !ok {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := skipMathOptArg(src[i+len(needle):]) // \SI[per-mode=symbol]{…}{…}
+		args, consumed, ok := parseMathArgs(rest, n)
+		if !ok {
+			out.WriteString(needle)
+			src = src[i+len(needle):]
+			continue
+		}
+		out.WriteString(mathQuantityText(name, args))
+		src = rest[consumed:]
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// mathQuantityText composes one siunitx quantity as maths source.
+func mathQuantityText(name string, args []string) string {
+	unit := func(a string) string {
+		u := mathThinSpace(formatUnitTokens(tokenizeTeX(a)))
+		if u == "" {
+			return ""
+		}
+		return "\\mathrm {" + u + "}"
+	}
+	switch name {
+	case "num":
+		v, err := formatNumber(args[0])
+		if err != nil {
+			return ""
+		}
+		return mathThinSpace(v)
+	case "ang":
+		return mathThinSpace(formatAngle(args[0]))
+	case "si", "unit":
+		return unit(args[0])
+	default: // SI, qty
+		v, err := formatNumber(args[0])
+		u := unit(args[1])
+		switch {
+		case err != nil || v == "":
+			return u
+		case u == "":
+			return mathThinSpace(v)
+		}
+		return mathThinSpace(v) + "\\, " + u
+	}
+}
+
+// mathThinSpace rewrites the \thinspace the text composer emits as the \, the maths
+// layer knows; both are TeX's thin space, spelled for their own mode.
+func mathThinSpace(s string) string {
+	return strings.ReplaceAll(s, "\\thinspace ", "\\, ")
+}
+
+// resolveMathRef replaces every \name{key} cross-reference or citation in a math
+// source string with its resolved text, reporting whether it changed anything.
+func (e *Engine) resolveMathRef(src, name string) (string, bool) {
+	if !mathRefArity[name] {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := skipMathOptArg(src[i+len(needle):]) // \cite[p. 3]{key}
+		args, consumed, ok := parseMathArgs(rest, 1)
+		if !ok {
+			out.WriteString(needle)
+			src = src[i+len(needle):]
+			continue
+		}
+		out.WriteString(e.mathRefText(name, args[0]))
+		src = rest[consumed:]
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// mathRefText is the text a resolved cross-reference / citation contributes to
+// math. Label lookups reuse the shared refText resolver ("??" when unresolved).
+func (e *Engine) mathRefText(name, key string) string {
+	switch name {
+	case "eqref":
+		return "(" + e.refText(key) + ")"
+	case "cite", "citep", "citet", "citealp", "citealt", "citeauthor", "citeyear", "Citep", "Citet":
+		return "[?]" // the bibliography is not resolved in the math pass
+	default: // \ref \autoref \cref \Cref \nameref \vref \pageref
+		return e.refText(key)
+	}
+}
+
+// mathNoise are commands that carry no math to render but must not drop the
+// equation: horizontal spacing (replaced by a thick space the math layer knows) and
+// metadata (removed). mand is the count of {brace} arguments to consume.
+var mathNoise = map[string]struct {
+	mand int
+	repl string
+}{
+	"hspace": {1, `\; `}, "mspace": {1, `\; `}, "vspace": {1, ``},
+	"label": {1, ``}, "nonumber": {0, ``}, "notag": {0, ``},
+	// \def\setlength#1#2{#1 #2\relax} and \def\addtolength#1#2{\advance#1 #2\relax}
+	// (latex.ltx:7347-7348): an assignment to a length, carrying no maths at all.
+	"setlength": {2, ``}, "addtolength": {2, ``},
+	// The infinitely stretchable skips are \hskip with a fixed glue —
+	// primitive("hfil",hskip,fil_code), fil_glue = 0pt plus 1fil (tex.web:20547,
+	// §3318) — so they take no argument. The maths layer cannot stretch, so what
+	// they contribute here is nothing; leaving them in cost the whole formula.
+	"hfil": {0, ``}, "hfill": {0, ``}, "hss": {0, ``}, "hfilneg": {0, ``},
+	"vfil": {0, ``}, "vfill": {0, ``}, "vss": {0, ``}, "vfilneg": {0, ``},
+	"qedhere": {0, ``}, "noalign": {1, ``},
+	// \tag{n} is the equation's NUMBER, not part of the formula. The equation
+	// environment reads it (equation.go) but \[ … \tag{1}\] does not go through that
+	// path, so the tag reached the maths layer and dropped the whole display: one
+	// paper writes its 69 numbered displays exactly so and lost every one. Stripping
+	// keeps the formula and loses only its number — the number is a follow-up, the
+	// formula is the content.
+	"tag": {1, ``},
+	// \intertext{…} interjects PROSE between the rows of an alignment. The maths
+	// layer cannot set prose, and left in place it costs the whole alignment; the
+	// text is a real if small loss, the alignment a larger one.
+	"intertext": {1, ``},
+	// Size switches the maths layer does not know. What they change is the size of
+	// what follows; what they cost was the formula.
+	"scriptscriptstyle": {0, ``}, "scriptstyle": {0, ``}, "textstyle": {0, ``},
+	// The TEXT size switches, for the same reason and a worse failure. These are
+	// macros, not primitives (size10.clo:58 declares \small as \@setfontsize plus
+	// four display-skip assignments and a \def\@listi{…}), so the macro-retry below
+	// EXPANDS one instead of leaving it unknown — and the maths layer is then handed
+	// \edef, \abovedisplayskip and \parsep, which it can never render. Expansion
+	// turned one unknown command into a pile of them. They are stripped BEFORE the
+	// retry can expand them (mathTextSize, consulted in renderMathResolvingMacros).
+	"tiny": {0, ``}, "scriptsize": {0, ``}, "footnotesize": {0, ``},
+	"small": {0, ``}, "normalsize": {0, ``}, "large": {0, ``},
+	"Large": {0, ``}, "LARGE": {0, ``}, "huge": {0, ``}, "Huge": {0, ``},
+	// The font DECLARATIONS, which reach a formula the same way and expand just as
+	// badly (\ttfamily is \fontfamily{…}\selectfont, and \selectfont is where the
+	// \edef lives). A document writes them into maths through \mbox: one paper's
+	// \newcommand*{\codefont}{\ttfamily\small} is used inside every \codify{…},
+	// and each of its 30 displays was dropped whole.
+	"rmfamily": {0, ``}, "sffamily": {0, ``}, "ttfamily": {0, ``},
+	"mdseries": {0, ``}, "bfseries": {0, ``}, "upshape": {0, ``},
+	"itshape": {0, ``}, "slshape": {0, ``}, "scshape": {0, ``},
+	"normalfont": {0, ``}, "selectfont": {0, ``},
+	// …and their one-letter ancestors, which \DeclareOldFontCommand keeps alive.
+	"rm": {0, ``}, "sf": {0, ``}, "tt": {0, ``}, "bf": {0, ``},
+	"it": {0, ``}, "sl": {0, ``}, "sc": {0, ``},
+}
+
+// mathNoiseCS reports whether a control sequence names a mathNoise entry. The
+// flatten guard needs the question asked of a token's cs name, where the retry
+// loop asks it of a command name reported in an error.
+func mathNoiseCS(cs string) bool {
+	_, ok := mathNoise[cs]
+	return ok
+}
+
+// mathFontSwitch are the text size and font switches of the standard classes
+// (size10.clo:58 declares \small; latex.ltx declares \ttfamily and the old
+// \DeclareOldFontCommand names). They are the mathNoise entries that need TWO
+// guards the others do not, because unlike every other entry there they are DEFINED
+// macros:
+//
+//   - they must be stripped BEFORE the macro-retry runs, or it expands them instead
+//     of reporting them, and
+//   - they must not be expanded when a macro BODY is flattened either
+//     (flattenMathBody), which is how they actually arrive: nothing in the source
+//     says \small, but \codify{x} → \mbox{\codefontify{x}} → {\codefont x} →
+//     {\ttfamily\small x}, and the gullet then walks into \small's body and hands
+//     the maths layer \edef, \abovedisplayskip and \parsep. The formula was
+//     dropped against \edef — a primitive the document never wrote.
+//
+// The formula then sets at the surrounding size and face. The size is lost; the
+// content is not, and the content is the larger of the two.
+// mathAlphabet are the \math… alphabets the engine defines as IDENTITY wrappers
+// (classkernel.go:427-439, \def\mathtt#1{#1}) and go-tex/math renders itself. The
+// identity is right in text mode, where the engine has one face; inside a formula it
+// throws the face away, and flattenMathBody expands it, so
+//
+//	\newcommand{\code}[1]{\mathtt{#1}}   then   $\code{A}$
+//
+// handed the maths layer a bare "A" — the typewriter face lost and nothing reported,
+// because the formula still renders and still counts one glyph. Written directly,
+// $\mathtt{A}$ was fine; only a macro body lost it (#471).
+//
+// The class-kernel comment above those definitions says the identity is "harmless —
+// user math is handled wholesale by the math layer", and that premise is exactly what
+// a substituted macro body breaks.
+//
+// This is a LIST, which go-tex/math could drift away from, so
+// TestMathAlphabetsAreAllHonouredByTheMathLayer renders \name{A} against a bare A for
+// every entry and fails if any stops differing. \mathnormal and \mathds are
+// deliberately absent: the layer has no mapping for the first, and the second is an
+// alias to \mathbb that SHOULD keep expanding.
+var mathAlphabet = map[string]bool{
+	"mathrm": true, "mathbf": true, "mathit": true, "mathsf": true,
+	"mathtt": true, "mathcal": true, "mathfrak": true, "mathscr": true,
+}
+
+// mathSpace are TeX's maths spacing commands, and they lose the same way for the same
+// reason. format.go:47-56 defines them as ordinary horizontal space —
+// \let\,\thinspace, \def\;{\hskip.27778em}, \def\quad{\hskip1em} — under a comment
+// that says so: "what a real LaTeX produces in text". In a formula the maths layer
+// measures them in MATH UNITS and renders them itself (\, is 3mu, \: 4mu, \; 5mu,
+// \! −3mu, \quad 18mu, \qquad 36mu), so flattening a macro body turned
+//
+//	\newcommand{\w}[1]{a\;#1}   then   $\w{b}$
+//
+// into "a b" — the \hskip stripped and a plain space left behind. \quad and \qquad
+// vanished outright.
+//
+// \! is the one that is not merely lost: it is a NEGATIVE thin space, −3mu, and it came
+// out as a positive space. The sign flipped.
+var mathSpace = map[string]bool{
+	",": true, ";": true, ":": true, "!": true, "quad": true, "qquad": true,
+}
+
+var mathFontSwitch = map[string]bool{
+	"tiny": true, "scriptsize": true, "footnotesize": true, "small": true,
+	"normalsize": true, "large": true, "Large": true, "LARGE": true,
+	"huge": true, "Huge": true,
+	"rmfamily": true, "sffamily": true, "ttfamily": true,
+	"mdseries": true, "bfseries": true, "upshape": true,
+	"itshape": true, "slshape": true, "scshape": true,
+	"normalfont": true, "selectfont": true,
+	"rm": true, "sf": true, "tt": true, "bf": true,
+	"it": true, "sl": true, "sc": true,
+}
+
+// mathGlue are the glue primitives a class writes INTO a display: iopart.cls opens
+// every equation with \displaystyle\hskip\mathindent to indent it instead of
+// centring it. Their argument is a <glue>, not a {group}, so they cannot go in
+// mathNoise — and left in place they cost the whole equation, since go-tex/math
+// renders no glue.
+var mathGlue = map[string]bool{
+	"hskip": true, "vskip": true, "kern": true, "mskip": true, "mkern": true,
+	// The glue PARAMETERS are assignments — \leftskip 0pt, \parskip=\medskipamount
+	// — and TeX reads the same <glue> after them (tex.web §224, glue_par). A class
+	// sets one inside a display and the whole formula went with it.
+	"leftskip": true, "rightskip": true, "parindent": true, "parskip": true,
+	"baselineskip": true, "lineskip": true, "abovedisplayskip": true,
+	"belowdisplayskip": true, "mathsurround": true, "parfillskip": true,
+}
+
+// mathTextSymbol are commands whose MATH meaning is a different symbol from their
+// text one, and which the maths layer therefore cannot be handed as they stand:
+//
+//	\DeclareRobustCommand{\dag}{\ifmmode{\dagger}\else\textdagger\fi}
+//	\DeclareRobustCommand{\ddag}{\ifmmode{\ddagger}\else\textdaggerdbl\fi}
+//	                                                     (latex.ltx:7195-7196)
+//
+// The engine's own \dag is plain.tex's \mathhexbox form, which reaches the maths
+// layer as \char and costs the formula. \dagger and \ddagger are what LaTeX means
+// in maths, and the maths layer knows them (\mathbin at U+2020/U+2021,
+// unicode-math-table.tex:127-128).
+var mathTextSymbol = map[string]string{
+	"dag": `\dagger`, "ddag": `\ddagger`,
+	// \bigtimes is the big cross of bigints/mathabx; the maths layer knows \times,
+	// the same glyph at text size.
+	"bigtimes": `\times`,
+}
+
+// mathPenalty are the primitives whose argument is a <number> rather than a glue.
+// \penalty is append_penalty — scan_int, then a penalty node (tex.web §21242-21250):
+// a break cost, carrying no maths at all, and 15 of the 200 arXiv papers put one
+// inside a formula through a macro of their own.
+var mathPenalty = map[string]bool{
+	"penalty": true, "postdisplaypenalty": true, "predisplaypenalty": true,
+}
+
+// stripMathGlue removes every occurrence of a glue primitive and the <glue> that
+// follows it from a math source string, reporting whether it changed anything. The
+// glue is either a register or macro (\mathindent, \parindent) or a dimen with its
+// unit and optional plus/minus parts (10pt plus 2pt minus 1pt).
+func stripMathGlue(src, name string) (string, bool) {
+	if !mathGlue[name] {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := src[i+len(needle):]
+		n, ok := scanMathGlue(rest)
+		if !ok {
+			// Not a glue after all: leave the command alone rather than eat what
+			// follows it, and let the renderer say what it makes of it.
+			out.WriteString(needle)
+			src = rest
+			continue
+		}
+		src = rest[n:]
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// stripMathPenalty removes every occurrence of a penalty primitive and the <number>
+// that follows it. The number may be a plain integer, a signed one, or a count
+// register spelled as a control sequence (\@M, \@highpenalty).
+func stripMathPenalty(src, name string) (string, bool) {
+	if !mathPenalty[name] {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := src[i+len(needle):]
+		n, ok := scanMathNumber(rest)
+		if !ok {
+			out.WriteString(needle)
+			src = rest
+			continue
+		}
+		src = rest[n:]
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// scanMathNumber returns how many bytes at the start of s a <number> occupies —
+// digits, or a control sequence standing for a count — and whether one is there.
+func scanMathNumber(s string) (int, bool) {
+	p := 0
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	if p < len(s) && s[p] == '\\' { // \@M, \@highpenalty, \z@ …
+		p++
+		for p < len(s) && (isMathLetter(s[p]) || s[p] == '@') {
+			p++
+		}
+		if p < len(s) && s[p] == ' ' {
+			p++
+		}
+		return p, true
+	}
+	for p < len(s) && (s[p] == '-' || s[p] == '+') {
+		p++
+	}
+	digits := p
+	for p < len(s) && s[p] >= '0' && s[p] <= '9' {
+		p++
+	}
+	if p == digits {
+		return 0, false
+	}
+	return p, true
+}
+
+// scanMathGlue returns how many bytes at the start of s a <glue> occupies, and
+// whether one is there at all. scanMathSource writes every control sequence as a
+// backslash, its name and one trailing space, which is how a register spelling is
+// recognised here.
+func scanMathGlue(s string) (int, bool) {
+	p := 0
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	if p < len(s) && s[p] == '=' { // \leftskip=0pt — TeX's optional equals
+		p++
+		for p < len(s) && s[p] == ' ' {
+			p++
+		}
+	}
+	if p < len(s) && s[p] == '\\' { // \mathindent, \parindent, \baselineskip…
+		p++
+		for p < len(s) && isMathLetter(s[p]) {
+			p++
+		}
+		if p < len(s) && s[p] == ' ' {
+			p++
+		}
+		return p, true
+	}
+	q, ok := scanMathDimen(s, p)
+	if !ok {
+		return 0, false
+	}
+	p = q
+	for _, word := range []string{"plus", "minus"} {
+		r := p
+		for r < len(s) && s[r] == ' ' {
+			r++
+		}
+		if strings.HasPrefix(s[r:], word) {
+			if q, ok := scanMathDimen(s, r+len(word)); ok {
+				p = q
+			}
+		}
+	}
+	return p, true
+}
+
+// isMathLetter reports whether c is an ASCII letter, which is all a TeX control
+// word or a unit is made of.
+func isMathLetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// scanMathDimen returns the end of a <dimen> (a signed number and its two-letter
+// unit) starting at i, and whether one is there.
+func scanMathDimen(s string, i int) (int, bool) {
+	p := i
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	for p < len(s) && (s[p] == '-' || s[p] == '+') {
+		p++
+	}
+	digits := p
+	for p < len(s) && (s[p] >= '0' && s[p] <= '9' || s[p] == '.') {
+		p++
+	}
+	if p == digits {
+		return 0, false
+	}
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	if p+2 > len(s) || !isMathLetter(s[p]) || !isMathLetter(s[p+1]) {
+		return 0, false
+	}
+	return p + 2, true
+}
+
+// stripMathNoise rewrites every occurrence of a non-rendering command \name in a
+// math source string per mathNoise, reporting whether it changed anything. An
+// occurrence whose arguments cannot be parsed is left verbatim.
+func stripMathNoise(src, name string) (string, bool) {
+	spec, ok := mathNoise[name]
+	if !ok {
+		return src, false
+	}
+	needle := "\\" + name + " "
+	var out strings.Builder
+	changed := false
+	for {
+		i := strings.Index(src, needle)
+		if i < 0 {
+			break
+		}
+		out.WriteString(src[:i])
+		rest := src[i+len(needle):]
+		if spec.mand > 0 {
+			_, consumed, ok := parseMathArgs(rest, spec.mand)
+			if !ok {
+				out.WriteString(needle)
+				src = rest
+				continue
+			}
+			rest = rest[consumed:]
+		}
+		out.WriteString(spec.repl)
+		src = rest
+		changed = true
+	}
+	out.WriteString(src)
+	return out.String(), changed
+}
+
+// parseMathArgsOpt reads a macro's arguments out of a maths source string. With
+// optArg set, the first of the n parameters is LaTeX's optional one: a leading
+// [..] if there is one, and def otherwise.
+func parseMathArgsOpt(s string, n int, optArg bool, def string) ([]string, int, bool) {
+	if !optArg || n == 0 {
+		return parseMathArgs(s, n)
+	}
+	first, rest, taken := takeMathOptArg(s)
+	if !taken {
+		first = def
+	}
+	args, consumed, ok := parseMathArgs(rest, n-1)
+	if !ok {
+		return nil, 0, false
+	}
+	return append([]string{first}, args...), len(s) - len(rest) + consumed, true
+}
+
+// takeMathOptArg reads a leading [..] argument (after any spaces), returning its
+// text, what follows it, and whether one was there. skipMathOptArg beside it throws
+// the same argument away; this one keeps it.
+func takeMathOptArg(s string) (arg, rest string, ok bool) {
+	p := 0
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	if p >= len(s) || s[p] != '[' {
+		return "", s, false
+	}
+	depth := 0
+	for i := p; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ']':
+			if depth == 0 {
+				return s[p+1 : i], s[i+1:], true
+			}
+		}
+	}
+	return "", s, false // unclosed [ : not an optional argument
+}
+
+// skipMathOptArg drops a leading optional [..] argument (and any spaces before it)
+// from a go-tex/math source string, e.g. the colour model in \color[rgb]{1,0,0}.
+func skipMathOptArg(s string) string {
+	p := 0
+	for p < len(s) && s[p] == ' ' {
+		p++
+	}
+	if p < len(s) && s[p] == '[' {
+		for p < len(s) && s[p] != ']' {
+			p++
+		}
+		if p < len(s) {
+			p++ // consume ']'
+		}
+		return s[p:]
+	}
+	return s
+}
+
+// replaceMathCS substitutes every occurrence of the control sequence \name in a
+// go-tex/math source string with exp. scanMathSource emits every control sequence as
+// a backslash, its name, and a single trailing space, so \name is matched with that
+// exact trailing space — which also prevents \F from matching inside \Foo.
+func replaceMathCS(src, name, exp string) string {
+	return strings.ReplaceAll(src, "\\"+name+" ", exp+" ")
+}
+
+// parseMathArgs reads n arguments from the start of a go-tex/math source string
+// (after a macro's name-space): a {balanced group} (returned without its outer
+// braces), a whole control sequence (\name, kept with its trailing space), or a
+// single rune. It returns the arguments, how many bytes they consumed, and false if
+// an argument is missing or a group is unbalanced.
+func parseMathArgs(s string, n int) ([]string, int, bool) {
+	p := 0
+	args := make([]string, 0, n)
+	for k := 0; k < n; k++ {
+		for p < len(s) && s[p] == ' ' {
+			p++
+		}
+		if p >= len(s) {
+			return nil, 0, false
+		}
+		switch s[p] {
+		case '{':
+			depth, start := 0, p
+			for p < len(s) {
+				if s[p] == '{' {
+					depth++
+				} else if s[p] == '}' {
+					depth--
+				}
+				p++
+				if depth == 0 {
+					break
+				}
+			}
+			if depth != 0 {
+				return nil, 0, false
+			}
+			args = append(args, s[start+1:p-1])
+		case '\\':
+			start := p
+			p++
+			for p < len(s) && (s[p] == '@' || (s[p] >= 'a' && s[p] <= 'z') || (s[p] >= 'A' && s[p] <= 'Z')) {
+				p++
+			}
+			arg := s[start:p]
+			if p < len(s) && s[p] == ' ' {
+				p++
+			}
+			args = append(args, arg+" ")
+		default:
+			r, w := utf8.DecodeRuneInString(s[p:])
+			args = append(args, string(r))
+			p += w
+		}
+	}
+	return args, p, true
+}
+
+// substituteMathBody renders a macro body to go-tex/math source, replacing each #k
+// parameter token with args[k-1]. Non-parameter tokens use scanMathSource's
+// encoding (backslash-name-space for a cs, the rune otherwise).
+func (e *Engine) substituteMathBody(body []tok, args []string) string {
+	var b strings.Builder
+	for _, t := range body {
+		if !t.cs_ && t.cat == catParam && t.ch >= '1' && t.ch <= '9' {
+			if i := int(t.ch - '1'); i < len(args) {
+				b.WriteString(args[i])
+			}
+			continue
+		}
+		if t.cs_ {
+			writeMathCS(&b, t.cs)
+		} else {
+			b.WriteRune(t.ch)
+		}
+	}
+	return b.String()
+}
+
+// flattenMathBody runs a substituted macro body through the gullet, as \edef would.
+// A class's body is TeX, not maths — \the@inst is \number\c@inst, an author's mark
+// is an \@for loop over \expandafter and \edef — and the maths layer can only refuse
+// those primitives, which costs the whole formula.
+//
+// Only the body just substituted goes through, never the surrounding source: the
+// source holds commands the maths layer renders itself, and the engine's text-mode
+// stand-ins for them would win. \cdot is \char183 here (latex.go) and \begin is
+//
+//	\def\begin#1{\gotex@checkenv{#1}\csname #1\endcsname}
+//
+// so flattening the whole source turned every \cdot into \char and every
+// \begin{bmatrix} into \bmatrix — 935 dropped formulas over 45 papers for the first,
+// 676 over 42 for the second, and one paper typeset its matrices as text, 411251
+// glyphs on seven pages.
+//
+// \begin and \end are still marked \noexpand inside the body itself, where the same
+// reasoning applies to a macro that wraps an environment.
+func (e *Engine) flattenMathBody(body string) string {
+	ts := tokenizeTeX(body)
+	for i, t := range ts {
+		if t.cs_ && (t.cs == "begin" || t.cs == "end" || e.isCharStandIn(t.cs) ||
+			mathFontSwitch[t.cs] || mathAlphabet[t.cs] || mathSpace[t.cs]) {
+			ts[i].noexp = true
+		}
+	}
+	saved := e.mathFlatten
+	e.mathFlatten = true
+	flat := e.toksToString(e.expandList(ts))
+	e.mathFlatten = saved
+	if flat != "" {
+		return flat
+	}
+	return body
+}
+
+// macroRedefinesItself reports whether \name is a macro whose replacement text begins
+// by REDEFINING \name. Flattening resolves NOTATION, so such a macro must be left for
+// the stomach: expanding it yields the assignment's tokens, and the engine then expands
+// the very name the assignment was about to replace — which is the same name again.
+//
+// ⛔ The self-redefining idiom makes that non-terminating. quantumarticle.cls:1108 is
+// the textbook form — "nothing the first time, a comma after that":
+//
+//	\def\@@@comma{\def\@@@comma{,}}
+//	\def\@@commaspacebefore#1{\@@@comma{}#1}
+//
+// Reached through \ensuremath in an author block, 2607.22466 spun \@@@comma 400 times
+// and pushed {,} to 200 001 frames deep: one page out of 43KB of source.
+//
+// ⛔ The test is SELF-reference, not "the body assigns". A first version refused every
+// assignment-bodied macro and the equation census caught what the page count could not:
+// \@forloop became a new trigger costing 23 equations, for a NET +20 dropped equations
+// across the 154-paper list, while pages showed 4 up and none down. A loop macro assigns
+// to other names and must keep expanding.
+func (e *Engine) macroRedefinesItself(name string) bool {
+	m := e.eq[name]
+	if m == nil || m.kind != mMacro {
+		return false
+	}
+	seenAssign := false
+	for _, t := range m.body {
+		if !t.cs_ {
+			return false
+		}
+		if seenAssign {
+			return t.cs == name // \def\<name> — the macro replaces itself
+		}
+		switch t.cs {
+		case "global", "long", "outer", "protected": // a prefix: look past it
+			continue
+		case "def", "gdef", "edef", "xdef", "let", "futurelet":
+			seenAssign = true
+			continue
+		}
+		return false
+	}
+	return false
+}
+
+// isCharStandIn reports whether a name is the engine's TEXT-mode stand-in for a
+// character it has no glyph command for:
+//
+//	\def\cdot{\char183\relax}     \def\bullet{\char8226\relax}     (latex.go)
+//	\protected\def\_{\char95\relax}                                (classkernel.go)
+//
+// In a formula those names are the maths layer's own — \cdot is ⋅ and it renders it —
+// so flattening one into \char costs the formula: 935 dropped over 45 papers when the
+// whole source went through the gullet, 118 over 11 with only the substituted body.
+// A body beginning with \char is what makes a stand-in recognisable without a list to
+// keep in step with the kernel.
+func (e *Engine) isCharStandIn(name string) bool {
+	m := e.eq[name]
+	if m == nil || m.kind != mMacro || len(m.params) != 0 || len(m.body) == 0 {
+		return false
+	}
+	return m.body[0].cs_ && m.body[0].cs == "char"
+}
+
+// mathErrorClass reduces a go-tex/math error that names no unknown command to a
+// BOUNDED key, so a corpus census counts reasons instead of occurrences. Every such
+// refusal used to be tallied under the single opaque "$math$": 19 documents and 52
+// equations in the fidelity corpus, all indistinguishable — which is why the biggest
+// remaining content loss (64 documents drop equations, and they paginate 1.23 pages
+// SHORT each where the rest run 0.08 long) had no name to work from.
+//
+// Digits are replaced so a position or a size does not make every message its own
+// class, and the result is truncated: the key is a label for aggregation, not the
+// error itself.
+func mathErrorClass(msg string) string {
+	msg = strings.TrimSpace(msg)
+	var b strings.Builder
+	prevDigit := false
+	for _, r := range msg {
+		if r >= '0' && r <= '9' {
+			if !prevDigit {
+				b.WriteByte('#')
+			}
+			prevDigit = true
+			continue
+		}
+		prevDigit = false
+		// A blank is written visibly. The failing token is often a control SPACE, and
+		// collapsing the message's whitespace printed it as a bare "unknown command \\"
+		// — a reason that names nothing, which is the very fault this function exists
+		// to repair.
+		if r == ' ' || r == '\n' || r == '\t' {
+			b.WriteString("␣")
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.ReplaceAll(b.String(), "␣␣", "␣")
+	out = strings.Trim(out, "␣")
+	if len(out) > 60 {
+		out = out[:60]
+	}
+	if out == "" {
+		return "(sans message)"
+	}
+	return out
+}
+
+// unknownMathCommand extracts the command name X from a go-tex/math "unknown command
+// \X" error, or "" when the message is a different failure. The name runs over letters
+// and @ (a LaTeX-internal control word), matching a TeX control-word token.
+func unknownMathCommand(errMsg string) string {
+	const marker = "unknown command \\"
+	i := strings.Index(errMsg, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := errMsg[i+len(marker):]
+	if rest == "" {
+		return ""
+	}
+	// A control word is one or more letters (@ included, for LaTeX internals).
+	j := 0
+	for j < len(rest) && (rest[j] == '@' || (rest[j] >= 'a' && rest[j] <= 'z') || (rest[j] >= 'A' && rest[j] <= 'Z')) {
+		j++
+	}
+	if j > 0 {
+		return rest[:j]
+	}
+	// Otherwise it is a control symbol: a single non-letter (\1, \%, \#, \_ …).
+	// Returning it lets the macro-retry expand a document's \newcommand{\1}{…} and
+	// keys the skip tally on the real command instead of the generic "$math$".
+	// Whitespace is not a command name (a malformed "\ " error), so ignore it.
+	r, _ := utf8.DecodeRuneInString(rest)
+	if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+		return ""
+	}
+	return string(r)
+}
+
+// recordMathSkip tallies a dropped equation. When the error is go-tex/math's
+// "unknown command \X" it keys on that command (so the report shows which math macro
+// to implement next); otherwise it keys on a generic "$math$". The tally is written
+// to two maps under the SAME key: skippedCS keeps math drops in the general
+// SkippedCommands surface (unchanged, for existing callers), while mathDropped is the
+// dedicated view Diagnostics lifts out of the text-mode Skipped tally into its own
+// MathDropped field — so a formula's silently-lost content is visible as math, not
+// conflated with undefined text commands.
+func (e *Engine) recordMathSkip(errMsg string) {
+	if e.skippedCS == nil {
+		e.skippedCS = map[string]int{}
+	}
+	if e.mathDropped == nil {
+		e.mathDropped = map[string]int{}
+	}
+	key := "$math$ " + mathErrorClass(errMsg)
+	if name := unknownMathCommand(errMsg); name != "" {
+		key = "\\" + name
+	}
+	e.skippedCS[key]++
+	e.mathDropped[key]++
+}
+
+// doMath handles a math-shift token: collect the source, render it, and place the
+// math box. Inline math ($…$) joins the current line; display math ($$…$$) ends
+// the paragraph and is centred on its own line (to \hsize with \hfil on each side).
+func (e *Engine) doMath() {
+	open := e.srcMark()
+	src, display := e.scanMathSource()
+	e.placeMath(e.stampSrcRange(e.mathOrDiagram(src, display), open), display)
+}
+
+// doDelimitedMath handles LaTeX's \(…\) (inline) and \[…\] (display): it collects
+// the raw math source up to the closing control sequence and places it.
+func (e *Engine) doDelimitedMath(closeName string, display bool) {
+	open := e.srcMark()
+	src := e.collectMathUntilCS(closeName)
+	e.placeMath(e.stampSrcRange(e.mathOrDiagram(src, display), open), display)
+}
+
+// srcMark is where the reader is now: the position of the token just read,
+// which at the start of a formula is its opening delimiter.
+type srcMark struct{ line, col int }
+
+func (e *Engine) srcMark() srcMark { return srcMark{e.curSrcLine, e.curSrcCol} }
+
+// stampSrcRange gives a formula the source range it occupies: open is where its
+// opening delimiter sat, and the reader is now on the closing one.
+//
+// ⛔ THIS IS WHERE THE STAMP HAS TO HAPPEN, and #750 put it somewhere else.
+// That change stamped the catMath branch of the stomach's main loop, with a
+// comment promising that "a display spanning several lines belongs to the one
+// the author would go looking for it at, not to its last". A probe in that
+// branch never fires: `$…$` arrives through doMath (engine.go's primitive
+// dispatch) and `\[…\]` through doDelimitedMath, and neither went past it.
+// What made #750's tests pass was makeMath's own default, srcLine =
+// e.curSrcLine, read AFTER the scan — which equals the opening line for a
+// one-line formula, and every fixture in that change was one line.
+//
+// Measured on a display opening on line 5 and closing on line 8: stamped line
+// 8. The comment described behaviour the code did not have, and the tests could
+// not tell, because they never spanned a line boundary.
+func (e *Engine) stampSrcRange(m mathNode, open srcMark) mathNode {
+	if open.line <= 0 {
+		return m
+	}
+	m.srcLine, m.srcCol = open.line, open.col
+	if e.curSrcLine > 0 {
+		m.srcEndLine, m.srcEndCol = e.curSrcLine, e.curSrcCol
+	}
+	return m
+}
+
+// mathOrDiagram renders a formula, or draws it when the formula is a diagram.
+//
+// \xymatrix is a formula by position — it sits inside \[…\] like any other — and
+// nothing else about it is. It is a grid of typeset cells with lines between
+// them, which the maths layer has no notion of and refuses whole, taking the
+// display with it. So it is recognised here, before the source is handed over.
+func (e *Engine) mathOrDiagram(src string, display bool) mathNode {
+	if opts, body, ok := xymatrixSource(src); ok {
+		if n, drawn := e.makeXymatrix(opts, body, src); drawn {
+			return n
+		}
+	}
+	return e.makeMath(src, display)
+}
+
+// collectMathUntilCS reads raw tokens (no expansion) up to a control sequence
+// named close, reconstructing the math source for go-tex/math.
+func (e *Engine) collectMathUntilCS(close string) string {
+	var b strings.Builder
+	for {
+		t, ok := e.getNext()
+		if !ok || (t.cs_ && t.cs == close) {
+			break
+		}
+		// Do not scan past the end of the file that opened the math: an unterminated
+		// \[ / \( (e.g. one reached through a class's runaway display-math patch)
+		// would otherwise consume the file-end sentinel and the rest of the document.
+		if isFileEndSentinel(t) {
+			e.back(t)
+			break
+		}
+		if t.cs_ && t.cs != close && e.expandsToCloseCS(t, close) {
+			// A user macro standing in for the closing \] or \) (e.g.
+			// \newcommand\dclose{\]}): read raw here it hides the terminator, so the
+			// scanner would run to EOF and swallow the rest of the document. Expand it
+			// in place so the real close cs surfaces next iteration. Narrow: only a
+			// parameterless macro whose body begins with the exact close cs, so ordinary
+			// math macros stay verbatim in the collected source.
+			e.expandMacro(e.meaningOf(t))
+			continue
+		}
+		if t.cs_ {
+			writeMathCS(&b, t.cs)
+		} else {
+			b.WriteRune(t.ch)
+		}
+	}
+	return b.String()
+}
+
+// placeMath positions a math box: display math ends the paragraph and is centred
+// on its own line; inline math joins the current line (starting one if needed).
+func (e *Engine) placeMath(m mathNode, display bool) {
+	if display {
+		e.endParagraph()
+		fil := glueNode{spec: glueSpec{stretch: unity, stretchOrder: 1}}
+		e.placeDisplay([]*boxNode{hpackSP([]node{fil, m, fil}, packTo, e.hsize)})
+		return
+	}
+	if !e.inPar {
+		e.beginParagraph(false)
+	}
+	e.parList = append(e.parList, m)
+}

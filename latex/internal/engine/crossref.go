@@ -1,0 +1,362 @@
+// Copied from github.com/go-tex/engine, the file crossref.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import (
+	"strconv"
+	"strings"
+)
+
+// This file implements LaTeX's cross-reference mechanism (\label / \ref and its
+// variants). LaTeX resolves references through an auxiliary file written on one
+// run and read on the next, so a forward \ref (used before its \label) resolves
+// on the second pass. The engine mirrors this exactly: CompileToPDF /
+// CompileToSVGPages compile the source twice when it contains \label, carrying the
+// label table from the first pass into the second (see compileLabels).
+//
+// A \label records the current \@currentlabel — the reference text the last
+// counter-stepping command (\section, \subsection, an equation, an enumerate item)
+// left behind, fully expanded to a string. A \ref pushes that string back into the
+// input so it typesets in place; an unresolved key yields "??" (as in LaTeX).
+
+// doLabel stores key → the fully-expanded \@currentlabel (via setLabel).
+func (e *Engine) doLabel() {
+	key := e.readBraceName()
+	if key == "" {
+		return
+	}
+	val := e.toksToString(e.expandList([]tok{csTok("@currentlabel")}))
+	if e.labels == nil {
+		e.labels = map[string]string{}
+	}
+	e.labels[key] = val
+	// Remember where in the main vertical list the label was declared, so that
+	// once the document is broken into pages we can say which page it fell on
+	// (finalizeLabelPages, for \pageref).
+	if e.labelMarks == nil {
+		e.labelMarks = map[string]int{}
+	}
+	e.labelMarks[key] = len(e.mvl)
+	// Additionally freeze the reference type and title name for typed references
+	// (\autoref / \nameref / \cref / \Cref); see typedrefs.go.
+	e.recordRefMeta(key)
+}
+
+// finalizeLabelPages turns each label's recorded main-vertical-list position
+// into a page number, once the run has broken the document into pages. It is
+// the \pageref counterpart of finalizeTOCPages, and is called on the auxiliary
+// pass so that the render pass can resolve a \pageref that precedes its \label.
+func (e *Engine) finalizeLabelPages() {
+	if len(e.labelMarks) == 0 {
+		return
+	}
+	pages := make(map[string]int, len(e.labelMarks))
+	for key, mark := range e.labelMarks {
+		pages[key] = e.pageOfIndex(mark)
+	}
+	e.labelPages = pages
+}
+
+// doPageref implements \pageref: the number of the page its \label fell on.
+// LaTeX resolves this through the .aux file; the engine resolves it from the
+// label page table gathered by the auxiliary pass. An unknown key — or a single
+// pass, which has no table yet — yields "??", LaTeX's unresolved marker.
+func (e *Engine) doPageref() {
+	e.peekStar() // hyperref's \pageref*: the page number without the hyperlink — see doRef
+	key := e.readBraceName()
+	if p, ok := e.labelPages[key]; ok && p > 0 {
+		e.pushString(strconv.Itoa(p))
+		return
+	}
+	e.pushString("??")
+}
+
+// finalizePages resolves every marker this run recorded — table of contents,
+// index and \label — into the page it fell on, now that the document has been
+// broken into pages.
+func (e *Engine) finalizePages() {
+	e.finalizeTOCPages()
+	e.finalizeIndexPages()
+	e.finalizeLabelPages()
+}
+
+// carryCrossRefs hands this engine everything a previous pass learned that a
+// later one needs to resolve a reference made before its definition: the label
+// table and its typed variants, the \citet author labels, and the table of
+// contents and index entries with the pages that pass measured.
+func (e *Engine) carryCrossRefs(prev *Engine) {
+	e.labels = prev.labels
+	e.refTypes = prev.refTypes
+	e.refNames = prev.refNames
+	e.labelPages = prev.labelPages
+	e.bibAuthor = prev.bibAuthor // \citet author labels, gathered by the aux \bibliography
+	e.tocSource = prev.tocEntries
+	e.indexSource = prev.indexEntries
+	e.carryAuxFile(prev)
+}
+
+// carryAuxFile hands the next pass the .aux the previous one wrote, so a package
+// that talks to ITSELF across passes finds its own last answers.
+//
+// ⛔⛔ THIS IS THE OTHER HALF OF carryCrossRefs, and it is not redundant with it.
+// Everything above carries state this engine keeps in Go — its own labels, its own
+// \citet authors, its own contents entries. A real LaTeX package keeps none of
+// that: natbib writes \bibcite{key}{Author et al.(2021)…} to \@auxout from
+// \bibitem's optional argument and reads it back next pass to resolve \citep. With
+// \@auxout a null stream, loading the real natbib.sty turned \citep{alpha} from a
+// wrong "[1]" into a broken "(?)" — the package was never the missing half
+// (go-tex/engine#711).
+//
+// Only the .aux is carried, not every written file: \jobname.vrb and friends are a
+// single pass's own scratch, and carrying them would feed a pass the previous
+// pass's material as if it were its own.
+func (e *Engine) carryAuxFile(prev *Engine) {
+	if prev.writtenFile == nil {
+		return
+	}
+	// "" is \jobname's own default, texput (engine.go), and the name the stream was
+	// opened under has to match the one looked up here or the file is silently lost.
+	job := e.jobName
+	if job == "" {
+		job = "texput"
+	}
+	name := job + ".aux"
+	s, ok := prev.writtenFile[name]
+	if !ok {
+		return
+	}
+	if e.writtenFile == nil {
+		e.writtenFile = map[string]string{}
+	}
+	e.writtenFile[name] = s
+}
+
+// crossRefsAgree reports whether the page numbers this run typeset are the ones
+// it would collect from its own output — that is, whether the numbers have
+// stopped moving and a further pass would change nothing. wasLabelPages is the
+// label table the run was handed, captured before finalizePages replaced it.
+func (e *Engine) crossRefsAgree(wasLabelPages map[string]int) bool {
+	if len(wasLabelPages) != len(e.labelPages) {
+		return false
+	}
+	for k, v := range wasLabelPages {
+		if e.labelPages[k] != v {
+			return false
+		}
+	}
+	if len(e.tocSource) != len(e.tocEntries) {
+		return false
+	}
+	for i := range e.tocSource {
+		if e.tocSource[i].page != e.tocEntries[i].page {
+			return false
+		}
+	}
+	if len(e.indexSource) != len(e.indexEntries) {
+		return false
+	}
+	for i := range e.indexSource {
+		if e.indexSource[i].page != e.indexEntries[i].page {
+			return false
+		}
+	}
+	return true
+}
+
+// doRef pushes the recorded reference text for a key back into the input. An
+// unknown or empty key yields "??", matching LaTeX's unresolved-reference marker.
+func (e *Engine) doRef() {
+	// hyperref's \ref*{key} is \ref without the hyperlink. This engine emits no
+	// hyperlinks, so consuming the star IS the whole implementation — and not
+	// consuming it made readBraceName meet "*" instead of "{", so the reference
+	// printed "??" and the key fell onto the page as text. 256 papers of the arXiv
+	// pool write \ref* (go-tex/engine#636).
+	e.peekStar()
+	key := e.readBraceName()
+	e.pushString(e.refText(key))
+}
+
+// doEqref is \eqref: like \ref but parenthesised, for equation numbers.
+func (e *Engine) doEqref() {
+	key := e.readBraceName()
+	e.pushString("(" + e.refText(key) + ")")
+}
+
+// refText returns the stored reference text for key, or "??" when unresolved.
+func (e *Engine) refText(key string) string {
+	if v, ok := e.labels[key]; ok && v != "" {
+		return v
+	}
+	return "??"
+}
+
+// doCite implements \cite{k1,k2,…}: the bracketed, comma-joined reference numbers
+// of one or more \bibitem entries, e.g. "[1, 3]". Each \bibitem stores its number
+// in the label table (via \label), so a \cite before the bibliography resolves on
+// the second pass. \nocite is a no-op here (it only affects a real .bib run).
+func (e *Engine) doCite() {
+	// ⛔ \cite TAKES AN OPTIONAL NOTE, and reading the braces first is how its
+	// arguments end up on the page. latex.ltx:
+	//
+	//	\def\cite{\@ifnextchar[{\@tempswatrue\@citex}{\@tempswafalse\@citex[]}}
+	//	\def\@citex[#1]#2{…\if@tempswa , #1\fi…}
+	//
+	// so the note is appended AFTER the key list, separated by ", " — \cite[p. 5]{k}
+	// sets "[1, p. 5]". Without the optional read, readBraceName met "[" instead of
+	// "{", returned nothing, and the whole "[etc.]{Zeilberger1990,chyzak98,…}" was
+	// typeset as text: one unbroken run 2665pt wide on a 478pt measure, with the
+	// words after it run together (go-tex/engine#629). 6621 papers of the arXiv pool
+	// write \cite[, 38 of the measured 154.
+	//
+	// natbib's \citep/\citet take TWO optionals, [pre][post]; with one it is the
+	// post-note, which is what LaTeX's \cite means by its single one. Reading up to
+	// two keeps both spellings off the page.
+	pre, post := e.readCiteNotes()
+	keys := splitComma(e.readBraceName())
+	e.recordCites(keys) // remember the keys so an auto \bibliography emits them
+	for i, k := range keys {
+		keys[i] = e.refText(k)
+	}
+	list := joinComma(keys)
+	if pre != "" {
+		list = pre + " " + list
+	}
+	if e.citeThroughMacro(list, post) {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("[")
+	b.WriteString(list)
+	if post != "" {
+		b.WriteString(", " + post)
+	}
+	b.WriteString("]")
+	e.pushString(b.String())
+}
+
+// citeThroughMacro hands the finished key list to \@cite when the format or the class
+// defines one, as latex.ltx:13295 does, and says whether it did.
+//
+// ⛔⛔ THE BRACKETS WERE BUILT IN GO, so a class could not change them — and 1450 papers
+// of the arXiv pool, 12 of the measured 154, carry a class that redefines \@cite. This
+// engine EXECUTES those classes, so the redefinition was already in the eqtb and was
+// dropped at the point of use: a document writing \def\@cite#1#2{(((#1#2)))} rendered
+// byte-identically to one that did not.
+//
+//	\def\@cite#1#2{[{#1\if@tempswa , #2\fi}]}
+//
+// ⛔ \if@tempswa IS SET HERE, not left over. The reference's \cite sets it true when it
+// read a bracket and false when it did not (latex.ltx:13283-13284), and a redefined
+// \@cite reads it to decide whether to print the note at all. Leaving it alone would
+// make the note's fate depend on whatever last touched the switch.
+//
+// The precedent is footnoteRuleNodes and footnoteTextBody (footnote.go): a macro the
+// reference defines is EXECUTED, not imitated.
+func (e *Engine) citeThroughMacro(list, post string) bool {
+	m := e.eq["@cite"]
+	if m == nil || m.kind != mMacro {
+		return false
+	}
+	toks := []tok{csTok("@tempswafalse")}
+	if post != "" {
+		toks[0] = csTok("@tempswatrue")
+	}
+	toks = append(toks, csTok("@cite"), chTok('{', catBegin))
+	toks = append(toks, stringToToks(list)...)
+	toks = append(toks, chTok('}', catEnd), chTok('{', catBegin))
+	toks = append(toks, stringToToks(post)...)
+	toks = append(toks, chTok('}', catEnd))
+	e.push(toks)
+	return true
+}
+
+// readCiteNotes reads the one or two optional arguments a citation command takes.
+// With one bracket the text is the POST-note, as LaTeX's \cite means it; with two
+// they are natbib's pre- and post-notes in that order.
+func (e *Engine) readCiteNotes() (pre, post string) {
+	first, ok := e.scanOptBracketToks()
+	if !ok {
+		return "", ""
+	}
+	second, ok := e.scanOptBracketToks()
+	if !ok {
+		return "", strings.TrimSpace(e.toksToString(first))
+	}
+	return strings.TrimSpace(e.toksToString(first)), strings.TrimSpace(e.toksToString(second))
+}
+
+// needsTwoPass reports whether the source must be compiled twice: it defines a
+// \label or a \bibitem whose number a \ref or \cite may use before the
+// definition is seen, or it requests a \tableofcontents / \listoffigures /
+// \listoftables, whose entries are only known once the whole document has run
+// (LaTeX's .toc/.lof/.lot mechanism — see toc.go), or it requests a \printindex,
+// whose \index entries and their page numbers are only known after a full run
+// (LaTeX's .idx mechanism — see index.go).
+func needsTwoPass(src []byte) bool {
+	return indexOf(src, `\label`) >= 0 ||
+		indexOf(src, `\bibitem`) >= 0 ||
+		indexOf(src, `\pageref`) >= 0 || // needs the label page table (finalizeLabelPages)
+		indexOf(src, `\bibliography`) >= 0 || // \cite forward-references an auto bibliography
+		indexOf(src, `\tableofcontents`) >= 0 ||
+		indexOf(src, `\listoffigures`) >= 0 ||
+		indexOf(src, `\listoftables`) >= 0 ||
+		indexOf(src, `\printindex`) >= 0
+}
+
+// splitComma splits a comma-separated key list, trimming spaces around each key.
+func splitComma(s string) []string {
+	var out []string
+	start := 0
+	flush := func(end int) {
+		k := trimSpaces(s[start:end])
+		if k != "" {
+			out = append(out, k)
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			flush(i)
+			start = i + 1
+		}
+	}
+	flush(len(s))
+	return out
+}
+
+// joinComma joins keys with ", ".
+func joinComma(keys []string) string {
+	out := ""
+	for i, k := range keys {
+		if i > 0 {
+			out += ", "
+		}
+		out += k
+	}
+	return out
+}
+
+// trimSpaces drops leading and trailing ASCII spaces.
+func trimSpaces(s string) string {
+	i, j := 0, len(s)
+	for i < j && s[i] == ' ' {
+		i++
+	}
+	for j > i && s[j-1] == ' ' {
+		j--
+	}
+	return s[i:j]
+}
+
+// indexOf is a tiny substring search (avoids importing bytes just for this).
+func indexOf(hay []byte, needle string) int {
+	n := len(needle)
+	for i := 0; i+n <= len(hay); i++ {
+		if string(hay[i:i+n]) == needle {
+			return i
+		}
+	}
+	return -1
+}

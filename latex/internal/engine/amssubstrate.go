@@ -1,0 +1,658 @@
+// Copied from github.com/go-tex/engine, the file amssubstrate.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file adds the extra plain-TeX substrate a real amsart.cls (and its siblings)
+// leans on beyond what article.cls needed: a handful of low-level TeX primitives
+// (\ignorespaces, \unskip, \accent, \insert, the mode conditionals \ifmmode/…, the
+// aux-file writers \openout/\write, …) plus the register-and-macro layer
+// AMSClassSubstrate. amsart is math-heavy and uses the plain-TeX kernel far more
+// directly than article: it assigns \brokenpenalty/\hfuzz/\tolerance, allocates
+// inserts (\newinsert\copyins), and drives its title/mark machinery through token
+// registers (see toks.go). Everything here is best-effort — a primitive whose only
+// effect is on fine spacing or the .aux file is accepted and made a no-op so the
+// class runs and typesets title, sections and math rather than aborting or leaking
+// its arguments onto the page.
+//
+// What is NOT here: the token registers themselves (toks.go), the class kernel
+// (classkernel.go / kernelhelpers.go), and the high-level class machinery
+// (classprims.go's LaTeX2eClassLead). This layer sits on top of all of those and is
+// loaded last (see LoadLaTeX).
+
+// loadAMSPrims registers the extra low-level TeX primitives amsart uses. Called
+// from New after loadToksPrims.
+func (e *Engine) loadAMSPrims() {
+	// \ignorespaces: expand and drop the following run of space tokens. amsart's
+	// \andify emits it to trim the space after the last author.
+	e.prim("ignorespaces", func(e *Engine) { e.ignoreSpaces() })
+	// \unskip / \unpenalty / \unkern: remove the last glue / penalty / kern from
+	// the current list (tex.web §1104 remove_item, §1105 delete_last; the algorithm
+	// and what the type guard is for are written up at deleteLast).
+	//
+	// These were no-ops, on the ground that they were "used only to trim trailing
+	// space, so an accepted no-op is close enough". Two things were wrong with
+	// that. The trailing space is not incidental: \unskip is the idiom for pulling
+	// punctuation back against the word before it, and our OWN apacite substrate
+	// writes \unskip, and \unskip: and \unskip; a dozen times (apacite.go:101
+	// onwards), so every bibliography entry that took those branches printed
+	// "Journal , 12" with the space still in. 79 of the 200 arXiv reference papers
+	// write one of the three, 1355 times between them. And the list surgery the
+	// comment says is unavailable has been available since \lastskip needed the
+	// current list (#387): deleteLast reuses exactly that resolution.
+	e.prim("unskip", func(e *Engine) {
+		e.deleteLast(func(n node) bool { _, ok := n.(glueNode); return ok })
+	})
+	e.prim("unpenalty", func(e *Engine) {
+		e.deleteLast(func(n node) bool { _, ok := n.(penaltyNode); return ok })
+	})
+	e.prim("unkern", func(e *Engine) {
+		e.deleteLast(func(n node) bool { _, ok := n.(kernNode); return ok })
+	})
+	// \immediate: a prefix to \write/\openout/\closeout; a no-op on its own.
+	e.prim("immediate", func(e *Engine) {})
+	// \aftergroup<token>: hold the token back until the current group closes, then
+	// insert it (see endGroup). A package finishes what it built inside a box this
+	// way — every TikZ node ends by \aftergroup-ing the code that closes it.
+	e.prim("aftergroup", func(e *Engine) {
+		if t, ok := e.getNext(); ok {
+			e.afterGroupToken(t)
+		}
+	})
+	// \accent<code>: set an accent over the next char. Used only in amsart's \dh/\dj
+	// glyphs (themselves replaced when amsfonts is absent). Consume the code number.
+	e.prim("accent", func(e *Engine) { e.scanInt() })
+	// \fontdimen<n><font>: a font parameter, READ as a value (\fontdimen2\font) or
+	// ASSIGNED to. tex.web §1224 gives the assignment three steps —
+	//
+	//	assign_font_dimen: begin find_font_dimen(true); k:=cur_val;
+	//	  scan_optional_equals; scan_normal_dimen; font_info[k].sc:=cur_val; end
+	//
+	// — and this took only the first. The "=" and the dimension after it stayed in
+	// the input and were TYPESET. IEEEtran sets three of them per font-size switch,
+	//
+	//	\fontdimen2\font=\@IEEEtrantmpdimenA\relax
+	//	\fontdimen3\font=-\@IEEEtrantmpdimenA\relax
+	//	\fontdimen4\font=\@IEEEtrantmpdimenA\relax
+	//
+	// leaving "=", "=-" and "=" — the "==-=" that filled a page: two corpus papers
+	// opened on one carrying nothing else, their title pushed to page 2.
+	//
+	// The equals is what tells an assignment from a read. TeX knows by context
+	// (prefixed_command against scan_something_internal) and lets the "=" be
+	// omitted; here the primitive runs in the stomach either way, so the "=" is the
+	// only signal — and a read is never followed by one. Without it, nothing is
+	// consumed, exactly as before.
+	// Consuming the assignment stopped the leak but DROPPED the value, so a document
+	// that sets its own interword space silently got ours. Measured against
+	// tectonic, \fontdimen2\font=8pt moves the reference's space to exactly 8pt and
+	// left ours at 2pt. The value is now kept, and spaceGlueOf reads it.
+	//
+	// Only the \font form is honoured — the current font, which is what IEEEtran and
+	// the rest of the corpus's 40 assignments use. \scriptfont/\textfont and the
+	// \the\font form need a font-register model this engine does not have; they
+	// still consume their value rather than leak it. See the issue.
+	e.prim("fontdimen", func(e *Engine) {
+		n := e.scanInt()
+		curFont := false
+		if t, ok := e.getXToken(); !ok {
+			return
+		} else if t.cs_ && t.cs == "font" { // \fontdimen2\font (the real \font primitive)
+			curFont = true
+		} else {
+			e.back(t)
+		}
+		e.skipOptSpace()
+		t, ok := e.getXToken()
+		if !ok {
+			return
+		}
+		if t.cs_ || t.ch != '=' {
+			e.back(t)
+			return // a READ: leave the input alone
+		}
+		v := e.scanDimen() // an ASSIGNMENT: the value belongs to it, not to the page
+		if curFont && n >= 2 && n <= 4 {
+			e.setFontDimen(e.curFont, n, v)
+		}
+	})
+	// \insert<n>{material}: add to an insert class (footnotes, amsart's \copyins).
+	// The engine has its own footnote model; accept the register number and the
+	// braced material and drop it here.
+	e.prim("insert", func(e *Engine) {
+		e.scanInt()
+		e.skipOptSpace()
+		if t, ok := e.getNext(); ok {
+			if t.cat == catBegin && !t.cs_ {
+				e.grabGroup()
+			} else {
+				e.back(t)
+			}
+		}
+	})
+	// \unhbox / \unvbox / \unhcopy / \unvcopy live in boxcmds.go.
+	e.installUnbox()
+	// aux-file writers: \newwrite\cs allocates a stream (a count is enough), and
+	// \openout / \write / \closeout are accepted and dropped (the engine's two-pass
+	// TOC/label machinery does not use TeX write streams).
+	e.prim("newwrite", func(e *Engine) {
+		name := e.scanCSName()
+		if name == "" {
+			return
+		}
+		if e.allocCnt >= registerPoolSize {
+			e.noteRegisterExhausted(`\count`)
+			return
+		}
+		e.define(name, &meaning{kind: mCountRef, code: e.allocCnt}, false)
+		e.allocCnt++
+	})
+	// \newread\cs allocates an input stream the same way; the engine reads no
+	// TeX streams, but a package that allocates one (pgf's \r@pgf@reada) must not
+	// see \newread undefined.
+	// \openin / \closein / \read / \ifeof live in readstreams.go.
+	e.installReadStreams()
+	// \newread\cs allocates an input stream. TeX allocates it with \chardef, so
+	// the handle IS the stream number — \meaning of one is \char"2. Allocating it
+	// as a count register instead made \openin\cs read the register's VALUE,
+	// which is zero until something writes it, so every stream a document opened
+	// collided on number 0.
+	e.prim("newread", func(e *Engine) {
+		name := e.scanCSName()
+		if name == "" || e.allocRead >= maxReadStreams {
+			return
+		}
+		e.define(name, &meaning{kind: mCharDef, code: e.allocRead}, false)
+		e.allocRead++
+	})
+	// \openout<n>=<filename> opens an output stream. The engine writes no auxiliary
+	// files, but the primitive still has to CONSUME its operand: undefined, the
+	// filename was left in the input and TYPESET. beamer opens three streams for its
+	// .nav/.toc/.snm files as the document begins, so every talk carried a page
+	// reading "texput.nav texput.toc texput.snm".
+	//
+	// The grammar is tex.web §1352 ("Implement \openout"):
+	//
+	//	new_write_whatsit(open_node_size);   { scan_four_bit_int for \openout }
+	//	scan_optional_equals; scan_file_name;
+	//
+	// and scan_file_name is §526: skip leading blanks, then take every CHARACTER
+	// token (get_x_token, so an expandable cs contributes the characters it expands
+	// to) until either a space — which is consumed — or a non-character token, which
+	// is pushed BACK (back_input). More precisely still, §516 more_name ends the name
+	// on a space and on nothing else. The engine's scanFileName already reads exactly
+	// that, so it is reused rather than re-derived.
+	//
+	// Two deliberate departures from the reference, both toward leniency:
+	//   - TeX scans the stream number with scan_four_bit_int and errors outside 0..15;
+	//     this takes any integer, as the neighbouring \closeout already does.
+	//   - TeX appends a whatsit to the current list and acts on it at \shipout unless
+	//     \immediate precedes; nothing is written here either way, so no node is made.
+	e.prim("openout", func(e *Engine) { e.doOpenout() })
+	e.prim("closeout", func(e *Engine) { e.doCloseout() })
+	e.prim("write", func(e *Engine) { e.doWrite() })
+	// mode conditionals. During class load and normal vertical/horizontal text the
+	// engine is never in math mode; \ifhmode/\ifvmode track whether a paragraph is
+	// open, \ifinner is always outer, and \ifvoid/\ifhbox/\ifvbox query a box
+	// register (every unused register is void).
+	e.prim("ifmmode", func(e *Engine) { e.doIf(false) })
+	e.prim("ifhmode", func(e *Engine) { e.doIf(e.inPar) })
+	e.prim("ifvmode", func(e *Engine) { e.doIf(!e.inPar) })
+	e.prim("ifinner", func(e *Engine) { e.doIf(false) })
+	e.prim("ifvoid", func(e *Engine) { e.doIf(e.getBox(e.scanInt()) == nil) })
+	e.prim("ifhbox", func(e *Engine) { e.scanInt(); e.doIf(false) })
+	e.prim("ifvbox", func(e *Engine) { e.scanInt(); e.doIf(false) })
+}
+
+// skipWriteFilename consumes an \openout right-hand side: an optional '=' then the
+// file name up to (and consuming) a terminating \relax or a space, without
+// typesetting it. Names in amsart are like `\jobname.toc\relax`.
+func (e *Engine) skipWriteFilename() {
+	e.scanEquals()
+	for {
+		t, ok := e.getXToken()
+		if !ok {
+			return
+		}
+		if t.cs_ { // a control sequence ends the file name (\relax) — consume and stop
+			return
+		}
+		if t.cat == catSpace {
+			return
+		}
+	}
+}
+
+// AMSClassSubstrate is the register-and-macro layer amsart builds on beyond the
+// article substrate: plain-TeX scratch registers, the penalty/spacing parameters a
+// class assigns, and best-effort no-ops for NFSS font selection and a few text
+// commands. Loaded last by LoadLaTeX.
+const AMSClassSubstrate = `
+\catcode64=11
+% ── token scratch registers (see toks.go) ───────────────────────────────────
+% \toks@ is plain TeX's \toks0; \@temptokena / \@emptytoks are LaTeX's named
+% scratch registers (the latter is kept permanently empty as a "clear" source).
+\toksdef\toks@=0
+\newtoks\@temptokena
+\newtoks\@emptytoks
+% ── plain-TeX scratch count / dimen / skip (\count@ = \count255, etc.) ───────
+\countdef\count@=255
+\dimendef\dimen@=0
+\dimendef\dimen@i=1
+\dimendef\dimen@ii=2
+\skipdef\skip@=0
+% ── penalty / spacing parameters a class assigns ────────────────────────────
+% \brokenpenalty is a TeX parameter too (texparams.go: 100) — see classkernel.go.
+% TeX's own defaults (tex.web §240, and LaTeX leaves both alone). They were a
+% fresh \newcount each, so the register read 0 or an arbitrary 10000 and SHADOWED
+% the engine's correct values (texparams.go has tolerance 200, engine.go
+% hyphenpenalty 50) — and the line breaker reads the REGISTER. With tolerance at
+% 10000 no line is ever too loose or too tight to accept, so the breaker packs
+% where TeX would rebreak or hyphenate; with \hyphenpenalty at 0 a hyphen costs
+% nothing, so it hyphenates where TeX would not.
+\newcount\tolerance \tolerance=200
+\newcount\hbadness
+\newcount\vbadness
+\newcount\hyphenpenalty \hyphenpenalty=50
+% Read by breakSegment (paragraph.go) like the two above, and zero here meant a
+% hyphen on the second-to-last line of a paragraph cost nothing extra. TeX: 5000.
+\newcount\finalhyphendemerits \finalhyphendemerits=5000
+\newdimen\hfuzz
+\newdimen\vfuzz
+\newdimen\emergencystretch
+\newdimen\displaywidth
+\newdimen\displayindent
+\newdimen\predisplaysize
+\newdimen\mathsurround
+% \lineskiplimit is a real parameter (see its prim): a \newdimen here SHADOWED it,
+% which is why \offinterlineskip — \lineskip\z@ \lineskiplimit\maxdimen, the idiom
+% for butting boxes together — still left 1pt between them. The same trap as
+% \prevdepth two screens down, and the third time in this file.
+% \normallineskiplimit stays a register: plain TeX keeps it as a SAVED COPY of the
+% parameter, not as the parameter itself.
+\newdimen\normallineskiplimit
+% \jot is the extra leading between the rows of a multi-line display. latex.ltx
+% ALLOCATES AND SETS IT (\newdimen\jot / \jot=3pt, l.11172-11173); allocating it
+% and leaving it zero made every reader have to guess whether a zero meant "unset"
+% or "this document wants none".
+\newdimen\jot
+\jot=3pt
+% ⛔ \hangafter IS NOT A DIMENSION, AND DECLARING IT AS ONE DELETED TEXT.
+% tex.web §236 makes it an INTEGER parameter, and texparams.go already lists it
+% among texIntParams with TeX's initial value 1. A \newdimen\hangafter here ran
+% afterwards and rebound the name to a dimension register, which is not an
+% equivalent spelling: the two SCAN DIFFERENTLY. \hangafter=1 against an
+% integer reads the 1 and stops; against a dimension it scans a <dimen>, which
+% REQUIRES a unit, so it reads past the 1 into the following text looking for
+% one. TeX's units are ordinary letter pairs (in, pt, pc, bp, cm, mm, dd, cc,
+% sp, ex, em), so "\hangafter=1 integers follow" came out as
+%
+%	BEFOREtegersfollow
+%
+% — the "in" taken out of the middle of a word and never seen again.
+%
+% ⚠ MEASURED INCIDENCE, AND IT IS NOT WHAT I FIRST WROTE HERE. I claimed every
+% \bibitem sets \hangafter=1; nothing in this repository sets \hangafter at all,
+% and LaTeX's bibliography takes its hanging indent from \list, not from this
+% parameter. A census over the 2935-paper corpus (comments stripped) finds 109
+% papers that WRITE \hangafter and ZERO where the scan eats a word. So this is a
+% latent trap removed and a type made right, not a corpus defect closed — the
+% witness is exact and its reach is small. See hangafter_probe_test.go.
+\newskip\tabskip
+\newskip\spaceskip
+\newskip\xspaceskip
+% latex.ltx:546. Allocated and never set, it read ZERO — and the paragraph
+% builder had the value hard-coded instead, so \parfillskip could not be
+% changed at all (which is what \centering does).
+\newskip\parfillskip \parfillskip=0pt plus 1fil
+% latex.ltx:547. It is 12pt to begin with, and \selectfont keeps it in step with
+% \baselineskip from then on (set@fontsize, l.8543). Allocated and never set it
+% read ZERO, and a class that measures with it got nothing: IEEEtran builds every
+% \IEEEeqnarray row strut as 0.7/0.3\normalbaselineskip, and \@arrayparboxrestore
+% — which runs inside every array cell and parbox — sets \baselineskip from it.
+\newskip\normalbaselineskip \normalbaselineskip=12pt
+% \normalbaselines restores the three interline parameters from those saved copies. It is
+% a kernel macro, not an AMS one — latex.ltx:558-559, verbatim:
+%
+%	\def\normalbaselines{\lineskip\normallineskip
+%	  \baselineskip\normalbaselineskip \lineskiplimit\normallineskiplimit}
+%
+% and it belongs here because this is where two of its three registers are declared
+% (\normallineskip is in classkernel.go, loaded before this substrate).
+%
+% Missing, it was skipped 17 times across 6 corpus papers. The one that shows is acmart:
+% \@typeset@author@bx (acmart.cls:2656-2657) opens with \def\and{\par}\normalbaselines and
+% then \global\setbox\author@bx=\vtop{…} — so the AUTHOR BOX of every bundled-acmart paper
+% was built with whatever interline spacing the surrounding group happened to leave.
+\def\normalbaselines{\lineskip\normallineskip
+  \baselineskip\normalbaselineskip \lineskiplimit\normallineskiplimit}
+% \lastskip is a real primitive now (tex.web §424, see Engine.lastSkip): it reads
+% the glue at the end of the list being built. The stand-in that used to sit here
+% was a \newskip — a register, permanently zero — and a register SHADOWS the
+% primitive, so defining the primitive alone changed nothing until this went.
+\newtoks\everydisplay
+\newtoks\everymath
+% list / equation scratch counters and skips amsart references directly
+\newcount\@eqcnt
+\newcount\@enumdepth
+\newcount\@itemdepth
+\newskip\@topsep
+\newskip\@topsepadd
+% \spacefactor is a real internal now (classprims.go), updated after every
+% character the way TeX updates it (§1034): a \newcount here would SHADOW the
+% primitive, and \@ would then set a register nothing reads. It used to be one,
+% with a comment saying the engine never updated it — which was true until
+% spacefactor.go. \@addpunct's \ifnum\spacefactor>\@m now answers for real.
+% \prevdepth is a real parameter now (see its prim and prevdepthParam): a
+% \newdimen here would SHADOW it, which is what kept it reading 0pt — the same
+% trap the \lastskip comment above documents.
+% \nointerlineskip and \removelastskip are plain TeX macros, not primitives, and
+% both were accepted no-ops. They work as written once \prevdepth and \lastskip
+% are real.
+\def\nointerlineskip{\prevdepth-1000pt}
+\def\removelastskip{\ifdim\lastskip=\z@\else\vskip-\lastskip\fi}
+% \newinsert allocates an insert class; a count register is a sufficient stand-in
+% (its number then indexes \skip/\dimen/\box scratch, as in \skip\copyins=1.5pc).
+\let\newinsert\newcount
+% \strut and \strutbox, verbatim from latex.ltx:613-614 and the \setbox inside
+% \set@fontsize's size@update (l.8544). \strutbox was allocated and never set and
+% \strut was \def'd EMPTY, so a strut — the idiom for forcing a line to its full
+% height — set nothing: \ht\strutbox read 0pt against the reference's 8.39996pt,
+% and \vbox{\hbox{\strut x}} was 4.73pt where the reference gives 8.39996, a line
+% the strut nearly doubles. 130 occurrences in 42 of the 200 arXiv reference
+% papers.
+%
+% Every brick of the real definition already worked, checked value by value
+% against tectonic before any of this was written: \vrule with height/depth/width
+% keywords, the .7\baselineskip arithmetic (8.39996pt, to the last digit in both
+% engines), \copy, \unhcopy and \ifmmode.
+%
+% It has to be re-set wherever the leading moves, which is why it lives in
+% \@setfontsize below rather than being set once: the reference re-sets it in
+% size@update, run from \selectfont, and \ht\strutbox is .7 x 9.5 = 6.64996pt
+% inside \footnotesize and .7 x 18 = 12.59995pt under \linespread{1.5}.
+%
+% width 0pt rather than \@width\z@: same dimension, no dependency on the order the
+% kernel's scratch macros are loaded in here.
+\newbox\strutbox
+\def\gotex@setstrutbox{\setbox\strutbox\hbox{\vrule height .7\baselineskip depth .3\baselineskip width 0pt}}
+\gotex@setstrutbox
+\def\strut{\relax\ifmmode\copy\strutbox\else\unhcopy\strutbox\fi}
+% ⛔ \lastbox WAS A STUB HERE: \def\lastbox{\hbox{}}, an empty box that removed
+% nothing — which is go-tex/engine#430's title, and the stub is its mechanism.
+% A \def SHADOWS the primitive, so registering one was not enough; the stub had
+% to go. It is a real primitive now (lastbox.go, tex.web:20965-20991), and
+% \@doendpe's {\setbox\z@\lastbox} can at last take the \parindent box away.
+\def\vrulefil{}
+% ── NFSS font selection: no real series/shape machinery, accept and drop ────
+% \selectfont installs the font the current family/series/shape calls for. This
+% engine has one text face per family rather than NFSS's tables, so it
+% re-selects the roman face — which is what matters in practice: a package
+% switches to \nullfont around material it wants measured but not set, and
+% brings the real font back with \selectfont. Without that, everything typeset
+% afterwards is set in a font with no characters (pgf does this for every
+% picture, which left every node's text empty).
+\def\selectfont{\gotex@selectbasefont}
+\def\f@shape{n}
+\def\f@series{m}
+\def\f@family{}
+\def\fontsize#1#2{}
+% \@setfontsize keeps the exact shape it always had — a macro with three
+% undelimited arguments — so nothing about how a class's tokens are consumed
+% changes. It puts the font at the size the class states (\gotex@fontsizeat) AND
+% the leading at the skip it states (\gotex@notefontsize, third argument). That
+% second call used to sit INSIDE the \ifx#1\normalsize guard, so nine sizes out of
+% ten stated a leading that went nowhere and line spacing never followed the font:
+% \footnotesize was 2.54pt too loose PER LINE and \Large 5.93pt too tight, while
+% \normalsize — the one case the guard let through, and so the natural thing to
+% test — was right to 0.04pt. latex.ltx:8533 \set@fontsize sets both from the same
+% call; only \gotex@classnormalsize, which records what the class calls normal,
+% belongs under the guard.
+% which is how a size table drives \tiny…\Huge; the size is read against the one
+% the class states for \normalsize, so Options.Size still picks the body size and
+% the table gives the ratios. It still REPORTS the \normalsize pair separately:
+% the leading, which is the base \baselinestretch is measured against, and the
+% size, which is the 100% the rest of the table is stated against.
+% \f@size is NFSS's current size as a BARE NUMBER — latex.ltx:8533 sets it with
+% \edef\f@size{\strip@pt\@tempdimb}, the unit stripped, so a class can write
+% \dimen0=\f@size pt. Undefined, it was skipped and its "pt" stayed behind: six
+% corpus papers report it 80 times each, and two of them opened on a page carrying
+% nothing but "pt==-=pt==-=pt==-=…" — the leftovers of eighty such assignments.
+% \f@baselineskip is deliberately NOT set here: its argument comes in several
+% shapes (12, 11\p@, {12pt}) and nothing in the corpus asks for it.
+\def\@setfontsize#1#2#3{\ifx#1\normalsize\gotex@classnormalsize{#2}\fi\edef\f@size{#2}\gotex@fontsizeat{#2}\gotex@notefontsize{#3}\gotex@setstrutbox}
+\def\fontencoding#1{}
+\def\fontfamily#1{}
+\def\fontseries#1{}
+\def\fontshape#1{}
+\def\usefont#1#2#3#4{}
+\def\try@load@fontshape{}
+\def\check@mathfonts{}
+% amsgen.sty's two shorthands (amsgen.sty:39-40), which every AMS-derived class
+% uses everywhere:
+%
+%	\let\@xp=\expandafter
+%	\let\@nx=\noexpand
+%
+% Undefined, \@xp is skipped and the \expandafter it stands for never happens, so
+% the assignment it was steering hits the wrong token: an AMS class's own
+%
+%	\@xp\gdef\csname r@tocindent\@tempa\endcsname{0pt}
+%
+% then defines nothing and spills "0pt" and the name that followed it onto the
+% page. In the arXiv reference set that cost one paper its whole body — one page
+% of engine internals against tectonic's 29.
+\let\@xp\expandafter
+\let\@nx\noexpand
+\def\@parboxrestore{}
+\def\displaystyle{}
+\def\textstyle{}
+\def\scriptstyle{}
+\def\m@th{}
+\def\jobname{texput}
+% ⛔⛔ \@auxout IS A REAL STREAM. It was \def\@auxout{-1}, a number no \openout ever
+% opens, so everything a package wrote to the .aux went nowhere and nothing was ever
+% read back. That is the channel LaTeX packages use to talk to THEMSELVES across
+% passes, and with it closed no such package can work however faithfully it is
+% loaded: natbib writes \bibcite{key}{Author et al.(2021)…} from \bibitem's optional
+% argument and reads it back to resolve \citep. Measured on a witness with the real
+% natbib.sty next to the document, \citep{alpha} came out "(?)" — an unresolved
+% reference — where tectonic gives "(Author et al., 2021)". Without natbib.sty it
+% came out "[1]". Loading the package made the answer WORSE, because the package was
+% never the missing half (go-tex/engine#711).
+%
+% This engine resolves its own \label/\ref in memory and reruns until the numbers
+% stop moving (api.go), which is a sound design and stays. The .aux is opened
+% alongside it, for the packages that have no other way in.
+\newwrite\@auxout
+% \protected@edef / \protected@xdef must keep a \protect'd (robust) token from
+% expanding while the body is being expanded — real LaTeX makes \protect
+% momentarily unexpandable. Plain \edef/\xdef here expands right through \protect,
+% so a robust command whose replacement text mentions itself or another robust
+% command runs away and swallows the document: bm.sty's
+% \protected@edef\bm#1{\bm{#1}}, and imsart's
+% \protected@xdef\@thanks{…\protect\thanks@thefnmark…\protect\orig@footnotetext…}.
+% Make \protect write itself and the following token literally, run the (x)edef
+% (which reads the control sequence, its parameter text and the body that follow),
+% then restore \protect once the assignment is done.
+\def\@unexpandable@protect{\noexpand\protect\noexpand}
+% ⛔ LaTeX's OWN NAMES, not private ones. This pair was \gotex@@protect /
+% \gotex@restore@protect — structurally identical to latex.ltx:1355-1371, and
+% invisible to anything that calls the kernel's names directly. A class does:
+% 2607.18707 skipped \restore@protect FOUR times, tripped the runaway guard, and came
+% out as ONE page out of 62KB of source. \restore@protect is one line, so what was
+% missing was a NAME and not a mechanism.
+\def\restore@protect{\let\protect\@@protect}
+\def\protected@edef{\let\@@protect\protect\let\protect\@unexpandable@protect
+  \afterassignment\restore@protect\edef}
+\def\protected@xdef{\let\@@protect\protect\let\protect\@unexpandable@protect
+  \afterassignment\restore@protect\xdef}
+% The two switches latex.ltx sets \protect with (lines 1353-1354): \string while a
+% display is written out, \@typeset@protect while typesetting.
+\def\set@display@protect{\let\protect\string}
+\def\set@typeset@protect{\let\protect\@typeset@protect}
+% \DeclareTextCommand\cs{encoding}{body}: amsart uses only the no-optional-arg
+% form; bind \cs to its body and ignore the encoding.
+\def\DeclareTextCommand#1#2#3{\def#1{#3}}
+\def\DeclareTextSymbol#1#2#3{}
+\def\DeclareTextCommandDefault#1{\def#1}
+% \MakeTextUppercase is textcase.sty's, and amsart TESTS for it: amsart.cls:429 does
+% \AtBeginDocument{\@ifundefined{MakeTextUppercase}{}{\let\uppercasenonmath\altucnm}},
+% so defining it at all puts amsart on its \altucnm path —
+% \def\altucnm#1{\MakeTextUppercase{\toks@{#1}}\edef#1{\the\toks@}} (:424). That idiom
+% needs \MakeTextUppercase to EXECUTE the \toks@ assignment inside its argument, which
+% \uppercase does (it upcases the character tokens and hands the list back to the mouth).
+% ⛔ It used to expand to \MakeUppercase, a name amsart itself only \lets to \uppercase
+% at :431 — so a document's own \let\MakeUppercase\relax (15 papers of 999, 7 in amsart)
+% disarmed THIS command too, \altucnm's \toks@ assignment never happened, and
+% \edef\@title{\the\toks@} closed a self-referential \@title: 2511.23047 spun \@title 400
+% times into the runaway guard and rendered ONE page of 22KB. Going through the primitive
+% keeps the two names independent, exactly as textcase and the kernel are.
+\def\MakeTextUppercase#1{\protected@edef\@gotexuctmp{#1}%
+  \expandafter\uppercase\expandafter{\@gotexuctmp}}
+% \textup: upright text — no series/shape machinery, so identity. Defining it (rather
+% than leaving it undefined and gobbled) is what lets amsart's \@seccntformat
+% (\textup{…the section number…}) actually emit the number in a heading.
+\def\textup#1{#1}
+\def\textsc#1{#1}
+\def\textmd#1{#1}
+\def\textnormal#1{#1}
+% ⛔⛔ \mark IS A PRIMITIVE AGAIN. A one-line stub here used to define it away,
+% for the reason it stated: page marks feed running heads the engine does not
+% build. That was true when it was written; the engine builds them now
+% (marks.go), and the commit message carries what the line said. A stub that
+% DISCARDS its argument is the one shape no channel can see: the document says
+% what it wants, the engine says nothing, every test stays green, and the loss
+% shows up only as ink that is not on the page. Here it cost 27 of the 128 corpus
+% papers with a reference their running head (#426), and it survived three
+% separate fixes to the chain above it — the band (#726), the dispatch, and the
+% pair's name (#728) — because each of those was right and this one line still
+% threw the mark away.
+% \/ : italic correction — a zero-width adjustment the engine does not need.
+\def\/{}
+% \hyphenation{…} is NOT stubbed here any more: there is now somewhere to record
+% it (hyphexception.go), and the primitive must be the one that runs.
+%
+% ⛔ THE STUB THAT WAS HERE IS THE SHAPE THE PARAGRAPH ABOVE WARNS ABOUT, six
+% lines further up, written about \mark: "DISCARDS its argument is the one shape
+% no channel can see — the document says what it wants, the engine says nothing,
+% every test stays green, and the loss shows up only as ink that is not on the
+% page." The stub was exactly that, and its own comment said so in the words
+% "nothing to record here" — true when it was written, and silently false
+% afterwards.
+%
+% ⚠ The backticks that first wrapped that stub's name in THIS comment ended the
+% Go raw string holding the substrate, which the compiler caught at once. A
+% LaTeX source embedded in Go cannot quote Go.
+%
+% A document writes \hyphenation for the words the patterns get WRONG. So the
+% silence fell precisely on the cases it was asked about: 170 of the 2935 corpus
+% papers (5.8%).
+% Sectioning support for classes that define their OWN \@startsection→\@sect (amsart)
+% rather than using the engine's built-in \@startsection (article/report/book). Real
+% LaTeX's \@hangfrom sets a hanging indent with the label #1 followed by body #2; the
+% engine has no hanging-indent primitive, so typeset label then body on one paragraph.
+% \@xsect finishes the heading (its argument is the after-skip, already applied), so a
+% \par is enough to let the following text start its own paragraph.
+% Display headings call \@hangfrom{label}{body}; the engine has no hanging indent,
+% so typeset label then body on one line and clear \@svsechd so \@xsect does not
+% re-emit it. Run-in headings instead defer the whole heading to \@svsechd, which
+% \@sect \def's and real LaTeX fires from the next \everypar; the engine has no live
+% everypar, so \@xsect runs \@svsechd itself (then clears it). This makes amsart
+% headings visible whether \@sect chose the display or the run-in path.
+\let\@svsechd\relax
+% ⚠ \long. Real LaTeX's \@hangfrom takes ONE argument — the label — and the heading
+% body that follows is ordinary material, not an argument (latex.ltx:12865):
+%
+%	\def\@hangfrom#1{\setbox\@tempboxa\hbox{{#1}}%
+%	      \hangindent \wd\@tempboxa\noindent\box\@tempboxa}
+%
+% The amsart family calls it with the body in a SECOND brace group ending in \par,
+% which real LaTeX simply typesets after the label (mathincs.cls:1177):
+%
+%	\@hangfrom{\hskip #3\relax\@svsec}{\interlinepenalty\@M #8\par}
+%
+% Ours takes that group as #2 — having no hanging indent, it has nothing else to do
+% with it — and an argument is exactly where a \par may not appear: tex.web §392
+% abandons the call, dropping THE WHOLE HEADING, number and title both. Measured,
+% this one macro is 179 of the corpus's 199 abandoned calls, 44 on a single paper.
+\long\def\@hangfrom#1#2{\global\let\@svsechd\relax\par\noindent#1#2}
+\def\@xsect#1{\ifx\@svsechd\relax\else\@svsechd\global\let\@svsechd\relax\fi\par}
+% (\@afterheading is classprims.go's: it used to be stubbed empty HERE, which loads
+% later and silently undid it — the first paragraph after a heading kept its indent.)
+% \@ifclasswith{class}{opt}{then}{else}: the class-file analogue of
+% \@ifpackagewith, consulting the option list the loader recorded in opt@class.cls.
+\def\@ifclasswith#1#2{\@ifundefined{opt@#1.cls}{\@secondoftwo}{\@ifinlist{#2}{\@nameuse{opt@#1.cls}}\ifin@\expandafter\@firstoftwo\else\expandafter\@secondoftwo\fi}}
+% ── amsthm counter-representation hooks (normally from amsmath.sty) ──────────
+% amsart.cls's \@xthm builds a within-numbered theorem's printed number as
+%   \the<thm> := \the<within>\@thmcountersep\@thmcounter{<thm>}
+% (see amsart.cls \@xthm). \@thmcountersep is the separator between the parent
+% and child number ("." → "Theorem 1.1"), and \@thmcounter{c} yields \arabic{c}
+% kept unexpanded (\noexpand) so the \xdef freezes "\arabic{c}" into \the<thm> and
+% it re-evaluates at every use. amsmath.sty defines both; the engine stubs amsmath,
+% so without these the two control sequences would survive verbatim into \the<thm>
+% and print literally ("1\@thmcountersep\@thmcounter{thm}") instead of "1.1".
+% \providecommand so a real amsmath, if ever supplied, still wins.
+\providecommand{\@thmcountersep}{.}
+\providecommand{\@thmcounter}[1]{\noexpand\arabic{#1}}
+% figure* and table* are the two-column forms. A real class defines them through
+% \@dblfloat; a class this engine emulates itself (revtex, IEEEtran, acmart,
+% elsarticle …) had no starred form at all, so \begin{figure*}[t] resolved to \relax
+% and typeset its own placement key — every such float in the arXiv corpus carried a
+% stray "[t]" or "[h]" on the page, in 23 papers for figure* and 11 for table*.
+% They route through \@dblfloat (classprims.go), the same hook the embedded article.cls
+% uses for its own figure*/table*: in two-column mode \@dblfloat → \gotex@dblfloat
+% typesets the float at the FULL text width and places it as a band spanning BOTH columns
+% across the top of a page (\@dblfloat / \@topnewpage), and in one column it sets the
+% ordinary one-column float (\@float). \endfigure*/\endtable* are \end@dblfloat to pair.
+% They are installed at \begin{document} and ONLY if nothing else has: a class that
+% defines its own figure* must keep it, and one that declares it with
+% \newenvironment would fail outright against a name already taken (acmart does,
+% and defining these too early cost that paper 14 of its 18 pages).
+% ⛔ The definitions are GLOBAL. A local \def here is rolled back by the first group that
+% closes after \begin{document}, and a document does not have to be well-behaved for that
+% to happen: an \author{…} written across BLANK LINES abandons the call on a \par
+% (tex.web §392), the brace depth is left off, and the \def'd figure*/table* go with the
+% group. Corpus paper 2405.05734 lost its five appendix floats' captions and numbers that
+% way — the reference has Fig. 13 to Fig. 17 and we repeated "Figure 12" — along with
+% table* and IEEEkeywords.
+%
+% That paper no longer abandons anything: IEEEtran declares its own \author \long
+% (IEEEtran.cls:4882) and the engine now follows it (packages.go). The requirement here is
+% unchanged, because the \par is only one way a group closes early — elsarticle, revtex and
+% acmart still abandon the same witness, and the guard in dblfloatglobal_test.go is written
+% on elsarticle for exactly that reason.
+%
+% A real class defines these with \newenvironment, which is global; so must this.
+\AtBeginDocument{%
+  \@ifundefined{figure*}{%
+    \expandafter\long\expandafter\gdef\csname figure*\endcsname{\@dblfloat{figure}}%
+    \expandafter\long\expandafter\gdef\csname endfigure*\endcsname{\end@dblfloat}%
+  }{}%
+  \@ifundefined{table*}{%
+    \expandafter\long\expandafter\gdef\csname table*\endcsname{\@dblfloat{table}}%
+    \expandafter\long\expandafter\gdef\csname endtable*\endcsname{\end@dblfloat}%
+  }{}%
+}
+\catcode64=11
+`
+
+// ignoreSpaces is \ignorespaces: expand and drop the following run of space tokens.
+// Shared, because more than the primitive needs it — color.sty ends BOTH
+// \@undeclaredcolor (l.95) and \@declaredcolor (l.102) with it, so \color eats the
+// space after its argument and a second copy of this loop would be a second thing to
+// keep in step.
+func (e *Engine) ignoreSpaces() {
+	for {
+		t, ok := e.getXToken()
+		if !ok {
+			return
+		}
+		if t.cs_ || t.cat != catSpace {
+			e.back(t)
+			return
+		}
+	}
+}

@@ -1,0 +1,213 @@
+// Copied from github.com/go-tex/engine, the file texparams.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file gives the engine TeX's named parameters — \tracinglostchars,
+// \hbadness, \spaceskip, \maxdepth and the rest of that long list. They are not
+// features anyone asks for by name, but a real package sets them constantly
+// (around a measurement it does not want warnings from, or to neutralise a
+// setting it must not inherit), and a single undefined one halts a package that
+// would otherwise run.
+//
+// Each is a register of its own type, so it behaves like the parameter it stands
+// for: assignable with or without =, readable with \the, scoped and restored by
+// grouping, and arithmetic (\advance, \multiply) applies. The engine does not yet
+// act on most of them — it has its own line-breaking tolerances and spacing — so
+// what a package writes is what it reads back, and nothing is silently dropped.
+// A parameter the engine *does* act on (\parindent, \hsize, \baselineskip, …) is
+// a primitive of its own elsewhere and is deliberately absent from these lists.
+
+// texIntParams are TeX's integer parameters, with the values plain TeX starts
+// from.
+var texIntParams = map[string]int{
+	"tracingcommands": 0, "tracingmacros": 0, "tracingonline": 0, "tracingoutput": 0,
+	"tracingparagraphs": 0, "tracingpages": 0, "tracingrestores": 0, "tracingstats": 0,
+	"tracinglostchars": 0, "showboxbreadth": -1, "showboxdepth": -1,
+	"errorcontextlines": -1, "escapechar": '\\', "endlinechar": 13, "newlinechar": -1,
+	"globaldefs": 0, "mag": 1000, "language": 0, "lefthyphenmin": 2, "righthyphenmin": 3,
+	"uchyph": 1, "time": 0, "day": 0, "month": 0, "year": 0,
+	"hbadness": 0, "vbadness": 0, "pretolerance": 100, "tolerance": 200, "looseness": 0,
+	"linepenalty": 10, "hyphenpenalty": 50, "exhyphenpenalty": 50,
+	"adjdemerits": 10000, "doublehyphendemerits": 10000, "finalhyphendemerits": 5000,
+	"widowpenalty": 150, "clubpenalty": 150, "brokenpenalty": 100,
+	"interlinepenalty": 0, "displaywidowpenalty": 50, "predisplaypenalty": 10000,
+	// Two integer parameters the table lacked. Undefined, the command was skipped
+	// and its VALUE stayed in the input: IEEEtran writes
+	// \interdisplaylinepenalty=10000 and \interfootnotelinepenalty=2500 in its
+	// preamble, and "=10000 =2500" was typeset there — on a page of its own.
+	"interdisplaylinepenalty": 100, "interfootnotelinepenalty": 100,
+	"postdisplaypenalty": 0, "floatingpenalty": 0, "outputpenalty": 0,
+	"binoppenalty": 700, "relpenalty": 500, "delimiterfactor": 901,
+	"maxdeadcycles": 25, "deadcycles": 0, "insertpenalties": 0, "badness": 0,
+	"defaulthyphenchar": -1, "defaultskewchar": -1, "holdinginserts": 0,
+	// \spacefactor is NOT here: it is a real primitive now (classprims.go), backed
+	// by the state TeX updates after every character. Listing it as well made it
+	// both a primitive and a parameter, and which one wins depends on load order —
+	// TestNoParameterIsBothAPrimitiveAndAListedParam exists for that and caught it.
+	"fam": -1, "prevgraf": 0, "hangafter": 1,
+	"errorstopmode": 0, "pausing": 0,
+}
+
+// maxDimenSP is TeX's \maxdimen (16383.99998pt) in scaled points: 2^30 − 1.
+const maxDimenSP = 1073741823
+
+// texDimenParams are TeX's dimension parameters.
+var texDimenParams = []string{
+	"maxdepth", "splitmaxdepth", "boxmaxdepth", "delimitershortfall",
+	"nulldelimiterspace", "scriptspace", "mathsurround", "predisplaysize",
+	"displaywidth", "displayindent", "overfullrule", "hangindent",
+	"emergencystretch", "hoffset", "voffset", // \lineskiplimit is a primitive now
+	"pagegoal", "pagetotal", "pagestretch", "pagefilstretch", "pagefillstretch",
+	"pagefilllstretch", "pageshrink", "pagedepth",
+	// \prevdepth was here and is NOT a parameter to accept-and-ignore any more: it
+	// is bound to e.prevDepth, the field appendToPage measures interline glue
+	// against. Leaving it listed re-armed the very defect that binding fixed —
+	// loadTeXParams runs BEFORE the primitive is registered (primitives.go), so the
+	// primitive won only by ordering, and moving one call would have turned
+	// \prevdepth back into a dead register with nothing to say so.
+	// TestNoParameterIsBothAPrimitiveAndAListedParam asserts the whole set now.
+}
+
+// texGlueParams are TeX's glue parameters. Inter-word spacing comes from the font
+// here, so these hold what a package sets without changing how text is set.
+var texGlueParams = []string{
+	// \lineskip is a primitive now: it and \lineskiplimit are the two parameters
+	// tex.web §679 names, and interlineGlue needs both live.
+	"spaceskip", "xspaceskip", "parfillskip", "topskip",
+	"splittopskip", "abovedisplayskip", "belowdisplayskip",
+	"abovedisplayshortskip", "belowdisplayshortskip", "parskip", "tabskip",
+	"thinmuskip", "medmuskip", "thickmuskip",
+}
+
+// loadTeXParams allocates a register for every named parameter and binds it. A
+// name already defined (a parameter the engine models itself, or one a macro
+// layer has claimed) is left alone.
+func (e *Engine) loadTeXParams() {
+	e.endlineReg = -1
+	// -1, not 0: register 0 belongs to somebody, and a zero default would make
+	// every assignment to it look like a dropped hanging indent.
+	e.hangIndentReg = -1
+	for name, def := range texIntParams {
+		if e.eq[name] != nil || e.allocCnt >= registerPoolSize {
+			continue
+		}
+		e.storeCount(e.allocCnt, def)
+		e.define(name, &meaning{kind: mCountRef, code: e.allocCnt}, true)
+		e.allocCnt++
+	}
+	// The mouth reads \endlinechar at every line end (see mouthChar); cache the
+	// register it landed on rather than looking the name up each time.
+	if m := e.eq["endlinechar"]; m != nil && m.kind == mCountRef {
+		e.endlineReg = m.code
+	}
+	// \escapechar is read whenever a control-sequence NAME is printed; cache it
+	// the same way (see escapeStr).
+	if m := e.eq["escapechar"]; m != nil && m.kind == mCountRef {
+		e.escapeReg = m.code
+	}
+	// ⛔ \hangindent'S REGISTER IS NOT CACHED HERE, AND THAT IS THE WHOLE POINT.
+	// classkernel.go runs AFTER this and declares \newdimen\hangindent, which
+	// rebinds the name to a different register — so a value cached at the end of
+	// this function would name a register nothing writes to, and the drop census
+	// would report nothing for ever while looking perfectly alive. That is the
+	// load-order trap this file already records twice (\prevdepth, \hangafter).
+	// The cache is maintained by define instead, which sees every binding
+	// including the ones that come later. See Engine.define.
+	//
+	// ⚠ MEASURED, NOT ARGUED. Caching here instead makes the engine watch dimen
+	// register 21 while \hangindent resolves to 59 after the kernel loads — and
+	// to 104 once a document declares its own. The census then reports nothing
+	// for every document for ever.
+	for _, name := range texDimenParams {
+		if e.eq[name] != nil || e.allocDim >= registerPoolSize {
+			continue
+		}
+		// \pagegoal is \maxdimen while no page is being built — TeX's value for an
+		// empty page. The engine gathers the whole document into one vertical list
+		// and splits it into pages at the very end, so no output routine ever runs
+		// and, from a class's point of view, the page never fills. Leaving \pagegoal
+		// at 0 makes a class that sizes a title/box against the "free space left on
+		// the page" (WileyNJD's \ComputeFreeSpaceOnPage) think there is NO room and
+		// enter a \vsplit-to-fit \loop that never terminates — 142841 near-empty
+		// pages. Initialise it to \maxdimen so such code sees a full, empty page.
+		if name == "pagegoal" {
+			e.storeDimen(e.allocDim, maxDimenSP)
+		}
+		// ⛔⛔ \splitmaxdepth AND \boxmaxdepth ARE \maxdimen, NOT ZERO. ltplain.dtx
+		// sets both on consecutive lines, and LaTeX inherits them:
+		//
+		//	\splitmaxdepth=\maxdimen        ltplain.dtx:872
+		//	\boxmaxdepth=\maxdimen          ltplain.dtx:873
+		//
+		// Measured against tectonic from inside both engines: \splittopskip 10.0pt and
+		// \maxdepth 5.0pt agree, and these two read 0.0pt here against 16383.99998pt
+		// there.
+		//
+		// ⛔ \splitmaxdepth IS THE #622 DEFECT, UNFIXED IN THE \vsplit PATH. It is the
+		// cap vert_break uses for prev_dp (tex.web:19059 passes it as vert_break's d),
+		// and splitVList reads it through splitMaxDepth. At zero every descender is
+		// charged to the running height the moment the next box arrives, so a column
+		// that fills EXACTLY gives up its last line — which is precisely what #622
+		// fixed for the page builder and nobody carried to \vsplit. multicols slices
+		// through the same function.
+		//
+		// ⚠ \boxmaxdepth is inert TODAY: nothing in this engine reads it, so setting it
+		// moves no box. It is set anyway because leaving it at 0 is a trap for whoever
+		// implements vpack's depth cap — the day that lands, a default of 0 would clamp
+		// every \vbox to depth zero and move the excess into its height, silently.
+		if name == "splitmaxdepth" || name == "boxmaxdepth" {
+			e.storeDimen(e.allocDim, maxDimenSP)
+		}
+		e.define(name, &meaning{kind: mDimenRef, code: e.allocDim}, true)
+		e.allocDim++
+	}
+	for _, name := range texGlueParams {
+		if e.eq[name] != nil || e.allocSkp >= registerPoolSize {
+			continue
+		}
+		// \parfillskip is the one of these with a non-zero value in every format:
+		// 0pt plus 1fil (latex.ltx:546, and plain.tex the same). It closes every
+		// paragraph (tex.web:16084), so a register left at zero justifies the last
+		// line of every paragraph to the full measure. Allocated and never set is
+		// exactly how it stood while the paragraph builder had the value written
+		// into it and never read the register at all.
+		if name == "parfillskip" {
+			e.storeSkip(e.allocSkp, glueSpec{stretch: unity, stretchOrder: 1})
+		}
+		// \topskip is the second of these with a non-zero value in every format:
+		// 10pt in plain.tex and in size10.clo, and it sits above the FIRST box of
+		// every page (tex.web §1001, see topskip.go). Allocated at zero, every page
+		// starts about 3pt too high in ordinary prose — never a whole line, so no
+		// page count moves and nothing says so.
+		//
+		// ⛔ The default belongs HERE and not in the consumer. topskip.go first
+		// carried a fallback for "no register", which loadTeXParams makes
+		// unreachable — it always allocates one — so the fallback was an assertion
+		// rather than a guard, and reading a register holding 0 as "absent" would
+		// have overridden a document's deliberate \topskip=0pt.
+		if name == "topskip" {
+			e.storeSkip(e.allocSkp, glueSpec{width: 10 * unity})
+		}
+		// \splittopskip is the third, and it is 10pt for the same reason and in the
+		// same place: ltplain.dtx:920-921 sets \topskip=10pt and \splittopskip=10pt
+		// on the line after it, so every LaTeX document has both. It plays the part
+		// \topskip plays on a page, for the top of a \vsplit remainder
+		// (tex.web:18857-18893, prune_page_top): the glue above the first box, with
+		// its natural width reduced by that box's height.
+		//
+		// ⛔ Allocated at zero and never read is how it stood, and the symptom is the
+		// one \topskip had — every column after the first starts too high, by less
+		// than a line, so no page count moves and nothing says so. Here it compounds:
+		// a \vsplit remainder also kept the glue that prune_page_top deletes, which
+		// pushes the SAME column back DOWN by an unrelated amount. Two errors of
+		// opposite sign on one measurement.
+		if name == "splittopskip" {
+			e.storeSkip(e.allocSkp, glueSpec{width: 10 * unity})
+		}
+		e.define(name, &meaning{kind: mSkipRef, code: e.allocSkp}, true)
+		e.allocSkp++
+	}
+}

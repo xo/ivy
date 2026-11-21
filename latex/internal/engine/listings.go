@@ -1,0 +1,582 @@
+// Copied from github.com/go-tex/engine, the file listings.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements the listings package's code-block facilities on top of the
+// engine's verbatim machinery (see verbatim.go): the lstlisting environment and
+// the \lstinline inline command. Like verbatim, their bodies are read raw from the
+// base input — no macro expansion, no category codes, so \, {, }, $, % and friends
+// are ordinary characters, and spaces and line breaks are preserved exactly. The
+// content is set in the tt font when one is bound (Options.MonoFont / \tt), else
+// the current font.
+//
+// lstlisting accepts an optional "[key=value,…]" argument. Four keys change the
+// output: numbers=left prepends a right-aligned line number to each line,
+// frame=single draws a thin rule around the whole block, and caption= / label=
+// are CONTENT — the caption is numbered and typeset above the block and the label
+// becomes a cross-reference target. Any other key (language=…, basicstyle=…, …)
+// is accepted and silently ignored so a real-world listing does not choke.
+//
+// caption= and label= used to be ignored with the rest, which was a deliberate
+// simplification and is measurably wrong: tectonic sets "Listing 1: …" above the
+// block, and without the label every \ref to a listing printed "??" — 21 of them
+// over 8 corpus papers, against 4 in the references. In particular, LANGUAGE-AWARE SYNTAX
+// HIGHLIGHTING IS OUT OF SCOPE: language= is parsed but never colourises the code;
+// per-language tokenising and colouring is a future enhancement.
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// lstOptions is the parsed, honoured subset of a listings option string. Keys the
+// engine does not model leave every field at its zero value.
+type lstOptions struct {
+	numbers bool // numbers=left (any value other than "" / "none" turns numbering on)
+	frame   bool // frame=single (any value other than "" / "none" draws a frame)
+	// caption=… and label=… are CONTENT, not styling: the caption is typeset
+	// ("Listing 1: …", above the block, which is where listings puts it) and the
+	// label becomes a real cross-reference target. Ignoring them left 21 "??" on
+	// the page across 8 corpus papers — 29 labelled listings referred to 31 times
+	// — against 4 in the references.
+	caption    string
+	hasCaption bool
+	label      string
+	// basicstyle=… is the font the block is set in, and ignoring it was worth
+	// pages: 26 of the 154 corpus papers ask for a SMALLER size there
+	// (footnotesize 14, small 6, scriptsize 5, tiny 1) and got body size. On
+	// 2301.11256 the reference sets its code at a 9.46pt line pitch and this
+	// engine at 14.45 — 57 lines of code per page against 39, which is most of
+	// that paper's +8 pages. The value is kept as RAW SOURCE and executed as TeX
+	// inside the block's group, so \scriptsize, \ttfamily and \color all do
+	// whatever they already do here; nothing about font switching is reimplemented.
+	basicStyle string
+	// style=<name> selects a \lstdefinestyle, resolved in lstOptionsFor.
+	styleName string
+	// captionpos=b puts the caption BELOW the block; listings' default is t.
+	// 2208.11395 asks for b and its reference has the caption under the code —
+	// 16 corpus papers set the key.
+	captionBelow bool
+	// listings, unlike every other block this renderer serves, does NOT build on
+	// \trivlist: listings.sty:1694 defaults aboveskip and belowskip to
+	// \medskipamount and applies them as plain \vspace (:1724, :1777). fancyvrb —
+	// which minted and the Code/CodeInput environments sit on — DOES use the list
+	// separation (fancyvrb.sty:665: \@topsepadd=\FancyVerbVspace, default \topsep,
+	// plus \partopsep). So only the lstlisting path sets this.
+	medskipSurround bool
+}
+
+// parseLstOptions parses a listings "[key=value,…]" option body into the honoured
+// subset. Whitespace around keys and values is trimmed; unknown keys are ignored;
+// a key with no "=value" is treated as present-but-empty. numbers/frame are on for
+// any explicit value other than the literal "none" (so numbers=left, numbers=right
+// and frame=single all read as on, while numbers=none / frame=none read as off).
+func parseLstOptions(s string) lstOptions {
+	// The lstlisting path, and only it: see lstOptions.medskipSurround. Set before
+	// the empty-option early return, since \begin{lstlisting} with no [options] is
+	// the common case.
+	o := lstOptions{medskipSurround: true}
+	if strings.TrimSpace(s) == "" {
+		return o
+	}
+	for _, part := range splitLstOptions(stripTeXComments(s)) {
+		key, val, _ := strings.Cut(part, "=")
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		on := val != "" && val != "none"
+		switch key {
+		case "numbers":
+			o.numbers = on
+		case "frame":
+			o.frame = on
+		case "caption":
+			o.caption, o.hasCaption = stripOneBracePair(val), true
+		case "label":
+			o.label = stripOneBracePair(val)
+		case "captionpos":
+			o.captionBelow = strings.HasPrefix(stripOneBracePair(val), "b")
+		case "basicstyle":
+			o.basicStyle = stripOneBracePair(val)
+		case "style":
+			o.styleName = stripOneBracePair(val)
+		}
+	}
+	return o
+}
+
+// styleToks turns a key's RAW VALUE into tokens, which for a style means turning
+// \scriptsize into a control sequence rather than eleven letters.
+//
+// ⛔ stringToToks does NOT do this: it makes character tokens only, so
+// basicstyle=\scriptsize arrived as the TEXT "\scriptsize" and was typeset —
+// an extra line on the page and no size change at all, which is exactly what the
+// first measurement showed.
+//
+// It is deliberately a small reader for key VALUES, not the engine's tokenizer:
+// a style value is font, size and colour switches with the odd brace, and TeX's
+// rule for those is the whole of what is implemented — a backslash takes the
+// letters that follow it (and the spaces after them, as TeX does), a backslash
+// before a non-letter takes that one character, and everything else is an
+// ordinary character token.
+func styleToks(s string) []tok {
+	var out []tok
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		switch {
+		case r == '\\' && i+1 < len(rs):
+			j := i + 1
+			if isASCIILetter(rs[j]) {
+				for j < len(rs) && isASCIILetter(rs[j]) {
+					j++
+				}
+				out = append(out, csTok(string(rs[i+1:j])))
+				for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+					j++ // a control word swallows the spaces after it
+				}
+				i = j - 1
+				continue
+			}
+			out = append(out, csTok(string(rs[j])))
+			i = j
+		case r == '{':
+			out = append(out, chTok('{', catBegin))
+		case r == '}':
+			out = append(out, chTok('}', catEnd))
+		case r == ' ' || r == '\t' || r == '\n':
+			out = append(out, chTok(' ', catSpace))
+		case isASCIILetter(r):
+			out = append(out, chTok(r, catLetter))
+		default:
+			out = append(out, chTok(r, catOther))
+		}
+	}
+	return out
+}
+
+// lstOptionsFor composes the options a block actually gets: listings keeps
+// document-wide defaults (\lstset), named styles (\lstdefinestyle) and the
+// block's own [key=value] list, and a later assignment wins over an earlier one.
+//
+// ⛔ A style is pulled in WHERE IT IS NAMED, not at the end: \lstset{style=mystyle}
+// means "these keys, here", so a key the document sets after it must still win.
+// Flattening to one string in that order and parsing once gives exactly listings'
+// last-one-wins, with no second notion of precedence to keep in step.
+func (e *Engine) lstOptionsFor(local string) lstOptions {
+	var parts []string
+	add := func(s string) {
+		if strings.TrimSpace(s) == "" {
+			return
+		}
+		if n := parseLstOptions(s).styleName; n != "" {
+			if keys, ok := e.lstStyles[n]; ok {
+				parts = append(parts, keys)
+			}
+		}
+		parts = append(parts, s)
+	}
+	add(e.lstDefaults)
+	add(local)
+	return parseLstOptions(strings.Join(parts, ","))
+}
+
+// doLstset records \lstset's keys as the document-wide defaults. Successive calls
+// ACCUMULATE, as listings' own key-value store does — a document that sets a style
+// at the top and a numbering option later means both.
+func (e *Engine) doLstset() {
+	keys := e.scanRawBraceArg()
+	if strings.TrimSpace(keys) == "" {
+		return
+	}
+	if e.lstDefaults == "" {
+		e.lstDefaults = keys
+	} else {
+		e.lstDefaults += "," + keys
+	}
+}
+
+// doLstdefinestyle records \lstdefinestyle{name}{keys} for a later style=name.
+func (e *Engine) doLstdefinestyle() {
+	name := strings.TrimSpace(e.scanRawBraceArg())
+	keys := e.scanRawBraceArg()
+	if name == "" {
+		return
+	}
+	if e.lstStyles == nil {
+		e.lstStyles = map[string]string{}
+	}
+	e.lstStyles[name] = keys
+}
+
+// splitLstOptions splits on commas at BRACE LEVEL ZERO. A plain strings.Split cut
+// caption={a listing, with a comma} in half and read "with a comma}" as another
+// key — harmless while caption was ignored, and wrong the moment it is typeset.
+func splitLstOptions(s string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i, r := range s {
+		switch r {
+		case '{', '[':
+			depth++
+		case '}', ']':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				out = append(out, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(out, s[start:])
+}
+
+// stripTeXComments removes TeX comments from a raw option list: a % starts one
+// and it runs to the end of the line, taking the newline with it. The option
+// block is read as RAW BYTES, so the comment arrives intact — and a comment eats
+// the key that follows it on the next line:
+//
+//	basicstyle=\tiny, %or \small or \footnotesize etc.
+//	caption={"Task-pool", function handling …},
+//
+// 2208.11395 writes exactly that, and its caption ended up inside a segment whose
+// key was "%or \small or \footnotesize etc." — so the listing had no caption, no
+// number, and the \ref to it printed "??".
+//
+// An escaped \% is not a comment.
+func stripTeXComments(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && (i == 0 || s[i-1] != '\\') {
+			for i < len(s) && s[i] != '\n' {
+				i++
+			}
+			continue // the newline goes with the comment, as TeX does
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// stripOneBracePair removes one matched outer {…}, so caption={a, b} and
+// caption=a give the same text.
+func stripOneBracePair(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) >= 2 && v[0] == '{' && v[len(v)-1] == '}' {
+		return strings.TrimSpace(v[1 : len(v)-1])
+	}
+	return v
+}
+
+// scanRawOptBracket reads an optional "[...]" straight from the raw base input at
+// the cursor — the counterpart of scanOptBracketToks for the verbatim-style
+// environments whose bodies are consumed raw rather than tokenized. Leading spaces
+// and tabs are skipped; if a '[' follows, the text up to the next ']' is returned
+// and the cursor advances past the ']'. With no bracket present nothing is
+// consumed and ("", false) is returned.
+func (e *Engine) scanRawOptBracket() (string, bool) {
+	i := e.bpos
+	for i < len(e.base) && (e.base[i] == ' ' || e.base[i] == '\t') {
+		i++
+	}
+	if i >= len(e.base) || e.base[i] != '[' {
+		return "", false
+	}
+	j := i + 1
+	for j < len(e.base) && e.base[j] != ']' {
+		j++
+	}
+	opts := string(e.base[i+1 : j])
+	if j < len(e.base) {
+		j++ // consume the closing ']'
+	}
+	e.bpos = j
+	return opts, true
+}
+
+// doLstlisting typesets a \begin{lstlisting}[opts] … \end{lstlisting} block. It is
+// reached via \begin, so the cursor sits just past "{lstlisting}"; it reads the
+// optional [opts] and then copies the raw source up to the literal
+// "\end{lstlisting}", setting each line verbatim in the tt font (mirroring
+// doVerbatim's raw scan and its trimming of the newline right after \begin and
+// right before \end).
+func (e *Engine) doLstlisting() {
+	opts, _ := e.scanRawOptBracket()
+	content, line := e.readRawEnvBody(`\end{lstlisting}`)
+	e.renderVerbatimBlock(content, line, e.lstOptionsFor(opts))
+}
+
+// readRawEnvBody copies the raw source from the cursor up to the literal end marker
+// (e.g. "\end{lstlisting}") — no expansion, no category codes — closes the group
+// \begin opened (the marker is consumed here, so the matching \end prim never
+// runs), and trims the newline right after \begin and right before \end the way
+// doVerbatim does. It returns the body text and the source line its first content
+// character lives on (for glyph stamping). It is shared by every verbatim-body
+// environment: lstlisting and minted read their bodies identically.
+func (e *Engine) readRawEnvBody(end string) (content string, firstLine int) {
+	// The body may not be in the character buffer at all. A minipage, a captured
+	// float or a beamer column reads its whole body as TOKENS first and typesets it
+	// afterwards, by which time the buffer's cursor sits PAST the captured body —
+	// so scanning the buffer here copies the document that FOLLOWS and swallows it.
+	// Measured: a minipage holding one lstlisting ate \end{minipage}, the text after
+	// it and \end{document}, then printed the listing at the end of the page.
+	if body, ok := e.rawEnvBodyFromLists(end); ok {
+		e.endEnvGroup() // as below: this environment read its own \end
+		line, _ := e.lineColAt(e.srcPos)
+		return trimVerbEdges(body), line
+	}
+	startOff := e.bpos
+	rest := string(e.base[e.bpos:])
+	idx := strings.Index(rest, end)
+	if idx < 0 {
+		content = rest
+		e.bpos = len(e.base)
+	} else {
+		content = rest[:idx]
+		e.bpos += len([]rune(rest[:idx])) + len([]rune(end))
+	}
+	e.endEnvGroup() // this environment reads its own \end, so it closes \begin's group
+	leadingNL := strings.HasPrefix(content, "\n")
+	content = strings.TrimPrefix(content, "\n")
+	content = strings.TrimSuffix(content, "\n")
+
+	firstLine, _ = e.lineColAt(startOff)
+	if leadingNL {
+		firstLine++
+	}
+	return content, firstLine
+}
+
+// rawEnvBodyFromLists reads a verbatim environment's body out of the PENDING TOKEN
+// LISTS, up to the \end{name} that end names, and reports whether it found it. It
+// never touches the character buffer: when the marker is not in the lists it puts
+// back everything it took and answers false, so an ordinary document — whose body
+// is still in the buffer — takes the scan below exactly as before.
+//
+// The tokens went through the mouth when the enclosing body was captured, so this is
+// verbatim only up to what tokenising already decided: a % comment took its line
+// with it there. That is a smaller loss than the alternative, which is losing the
+// rest of the document.
+func (e *Engine) rawEnvBodyFromLists(end string) (string, bool) {
+	name := strings.TrimSuffix(strings.TrimPrefix(end, `\end{`), "}")
+	var taken []tok
+	for len(e.lists) > 0 {
+		t, ok := e.getNext()
+		if !ok {
+			break
+		}
+		taken = append(taken, t)
+		if !t.cs_ || t.cs != "end" {
+			continue
+		}
+		if n, ok := e.peekBraceNameFromLists(); ok && n == name {
+			return e.toksToString(taken[:len(taken)-1]), true
+		}
+	}
+	e.push(taken) // not ours: leave the input exactly as it was
+	return "", false
+}
+
+// peekBraceNameFromLists reads a {name} group from the pending lists and CONSUMES it,
+// used right after an \end token to see which environment it closes.
+func (e *Engine) peekBraceNameFromLists() (string, bool) {
+	var taken []tok
+	var name []rune
+	depth := 0
+	for len(e.lists) > 0 {
+		t, ok := e.getNext()
+		if !ok {
+			break
+		}
+		taken = append(taken, t)
+		if t.cs_ {
+			break // a control sequence inside the braces: not a plain environment name
+		}
+		switch t.cat {
+		case catBegin:
+			depth++
+			if depth > 1 {
+				e.push(taken)
+				return "", false
+			}
+		case catEnd:
+			return string(name), depth == 1
+		default:
+			if depth == 1 {
+				name = append(name, t.ch)
+			}
+		}
+	}
+	e.push(taken)
+	return "", false
+}
+
+// trimVerbEdges drops the newline right after \begin and right before \end, the way
+// the buffer scan does.
+func trimVerbEdges(s string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(s, "\n"), "\n")
+}
+
+// renderVerbatimBlock sets content as a code block: each line verbatim in the tt
+// font (see verbFont), starting at source line firstLine, with a little vertical
+// gap above and below. When o.numbers is set each line gets a right-aligned number
+// in a fixed-width gutter; when o.frame is set the whole block is wrapped in a
+// frame. Shared by lstlisting and minted.
+func (e *Engine) renderVerbatimBlock(content string, firstLine int, o lstOptions) {
+	e.endParagraph() // flush any open paragraph before the block
+	// basicstyle= is run as TeX, inside a group, BEFORE anything is measured: the
+	// size switch it almost always carries moves \baselineskip and the tt font
+	// together, and both are already read from the engine's state further down
+	// (verbFont, interlineGlue). Measured on a witness, a verbatim block inside
+	// {\scriptsize …} already sets at the reference's 9.46pt pitch — so honouring
+	// the key needed no font plumbing at all, only reading it.
+	if o.basicStyle != "" {
+		e.beginGroup()
+		defer e.endGroup()
+		e.execToks(styleToks(o.basicStyle))
+		e.endParagraph() // the style may have opened one; keep the block's own state clean
+	}
+	font := e.verbFont()
+	if font == nil {
+		return
+	}
+
+	lines := strings.Split(content, "\n")
+	// A right-aligned gutter wide enough for the largest line number, when numbering.
+	digits := len(strconv.Itoa(len(lines)))
+
+	// The caption goes ABOVE the block, which is where listings puts it
+	// (listings.sty's default captionpos=t), and it is numbered by the lstlisting
+	// counter through \refstepcounter — so the number, \@currentlabel and the
+	// reference type all come from the one mechanism every other numbered thing
+	// uses. tectonic renders the witness "Listing 1: a listing, with a comma".
+	if !o.captionBelow {
+		e.emitLstCaption(o)
+	}
+
+	e.mvlAppendBlockGap(o.medskipSurround) // a little space above the block
+	if o.frame {
+		// Collect the line boxes into a vbox with interline glue, then wrap the vbox
+		// in a frame (reusing boxframe.go's frameNode at the \fbox defaults) and put
+		// the whole thing on the page as a single unit.
+		var vlist []node
+		prevDepth := ignoreDepth
+		for i, ln := range lines {
+			b := e.verbatimLine(e.lstText(ln, i+1, digits, o.numbers), font, firstLine+i)
+			if g, ok := e.interlineGlue(prevDepth, b.height); ok {
+				vlist = append(vlist, g)
+			}
+			vlist = append(vlist, b)
+			prevDepth = b.depth
+		}
+		vbox := vpackSP(vlist, packNatural, 0)
+		fr := frameNode{inner: vbox, sep: fboxSep, rule: fboxRule}
+		// Wrap the frame in an hbox so it sits on the main vertical list as an
+		// ordinary box (with proper interline glue and page-break handling).
+		e.appendToPage(hpackSP([]node{fr}, packNatural, 0))
+	} else {
+		for i, ln := range lines {
+			e.appendToPage(e.verbatimLine(e.lstText(ln, i+1, digits, o.numbers), font, firstLine+i))
+		}
+	}
+	e.mvlAppendBlockGap(o.medskipSurround)
+	if o.captionBelow {
+		e.emitLstCaption(o)
+	}
+}
+
+// lstText returns the literal text of one listing line, optionally prefixed with a
+// right-aligned line number in a fixed-width gutter. Because the tt font is
+// monospaced, padding the number with leading spaces aligns the numbers and keeps
+// the code columns straight; the two trailing spaces separate the number from the
+// code.
+func (e *Engine) lstText(line string, n, digits int, numbers bool) string {
+	if !numbers {
+		return line
+	}
+	return fmt.Sprintf("%*d  %s", digits, n, line)
+}
+
+// doLstinline implements \lstinline: an inline verbatim like \verb, with an
+// optional leading [opts] (accepted; the honoured options do not affect inline
+// rendering). The code is delimited either by a matching pair of an arbitrary
+// character (\lstinline|code|) or, when that character is '{', by the closing '}'
+// (\lstinline[opts]{code}). The text joins the current paragraph inline in the tt
+// font.
+func (e *Engine) doLstinline() {
+	e.scanRawOptBracket() // optional [opts]; ignored for inline rendering
+	e.setInlineVerbatim()
+}
+
+// setInlineVerbatim reads a \verb-style delimited code span straight from the raw
+// input at the cursor and sets it inline in the tt font. The delimiter is the next
+// character, matched by its twin (\lstinline|code|), except '{' which is matched by
+// '}' (\lstinline{code}). Shared by \lstinline and \mintinline.
+func (e *Engine) setInlineVerbatim() {
+	if e.bpos >= len(e.base) {
+		return
+	}
+	open := e.base[e.bpos]
+	e.bpos++
+	closer := open
+	if open == '{' {
+		closer = '}'
+	}
+	start := e.bpos
+	for e.bpos < len(e.base) && e.base[e.bpos] != closer {
+		e.bpos++
+	}
+	text := string(e.base[start:e.bpos])
+	if e.bpos < len(e.base) {
+		e.bpos++ // consume the closing delimiter
+	}
+	font := e.verbFont()
+	if font == nil {
+		return
+	}
+	if !e.inPar {
+		e.beginParagraph(true)
+	}
+	e.parList = append(e.parList, e.verbNodes(text, font, e.curSrcLine)...)
+}
+
+// emitLstCaption typesets "Listing N: <caption>" and registers label= as a
+// cross-reference target. Nothing happens without a caption=, because listings
+// numbers only captioned listings.
+//
+// It runs through \refstepcounter{lstlisting} rather than stepping a register
+// here, so \@currentlabel and \@currentreftype are set by the same hook as every
+// other numbered construct (counters.go). The reference TYPE is therefore
+// "lstlisting", and cleveref's own \crefalias{lstlisting}{listing}
+// (cleveref.sty:3123) is what turns it into "listing 1" / "Listing 1" — see
+// crefTypeFallback.
+func (e *Engine) emitLstCaption(o lstOptions) {
+	if !o.hasCaption {
+		return
+	}
+	var b []tok
+	add := func(ts ...tok) { b = append(b, ts...) }
+	add(csTok("refstepcounter"), chTok('{', catBegin))
+	add(stringToToks("lstlisting")...)
+	add(chTok('}', catEnd))
+	// \lstlistingname is listings' own name for it, so a document that renames it
+	// is honoured exactly as \figurename is.
+	// \nobreakspace, not a '~' character token: a literal tilde is typeset as a
+	// tilde, and the caption read "Listing~1:" on the page.
+	add(csTok("par"), csTok("noindent"), chTok('{', catBegin), csTok("bf"),
+		csTok("lstlistingname"), csTok("nobreakspace"), csTok("thelstlisting"),
+		chTok(':', catOther), chTok('}', catEnd), chTok(' ', catSpace))
+	add(stringToToks(o.caption)...)
+	if o.label != "" {
+		add(csTok("label"), chTok('{', catBegin))
+		add(stringToToks(o.label)...)
+		add(chTok('}', catEnd))
+	}
+	add(csTok("par"))
+	e.execToks(b)
+}

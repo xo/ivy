@@ -1,0 +1,419 @@
+// Copied from github.com/go-tex/engine, the file boxcmds.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements LaTeX's box-placement and save-box commands, built on the
+// same hpack/alignList machinery as \framebox (see boxframe.go) and the box
+// registers used by \setbox/\box/\copy (see stomach.go):
+//
+//   \makebox[width][pos]{content}  an hbox of the given width (natural if no
+//                                  [width]), content aligned l/c/r (default c)
+//                                  with fil glue — \framebox without the frame.
+//   \raisebox{lift}{content}       the content hbox shifted up by lift (a dimen;
+//                                  negative lowers). \raisebox{lift}[ht][dp]{…}
+//                                  additionally overrides the box's reported
+//                                  height/depth so surrounding lines see that
+//                                  vertical extent regardless of the content.
+//   \newsavebox{\name}             allocate a \box register and bind \name as its
+//                                  handle (an mBoxRef, the box analogue of the
+//                                  mCountRef a \newcount hands out).
+//   \sbox{\name}{content}          store \hbox{content} in \name's register.
+//   \savebox{\name}[w][pos]{…}     store \makebox[w][pos]{…} in \name's register.
+//   \usebox{\name}                 place a copy of \name's register inline.
+//
+// Box-register assignment (\sbox/\savebox, like the engine's \setbox) is global:
+// setBox writes the register with no group save/restore, so a stored box survives
+// the enclosing group — matching this engine's existing \setbox behaviour. The
+// \newsavebox handle is likewise defined globally, so a preamble allocation is
+// visible everywhere. \usebox places a *copy* (cloneBox), so the register is left
+// intact and can be reused any number of times.
+
+// loadBoxCmds registers the box-placement and save-box primitives. It is called at
+// the end of loadStomach so the commands share the box-building machinery.
+func (e *Engine) loadBoxCmds() {
+	e.prim("makebox", func(e *Engine) { e.place(e.doMakebox()) })
+	e.prim("raisebox", func(e *Engine) { e.place(e.doRaisebox()) })
+	e.prim("newsavebox", func(e *Engine) { e.doNewsavebox() })
+	e.prim("sbox", func(e *Engine) { e.doSbox() })
+	e.prim("savebox", func(e *Engine) { e.doSavebox() })
+	e.prim("usebox", func(e *Engine) { e.place(e.doUsebox()) })
+	e.prim("lrbox", func(e *Engine) { e.doLrbox() }) // \begin{lrbox}{\reg} … \end{lrbox}
+	e.prim("endlrbox", func(e *Engine) {})           // consumed by collectEnvBody
+}
+
+// doLrbox implements the lrbox environment: \begin{lrbox}{\name} … \end{lrbox} is
+// the environment form of \sbox — it typesets its body as an \hbox and stores it in
+// \name's register for a later \usebox, rather than setting it on the page. Without
+// this the environment is undefined: its body LEAKS into the running text where the
+// \begin sits, and the register stays void so the matching \usebox produces nothing.
+// The register operand is read first, then the body is collected up to \end{lrbox}
+// (which closes the group \begin opened) and packed exactly as \sbox does.
+func (e *Engine) doLrbox() {
+	reg, ok := e.readSetBoxHandle()
+	// The body ends at the \end of the environment \begin actually opened, which
+	// need not be lrbox: a class may post \lrbox as ANOTHER environment's opening
+	// and \endlrbox as its closing. oupau.cls does exactly that —
+	//   \newbox\absbox  \def\abstract{\lrbox\absbox …}  \def\endabstract{\endlrbox}
+	// — so scanning for a literal \end{lrbox} found none, ran to the end of the
+	// file, and the abstract was set on the page where \begin{abstract} stood
+	// instead of into \absbox; the title page's \unhbox\absbox then produced
+	// nothing. \@currenvir is what LaTeX itself pairs \begin and \end by.
+	end := "lrbox"
+	if n, ok := e.currentEnvir(); ok {
+		end = n
+	}
+	body := e.collectEnvBody(end)
+	body = append(body, e.lrboxClosers(end)...)
+	if !ok {
+		return // invalid handle: the body is consumed (no leak), nothing to store
+	}
+	// Typeset the collected body as \hbox{body} — the braces give it its own group,
+	// matching \sbox{\name}{body}.
+	toks := make([]tok, 0, len(body)+2)
+	toks = append(toks, chTok('{', catBegin))
+	toks = append(toks, body...)
+	toks = append(toks, chTok('}', catEnd))
+	e.push(toks)
+	list, _ := e.grabHboxList()
+	e.setBoxScoped(reg, hpackSP(list, packNatural, 0), false)
+}
+
+// lrboxClosers returns the part of \end<name> that runs BEFORE \endlrbox — what the
+// environment opened INSIDE the box and must close inside it.
+//
+// sagej.cls writes its abstract as
+//
+//	\newbox\absbox
+//	\def\abstract{\lrbox\absbox\minipage{\textwidth}\section*{Abstract}}
+//	\def\endabstract{\endminipage\endlrbox}
+//
+// so the \minipage that gives the abstract its WIDTH is opened by \abstract and
+// closed by \endabstract. collectEnvBody stops at \end{abstract}, before the closing
+// half ever runs, so the minipage never ended and never constrained anything: the
+// whole abstract came out as one horizontal list at its natural width, ending at
+// x=6619pt on a 612pt sheet with most of it drawn off the paper (go-tex/engine#629,
+// where it is two of the 49 papers and the two widest lines in the corpus).
+//
+// Only the tokens before \endlrbox are taken, and only when \endlrbox is there at
+// all: that control sequence is what marks the boundary between "inside the box" and
+// "after it", and a closing macro that does not name it is not this shape — running
+// its tokens here would run them twice.
+func (e *Engine) lrboxClosers(name string) []tok {
+	m := e.eq["end"+name]
+	if m == nil || m.kind != mMacro || len(m.params) != 0 {
+		return nil
+	}
+	var inside []tok
+	for _, t := range m.body {
+		if t.cs_ && t.cs == "endlrbox" {
+			return inside // found the boundary: everything before it belongs in the box
+		}
+		inside = append(inside, t)
+	}
+	return nil // no \endlrbox: not this shape
+}
+
+// doMakebox implements \makebox[width][pos]{content}: with no [width] it packs the
+// content at its natural width; with [width] it packs to that width, the content
+// aligned l/c/r (default c) via fil glue — \framebox (see doFramebox) without the
+// surrounding frame.
+func (e *Engine) doMakebox() *boxNode {
+	width, hasWidth := e.scanOptBracketDimen()
+	pos := e.scanOptBracketPos()
+	list, _ := e.grabHboxList()
+	if hasWidth {
+		return hpackSP(alignList(list, pos), packTo, width)
+	}
+	return hpackSP(list, packNatural, 0)
+}
+
+// doRaisebox implements \raisebox{lift}{content} and \raisebox{lift}[ht][dp]{…}:
+// the content is packed as a natural hbox and shifted up by lift (shift is
+// positive-downward, so shift = -lift; a negative lift lowers). When the optional
+// [ht]/[dp] are given, the box's reported height/depth are overridden to those
+// values so surrounding material sees the stated vertical extent regardless of the
+// content's own metrics.
+func (e *Engine) doRaisebox() *boxNode {
+	// The lift and the optional [ht][dp] are read as TOKENS and scanned LATER,
+	// because LaTeX lets them speak about the content's own metrics:
+	//
+	//	\raisebox{-.5\height}{x}
+	//
+	// \height, \depth, \width and \totalheight are bound by \raisebox itself
+	// (ltboxes.dtx: \setbox\@tempboxa\hbox{#4} then \def\height{\ht\@tempboxa}),
+	// so they are only meaningful once the content is packed — which happens
+	// after the lift has been read off the input.
+	//
+	// They did not exist in the engine at all, and the cost was not a wrong lift.
+	// \scanDimen met an undefined control sequence where it wanted a unit and read
+	// ON, swallowing the content group and unbalancing the float it sat in: a
+	// \caption later in that float then had no \@captype and the literal text
+	// "\the@captype" reached the page. Seven corpus papers write one of these 102
+	// times, 14 of them directly inside a \raisebox.
+	liftToks := e.readBraceToksRaw()
+	// An EMPTY bracket means "take the natural metric", which is what
+	// scanOptBracketDimen used to report as absent. Reading the optionals as
+	// tokens loses that, and an empty list would otherwise set the height to 0pt.
+	htToks, hasHt := e.scanOptBracketToks()
+	dpToks, hasDp := e.scanOptBracketToks()
+	hasHt = hasHt && len(htToks) > 0
+	hasDp = hasDp && len(dpToks) > 0
+	list, _ := e.grabHboxList()
+	b := hpackSP(list, packNatural, 0)
+
+	// The bindings are scoped, so a \raisebox inside another's content cannot
+	// leave its own metrics behind for the outer one to read.
+	e.beginGroup()
+	e.bindBoxMetrics(b)
+	b.shift = -e.dimenFromToks(liftToks)
+	if hasHt {
+		b.height = e.dimenFromToks(htToks)
+	}
+	if hasDp {
+		b.depth = e.dimenFromToks(dpToks)
+	}
+	e.endGroup()
+	return b
+}
+
+// bindBoxMetrics binds \height, \depth, \width and \totalheight to b's metrics,
+// as internal dimens — not as macros expanding to "12.34pt", because the whole
+// point is that they appear with a COEFFICIENT: "-.5\height" is a factor times an
+// internal dimen, and "-.512.34pt" is not a dimension at all.
+func (e *Engine) bindBoxMetrics(b *boxNode) {
+	if e.boxMetricDims == nil {
+		if e.allocDim+4 > registerPoolSize {
+			e.noteRegisterExhausted(`\dimen`)
+			return
+		}
+		e.boxMetricDims = map[string]int{}
+		for _, name := range boxMetricNames {
+			e.boxMetricDims[name] = e.allocDim
+			e.allocDim++
+		}
+	}
+	// ⛔ The NAMES are bound LOCALLY — the caller scopes this with a group — and
+	// not once and globally. \width and \depth are names a document may well use
+	// for something of its own: two corpus papers define one of them, and
+	// 2407.18384 writes \depth(\Phi) sixty times for a neural network's depth. A
+	// global binding would have replaced that macro with a dimen register the
+	// first time any \raisebox ran. Neither paper happens to use \raisebox, so
+	// nothing measured it — which is exactly why it is written down here.
+	//
+	// The REGISTERS are allocated once, because an index is not a binding.
+	for name, v := range map[string]int{
+		"height":      b.height,
+		"depth":       b.depth,
+		"width":       b.width,
+		"totalheight": b.height + b.depth,
+	} {
+		e.define(name, &meaning{kind: mDimenRef, code: e.boxMetricDims[name]}, false)
+		e.setDimen(e.boxMetricDims[name], v, false)
+	}
+}
+
+// boxMetricNames is the four \raisebox binds, in allocation order.
+var boxMetricNames = []string{"height", "depth", "width", "totalheight"}
+
+// dimenFromToks scans a saved token list as a dimension, with the input MARKED
+// and restored around the scan. That is what keeps a malformed lift from reaching
+// the document: TeX's dimen scanner looks past the last digit for a unit, and the
+// defect this function exists to avoid is exactly a scan that ran on into live
+// input and swallowed the content group with it.
+//
+// A \relax terminator was tried here as well and measured to change NOTHING —
+// neither the corpus, nor the rendered shift of a unitless \raisebox{3}{x}
+// followed by the letters "pt", which is the sharpest witness for it. The mark is
+// doing the work, so the terminator is not carried.
+func (e *Engine) dimenFromToks(toks []tok) int {
+	if len(toks) == 0 {
+		return 0
+	}
+	m := e.markInput()
+	e.push(append([]tok(nil), toks...))
+	d := e.scanDimen()
+	e.restoreInput(m)
+	return d
+}
+
+// doNewsavebox implements \newsavebox{\name}: it allocates the next free \box
+// register and binds \name as its handle (an mBoxRef, whose code is the register
+// index). Re-allocating an existing handle is a no-op (its register is kept), and
+// the binding is global so a preamble \newsavebox is visible everywhere.
+func (e *Engine) doNewsavebox() {
+	name := e.readBraceCSName()
+	if name == "" {
+		return
+	}
+	if m := e.eq[name]; m != nil && m.kind == mBoxRef {
+		return // already allocated: reuse the register
+	}
+	if e.allocBox >= registerPoolSize {
+		e.noteRegisterExhausted(`\box`)
+		return // out of box registers
+	}
+	e.define(name, &meaning{kind: mBoxRef, code: e.allocBox}, true)
+	e.allocBox++
+}
+
+// doSbox implements \sbox{\name}{content}: it stores \hbox{content} (packed at its
+// natural width) in \name's register. The {content} group is always consumed to
+// keep the input in sync, even when \name is not a valid save-box handle.
+func (e *Engine) doSbox() {
+	reg, ok := e.readSetBoxHandle()
+	list, _ := e.grabHboxList()
+	if ok {
+		e.setBoxScoped(reg, hpackSP(list, packNatural, 0), false)
+	}
+}
+
+// doSavebox implements \savebox{\name}[w][pos]{content}: it stores the result of
+// \makebox[w][pos]{content} in \name's register. The \makebox arguments are always
+// consumed, even when \name is not a valid save-box handle.
+func (e *Engine) doSavebox() {
+	reg, ok := e.readSetBoxHandle()
+	b := e.doMakebox()
+	if ok {
+		e.setBoxScoped(reg, b, false)
+	}
+}
+
+// doUsebox implements \usebox{\name}: it returns a copy (cloneBox) of \name's
+// register so the stored box survives and can be reused. A void register or an
+// invalid handle yields a nil box, which place drops.
+func (e *Engine) doUsebox() *boxNode {
+	// LaTeX's \usebox is \long\def\usebox#1{\leavevmode\copy#1\relax}: a single
+	// token is a perfectly good undelimited argument, so \usebox\bx is as valid as
+	// \usebox{\bx} — and a class that writes the bare form got NOTHING, silently,
+	// because insisting on the braced form left the register unread. readSetBoxHandle
+	// accepts both (it is what \sbox already uses).
+	reg, ok := e.readSetBoxHandle()
+	if !ok {
+		return nil
+	}
+	return cloneBox(e.getBox(reg))
+}
+
+// readBraceCSName reads a {\cs} group and returns the control-sequence name it
+// contains (the first cs token), or "" if the group is absent or holds no cs. The
+// group's tokens are read without expansion so a save-box handle is not executed.
+func (e *Engine) readBraceCSName() string {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok || !(t.cat == catBegin && !t.cs_) {
+		if ok {
+			e.back(t)
+		}
+		return ""
+	}
+	cs := ""
+	for {
+		u, ok := e.getNext()
+		if !ok || (u.cat == catEnd && !u.cs_) {
+			break
+		}
+		if u.cs_ && cs == "" {
+			cs = u.cs
+		}
+	}
+	return cs
+}
+
+// readBoxHandle reads a {\name} group and resolves \name to its \box register
+// index. The second result is false when the group is absent or \name is not a
+// save-box handle (an mBoxRef defined by \newsavebox).
+func (e *Engine) readBoxHandle() (int, bool) {
+	cs := e.readBraceCSName()
+	if cs == "" {
+		return -1, false
+	}
+	if m := e.eq[cs]; m != nil && m.kind == mBoxRef {
+		return m.code, true
+	}
+	return -1, false
+}
+
+// readSetBoxHandle reads the box-register operand of \sbox / \savebox, accepting
+// both the LaTeX2e save-box form (\sbox{\name}{…}, a braced \newsavebox handle)
+// and the low-level register form the real embedded classes use unbraced: a
+// \newsavebox handle (\sbox\@tempboxa{…}, in the \@makecaption of article/report/
+// book) and a numbered register (amsart's \sbox\z@{…} toc measure and
+// \sbox\@labels{…} theorem head). The unbraced forms used to fall through
+// readBoxHandle's "no braces → invalid handle" path, which dropped the register
+// and spilled the {content} — the section-number-following-a-heading artifact and
+// the lost theorem head on the real amsart path.
+func (e *Engine) readSetBoxHandle() (int, bool) {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok {
+		return -1, false
+	}
+	e.back(t)
+	if t.cat == catBegin && !t.cs_ {
+		return e.readBoxHandle() // \sbox{\name}{…}
+	}
+	return e.boxRegIndex(), true // \sbox\@tempboxa{…} / \sbox\z@{…} / \sbox0{…}
+}
+
+// \unhbox<n> unpacks a box register onto the list being built, instead of
+// placing the box as a single item: the register's contents become part of the
+// surrounding list and the register is voided. \unhcopy leaves the register
+// alone, and \unvbox / \unvcopy are the vertical pair.
+//
+// This is how a file accumulates material a piece at a time —
+// \setbox0=\hbox{\unhbox0 <more>} appends to box 0 without nesting a box inside
+// a box, which would trap the contents at a fixed width. pgf builds a path's
+// nodes exactly that way, so while these consumed the register number and threw
+// the contents away, every node on a path but the last one disappeared.
+//
+// TeX refuses to unpack a vbox onto a horizontal list or the reverse; the engine
+// contributes nothing in that case, which is what the refusal amounts to here.
+func (e *Engine) installUnbox() {
+	e.prim("unhbox", func(e *Engine) { e.unbox(hbox, false) })
+	e.prim("unhcopy", func(e *Engine) { e.unbox(hbox, true) })
+	e.prim("unvbox", func(e *Engine) { e.unbox(vbox, false) })
+	e.prim("unvcopy", func(e *Engine) { e.unbox(vbox, true) })
+}
+
+func (e *Engine) unbox(want boxKind, keep bool) {
+	i := e.boxRegIndex()
+	b := e.getBox(i)
+	if b == nil || b.kind != want {
+		return
+	}
+	// ⛔ A VBOX's contents are VERTICAL material: its items are finished lines, and
+	// they cannot join a horizontal list. place() routes to e.parList while a
+	// paragraph is open, so \unvbox inside one handed the lines to the line breaker,
+	// which glued them end to end and re-broke the result as a single paragraph.
+	//
+	// That is not hypothetical syntax. acmart writes it twice in its title machinery:
+	//
+	//	\noindent\unvbox\@tempboxa                      % acmart.cls:2303
+	//	\vbox{\noindent\unvbox\mktitle@bx\par\medskip…} % acmart.cls:2652
+	//
+	// \noindent opens a paragraph, so both took that path. On 2405.20319 the title and
+	// five author blocks came out as ONE line ending at x=3356pt on a 612pt sheet
+	// (go-tex/engine#629); removing the teaser — which is what makes the title box tall
+	// enough for :2303's \vsplit loop to run — brought that same line back to 298.44pt.
+	//
+	// ⚠ The oracle, not the rulebook, settles what to do here. tex.web §1110 calls
+	// \unvbox in horizontal mode an illegal case, which would mean ignoring it; the
+	// reference engine does NOT ignore it — a fifteen-line witness through tectonic
+	// keeps every line broken at its own measure. So the paragraph is ENDED and the
+	// lines go to the vertical list, which is what the reference PDFs show.
+	if want == vbox {
+		e.endParagraph()
+	}
+	list := b.list
+	if keep {
+		list = cloneBox(b).list
+	} else {
+		e.setBox(i, nil)
+	}
+	for _, n := range list {
+		e.place(n)
+	}
+}

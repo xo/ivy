@@ -1,0 +1,375 @@
+// Copied from github.com/go-tex/engine, the file hyperlink.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements hyperref's hyperlink commands: \url, \href and \nolinkurl.
+//
+//   - \url{URL}        typesets URL literally (in the tt font when one is bound,
+//                      otherwise the current font) AND makes it clickable to URL.
+//   - \href{URL}{text} typesets text normally and makes it clickable to URL.
+//   - \nolinkurl{URL}  typesets URL literally like \url but with NO link.
+//
+// A URL carries characters — ~, %, #, _, & — whose ordinary catcodes would make
+// the tokenizer misread them, so \url and \nolinkurl read their argument raw from
+// the base input (exactly as \verb does; see verbatim.go), bypassing catcodes and
+// macro expansion. \href reads its first {URL} raw for the same reason and its
+// second {text} through the normal box-building path so macros there still expand.
+//
+// The clickable target is modelled as a linkNode wrapping the content's packed
+// hbox — the same "box wrapper" shape as frameNode (see boxframe.go). The SVG
+// driver emits an <a href="URL"> around the inner box, so the engine's SVG is a
+// genuinely clickable document in a browser (the differentiator gotex targets).
+// The PDF driver lays a /Link–/URI annotation over the same box (go-pdfkit's
+// Page.AddLink), so the PDF is clickable too. When hyperref's colorlinks option is
+// on the link text is additionally painted in its colour (see hyperstyle.go).
+
+import "strings"
+
+// linkNode wraps a packed inner hbox in a hyperlink to url. It carries the same
+// reference-point dimensions as its inner box, so it packs, breaks across lines and
+// paints like any other box item; the drivers additionally wrap the inner content
+// in a clickable target (an SVG <a>; a PDF /Link–/URI annotation).
+type linkNode struct {
+	url   string
+	inner *boxNode
+}
+
+func (linkNode) isNode() {}
+
+// width, height and depth are the link's reference-point dimensions (sp): it is
+// dimensionally transparent, taking exactly its inner box's size.
+func (ln linkNode) width() int  { return ln.inner.width }
+func (ln linkNode) height() int { return ln.inner.height }
+func (ln linkNode) depth() int  { return ln.inner.depth }
+
+// readCSNameArg reads the name of a control sequence given as an undelimited
+// argument, in either form: {\name} or the bare \name. url.sty's \urldef is
+// \def\urldef#1{…}, so a single token IS the argument — and every real use of it
+// writes the bare form (\urldef\tempurl\url{…} is what a bibliography style emits).
+// Reading only the braced form found nothing and defined nothing.
+func (e *Engine) readCSNameArg() string {
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok {
+		return ""
+	}
+	if t.cs_ {
+		return t.cs
+	}
+	e.back(t)
+	return e.readBraceCSName()
+}
+
+// doUrldef implements url.sty's \urldef{\name}\url{text}: it DEFINES \name to
+// typeset that URL and typesets NOTHING itself. url.sty reads the text verbatim once,
+// at definition time, so the URL survives being used later inside another macro's
+// argument — which is the whole point of the command.
+//
+// Undefined, \urldef was skipped and the \url that follows it ran on the spot: the
+// URL appeared where the DEFINITION stood (a preamble, or the head of a bibliography)
+// and the later \name, still undefined, produced nothing. Both halves are wrong, and
+// 12 of the fidelity corpus's 157 papers use it — 187 times.
+func (e *Engine) doUrldef() {
+	name := e.readCSNameArg()
+	if name == "" {
+		return
+	}
+	// The URL command that follows (\url, and \path in the same family) and the
+	// verbatim argument it would have read.
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok {
+		return
+	}
+	if !t.cs_ {
+		e.back(t)
+		return
+	}
+	// \urldef{\mail}\path|a@b| is the delimited form; readUrlArg takes both.
+	arg, argOK := e.readUrlArg()
+	if !argOK {
+		return
+	}
+	// \name := \<cmd>{<arg>}, so using it typesets exactly what the command would.
+	body := []tok{csTok(t.cs), chTok('{', catBegin)}
+	body = append(body, stringToToks(arg)...)
+	body = append(body, chTok('}', catEnd))
+	e.define(name, &meaning{kind: mMacro, body: body}, false)
+}
+
+// doURL implements \url{URL}: it reads URL literally (URLs carry catcode-active
+// characters like ~, #, %, & that must not be interpreted), typesets it in the
+// verbatim (tt) font and wraps the result in a hyperlink pointing to itself.
+func (e *Engine) doURL() {
+	url, _ := e.readRawBracedArg()
+	save := e.beginLinkColor(e.hyperURLColor)
+	inner := e.urlBox(url)
+	e.curColor = save
+	if inner == nil {
+		return
+	}
+	e.placeInline(linkNode{url: url, inner: inner})
+}
+
+// doBigURL implements url.sty's low-level \Url. That package builds \url as
+// "\begingroup … \Url" and, in natbib's .bbl boilerplate, \doi as
+// "doi: \begingroup \urlstyle{rm}\Url"; the group is opened by whatever calls
+// \Url, and \Url is what closes it once the URL/DOI is set. So \Url typesets its
+// argument verbatim like \url, then closes that enclosing \begingroup. Without a
+// \Url of its own the engine still stubbed \urlstyle, which flipped natbib's
+// "\ifx\csname urlstyle\endcsname\relax" probe to the \begingroup-opening branch —
+// one unmatched \begingroup per \doi, a cascading group leak that swallowed the
+// tail of the bibliography (and lost every DOI). The close is guarded to a
+// \begingroup group so a stray \Url can never corrupt brace nesting.
+func (e *Engine) doBigURL() {
+	e.doURL()
+	if k, open := e.curGroupKind(); open && k == semiSimpleGroup {
+		e.closeSemiSimple()
+	}
+}
+
+// doPath implements url.sty's \path.
+//
+// url.sty declares it at its line 204 as
+//
+//	% picTeX defines \path, so declare it optionally:
+//	\@ifundefined{path}{\DeclareUrlCommand\path{\urlstyle{tt}}}{}
+//
+// so it is \url's sibling set in typewriter and, unlike hyperref's \url, NOT a
+// link of its own — a bibliography writes \href{https://doi.org/…}{\path{doi:…}}
+// and the href is what carries the link. Undefined, the text inside it was
+// dropped: five corpus papers lose their DOIs, a mail address and a file path
+// that way, 49 occurrences.
+//
+// The optional declaration is the interesting half, and it is not decoration:
+// picTeX, TikZ and forest use the same name for something else entirely, and
+// whoever DEFINED it first keeps it. So this binds only when url, xurl or hyperref
+// is loaded — see bindURLPath — and, in a document that also loads a pgf package,
+// only for the braced or |-fenced form. Binding it unconditionally was measured and
+// was worse: forest's \path [draw, \forestoption{edge}] came out as a URL and
+// 2402.04711 lost a page.
+func (e *Engine) doPath() {
+	if !e.urlPathBound {
+		// url.sty has not been loaded (nor hyperref, which loads it), or a pgf-family
+		// package got there first and owns the name. Either way this is not url's
+		// \path, and behaving as if it were mangles the other one: 2402.04711 draws
+		// its trees with forest, whose \path [draw, \forestoption{edge}] would be
+		// set as a URL. Fall back to exactly what an unbound name did before.
+		e.skipUndefined("path")
+		return
+	}
+	if e.pgfLoaded() && !e.urlPathArgFollows() {
+		// TikZ's \path at top level (the engine gobbles a {tikzpicture} whole but not
+		// the \tikz short form): its argument is a path, "(0,0) -- (1,1);" or "[draw]",
+		// never a braced or |-fenced URL. Same fallback as an unbound name.
+		e.skipUndefined("path")
+		return
+	}
+	text, ok := e.readUrlArg()
+	if !ok {
+		return
+	}
+	inner := e.urlBox(text)
+	if inner == nil {
+		return
+	}
+	e.placeInline(inner)
+}
+
+// urlPathArgFollows reports whether the source continues with a braced or |-fenced
+// argument, the two spellings of \path{…} / \path|…| that a document loading a pgf
+// package writes for url.sty. From an expansion it answers true, as readUrlArg's
+// braced fallback is the only reader there.
+func (e *Engine) urlPathArgFollows() bool {
+	if len(e.lists) > 0 {
+		return true
+	}
+	for p := e.bpos; p < len(e.base); p++ {
+		if cc := e.catOf(e.base[p]); cc == catSpace || cc == catEOL {
+			continue
+		}
+		return e.base[p] == '{' || e.base[p] == '|'
+	}
+	return false
+}
+
+// readUrlArg reads a url.sty command's argument, which may be braced OR fenced by
+// any character the document chooses: \path{a/b} and \path|a/b| are both legal,
+// and 2404.16039 writes \urldef{\mailAM}\path|alexmos@kma.zcu.cz |. The fence is
+// whatever non-brace character comes first, and the argument runs to its next
+// occurrence.
+//
+// The delimited form can only be read from the SOURCE, for the reason
+// readRawBracedArg gives at length: with something pending on the input stack the
+// characters at the mouth's position are not the argument. From an expansion this
+// falls back to the braced reader, which handles that case correctly.
+func (e *Engine) readUrlArg() (string, bool) {
+	if len(e.lists) > 0 {
+		return e.readRawBracedArg()
+	}
+	p := e.bpos
+	for p < len(e.base) {
+		if cc := e.catOf(e.base[p]); cc != catSpace && cc != catEOL {
+			break
+		}
+		p++
+	}
+	if p >= len(e.base) {
+		return "", false
+	}
+	if e.base[p] == '{' {
+		return e.readRawBracedArg()
+	}
+	fence := e.base[p]
+	p++
+	start := p
+	for p < len(e.base) {
+		if e.base[p] == fence {
+			text := string(e.base[start:p])
+			e.bpos = p + 1
+			return text, true
+		}
+		p++
+	}
+	// No closing fence: do not swallow the rest of the document.
+	return "", false
+}
+
+// doNolinkurl implements \nolinkurl{URL}: like \url it typesets URL literally in
+// the verbatim font, but produces no clickable link (just the monospace rendering).
+func (e *Engine) doNolinkurl() {
+	url, _ := e.readRawBracedArg()
+	inner := e.urlBox(url)
+	if inner == nil {
+		return
+	}
+	e.placeInline(inner)
+}
+
+// doHref implements \href{URL}{text}: the first argument is read literally (as for
+// \url) so URL characters keep their meaning; the second is composed normally
+// (macros expand) and the whole is wrapped in a hyperlink pointing to URL.
+func (e *Engine) doHref() {
+	url, _ := e.readRawBracedArg()
+	save := e.beginLinkColor(e.hyperURLColor)
+	list, _ := e.grabHboxList()
+	e.curColor = save
+	e.placeInline(linkNode{url: url, inner: hpackSP(list, packNatural, 0)})
+}
+
+// doHyperref implements hyperref's \hyperref, in both its forms:
+//
+//	\hyperref[label]{text}                 — an internal link to a \label
+//	\hyperref{url}{category}{name}{text}   — the low-level four-argument form
+//
+// Either way the VISIBLE part is the final {text}; the engine has no internal-link
+// destination for the label form, so the recovery is to typeset that text (the
+// clickability is dropped). Without a handler \hyperref was undefined and its text
+// was DROPPED — the visible words of a cross-reference vanished (273 occurrences in
+// the corpus). The text tokens are composed normally (macros expand).
+func (e *Engine) doHyperref() {
+	if _, ok := e.scanOptBracketToks(); ok {
+		e.push(e.readBraceToks()) // [label]{text}: label dropped, text typeset
+		return
+	}
+	// The four-argument {url}{category}{name}{text} form: keep only the visible text.
+	e.readBraceToks()
+	e.readBraceToks()
+	e.readBraceToks()
+	e.push(e.readBraceToks())
+}
+
+// urlBox typesets a literal URL string as a natural-width hbox in the verbatim
+// (tt) font, or nil when no font is available to measure with.
+func (e *Engine) urlBox(url string) *boxNode {
+	font := e.verbFont()
+	if font == nil {
+		return nil
+	}
+	return hpackSP(e.verbNodes(url, font, e.curSrcLine), packNatural, 0)
+}
+
+// placeInline adds an inline node to the current paragraph, starting one (indented)
+// when in vertical mode — links and URLs join the running text like \verb material.
+func (e *Engine) placeInline(n node) {
+	if !e.inPar {
+		e.beginParagraph(true)
+	}
+	e.parList = append(e.parList, n)
+}
+
+// readRawBracedArg reads a brace-delimited argument literally from the base input:
+// it skips leading spaces, requires a '{', then returns the runes up to the matching
+// '}' (tracking nested brace depth) without tokenizing or expanding them — the
+// reading discipline \url, \nolinkurl and \href's URL need so characters like ~, %,
+// #, _ and & keep their literal value. ok is false when no '{' follows (the cursor
+// is left unchanged in that case). An unterminated argument consumes to end of input.
+func (e *Engine) readRawBracedArg() (string, bool) {
+	// Only the SOURCE can be read raw. When something is already pending on the
+	// input stack the argument is coming from an expansion, and the base text at
+	// the mouth's position is whatever follows the macro that produced it: reading
+	// there skips the argument and eats the next braced group in the document.
+	//
+	// beamer does exactly that. Its navigation lays a \hypertarget per frame whose
+	// name it BUILDS (\hypertarget{Navigation\the\c@page}{}), and with an outer
+	// theme that draws a head or foot line the target is emitted while a [fragile]
+	// frame's body is being copied out verbatim — so the {…} eaten was the frame's
+	// own. Measured: \textbf{gras} reached \jobname.vrb as \textbf, and the frame
+	// lost everything after its first control sequence.
+	if len(e.lists) > 0 {
+		e.skipOptSpace()
+		t, ok := e.getNext()
+		if !ok {
+			return "", false
+		}
+		if !(t.cat == catBegin && !t.cs_) {
+			e.back(t)
+			return "", false
+		}
+		return e.toksToString(e.grabGroup()), true
+	}
+	p := e.bpos
+	for p < len(e.base) {
+		if cc := e.catOf(e.base[p]); cc != catSpace && cc != catEOL {
+			break
+		}
+		p++
+	}
+	if p >= len(e.base) || e.base[p] != '{' {
+		return "", false
+	}
+	p++ // consume the opening '{'
+	start := p
+	depth := 1
+	for p < len(e.base) {
+		switch e.base[p] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				text := string(e.base[start:p])
+				e.bpos = p + 1 // consume the closing '}'
+				return text, true
+			}
+		}
+		p++
+	}
+	e.bpos = p
+	return string(e.base[start:p]), false
+}
+
+// escapeXMLAttr escapes a string for use inside a double-quoted XML/SVG attribute,
+// so a URL containing &, <, >, " or ' cannot break out of the href="…" it fills.
+func escapeXMLAttr(s string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		`"`, "&quot;",
+		"'", "&#39;",
+	).Replace(s)
+}

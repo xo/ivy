@@ -1,0 +1,1651 @@
+// Copied from github.com/go-tex/engine, the file packages.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+import (
+	// ivy: no file system and no environment, in latex/internal/nofs (D5, D62).
+	os "github.com/xo/ivy/latex/internal/nofs"
+	"path/filepath"
+	"strings"
+)
+
+// This file lets the engine LOAD real LaTeX class and package files (.cls/.sty)
+// instead of only emulating them. \documentclass and \usepackage resolve the
+// named file (from the document's directory, a TEXINPUTS-style search path, or an
+// embedded base set), make @ a letter as LaTeX does, and splice the file into the
+// input so its own \newcommand/\def/\DeclareOption... run on the engine. A file is
+// loaded *tolerantly*: a command the engine does not yet implement is skipped
+// (as in lenient mode) rather than aborting the compile, so a real third-party
+// class contributes what it can. The LaTeX2e option mechanism
+// (\DeclareOption/\ProcessOptions/\ExecuteOptions/\CurrentOption/\PassOptionsTo*)
+// lives here too, since it is driven by the per-file load state.
+
+// loadFrame is one entry on the class/package load stack: what to restore when the
+// file finishes, plus its option-processing context.
+type loadFrame struct {
+	atcat    cat              // catcode of @ to restore when the file ends
+	name     string           // package/class base name (for the loaded registry + \CurrentOption)
+	endHook  string           // \@endofpackagehook / \@endofclasshook to reset after the file
+	passed   []string         // options requested for this file
+	declared map[string][]tok // \DeclareOption{name}{code}
+	star     []tok            // \DeclareOption*{code}
+	hasStar  bool
+	// The \@currname / \@currext / \@currnamestack in force when this file was
+	// entered, restored when it ends. LaTeX keeps them on a stack for the same
+	// reason: a class that loads a package in the middle of its own option
+	// declarations must still be "the current file" afterwards. Without the
+	// restore, beamer declared its options into the family named by the LAST
+	// package it happened to require, and its own \ExecuteOptionsBeamer{c} then
+	// reported "key c undefined".
+	prevName  *meaning
+	prevExt   *meaning
+	prevStack *meaning
+}
+
+// texInputDirs is the ordered search path for \usepackage/\documentclass/\input
+// files: the current directory (the document's dir — the CLI chdirs there), then
+// any colon-separated dirs in TEXINPUTS or GOTEX_TEXMF.
+func texInputDirs() []string {
+	dirs := []string{"."}
+	for _, env := range []string{"TEXINPUTS", "GOTEX_TEXMF"} {
+		for _, d := range filepath.SplitList(os.Getenv(env)) {
+			if d = strings.TrimSpace(d); d != "" && d != "." {
+				dirs = append(dirs, d)
+			}
+		}
+	}
+	return dirs
+}
+
+// findTeXFile resolves name (with one of exts appended when it has no extension)
+// against the files the document has written, the search path, and the embedded base
+// set, in that order. It returns the file bytes and
+// a display path.
+func (e *Engine) findTeXFile(name string, exts []string) ([]byte, string, bool) {
+	var candidates []string
+	if hasExtension(name) {
+		candidates = []string{name}
+	} else {
+		for _, x := range exts {
+			candidates = append(candidates, name+x)
+		}
+	}
+	for _, c := range candidates {
+		// A file the document wrote itself wins over anything on disk: beamer reads
+		// back \jobname.vrb, and a stale copy left by an earlier run would render
+		// the previous document's frame (see writestreams.go).
+		if data, ok := e.writtenTeXFile(c); ok {
+			return data, c, true
+		}
+		for _, d := range texInputDirs() {
+			if data, err := readDocFile(filepath.Join(d, c)); err == nil {
+				return data, filepath.Join(d, c), true
+			}
+		}
+		if data, path, ok := e.hostTeXFile(c); ok {
+			return data, path, true
+		}
+	}
+	return nil, "", false
+}
+
+// neverLoadReal lists packages the engine emulates natively (geometry) or whose
+// real implementation is too distribution-heavy to run and is better served by the
+// existing stubs (drawing/font/encoding packages). A file with one of these names
+// is not loaded from disk even when present.
+var neverLoadReal = map[string]bool{
+	"geometry": true, "tikz": true, "pgf": true, "pgfplots": true,
+	"hyperref": true, "fontspec": true, "inputenc": true, "fontenc": true,
+	"babel": true, "biblatex": true, "listings": true, "pstricks": true,
+	"xcolor": true, "color": true, "graphicx": true, "graphics": true,
+	// minted shells out to Pygments and builds its environments through fancyvrb's
+	// capture machinery. Loaded for real — a paper that ships minted.sty gets it —
+	// \newminted's environments came out defined but unusable: the body reached the
+	// page through a token list with the ordinary category codes, so a lone $ in a
+	// code line opened maths and ate the rest of the document (#225). The engine's
+	// own minted (minted.go) is minted's OWN draft-mode behaviour: verbatim.
+	"minted": true,
+	// bm builds its bold-math commands from low-level math-alphabet machinery
+	// (\install@mathalphabet, \getanddefine@fonts) the engine's font model does not
+	// run, and its \protected@edef\bm#1{\bm{#1}} re-dispatch expands the robust \bm
+	// against the engine's non-protecting \protected@edef and swallows the document.
+	// The kernel already defines \bm as \boldsymbol (the math layer's bold path), so
+	// the bundled real bm.sty is only ever worse.
+	"bm": true,
+}
+
+// pgfPackages are the drawing packages the engine now has a system-layer driver
+// for (texmf/pgfsys-gotex.def, see special.go for the seam it draws through).
+// Loading their real sources — rather than gobbling a picture and standing a
+// placeholder box in for it — is what makes the engine behave like a TeX
+// distribution here. The path is still being brought up: the sources load a long
+// way but do not yet complete, so it is opt-in through GOTEX_PGF while the
+// remaining gaps are closed, and the stubs stay the default. With the variable
+// set (and the pgf sources on TEXINPUTS/GOTEX_TEXMF) the real files load and the
+// driver draws through the \special seam.
+var pgfPackages = map[string]bool{"tikz": true, "pgf": true, "pgfplots": true}
+
+// realPGF reports whether the real pgf/TikZ sources may be loaded.
+func realPGF() bool { return os.Getenv("GOTEX_PGF") != "" }
+
+// twoColumnOptIn reports whether the two-column output routine (twocolumn.go) runs for
+// classes whose \twocolumn is not LaTeX's own — revtex reprint, acmart sigconf, IEEEtran
+// conference and the rest. It is ON by default and GOTEX_TWOCOLUMN=0 turns it back off.
+// The standard classes (article/report/book [twocolumn], see standardTwoColClass) drove
+// the routine LIVE even before that.
+//
+// It was gated while the column engines were brought up, on the strength of one paper
+// whose page count overshot. Measured over the 157 arXiv papers with a tectonic
+// reference it is better on every count that matters — Σ page error 632 → 616, MEDIAN
+// error 3 → 2 pages, papers within two pages 77 → 83, exact 20 → 21, beamer untouched —
+// with 21 papers closer and 11 further. Setting a two-column paper in one column is also
+// what makes its figures twice too wide: \linewidth is a COLUMN there, and half the
+// papers that inflate under faithful figure widths (issue #146) are two-column classes.
+func twoColumnOptIn() bool { return os.Getenv("GOTEX_TWOCOLUMN") != "0" }
+
+// pdfAspectOptIn reports whether an un-rasterisable PDF figure's placeholder is
+// sized to the figure's TRUE aspect ratio (read from its page box, see pdfbox.go)
+// instead of a blind square. It is opt-in through GOTEX_PDFASPECT.
+//
+// The aspect is objectively more correct — a 3:1 landscape figure is not a square —
+// and it improves a figure-heavy paper measured against tectonic (2606.18084:
+// layout divergence 16.2→14.2, a page recovered). But as the corpus DEFAULT it is
+// net-negative, and re-measured 2026-09-11 on the 154 papers whose reference is a
+// valid build (three are truncated, see measure/refaudit.py): Sigma 311 → 318 (+7).
+//
+// The reason first written here — "the engine places figures INLINE while the
+// reference FLOATS them, so the correct behaviour waits on real float placement" —
+// is STALE: float placement has since become the default (GOTEX_FLOATS=0 opts out,
+// floatplace.go), and the aspect is still +7 WITH floats placed.
+//
+// What the five papers it moves actually say is the opposite of over-pagination.
+// Every one of them gets SHORTER — a true-aspect placeholder is shorter than a
+// blind square for a wide figure — and four of the five were already too short:
+//
+//	2201.02101  ref 27   30 → 29   error 3 → 2   better
+//	2206.00339  ref 34   34 → 32   error 0 → 2
+//	2301.08336  ref 22   19 → 18   error 3 → 4
+//	2406.10437  ref 41   39 → 35   error 2 → 6
+//	2407.18384  ref 333  314 → 313 error 19 → 20
+//
+// So the square was COMPENSATING for an under-pagination that has nothing to do
+// with figures, and the accurate height exposes it. The order is therefore: find
+// what makes those documents short, then open this. Off by default the corpus is
+// untouched, and the browser preview (whose square placeholders are a visible
+// infidelity) can opt in.
+func pdfAspectOptIn() bool { return os.Getenv("GOTEX_PDFASPECT") != "" }
+
+// realBeamer reports whether \documentclass{beamer} loads the REAL beamer.cls
+// rather than the built-in emulation in beamer.go.
+//
+// It is decided by whether the class file can be RESOLVED — from the document's
+// directory, TEXINPUTS/GOTEX_TEXMF, the host's Options.Resolve, or the embedded
+// set. There is nothing to opt into: a caller that supplies beamer gets beamer,
+// and one that does not gets the emulation, which is what the fallback in
+// doDocumentClass already promised.
+//
+// It used to be gated on GOTEX_BEAMER because the real class loaded but was
+// believed not to typeset — "a talk still comes out nearly blank". That was true
+// when it was written and is not any more; the grabUndelimited fix in v0.160.0
+// is what changed it. Measured over 10025 real talks:
+//
+//	real beamer.cls   99.9% rendered   87209 pages   (~8.7 per talk)
+//	emulation         92.3% rendered   14162 pages   (~1.4 per talk)
+//
+// GOTEX_BEAMER=0 still forces the emulation, for comparing the two paths.
+func (e *Engine) realBeamer() bool {
+	if os.Getenv("GOTEX_BEAMER") == "0" {
+		return false
+	}
+	_, _, ok := e.findTeXFile("beamer", []string{".cls"})
+	return ok
+}
+
+// emulateOnly reports whether a package must use the built-in stubs rather than
+// its real file.
+func emulateOnly(name string) bool {
+	if isPGFFamily(name) {
+		return !realPGF()
+	}
+	return neverLoadReal[name]
+}
+
+// isPGFFamily reports whether a package name belongs to pgf. The whole family
+// has to be recognised, not the three headline names: pgf ships pgfcore,
+// pgfmath, pgfpages, pgffor, pgfkeys, pgfsys, pgfrcs and more, and BEAMER ITSELF
+// requires pgfpages, pgfmath and pgfcore directly.
+//
+// Guarding only {tikz, pgf, pgfplots} meant that the moment pgf's sources were
+// findable — which is now easy, since a host can hand the engine a texmf tree —
+// beamer pulled the REAL pgfcore through its own \RequirePackage, whatever
+// GOTEX_PGF said. Measured over 500 real talks with beamer.cls present: 4286
+// pages with pgf out of reach, 1487 with its sources on the search path and
+// GOTEX_PGF UNSET. The flag was not the switch it looked like; reachability was.
+func isPGFFamily(name string) bool {
+	return name == "tikz" || strings.HasPrefix(name, "pgf")
+}
+
+// loadTeXFile splices a resolved class/package file into the input with @ made a
+// letter, pushing a load frame so the catcode and tolerance are restored when the
+// file's tokens are exhausted (via the \@gotex@endload marker appended after it).
+// name is the base name and ext its extension (".sty"/".cls"); passed are its
+// options.
+func (e *Engine) loadTeXFile(data []byte, name, ext string, passed []string) {
+	endHook := "@endofpackagehook"
+	if ext == ".cls" {
+		endHook = "@endofclasshook"
+	}
+	fr := loadFrame{
+		atcat:    e.catcode['@'],
+		name:     name,
+		endHook:  endHook,
+		passed:   passed,
+		declared: map[string][]tok{},
+	}
+	e.loadStack = append(e.loadStack, fr)
+	e.loadDepth++
+	e.catcode['@'] = catLetter
+	if e.loadedPackages == nil {
+		e.loadedPackages = map[string]bool{}
+	}
+	e.loadedPackages[name] = true
+	// Record the file the way \ProvidesPackage/\ProvidesClass would, so the kernel's
+	// \@ifpackageloaded{name}/\@ifpackagewith{name}{opt} (which consult ver@<file>
+	// and opt@<file>) see it as loaded with its options.
+	e.define("ver@"+name+ext, &meaning{kind: mMacro, body: stringToToks("gotex")}, true)
+	e.define("opt@"+name+ext, &meaning{kind: mMacro, body: stringToToks(strings.Join(passed, ","))}, true)
+	// \CurrentOption starts empty for this file.
+	e.define("CurrentOption", &meaning{kind: mMacro}, true)
+	// \@currname / \@currext name the file being loaded, as \ProvidesClass/Package's
+	// caller (\documentclass/\usepackage) sets them in real LaTeX; a class reads them
+	// (amsart's opening \csname ver@\@currname.\@currext\endcsname and its
+	// \@currnamestack scan). ext is stored without the leading dot ("cls"/"sty").
+	extNoDot := strings.TrimPrefix(ext, ".")
+	top := &e.loadStack[len(e.loadStack)-1]
+	top.prevName, top.prevExt, top.prevStack = e.eq["@currname"], e.eq["@currext"], e.eq["@currnamestack"]
+	e.define("@currname", &meaning{kind: mMacro, body: stringToToks(name)}, true)
+	e.define("@currext", &meaning{kind: mMacro, body: stringToToks(extNoDot)}, true)
+	// \@currnamestack is a flat brace-group list the class dissects with a delimited
+	// macro (\@tempa#1#2\@nil); a single {name}{ext} frame satisfies that scan.
+	stack := append([]tok{chTok('{', catBegin)}, stringToToks(name)...)
+	stack = append(stack, chTok('}', catEnd), chTok('{', catBegin))
+	stack = append(stack, stringToToks(extNoDot)...)
+	stack = append(stack, chTok('}', catEnd))
+	e.define("@currnamestack", &meaning{kind: mMacro, body: stack}, true)
+	// Splice: file body, then the end-of-file hook (\AtEndOfPackage/Class code) and
+	// a marker control sequence that pops the frame. The marker tokenizes with @
+	// still a letter, so its name is valid. Line endings are normalised to LF first:
+	// the engine treats only \n as end-of-line, so a CRLF file (e.g. a .cls checked
+	// out on Windows) would otherwise typeset stray \r characters.
+	body := normalizeEOL(string(data))
+	// The 2020 format lets a package register code to run around ANOTHER file's
+	// loading: \AddToHook{package/amsmath/after} (beamer's overlay layer does exactly
+	// this) and \AddToHook{file/<name>.sty/before}. Fire those four hooks around the
+	// body. \UseHook on a hook nobody registered is a no-op, so this costs nothing
+	// when no one is listening.
+	kind := "package"
+	if ext == ".cls" {
+		kind = "class"
+	}
+	pre := "\\UseHook{file/" + name + ext + "/before}\\UseHook{" + kind + "/" + name + "/before}"
+	post := "\\UseHook{" + kind + "/" + name + "/after}\\UseHook{file/" + name + ext + "/after}"
+	if name == "beamer" && ext == ".cls" {
+		// This engine renders no speaker notes, and beamer's note machinery emits
+		// PAGES. \setbeameroption{show notes on second screen} sets \beamer@notes and
+		// makes every frame produce a note page beside the slide, which LaTeX hands to
+		// pgfpages to merge onto ONE physical page. With no merging each frame came out
+		// three pages instead of one: two frames became six where LaTeX makes two, and
+		// the worst talk in the reference set rendered 21 pages against tectonic's 7.
+		//
+		// Switched off at \begin{document}, after the preamble's \setbeameroption has
+		// had its say. Appended HERE, inside the class load, because that is where @ is
+		// a letter.
+		post += "\\AtBeginDocument{\\beamer@notesfalse}"
+	}
+	// \gotexeatdate consumes the OPTIONAL DATE a caller may write after the file
+	// name — \RequirePackage{keyval}[1997/11/10] states the oldest acceptable
+	// release. The engine loads whatever it finds, but an unread date is typeset,
+	// and beamer's title page carried a stray "[1997/11/10]". It runs AFTER the
+	// file (and after the frame is popped), where the date is the next thing in the
+	// input: reading it BEFORE splicing the file would put the token that is not a
+	// "[" back on the token stack, ahead of the file about to be spliced into the
+	// character buffer — which silently swallowed everything after the \usepackage.
+	// \gotexatletter OPENS the tail, because the tail is TEXT and its catcodes are
+	// those in force when it is READ, not when it is spliced. A package that ends
+	// with \makeatother — which is how most author-written .sty files end — turned
+	// \@endofpackagehook into \@ followed by the letters "endofpackagehook", and
+	// printed the name of the engine's own end-of-load marker on the page.
+	// endLoad restores the frame's saved catcode for @ immediately afterwards.
+	//
+	// It carries no @ of its own, so \endinput's skip can LAND on it (io.go) —
+	// which a \makeatletter in the same place could not survive, since the skip
+	// jumps to a marker and a marker in front of the repair is not reachable.
+	e.pushPackageLevel(pre + body + "\\gotexatletter\\" + endHook + post + "\\@gotex@endload \\gotexeatdate ")
+}
+
+// normalizeEOL converts CRLF and lone CR line endings to LF. The engine's mouth
+// treats only \n as end-of-line, so a file with Windows/classic-Mac line endings
+// would otherwise leave stray \r characters that get typeset.
+func normalizeEOL(s string) string {
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
+}
+
+// endLoad pops the top load frame: it restores @'s catcode and the load tolerance,
+// and resets the end-of-file hook so it does not leak into the next load.
+func (e *Engine) endLoad() {
+	if len(e.loadStack) == 0 {
+		return
+	}
+	fr := e.loadStack[len(e.loadStack)-1]
+	e.loadStack = e.loadStack[:len(e.loadStack)-1]
+	e.catcode['@'] = fr.atcat
+	if fr.endHook != "" {
+		e.define(fr.endHook, &meaning{kind: mMacro}, true) // \let\@endof…hook\@empty
+	}
+	// Hand \@currname / \@currext / \@currnamestack back to the file that was
+	// being loaded when this one started (see loadFrame). Outside any file they
+	// are EMPTY, not undefined — that is what LaTeX leaves behind, and what code
+	// that interpolates them expects.
+	restore := func(name string, prev *meaning) {
+		if prev == nil {
+			prev = &meaning{kind: mMacro}
+		}
+		e.eq[name] = prev
+	}
+	restore("@currname", fr.prevName)
+	restore("@currext", fr.prevExt)
+	restore("@currnamestack", fr.prevStack)
+	if e.loadDepth > 0 {
+		e.loadDepth--
+	}
+}
+
+// curFrame returns the top load frame (where \DeclareOption etc. record), or nil
+// outside any file load.
+func (e *Engine) curFrame() *loadFrame {
+	if len(e.loadStack) == 0 {
+		return nil
+	}
+	return &e.loadStack[len(e.loadStack)-1]
+}
+
+// ── \documentclass / \usepackage / \RequirePackage / \LoadClass ─────────────
+
+// emulatedClasses are the standard classes served by the built-in emulation rather
+// than a real .cls. article/report/book are NOT here: the engine loads their real,
+// embedded classes (the class kernel — \@startsection numbering, \secdef via
+// \@dblarg for \chapter, \list, NFSS aliases, \@float, \@starttoc, rubber glue,
+// source-line stability — is complete enough that they pass the conformance and
+// fidelity gates).
+//
+// amsart is NOT here any more: it joins article/report/book on the real embedded
+// class. It used to be gated to the emulation because its \newtheorem…[section]
+// machinery looped on the engine and its theorem numbers came out as raw macro
+// text; both are fixed (the runaway guard + delimited-arg brace-strip, and the
+// \@thmcountersep/\@thmcounter hooks in AMSClassSubstrate), so \documentclass{amsart}
+// now loads texmf/amsart.cls and typesets its own title/section/theorem heads.
+// GOTEX_AMSART=0 forces the old emulation back, for comparing the two paths.
+// letter/proc/slides/minimal are not embedded, so they fall back to the emulation
+// regardless.
+var emulatedClasses = map[string]bool{
+	"letter": true, "proc": true, "slides": true, "minimal": true,
+}
+
+// realAmsart reports whether \documentclass{amsart} loads the REAL embedded
+// amsart.cls rather than the built-in article-shaped emulation. Like realBeamer it
+// is decided by whether the class file can be resolved (the embedded set always
+// provides it); GOTEX_AMSART=0 forces the emulation, for A/B comparison. acmart
+// papers already reach the real amsart through their bundled acmart.cls's
+// \LoadClass{amsart} — this gate governs only the direct \documentclass{amsart}.
+func (e *Engine) realAmsart() bool {
+	if os.Getenv("GOTEX_AMSART") == "0" {
+		return false
+	}
+	_, _, ok := e.findTeXFile("amsart", []string{".cls"})
+	return ok
+}
+
+// setClassOptionList records \documentclass's options in \@classoptionslist, and the
+// same list in \@raw@classoptionslist, as ltclass.dtx does on the first class load:
+//
+//	\ifx\@classoptionslist\relax
+//	  \protected@xdef\@classoptionslist{\zap@space#2 \@empty}%
+//	  \gdef\@raw@classoptionslist{#2}%
+//
+// Both start out \relax (see the class kernel), so a second \documentclass — or a
+// \LoadClass from inside a class — leaves the first one's list alone, which is the
+// test the reference makes.
+//
+// A package reads the list back to pick up class options it recognises. Leaving it
+// undefined was not merely a blank: \@for over an undefined control sequence does not
+// iterate over nothing, it SWALLOWS what follows. beamer runs that loop unguarded in
+// \beamer@filterclassoptions and again in \ProcessOptionsBeamer, so any theme built on
+// \ProcessOptionsBeamer — beamerthemesplit, and the fifteen themes that share its shape
+// — took the rest of the document with it.
+//
+// The engine's option scanner has already trimmed each item, which is what \zap@space
+// is there for.
+func (e *Engine) setClassOptionList(opts []string) {
+	if m := e.eq["@classoptionslist"]; m != nil && !(m.kind == mPrim && m.name == "relax") {
+		return // a class list is already recorded: the first one wins
+	}
+	body := charToks(strings.Join(opts, ","))
+	e.define("@classoptionslist", &meaning{kind: mMacro, body: body}, true)
+	e.define("@raw@classoptionslist", &meaning{kind: mMacro, body: body}, true)
+}
+
+// doDocumentClass implements \documentclass[options]{class}: for a non-emulated
+// class it loads class.cls when it can be resolved; for a standard class (and when
+// the file cannot be found) it falls back to the built-in emulation.
+func (e *Engine) doDocumentClass() {
+	opts := e.scanBracketList()
+	name := e.readBraceNameX()
+	if name == "" {
+		return
+	}
+	e.hasClass = true
+	e.komaClass = isKomaClass(name)
+	e.setPtsize(opts)          // record 10pt/11pt/12pt for \@ptsize even without the .cls
+	e.setClassOptionList(opts) // \@classoptionslist, for packages that read them back
+	// Record a paper-size class option (a4paper/letterpaper/…). The geometry package
+	// inherits the class's paper size when its own options name none — without this,
+	// a European \documentclass[a4paper] + \usepackage[margin]{geometry} document was
+	// laid out on US letter, shrinking the text height and overflowing pages.
+	for _, o := range opts {
+		if _, ok := paperSizes[strings.TrimSpace(o)]; ok {
+			e.classPaperSize = strings.TrimSpace(o)
+		}
+	}
+	// …and PUBLISH it. The standard classes set \paperwidth/\paperheight from that
+	// option, and a document that loads anything pulling in the graphics driver —
+	// graphicx, color, xcolor, tikz, siunitx, mathtools — then gets it written to the
+	// media box, which is every real paper. An EMULATED class loads no .cls, so
+	// nothing did it: \documentclass[a4paper,twocolumn]{revtex4-2} with graphicx came
+	// out 612x792 where tectonic gives 595x842, while the same document without
+	// a4paper agrees at letter on both.
+	//
+	// A class that states its OWN sheet still wins, because applyAcmartGeometry and
+	// the rest run after this — which is the class's own precedence: acmart.cls
+	// forces 6.75in x 10in for acmsmall whatever paper option the document passed.
+	if w, h, ok := e.paper(e.classPaperSize); ok {
+		e.setNamedDimen("paperwidth", w)
+		e.setNamedDimen("paperheight", h)
+	}
+	if hasOption(opts, "twocolumn") && !classManagesOwnColumns(name) {
+		// \documentclass[twocolumn]{…}: two-column page layout (twocolumn.go). Live for
+		// the standard classes whose \twocolumn is LaTeX's own (article/report/book),
+		// which render correctly and paginate closer to the reference; other classes
+		// stay behind GOTEX_TWOCOLUMN until validated.
+		if standardTwoColClass(name) || twoColumnOptIn() {
+			e.twoColumn = true
+			e.twoColLive = true // let the document's \twocolumn/\onecolumn fire
+		}
+	}
+	// IEEEtran is two-column BY NATURE — its papers never pass [twocolumn], the class
+	// simply sets two columns (IEEEtran.cls's \@twocolumnfalse is the exception, the
+	// `onecolumn' option). Served by the article-shaped emulation, nothing turned them
+	// on and every such paper was set one column wide: measured, 2607.20748 came out
+	// 43 pages against a reference of 27, and its lines ran 477pt on a 648pt page
+	// where a real IEEEtran column is 252pt.
+	if isIEEEtranClass(name) && !e.classFileResolvable(name) && !hasOption(opts, "onecolumn") {
+		e.twoColumn = true
+		e.twoColLive = true
+	}
+	if name == "beamer" {
+		// beamer's \RequirePackage[…, head=0.5cm, headsep=0pt, foot=0.5cm]{geometry}
+		// names the bands WITHOUT includeheadfoot, so geometry hands it a full-page
+		// \textheight and beamer's own frame machinery carves the two out again. This
+		// engine does not run that machinery; folding the bands into the body here is
+		// what keeps a slide the right height. See geomState.beamerBands.
+		e.beamerBands = true
+		if e.geom != nil {
+			e.geom.beamerBands = true
+		}
+	}
+	if name == "beamer" && !e.realBeamer() {
+		e.loadBeamer()
+		return
+	}
+	if name == "amsart" {
+		// Give the page builder amsart's real text block (360pt × 584pt, or 632pt
+		// high on a4paper) as a PERSISTENT floor, in both paths. The emulation never
+		// runs amsart.cls's \textwidth/\textheight and would keep the plain-TeX
+		// default (6.5in × 8.9in), under-paginating; the real class DOES set them,
+		// but through TeX assignments that the enclosing document group restores
+		// after the page builder has run, so e.hsize/e.vsize revert post-render.
+		// Setting the engine dimens here directly makes the budget stick either way
+		// (the class's own \hsize=30pc then saves and restores this same value); a
+		// later \usepackage{geometry} still overrides it, running after this.
+		e.applyAmsartGeometry(opts)
+		if !e.realAmsart() {
+			return // GOTEX_AMSART=0 forces the built-in emulation
+		}
+	}
+	// acmart's sigconf/sigplan/acmtog/… formats are two-column by nature — the
+	// format sets two columns, not a [twocolumn] option. Set them whether or not the
+	// paper bundles acmart.cls: the emulation floor below handles the unbundled case,
+	// but a paper that ships the real class loads it (single-column in this engine)
+	// and would otherwise miss the column layout entirely.
+	if name == "acmart" && acmartTwoColumnFormat(opts) {
+		e.twoColumn = true
+		e.twoColLive = true
+	}
+	// achemso's manuscript mode is double-spaced (see applyAchemsoGeometry). The
+	// class is not embedded, so an unbundled paper falls to the article emulation
+	// and would keep the size-default leading, fitting twice the text per page.
+	if name == "achemso" && !e.classFileResolvable(name) {
+		e.applyAchemsoGeometry(opts)
+		// achemso's author block has the same SHAPE as acmart's — \author plus
+		// \affiliation wrapping \institution / \city / \country sub-fields — and the
+		// article emulation knows none of it. Undefined, \affiliation's argument is
+		// not discarded in the document, so the affiliations were typeset as BODY
+		// TEXT: corpus paper 2209.13121 has twelve of them, and "Measurement",
+		// "Gaithersburg," and "(NIST)," landed in the running prose. They are in its
+		// reference, so dropping them instead would be a content loss; the substrate
+		// accumulates them into the title block where they belong.
+		//
+		// The substrate is named for acmart because that is where it was written, not
+		// because it is acmart-specific. revtex has its own (revtex.go).
+		e.loadAcmartMetadata()
+		// achemso emits the title block ITSELF at \begin{document}; the paper never
+		// writes \maketitle. Without this the accumulated authors and affiliations
+		// are stored and never typeset, which loses the same words the leak used to
+		// show in the wrong place. \maketitle disarms itself, so a document that does
+		// call it is unaffected.
+		e.pushPackageLevel(`\AtBeginDocument{\maketitle}`)
+	}
+	if (name == "acmart" || name == "IEEEtran") && !e.classFileResolvable(name) {
+		// acmart and IEEEtran are not embedded, and when the paper does not bundle
+		// the .cls they fall to the article-shaped emulation, which sizes their page
+		// wrong (the plain-TeX text block and the size-default leading). Give the page
+		// builder the real class's single-column-equivalent text block and base
+		// leading as a persistent floor, the way the amsart branch above does, so the
+		// page count is right even though the two-column formats render single-column.
+		// When the class IS resolvable it is loaded below and sizes its own page.
+		if name == "acmart" {
+			e.applyAcmartGeometry(opts)
+			e.loadAcmartMetadata() // gobble acmart's top-matter metadata + CCSXML block
+			// (two columns for the two-column formats are set above, before this
+			// emulation-floor branch, so a bundled acmart.cls gets them too.)
+		} else {
+			e.applyIEEEtranGeometry(opts)
+			e.loadIEEEtranNames(opts)
+		}
+		return
+	}
+	if isRevtexClass(name) && !e.classFileResolvable(name) {
+		// revtex is not embedded; the article-shaped fallback leaves \affiliation
+		// and the author-list commands undefined — the corpus's single most common
+		// undefined control sequence, which drops the whole author block. Load a
+		// title-block emulation that keeps that content (revtex.go), then use the
+		// article-shaped page (its geometry is already close). A bundled revtex .cls
+		// resolves above and defines these itself.
+		//
+		// revtex's reprint / journal styles (reprint, twocolumn, or a journal substyle
+		// like prl/prd) set the body in two columns with a FULL-WIDTH frontmatter
+		// (title/authors/affiliations/abstract). The emulation's \maketitle runs an
+		// internal hook (\gotex@revtexbodytwocol) at its end that, in reprint mode,
+		// keeps everything set so far full-width and switches the body to two columns
+		// (twocolumn.go). The default (preprint) stays one-column.
+		//
+		// This RENDERS the body two-column with a spanning title/abstract, and the
+		// figure-heavy PAGE COUNT now converges: the earlier two-column under-pagination
+		// (2601.22272: 51pp vs tectonic 62) was the relative-width floats collapsing to
+		// ~zero in the graphics-option parser, so they reserved no vertical space. With
+		// that fixed (scanGraphicsOpts evaluates 0.48\textwidth as a real dimension in
+		// two-column mode, \textwidth spans both columns, and the placeholder takes the
+		// figure's true aspect) 2601.22272 reaches 62pp — exactly tectonic.
+		//
+		// A `figure*` / `table*` (a both-columns-spanning float — 25 of them in 2601.22272)
+		// now RENDERS correctly: \@dblfloat routes to \gotex@dblfloat (twocolumn.go), which
+		// typesets the float at the full \textwidth and places it as a band spanning BOTH
+		// columns across the top of the page its anchor sits on, the columns resuming below.
+		// The floats are on the page and no longer paint past the column edge.
+		//
+		// It nonetheless STAYS behind GOTEX_TWOCOLUMN, and so does the band itself (it forms
+		// only under twoColumnOptIn — see doDblFloat), for two reasons that share a cause,
+		// imperfect float PLACEMENT. First the page count overshoots: a full-width band
+		// blocks both columns for its height (text cannot flow beside it) where the old
+		// inline one-column float blocked one, so 2601.22272 rises to 69pp against tectonic's
+		// 62 — tectonic packs its floats denser than this top-band model. Second, on a LIVE
+		// standard [twocolumn] article (2601.20606) the band floats to a page top whose
+		// position does not track the reference, regressing the layout proxy (+2.2) even
+		// while rendering a wide table* more faithfully. Both need a fuller float-placement
+		// pass; until it lands the corpus default stays one-column (its tuned geometry
+		// matching the reference closely — 2601.22272: 61 vs 62), and the live standard
+		// two-column path keeps the historical inline float.
+		e.revtexReprint = twoColumnOptIn() && revtexReprintMode(opts)
+		e.applyRevtexGeometry(revtexReprintMode(opts), opts)
+		e.loadRevtexEmulation()
+		return
+	}
+	if name == "elsarticle" && !e.classFileResolvable(name) {
+		// elsarticle.cls is \LoadClass{article} plus Elsevier front matter: it sizes
+		// NOTHING itself, so its text block is article's for the same paper and size
+		// options. Unbundled it loaded nothing at all and kept the emulation's 466pt
+		// block where article gives 390pt on letter at 12pt — a fifth more text on
+		// every line, and 40 pages against the real class's 50 on corpus paper
+		// 2301.11256. Loading the embedded article.cls with the same options gets the
+		// exact block for any paper/size pair, with no table to keep in step.
+		if e.applyElsarticleGeometry(opts) {
+			return // a journal type: the class sizes it with geometry, not article's
+		}
+		// The preprint default, on US LETTER.
+		//
+		// elsarticle.cls:109 writes \ExecuteOptions{a4paper,10pt,…} and this used to
+		// take it at its word. It does nothing: \ExecuteOptions runs the code of
+		// DECLARED options, elsarticle never declares a4paper (its \DeclareOption* on
+		// the NEXT line forwards user options to article, which is a different
+		// mechanism and does not apply to \ExecuteOptions), so the name is silently
+		// skipped and the sheet stays article's letter.
+		//
+		// tectonic settles it — \documentclass[final,12pt]{elsarticle}, nothing else:
+		//
+		//	                reference   with a4paper   without
+		//	\textwidth        390.0pt       390.0pt     390.0pt
+		//	\textheight       548.5pt       592.0pt     548.5pt
+		//	\paperwidth     614.295pt      597.51pt   614.295pt
+		//	\paperheight     794.97pt      845.05pt    794.97pt
+		//
+		// All four match once it goes. The source was quoted correctly and its
+		// SEMANTICS assumed.
+		aopts := append([]string{}, opts...)
+		if data, _, ok := e.findTeXFile("article", []string{".cls"}); ok {
+			e.loadTeXFile(data, "article", ".cls", append(aopts, e.takePassed(name)...))
+			return
+		}
+	}
+	if emulatedClasses[name] || emulateOnly(name) {
+		return // use the built-in emulation for a standard class
+	}
+	if data, _, ok := e.findTeXFile(name, []string{".cls"}); ok {
+		e.loadTeXFile(data, name, ".cls", append(opts, e.takePassed(name)...))
+	}
+}
+
+// namesPaperSize reports whether the class options already choose a paper size,
+// so a class default is not imposed over the paper's own choice.
+func namesPaperSize(opts []string) bool {
+	for _, o := range opts {
+		if strings.HasSuffix(strings.TrimSpace(o), "paper") {
+			return true
+		}
+	}
+	return false
+}
+
+// doUsepackageLoad implements \usepackage[options]{name,name,...}: geometry keeps
+// its native handler; every other package is loaded from a resolved .sty when one
+// exists (and is not on the never-load list), else left to the stubs.
+func (e *Engine) doUsepackageLoad() {
+	opts := e.scanBracketList()
+	names := e.readBraceNameX()
+	// A file spec takes TWO optional arguments, options and a DATE:
+	// \@onefilewithoptions#1[#2][#3]#4 (latex.ltx:13735). The date is how a package
+	// states the version it needs, and jabbrv.sty writes
+	//
+	//	\RequirePackage{kvoptions}[2006/08/17]
+	//
+	// Left unread it was typeset, and "[2006/08/17]" opened the first page of every
+	// document that loads jabbrv — pushing the title to page 2.
+	e.skipOptDateBracket()
+	for _, raw := range strings.Split(names, ",") {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		// Every package the document ASKS for is recorded, whether or not a .sty is
+		// found: a package the engine emulates has no file, and the emulation still
+		// needs to know it was requested. \@ifpackageloaded keeps its own registry
+		// (ver@foo.sty), which only a real load populates.
+		if e.pkgRequested == nil {
+			e.pkgRequested = map[string]bool{}
+		}
+		e.pkgRequested[name] = true
+		if !e.loadTextFontPackage(name) {
+			e.noteFontSubstitution(name)
+		}
+		if name == "babel" {
+			e.applyBabel(opts)
+		}
+		if name == "url" || name == "xurl" || name == "hyperref" {
+			e.bindURLPath()
+		}
+		if name == "geometry" {
+			e.applyGeometry(strings.Join(opts, ","))
+			continue
+		}
+		if name == "hyperref" && len(opts) > 0 {
+			// hyperref routes its package options through the same keyval as
+			// \hypersetup, so \usepackage[colorlinks,urlcolor=blue]{hyperref} styles
+			// links exactly as the \hypersetup form does (see hyperstyle.go).
+			e.applyHypersetup(strings.Join(opts, ","))
+		}
+		if name == "caption" || name == "subcaption" {
+			// Before any real load, so a caption.sty that IS found defines
+			// \captionfont itself and wins.
+			e.captionFontFromOptions(opts)
+		}
+		if emulateOnly(name) {
+			continue
+		}
+		if data, _, ok := e.findTeXFile(name, []string{".sty"}); ok {
+			e.loadTeXFile(data, name, ".sty", append(append([]string{}, opts...), e.takePassed(name)...))
+			continue
+		}
+		if name == "fullpage" {
+			// fullpage (H. Partl / P. W. Daly) is a one-line geometry: the text block is
+			// the paper less a uniform margin on every side — 1in by default, 1.5cm
+			// under [cm]. It computes \topmargin as margin − 1in − \headheight −
+			// \headsep, so the BODY starts at the margin and the running head sits
+			// INSIDE it: geometry's own box model, expressible as one option.
+			//
+			// A bundled fullpage.sty is loaded above and wins; this stands in only when
+			// the paper ships none, which is every use of it in the fidelity corpus (7
+			// of 157 papers, 270 of the 22127-paper pool). Unemulated, the document kept
+			// its class margins: a book set 38 lines a page where the reference sets
+			// 44-49, and paginated 374 pages against 333.
+			m := "1in"
+			if hasOption(opts, "cm") {
+				m = "1.5cm"
+			}
+			// fullpage.sty subtracts the running-head and running-foot bands from the
+			// text height, and its DEFAULT (\ExecuteOptions{in,plain}) zeroes only the
+			// head ones:
+			//
+			//	\ifFP@plain  \headheight 0pt  \headsep 0pt  \fi
+			//	\ifFP@empty  \footskip   0pt              \fi
+			//	\textheight = \paperheight − \headheight − \headsep − \footskip − 2·margin
+			//
+			// So \footskip — 30pt in the standard classes — comes off the body unless
+			// [empty] is given, and the head bands come off under [headings] and
+			// [myheadings], which do not zero them. That is geometry's includefoot /
+			// includehead exactly, which is how it is said here.
+			//
+			// Read as a plain margin=1in, the block was 30pt too tall on every page —
+			// about 2.2 lines — and a 333-page book paginated 283.
+			opt := "margin=" + m
+			if !hasOption(opts, "empty") {
+				opt += ",includefoot"
+			}
+			if hasOption(opts, "headings") || hasOption(opts, "myheadings") {
+				opt += ",includehead"
+			}
+			e.applyGeometry(opt)
+			continue
+		}
+		if name == "cleveref" {
+			// cleveref ships FOUR default naming sets and picks between them with two
+			// package options, both read here (cleveref.sty:3889-3946):
+			//
+			//	capitalise / capitalize  \cref prints the capitalised names too
+			//	noabbrev                 "equation"/"figure" instead of "eq."/"fig."
+			//
+			// Its own defaults are abbrev ON, capitalise OFF (cleveref.sty:3814-3831),
+			// which is what crefForms holds; the options are applied over it rather
+			// than stored as names, because a document's own \crefname must still win
+			// over them and does so through a DIFFERENT macro in cleveref (the
+			// language defaults are @preamble ones).
+			//
+			// Nine corpus papers load cleveref with options and four of them use
+			// \cref — 186 of the corpus's 905 uses. Ignoring the options printed
+			// lowercase names through all four.
+			if hasOption(opts, "capitalise") || hasOption(opts, "capitalize") {
+				e.crefCapitalise = true
+			}
+			if hasOption(opts, "noabbrev") {
+				e.crefNoAbbrev = true
+			}
+		}
+		if name == "apacite" {
+			// apacite drives an APA-style .bbl but is often required by a journal
+			// class (agujournal, sn-jnl) without the .sty being bundled. Left
+			// unloaded, its content-bearing reference macros are undefined and the
+			// lenient path gobbles their arguments, dropping every reference's year,
+			// title, journal and pages. Install the reference-list stubs so that
+			// content survives (see apacite.go). A bundled apacite.sty resolves above.
+			e.loadApaciteStubs()
+		}
+	}
+}
+
+// doLoadClass implements \LoadClass[options]{class} (used by a class to build on a
+// base class). \LoadClassWithOptions passes the current class's options through.
+func (e *Engine) doLoadClass(withOptions bool) {
+	// ⛔ Expanded HERE, once, so both halves of this function see the same list. The
+	// engine's own applyLoadClassBaseSize resolved a macro option itself and the list
+	// passed to the .cls did not, so acmart's \LoadClass[\ACM@fontsize]{amsart} set the
+	// font scale from 9pt and left amsart's TeX-level \@typesizes at 10pt: the body of
+	// every acmart paper was led at 12pt against the reference's 11pt.
+	opts := e.resolveOptionList(e.scanBracketList())
+	if withOptions {
+		if fr := e.curFrame(); fr != nil {
+			opts = append(opts, fr.passed...)
+		}
+	}
+	name := e.readBraceNameX()
+	if name == "" {
+		return
+	}
+	// Before the load and OUTSIDE its guard: the size is what the loading class
+	// STATED, and it holds whether or not the loaded .cls is found or emulated. Inside
+	// the guard it never ran for the case it was written for.
+	e.applyLoadClassBaseSize(opts)
+	if data, _, ok := e.findTeXFile(name, []string{".cls"}); ok && !emulateOnly(name) {
+		e.loadTeXFile(data, name, ".cls", append(opts, e.takePassed(name)...))
+	}
+}
+
+// ── LaTeX2e option processing ────────────────────────────────────────────────
+
+// doDeclareOption implements \DeclareOption{name}{code} and \DeclareOption*{code}:
+// it records the option's code on the current load frame, and — for the named form
+// — defines \ds@<name> with that code.
+//
+// \ds@<name> is not a private spelling: it is the mechanism. base/ltclass.dtx stores
+// the option there,
+//
+//	\long\def\@declareoption#1#2{%
+//	   \xdef\@declaredoptions{\@declaredoptions,#1}%
+//	   \toks@{#2}%
+//	   \expandafter\edef\csname ds@#1\endcsname{\the\toks@}}
+//
+// and \ProcessOptions reaches it through \@use@ption, which ends in
+// \csname ds@\detokenize\expandafter{\CurrentOption}\endcsname. So a class may apply
+// one of its own options by CALLING the macro, which aas.cls does for its paper size
+// (`\ds@letterpaper`, aas.cls:5547, between its declarations and its \@options).
+// Without the definition that line is an undefined command, skipped, and the paper
+// size is never set — see #625.
+//
+// The definition is LOCAL, as the kernel's \edef is. A class file is loaded on a load
+// FRAME (catcodes saved and restored), not inside a TeX group, so nothing closes
+// between the declaration and the call.
+func (e *Engine) doDeclareOption() {
+	fr := e.curFrame()
+	if e.peekStar() {
+		code := e.readBraceToksRaw()
+		if fr != nil {
+			fr.star, fr.hasStar = code, true
+		}
+		return
+	}
+	name := e.readBraceName()
+	code := e.readBraceToksRaw()
+	if fr != nil {
+		fr.declared[name] = code
+	}
+	if name != "" {
+		e.define("ds@"+name, &meaning{kind: mMacro, body: code}, false)
+	}
+}
+
+// doProcessOptions implements \ProcessOptions (and \ProcessOptions*): for each
+// requested option it runs the matching \DeclareOption code (or \DeclareOption*'s
+// code, or nothing), with \CurrentOption bound to the option, by pushing the
+// assembled token list so it executes before the rest of the file.
+func (e *Engine) doProcessOptions() {
+	e.peekStar() // \ProcessOptions* is accepted; order differences are not modelled
+	fr := e.curFrame()
+	if fr == nil {
+		return
+	}
+	var run []tok
+	for _, opt := range fr.passed {
+		code, ok := fr.declared[opt]
+		if !ok {
+			if !fr.hasStar {
+				continue // unknown option: ignore (LaTeX would warn)
+			}
+			code = fr.star
+		}
+		run = append(run, setCurrentOptionToks(opt)...)
+		run = append(run, code...)
+	}
+	if len(run) > 0 {
+		e.push(run)
+	}
+}
+
+// doExecuteOptions implements \ExecuteOptions{opt,opt,...}: it runs the code of
+// each named option that this file declared (used to set defaults before
+// \ProcessOptions), with \CurrentOption bound.
+func (e *Engine) doExecuteOptions() {
+	list := e.readBraceName()
+	fr := e.curFrame()
+	if fr == nil {
+		return
+	}
+	var run []tok
+	for _, raw := range strings.Split(list, ",") {
+		opt := strings.TrimSpace(raw)
+		if code, ok := fr.declared[opt]; ok {
+			run = append(run, setCurrentOptionToks(opt)...)
+			run = append(run, code...)
+		}
+	}
+	if len(run) > 0 {
+		e.push(run)
+	}
+}
+
+// skipOptDateBracket consumes the trailing [<date>] of a file spec, and NOTHING
+// else. It looks with getNext rather than getXToken: LaTeX's own lookahead here is
+// \@ifnextchar, which is \futurelet and expands nothing, and expanding would run
+// whatever follows the load BEFORE the package is registered — measured, that made
+// \usepackage{p}\@ifpackageloaded{p}{…} answer "not loaded".
+func (e *Engine) skipOptDateBracket() {
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok {
+		return
+	}
+	if t.cs_ || t.ch != '[' {
+		e.back(t)
+		return
+	}
+	for {
+		u, ok := e.getNext()
+		if !ok {
+			return
+		}
+		if !u.cs_ && u.ch == ']' {
+			return
+		}
+	}
+}
+
+// doPassOptionsTo implements \PassOptionsToPackage{opts}{pkg} and
+// \PassOptionsToClass: it stashes options to be merged when pkg/class is loaded.
+func (e *Engine) doPassOptionsTo() {
+	opts := e.readBraceGroupText()
+	target := e.readBraceName()
+	if e.passedOptions == nil {
+		e.passedOptions = map[string][]string{}
+	}
+	for _, raw := range strings.Split(opts, ",") {
+		if o := strings.TrimSpace(raw); o != "" {
+			e.passedOptions[target] = append(e.passedOptions[target], o)
+		}
+	}
+}
+
+// readBraceGroupText reads a braced group and returns its text with the INNER
+// braces kept and counted. An option list is not a name: beamer passes
+//
+//	\PassOptionsToPackage{pdfborder={0 0 0},linkbordercolor=[rgb]{.5,.5,.5}}{hyperref}
+//
+// and a reader that stops at the first closing brace ends the list inside
+// "pdfborder={0 0 0" — the remainder was typeset onto the first page.
+func (e *Engine) readBraceGroupText() string {
+	e.skipOptSpace()
+	t, ok := e.getNext()
+	if !ok || t.cs_ || t.cat != catBegin {
+		if ok {
+			e.back(t)
+		}
+		return ""
+	}
+	var b []rune
+	for depth := 1; ; {
+		u, ok := e.getNext()
+		if !ok {
+			break
+		}
+		if !u.cs_ && u.cat == catEnd {
+			depth--
+			if depth == 0 {
+				break
+			}
+		}
+		if !u.cs_ && u.cat == catBegin {
+			depth++
+		}
+		if !u.cs_ {
+			b = append(b, u.ch)
+		}
+	}
+	return string(b)
+}
+
+// takePassed returns and clears the options queued for name by \PassOptionsTo*.
+func (e *Engine) takePassed(name string) []string {
+	if e.passedOptions == nil {
+		return nil
+	}
+	p := e.passedOptions[name]
+	delete(e.passedOptions, name)
+	return p
+}
+
+// setCurrentOptionToks builds the tokens for \def\CurrentOption{opt}.
+func setCurrentOptionToks(opt string) []tok {
+	toks := []tok{csTok("def"), csTok("CurrentOption"), chTok('{', catBegin)}
+	toks = append(toks, stringToToks(opt)...)
+	return append(toks, chTok('}', catEnd))
+}
+
+// setPtsize records the base type size selected by a class option so \@ptsize
+// (used by size1x.clo names) reflects 10/11/12pt; it defaults to 10pt. It also
+// wires the base size into the engine's font scale and leading: a [11pt]/[12pt]
+// class sets \normalsize at 110%/120% of the 10pt design with the size clo's
+// baselineskip (13.6/14.5pt), so body text is set at 11/12pt and wraps like real
+// LaTeX. 10pt is the 100% default — byte-identical to the pre-existing behaviour.
+// classBaseSizes is the class base size a size OPTION names: the engine's font scale
+// as a permille of 10pt, the \normalsize leading, and \@ptsize.
+//
+// 8pt and 9pt are amsart's, and they are not an embellishment: acmart decides its body
+// size from its FORMAT, not from a size option — acmart.cls:237-256 is an \ifcase over
+// \ACM@format@nr that sets \ACM@fontsize (9pt for manuscript/acmtog/sigconf/siggraph/
+// sigchi, 10pt for the rest) and then does
+//
+//	\LoadClass[\ACM@fontsize, reqno]{amsart}
+//
+// Only the three standard options were read here, so every acmart paper was set at 10pt.
+// The leadings are amsart.cls's own \@typesizes tables: \DeclareOption{9pt} gives
+// "\or{9}{11}% normalsize" (amsart.cls:290-296) and \DeclareOption{8pt} "\or{8}{10}"
+// (:283-289). \@ptsize is amsart's convention there too — \def\@ptsize{9}, not size-10,
+// which is why it is a string in this table rather than arithmetic.
+var classBaseSizes = map[string]struct {
+	ptsize   string
+	permille int
+	leading  int
+}{
+	"8pt":  {"8", 800, ptToSP(10)},
+	"9pt":  {"9", 900, ptToSP(11)},
+	"10pt": {"0", 1000, 12 * unity},
+	// ⛔ 1095 and not 1100. An 11pt class does not set its body at 11pt: size11.clo
+	// states \normalsize as \@xipt, and \@xipt is 10.95 — the kernel's own number,
+	// which classkernel.go:77 already carries verbatim from latex.ltx:7852-7863.
+	// This table contradicted the constant sitting beside it.
+	//
+	// Every entry of an 11pt document's size ladder is anchored on this base and
+	// divided by the class's own \normalsize, so 1100 multiplied the whole ladder
+	// by 11/10.95 = 1.00457. Whole-point sizes hid it exactly — int(11*14.4/10.95
+	// + 0.5) is 14, the same number the right anchor gives — and #718 made sizes
+	// fractional, which is what let it be seen (#717).
+	"11pt": {"1", 1095, ptToSP(13.6)},
+	"12pt": {"2", 1200, ptToSP(14.5)},
+}
+
+// applyLoadClassBaseSize applies a base size named in a \LoadClass option list. A class
+// loading another one is how acmart states its body size, and doLoadClass splices the
+// .cls without going through doDocumentClass — so setPtsize never saw the 9pt and the
+// engine's font scale stayed at 10pt while amsart's own TeX-level \@typesizes changed.
+// Measured on 2304.01951 (sigconf, so 9pt), page 4 against its reference: our glyphs were
+// 11.35pt tall and 4.49pt wide against 10.22 and 3.90, at the same line pitch and the
+// same column width.
+//
+// Only the font scale and the leading are applied, not setPtsize's whole body: the
+// DOCUMENT's options already set \@classoptionslist and the list spacings, and a class
+// loading another must not overwrite those.
+func (e *Engine) applyLoadClassBaseSize(opts []string) {
+	for _, o := range opts {
+		if sz, ok := classBaseSizes[e.resolveSizeOption(o)]; ok {
+			e.define("@ptsize", &meaning{kind: mMacro, body: stringToToks(sz.ptsize)}, true)
+			// The FONT SCALE only, not the leading. amsart's 9pt table says 11pt
+			// (amsart.cls:290-296) and acmart overrides it: the reference's measured line
+			// pitch on 2304.01951 page 4 is 10.5pt, which is what the 12pt default already
+			// gives. Setting 11 here moved the pitch to 10.0 — AWAY from the reference.
+			e.scaleClassFontsToBase(sz.permille)
+			return
+		}
+	}
+}
+
+func (e *Engine) setPtsize(opts []string) {
+	pt := "0"                           // \@ptsize is (size-10): 0/1/2 for 10/11/12pt
+	permille, leading := 1000, 12*unity // class base size and \normalsize leading
+	if e.komaClass {
+		// KOMA-Script's classes default to 11pt where the standard ones default to
+		// 10pt (scrguide, \KOMAoption{fontsize}). A named size option below still
+		// wins, exactly as it does for a standard class.
+		//
+		// ⛔ 1095, AND IT SAID 1100 UNTIL NOW — the same defect as the one the
+		// comment on "11pt" above describes at length, in the line that sets the
+		// DEFAULT instead of the line that reads an option. #717 fixed the table
+		// and missed this, which is what a fix applied to a table rather than to
+		// the quantity does.
+		//
+		// scrsize11pt.clo:76 is \@xipt, and \@xipt is 10.95 (latex.ltx:7858). A
+		// KOMA class with no size option was therefore anchored 11/10.95 =
+		// 1.00457 high on EVERY size of its ladder — the same 0.46% the standard
+		// classes carried before #717.
+		pt, permille, leading = "1", 1095, ptToSP(13.6)
+	}
+	for _, o := range opts {
+		if sz, ok := classBaseSizes[strings.TrimSpace(o)]; ok {
+			pt, permille, leading = sz.ptsize, sz.permille, sz.leading
+		}
+	}
+	e.define("@ptsize", &meaning{kind: mMacro, body: stringToToks(pt)}, true)
+	// Wire the class base size into the font system and the leading. 10pt is the
+	// 100% default, so both are no-ops and 10pt documents stay byte-identical.
+	e.baselineskip, e.baseBaselineskip = leading, leading
+	e.scaleClassFontsToBase(permille)
+	topsep, itemsep := 8.0, 4.0
+	switch pt {
+	case "1":
+		topsep, itemsep = 9.0, 4.5
+	case "2":
+		topsep, itemsep = 10.0, 5.0
+	}
+	// \intextsep is the space the output routine puts above and below a float it
+	// sets in the running column (latex.ltx \@addtocurcol: \vskip\intextsep,
+	// \box\@currbox, \vskip\intextsep). latex.ltx sets it to 12pt plus 2 minus 2 at
+	// EVERY class size; the register is allocated by the class kernel here and was
+	// never given that value, so it read zero.
+	e.setNamedDimen("intextsep", ptToSP(12))
+	// The foot area: \skip\footins is what the first footnote of a page costs the
+	// page, \footnotesep the strut at the head of each note (size1x.clo:202-203).
+	// Both registers are allocated by the class kernel and were never given a
+	// value, so both read zero.
+	footins, fnsep := 9.0, 6.65
+	switch pt {
+	case "1":
+		footins, fnsep = 10.0, 7.7
+	case "2":
+		footins, fnsep = 10.8, 8.4
+	}
+	e.setFootinsSkip(ptToSP(footins))
+	e.setNamedDimen("footnotesep", ptToSP(fnsep))
+	e.setNamedDimen("topsep", ptToSP(topsep))
+	e.setNamedDimen("itemsep", ptToSP(itemsep))
+	e.setNamedDimen("parsep", ptToSP(itemsep))
+}
+
+// isKomaClass reports whether name is one of KOMA-Script's document classes. They
+// are not embedded, so a paper that does not bundle one falls to the article-shaped
+// emulation — which is close enough in shape, but starts from the WRONG base size:
+// KOMA defaults to 11pt, the standard classes to 10pt. Corpus paper 2212.13760 came
+// out at a 12pt leading against the reference's 13.6, in 10 pages against 20.
+func isKomaClass(name string) bool {
+	switch name {
+	case "scrartcl", "scrarticle", "scrreprt", "scrreport", "scrbook", "scrlttr2":
+		return true
+	}
+	return false
+}
+
+// classManagesOwnColumns reports whether a class runs its own multi-column output
+// routine rather than LaTeX's standard \twocolumn one, so the engine's two-column page
+// builder (twocolumn.go) must NOT be switched on for it by a bare twocolumn option.
+// revtex is the clearest case — it \let\twocolumn\@undefined and lays its columns
+// through the ltxgrid grid engine — and the two-column journal classes (acmart,
+// IEEEtran) size and fill their columns their own way; driving them through the generic
+// routine mis-paginates (measured: revtex 2601.22272 loses a third of its pages).
+func classManagesOwnColumns(name string) bool {
+	if isRevtexClass(name) {
+		return true
+	}
+	switch name {
+	case "acmart", "IEEEtran", "IEEEconf", "aastex", "aastex6", "aastex61", "aastex62", "aastex631", "elsarticle":
+		return true
+	}
+	return false
+}
+
+// isIEEEtranClass reports whether name is one of the IEEE classes whose layout is
+// two columns unless the paper asks otherwise.
+func isIEEEtranClass(name string) bool {
+	switch name {
+	case "IEEEtran", "IEEEconf":
+		return true
+	}
+	return false
+}
+
+// standardTwoColClass reports whether name is a standard LaTeX class whose two-column
+// layout is LaTeX's own \twocolumn machinery, so a [twocolumn] option can drive the
+// engine's two-column page builder live (no GOTEX_TWOCOLUMN gate). These render
+// correctly and paginate closer to the reference; other classes stay gated.
+func standardTwoColClass(name string) bool {
+	switch name {
+	case "article", "report", "book":
+		return true
+	}
+	return false
+}
+
+// revtexReprintMode reports whether a revtex option list selects the two-column
+// reprint layout: the explicit reprint / twocolumn options, or a journal substyle
+// that implies reprint (prl/prd/…). revtex DEFAULTS to one-column preprint, and an
+// explicit preprint or onecolumn option keeps it there.
+func revtexReprintMode(opts []string) bool {
+	for _, o := range opts {
+		switch strings.TrimSpace(o) {
+		case "preprint", "onecolumn":
+			return false
+		}
+	}
+	for _, o := range opts {
+		if revtexTwoColOption(strings.TrimSpace(o)) {
+			return true
+		}
+	}
+	return false
+}
+
+// revtexTwoColOption reports whether one revtex option implies the two-column reprint
+// layout: reprint/twocolumn, or a journal substyle. The society option "aps" alone
+// does not (it defaults to preprint); only the specific journals imply reprint.
+func revtexTwoColOption(o string) bool {
+	switch o {
+	case "reprint", "twocolumn",
+		"prl", "prd", "prb", "pra", "prc", "pre", "prx", "prxquantum",
+		"prapplied", "prfluids", "prmaterials", "prper", "prab", "praccel",
+		"prresearch", "rmp", "prstab", "prstper":
+		return true
+	}
+	return false
+}
+
+// hasOption reports whether the trimmed option list contains want (used to read
+// class options such as twocolumn / onecolumn back from \documentclass).
+func hasOption(opts []string, want string) bool {
+	for _, o := range opts {
+		if strings.TrimSpace(o) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ── scanning helpers ─────────────────────────────────────────────────────────
+
+// scanBracketList reads an optional [a,b,c] and returns the trimmed items (nil
+// when absent).
+func (e *Engine) scanBracketList() []string {
+	toks, ok := e.scanOptBracketToks()
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, raw := range strings.Split(e.toksToString(toks), ",") {
+		if s := strings.TrimSpace(raw); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// peekStar consumes and reports a leading * (after optional spaces). When no star
+// follows, the input is restored EXACTLY as it stood — nothing is left pushed back.
+// A plain back() of the peeked token would strand it in a pending token list, ahead
+// of the base input it was read from. That is harmless until the caller then splices
+// a file into the base: \ProcessOptions runs a class option's code, and an option
+// that loads a companion file (svjour's [epj] \InputIfFileExists{svepj.clo}) splices
+// that file at the mouth position — landing it BETWEEN the stranded token and the
+// base tokens that followed it. svjour's next line, \ifx\journalopt\@empty, then has
+// its already-peeked \ifx bind to the loaded file's first token (\ProvidesFile{…})
+// instead of \journalopt, and the mismatched conditional skips to end-of-file,
+// swallowing the whole document (0 pages). Restoring the mark keeps the peeked token
+// attached to what genuinely follows it, so a later splice cannot slip in between.
+func (e *Engine) peekStar() bool {
+	m := e.markInput()
+	e.skipOptSpace()
+	if t, ok := e.getNext(); ok && !t.cs_ && t.ch == '*' {
+		return true
+	}
+	e.restoreInput(m)
+	return false
+}
+
+// readBraceToksRaw reads a {..} group without expansion, returning its tokens (the
+// replacement text of an option or hook); nil when the next thing is not a group.
+func (e *Engine) readBraceToksRaw() []tok {
+	for {
+		t, ok := e.getNext()
+		if !ok {
+			return nil
+		}
+		if t.cat == catSpace {
+			continue
+		}
+		if t.cat == catBegin && !t.cs_ {
+			return e.grabGroup()
+		}
+		e.back(t)
+		return nil
+	}
+}
+
+// ── \IfFileExists / \InputIfFileExists ───────────────────────────────────────
+
+// doIfFileExists implements \IfFileExists{name}{then}{else}: it runs the then-code
+// when name resolves on the search path, else the else-code.
+func (e *Engine) doIfFileExists() {
+	name := e.readBraceName()
+	then := e.readBraceToksRaw()
+	els := e.readBraceToksRaw()
+	if _, _, ok := e.findTeXFile(name, []string{"", ".tex"}); ok {
+		e.push(then)
+	} else {
+		e.push(els)
+	}
+}
+
+// readBraceNameX reads a braced file name, expanding it as TeX's file-name
+// scanner does: a package names the file to load through a macro (pgf loads its
+// driver as \pgfutil@InputIfFileExists{\pgfsysdriver}), so an unexpanded name
+// would never resolve.
+func (e *Engine) readBraceNameX() string {
+	e.skipOptSpace()
+	t, ok := e.getXToken()
+	if !ok || t.cs_ || t.cat != catBegin {
+		if ok {
+			e.back(t)
+		}
+		return ""
+	}
+	var b []rune
+	for {
+		u, ok := e.getXToken()
+		if !ok || (!u.cs_ && u.cat == catEnd) {
+			break
+		}
+		if u.cs_ {
+			b = append(b, []rune(u.cs)...)
+			continue
+		}
+		b = append(b, u.ch)
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// doInputIfFileExists implements \InputIfFileExists{name}{then}{else}: when name
+// resolves it runs the then-code and then reads the file, else it runs the
+// else-code.
+//
+// The order is LaTeX's, and it is that way round. ltfiles.dtx:
+//
+//	\long\def\InputIfFileExists#1#2{%
+//	  \IfFileExists{#1}%
+//	   {#2\@addtofilelist{#1}\@@input \@filef@und}}
+//
+// so #2 runs BEFORE the file is read — a package announces itself, or sets what the
+// file it is about to read expects to find. The then-code is pushed onto the file's
+// own level, where it is read before the file's text and cannot outlive it.
+func (e *Engine) doInputIfFileExists() {
+	name := e.readBraceNameX()
+	then := e.readBraceToksRaw()
+	els := e.readBraceToksRaw()
+	data, _, ok := e.findTeXFile(name, []string{"", ".tex"})
+	if !ok {
+		e.push(els)
+		return
+	}
+	e.spliceInputFile(data)
+	e.push(then)
+}
+
+// captionFontFromOptions honours the caption package's size options by defining
+// \captionfont, which is the hook \caption reads for its size.
+//
+// caption.sty declares them exactly this way — its small/footnotesize/scriptsize
+// options are \def\captionfont{\small} and friends — so the name is the package's
+// own and this is what loading the real file would have done. The texmf tree here
+// carries fonts only, so the real caption.sty never loads and our stub gobbles the
+// options; without this, a document that asks for a smaller caption gets the body
+// size that article.cls's \@makecaption prescribes for everyone else.
+//
+// 13 of the 200 corpus papers ask for a smaller caption, 11 of them through this
+// option form and 2 through \captionsetup in the body — which still needs the
+// key-value parsing filed as its own issue. Both spellings are accepted here: a bare
+// "small" and "font=small", with or without braces around the value.
+func (e *Engine) captionFontFromOptions(passed []string) {
+	for _, opt := range passed {
+		v := strings.TrimSpace(opt)
+		if k, after, ok := strings.Cut(v, "="); ok && strings.TrimSpace(k) == "font" {
+			v = strings.Trim(strings.TrimSpace(after), "{}")
+		}
+		switch v {
+		case "small", "footnotesize", "scriptsize":
+			e.define("captionfont", &meaning{kind: mMacro, body: []tok{csTok(v)}}, true)
+		}
+	}
+}
+
+// resolveSizeOption gives a class option's text, expanding it when the option IS a macro.
+//
+// acmart does not write the size literally — acmart.cls:258 is
+//
+//	\LoadClass[\ACM@fontsize, reqno]{amsart}
+//
+// and scanBracketList hands the option back as the unexpanded "\ACM@fontsize", so a
+// lookup on the literal "9pt" matched nothing and the whole path was silently inert:
+// \@ptsize stayed 0 and \baselineskip 12pt while \ACM@fontsize plainly read 9pt, which is
+// exactly what the witness printed before this.
+//
+// Only a single control sequence is resolved, and only one level: a size option is a name
+// or a macro holding one, never an expression.
+//
+// ⛔⛔ This resolves the option for the ENGINE's own decision, and for a long time that
+// was the only place it was resolved. The list handed to the loaded .cls stayed
+// unexpanded, so the loaded class never saw the size either: amsart received the literal
+// "\ACM@fontsize", matched no \DeclareOption, and kept its 10pt \@typesizes — which is
+// why \baselineskip read 12pt in the body of every acmart paper while this function had
+// correctly read 9pt a few lines earlier. The same expansion at one of two sites.
+//
+// Measured on 2304.01951 (sigconf, 9pt), the interline step on pages 2–9, both sides
+// through the same reader:
+//
+//	ours 11.96pt   reference 10.96pt   (\baselineskip read 12.0pt / 11.0pt)
+//
+// and the whole of it reproduces in two lines of TeX, which is the witness this fix is
+// tested against:
+//
+//	\LoadClass[9pt]{amsart}          → 11pt both sides   (amsart's own \DeclareOption ran)
+//	\LoadClass[\probesize]{amsart}   → 12pt ours, 11pt reference
+func (e *Engine) resolveSizeOption(o string) string {
+	o = strings.TrimSpace(o)
+	if !strings.HasPrefix(o, `\`) {
+		return o
+	}
+	m := e.meaningOf(csTok(strings.TrimPrefix(o, `\`)))
+	if m == nil || m.kind != mMacro {
+		return o
+	}
+	return strings.TrimSpace(e.toksToString(m.body))
+}
+
+// resolveOptionList expands every option that IS a macro, so the list the loaded class
+// receives says what the loading class meant.
+//
+// It is resolveSizeOption applied to the whole list, under a name that says what it is
+// for: the option does not have to be a size for the expansion to matter — a class that
+// states its format, its paper or its numbering through a macro has the same problem, and
+// nothing about the mechanism is specific to sizes. An option that is not a macro, or a
+// control sequence with no macro behind it, is handed through untouched: a .cls that
+// declares an option literally named like a control sequence still gets it.
+func (e *Engine) resolveOptionList(opts []string) []string {
+	out := make([]string, 0, len(opts))
+	for _, o := range opts {
+		out = append(out, e.resolveSizeOption(o))
+	}
+	return out
+}
+
+// IEEEtranNames is what IEEEtran calls its floats and its keyword block, plus the two
+// commands the class makes \long. Every line is cited, and every one is visible on the page:
+//
+//	IEEEtran.cls:2607  \def\figurename{Fig.}          — not "Figure"
+//	IEEEtran.cls:2608  \def\tablename{TABLE}          — in CAPITALS
+//	IEEEtran.cls:2830  \def\thetable{\@Roman\c@table} — ROMAN numerals
+//	IEEEtran.cls:2614  \def\IEEEkeywordsname{Index Terms}
+//	IEEEtran.cls:5286  \def\IEEEkeywords{… \textit{\IEEEkeywordsname}---\relax …}
+//	IEEEtran.cls:4882  \long\def\author#1{\gdef\@author{#1}}
+//	IEEEtran.cls:4874  \long\def\thanks#1{…}
+//
+// Checked against the reference PDFs rather than taken on trust: five IEEEtran papers of the
+// corpus print "Fig. N" and never "Figure N", "TABLE I/II/III" and never "Table 1", and four
+// of the five print "Index Terms". Eleven corpus papers use the class.
+//
+// compsoc is the exception on three of these — IEEEtran.cls:2609 restores "Figure" and :2828
+// arabic table numbers for it — and NO corpus paper asks for compsoc, so the option is not
+// branched on here. A paper that did would get the non-compsoc names, which is the same kind
+// of approximation the geometry above already makes.
+const IEEEtranNames = `
+\makeatletter
+\def\figurename{Fig.}
+\def\tablename{TABLE}
+\def\thetable{\@Roman\c@table}
+\providecommand\IEEEkeywordsname{Index Terms}
+% \author and \thanks are \long IN THIS CLASS, and IEEEtran.cls says why on the line above
+% its own definition: "V1.7 allow \author to contain \par's. This is needed to allow \thanks
+% to contain \par." (IEEEtran.cls:4881-4882, and :4874 for \thanks). LaTeX's own \author is
+% deliberately NOT \long (see latex.go), which is right for article and amsart; it is wrong
+% here, and the difference costs a whole title block. IEEEtran's \author takes no optional
+% argument, so replacing the command outright is what the class does.
+\long\def\author#1{\gdef\@author{#1}}
+\long\def\thanks#1{}
+\def\IEEEoverridecommandlockouts{\relax}
+% The two-column branch of IEEEtran's own definition, which is what every corpus paper is in:
+% an italic bold run-in name, an em dash, then the list. \endIEEEkeywords adds vertical space
+% and restores the size.
+\newenvironment{IEEEkeywords}{\par\bfseries\textit{\IEEEkeywordsname}---\relax\ignorespaces}%
+  {\par\normalfont\normalsize\medskip}
+\makeatother
+`
+
+// loadIEEEtranNames splices IEEEtranNames for an emulated IEEEtran. It is a separate load from
+// applyIEEEtranGeometry because geometry is engine state and these are macros the document can
+// still override afterwards.
+func (e *Engine) loadIEEEtranNames(opts []string) error {
+	if err := e.LoadFormat(IEEEtranNames); err != nil {
+		return err
+	}
+	// The author blocks differ BY MODE in the class, and following that matters on the
+	// page — see IEEEtranAuthorBlocksRows / IEEEtranAuthorBlocksInline.
+	blocks := IEEEtranAuthorBlocksInline
+	for _, m := range []string{"conference", "peerreviewca", "transmag"} {
+		if hasOption(opts, m) {
+			blocks = IEEEtranAuthorBlocksRows
+			break
+		}
+	}
+	if err := e.LoadFormat(blocks); err != nil {
+		return err
+	}
+	// The spanning form is loaded only where the class actually set two columns — the
+	// same condition, a few lines up. \twocolumn[…] is a no-op that GOBBLES its span
+	// unless e.twoColLive is on (primitives.go), so handing a one-column paper the
+	// spanning \maketitle would discard its whole title block.
+	if e.twoColLive {
+		return e.LoadFormat(IEEEtranTitleSpan)
+	}
+	return e.LoadFormat(IEEEtranTitlePlain)
+}
+
+// IEEEtranAuthorBlocksRows and IEEEtranAuthorBlocksInline are IEEEtran's author blocks, and
+// the class defines them TWO WAYS.
+//
+// In conference, peerreviewca and transmag mode it sets them through \@IEEEauthorhalign
+// (IEEEtran.cls:4632, :4649, :4683): each block is a ROW, ended by the macro's own \crcr,
+// and the halign puts the authors side by side in columns. Outside those modes it defines
+// them as plain pass-throughs (:4676-4677):
+//
+//	\def\IEEEauthorblockN#1{#1}
+//	\def\IEEEauthorblockA#1{#1}
+//
+// The halign is not implemented here, so the rows become a vertical stack — but the
+// DISTINCTION has to be kept, and getting it wrong is visible on the page both ways.
+//
+// ⛔ A conference paper writes one block per line and needs the break: without it
+// 2408.02112 came out as "Stephen M. Watt Ontario Research Centre for Computer Algebra and
+// Cheriton School of …" on one line that ran off the right edge.
+//
+// ⛔ A journal paper writes them INLINE, with its own punctuation between:
+// "\IEEEauthorblockN{Daanish Mahajan}, \IEEEauthorblockN{Chirag Jain}, …" (2405.05734).
+// Breaking there strands each comma alone on a line, where the reference reads
+// "Daanish Mahajan, Chirag Jain, Navin Kashyap" — which is exactly what the class's
+// pass-through gives.
+const IEEEtranAuthorBlocksRows = `
+\long\def\IEEEauthorblockN#1{\par#1\par}
+\long\def\IEEEauthorblockA#1{\par#1\par}
+`
+
+// IEEEtranAuthorBlocksInline is the class's own definition outside the three row modes.
+const IEEEtranAuthorBlocksInline = `
+\long\def\IEEEauthorblockN#1{#1}
+\long\def\IEEEauthorblockA#1{#1}
+`
+
+// IEEEtranTitleSpan and IEEEtranTitlePlain replace the generic \maketitle (latex.go) for an
+// emulated IEEEtran. Two things were wrong with the generic one on this class.
+//
+// ⛔ \centerline{\@author} is an \hbox. A multi-block IEEEtran author is a VERTICAL list —
+// \IEEEauthorblockN{name} over \IEEEauthorblockA{affiliation}, repeated per author — and an
+// hbox flattens it into one line that does not wrap. On 2408.02112 the reference sets two
+// authors side by side over four lines of affiliation each; we set one line that ran off the
+// right edge of the page. A \par inside that hbox does nothing at all, which is why defining
+// \IEEEauthorblockN with one changed the corpus by exactly zero glyphs before this.
+//
+// ⛔ And the block did not SPAN the columns. IEEEtran sets two columns from \documentclass,
+// so the generic \maketitle emitted the title into column one, where it overlapped the body.
+// \twocolumn[…] is precisely the construct for this: its bracket material is typeset at full
+// width and placed across the top of the region's first page (twocolumn.go,
+// typesetSpanFullWidth / colRegion.span), which is how the revtex emulation already does it.
+//
+// The font sizes are deliberately left as the generic \maketitle had them. This change is
+// structural — a vertical, full-width block instead of a horizontal box — and the title's
+// real size is a separate fidelity question with its own effect on Sigma.
+const IEEEtranTitleSpan = `
+\makeatletter
+\long\def\maketitle{\twocolumn[%
+  \begin{center}\@title\par\smallskip\@author\par\end{center}\bigskip]%
+  \global\let\maketitle\relax}
+\makeatother
+`
+
+// IEEEtranTitlePlain is the same block without the span, for [onecolumn]. It still replaces
+// \centerline with a center environment, because the hbox defect above is not about columns.
+const IEEEtranTitlePlain = `
+\makeatletter
+\long\def\maketitle{\par\bigskip
+  \begin{center}\@title\par\smallskip\@author\par\end{center}\bigskip
+  \global\let\maketitle\relax}
+\makeatother
+`
+
+// bindURLPath gives \path url.sty's meaning, if the name is still free.
+//
+// url.sty declares it optionally (line 204):
+//
+//	% picTeX defines \path, so declare it optionally:
+//	\@ifundefined{path}{\DeclareUrlCommand\path{\urlstyle{tt}}}{}
+//
+// so a package that has defined \path GLOBALLY before keeps the name. PiCTeX
+// does (that is the "picTeX" of the comment). TikZ, PGF and forest do NOT: TikZ
+// installs its \path only inside a {tikzpicture} (\tikz@installcommands), so at the
+// top level the name is still free when url.sty tests it, and a document that loads
+// tikz and then xurl has url's \path outside a picture and TikZ's inside — tectonic
+// 0.17.0 typesets \path{max_parallel_requests} and \path{%USERPROFILE%\.continue}
+// there with 0 errors, which only url's catcodes can read. The earlier rule (any
+// pgf-family package first keeps the name) read the picture scope as global and
+// dropped the identifier. What the picture scope still means for the engine, which
+// gobbles a picture whole but meets \tikz[...]\path (0,0) -- (1,1); at top level, is
+// handled in doPath (pgfPathFollows).
+func (e *Engine) bindURLPath() {
+	if e.pkgRequested["pictex"] {
+		return // their \path, not url's
+	}
+	e.urlPathBound = true
+}
+
+// pgfLoaded reports whether TikZ, PGF or forest has been requested: a document in
+// which a top-level \path may be TikZ's (inside \tikz, or a forest option).
+func (e *Engine) pgfLoaded() bool {
+	for name := range e.pkgRequested {
+		if isPGFFamily(name) || name == "forest" {
+			return true
+		}
+	}
+	return false
+}

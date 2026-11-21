@@ -1,0 +1,367 @@
+// Copied from github.com/go-tex/engine, the file color.go, at the commit 8234996d66f827438f248e8b0059031f52cb9964 (D62).
+
+// Copyright (c) the go-tex/engine authors.
+// SPDX-License-Identifier: BSD-3-Clause
+
+package engine
+
+// This file implements colour (the color / xcolor packages): \color and
+// \textcolor for text, \colorbox / \fcolorbox for filled (and framed) boxes, and
+// \definecolor to name new colours. Colours are 0xRRGGBB values; a set of standard
+// names is built in, and \definecolor adds more (rgb / RGB / gray / HTML models).
+// A colour of 0 means "default" (black text, no box fill), so the zero value needs
+// no special casing. Every glyph is stamped with the current colour and both
+// drivers honour it (SVG fill, PDF SetFillColor).
+
+import (
+	"strconv"
+	"strings"
+)
+
+// namedColors are the standard color/xcolor names (dvips-ish values).
+var namedColors = map[string]uint32{
+	"black": 0x000000, "white": 0xFFFFFF, "red": 0xFF0000, "green": 0x00FF00,
+	"blue": 0x0000FF, "cyan": 0x00FFFF, "magenta": 0xFF00FF, "yellow": 0xFFFF00,
+	"gray": 0x808080, "grey": 0x808080, "darkgray": 0x404040, "lightgray": 0xBFBFBF,
+	"brown": 0xBF8040, "orange": 0xFF8000, "pink": 0xFFBFBF, "purple": 0xBF0040,
+	"violet": 0x800080, "olive": 0x808000, "teal": 0x008080, "lime": 0xBFFF00,
+}
+
+// resolveColor maps a colour expression to its 0xRRGGBB value. A bare name is
+// looked up (user \definecolor names first, then built-ins); an xcolor mix
+// expression like "red!50!blue" or "red!30" (= red!30!white) is evaluated
+// left-associatively. Unknown → black.
+func (e *Engine) resolveColor(expr string) uint32 {
+	expr = strings.TrimSpace(expr)
+	if strings.Contains(expr, "!") {
+		return e.mixExpr(expr)
+	}
+	return e.resolveNamed(expr)
+}
+
+// resolveNamed looks up a plain colour name (no mix syntax).
+func (e *Engine) resolveNamed(name string) uint32 {
+	name = strings.TrimSpace(name)
+	if e.colors != nil {
+		if c, ok := e.colors[name]; ok {
+			return c
+		}
+	}
+	if c, ok := namedColors[name]; ok {
+		return c
+	}
+	return 0
+}
+
+// mixExpr evaluates an xcolor "!"-mix expression. "A!p!B" mixes p% of A with the
+// rest B; "A!p" mixes with white; longer chains fold left ((A!p!B)!q!C).
+func (e *Engine) mixExpr(expr string) uint32 {
+	parts := strings.Split(expr, "!")
+	cur := e.resolveNamed(parts[0])
+	for i := 1; i < len(parts); i += 2 {
+		pct, err := strconv.ParseFloat(strings.TrimSpace(parts[i]), 64)
+		if err != nil {
+			pct = 100
+		}
+		other := uint32(0xFFFFFF) // A!p (no second colour) mixes with white
+		if i+1 < len(parts) {
+			other = e.resolveNamed(parts[i+1])
+		}
+		cur = mixRGB(cur, other, pct)
+	}
+	return cur
+}
+
+// mixRGB blends a (pct%) with b ((100-pct)%) per channel.
+func mixRGB(a, b uint32, pct float64) uint32 {
+	f := pct / 100
+	if f < 0 {
+		f = 0
+	} else if f > 1 {
+		f = 1
+	}
+	ch := func(shift uint) uint8 {
+		ca := float64((a >> shift) & 0xFF)
+		cb := float64((b >> shift) & 0xFF)
+		return uint8(f*ca + (1-f)*cb + 0.5)
+	}
+	return packRGB(ch(16), ch(8), ch(0))
+}
+
+// selectColor makes c the current text colour, saving the previous one for
+// restoration at the end of the current group (so { \color{red} … } reverts).
+func (e *Engine) selectColor(c uint32) {
+	if len(e.groups) > 0 {
+		e.save = append(e.save, saveItem{kind: 8, oldi: int(e.curColor)})
+	}
+	e.curColor = c
+}
+
+// doColor implements \color{name}: switch the current colour (group-scoped).
+//
+// The colour also has to reach the drawing driver. This engine resolves colour
+// itself and stamps it on each glyph, which is all a page of text needs; but a
+// drawing package puts its marks on the page through its own driver, and asks
+// the colour package — through \color — to tell that driver what colour to use.
+// TikZ's shorthand for a colour option, \draw[red], goes exactly that way. So
+// when a picture is open the name is handed on to the drawing package's own
+// colour command, which emits what its driver understands.
+func (e *Engine) doColor() {
+	// \color takes an OPTIONAL MODEL, and this read straight past it — color.sty:88-90:
+	//
+	//	\DeclareRobustCommand\color{\@ifnextchar[\@undeclaredcolor\@declaredcolor}
+	//	\def\@undeclaredcolor[#1]#2{…\csname color@#1\endcsname\current@color{#2}…}
+	//
+	// (xcolor.sty:711 declares the same \color.) Without it, readBraceName saw "["
+	// where it wanted "{", backed the token up and returned empty — so the colour was
+	// not set AND "[HTML]000000" was typeset as text. One corpus paper defines its
+	// review-highlight macro as \newcommand{\Rev}[1]{{\color[HTML]{000000}{#1}}} and
+	// uses it 165 times.
+	//
+	// parseColorSpec already knows every model the reference does (rgb, RGB, gray,
+	// HTML, cmyk) — it was reached only through \definecolor.
+	if mt, ok := e.scanOptBracketToks(); ok {
+		model := strings.TrimSpace(e.toksToString(mt))
+		spec := e.readBraceName()
+		e.selectColor(parseColorSpec(model, spec))
+		e.ignoreSpaces() // color.sty:95
+		return           // an undeclared colour has no NAME to hand the drawing package
+	}
+	name := e.readBraceName()
+	e.selectColor(e.resolveColor(name))
+	e.tellDriverColor(name)
+	// color.sty:102 — \@declaredcolor ends with \ignorespaces, so "\color{red} X"
+	// sets the colour and then typesets "X", not " X". We kept the space: the
+	// reference renders "ROUGEB" where we rendered "ROUGE B" on the witness of #452.
+	// Every \color in the corpus is one space wide, which is why this is measured on
+	// its own rather than folded into that change.
+	e.ignoreSpaces()
+}
+
+// tellDriverColor passes a colour name to the drawing package, if one is loaded
+// and a picture is open. The test lives in TeX (see \gotex@pgfcolor in the LaTeX
+// kernel) because only the package knows whether it is drawing.
+func (e *Engine) tellDriverColor(name string) {
+	if name == "" || e.eq["gotex@pgfcolor"] == nil {
+		return
+	}
+	out := []tok{csTok("gotex@pgfcolor"), chTok('{', catBegin)}
+	for _, r := range name {
+		out = append(out, chTok(r, catOther))
+	}
+	e.push(append(out, chTok('}', catEnd)))
+}
+
+// doTextcolor implements \textcolor[<model>]{<colour>}{<text>}.
+//
+// It is a PRIMITIVE, and that is the whole point. The maths layer works on a SOURCE
+// STRING: renderMathResolvingMacros expands a MACRO by matching its parameter text
+// against text, and it cannot match either of the two shapes that express an optional
+// argument in TeX —
+//
+//   - the reference's own \protected\def\textcolor#1#{\@textcolor{#1}}
+//     (color.sty:103, xcolor.sty:758), whose parameter is delimited by the next brace;
+//   - an \@ifnextbracket dispatcher, which needs to LOOK at the next token.
+//
+// Both were tried. The first expanded
+// \newcommand{\W}{\ensuremath{\textcolor{darkgreen}{w}}} to "{arkgreen{" and
+// go-tex/math refused it with "missing }" — 52 equations on corpus paper 2405.18549
+// and 86 over five papers. The second reached the maths layer as \@ifnextbracket and
+// dropped the equation under that name instead.
+//
+// A primitive is not a macro, so expandMacroInMathSource declines it and the source
+// falls through to stripMathColor, which already knows the command and its optional
+// model (math.go: "textcolor": {2, 1}) and strips it while KEEPING the content. That
+// is what the maths path wants: an equation set in the surrounding colour rather than
+// dropped.
+//
+// In text it is \@textcolor's own body, minus the \protect and \leavevmode the
+// two-argument form never had: a group, the colour, the text.
+func (e *Engine) doTextcolor() {
+	model, hasModel := e.scanOptBracketToks()
+	name := e.grabUndelimited()
+	text := e.grabUndelimited()
+	// Rebuilt as the reference's own body, {\color#1{#2}#3} (color.sty:104), and
+	// pushed for the mouth to read: the GROUP is TeX's, not this primitive's.
+	// Opening it with e.beginGroup and closing it by pushing \endgroup instead left
+	// the brace bookkeeping one deep and every \textcolor raised "Missing } inserted".
+	out := []tok{chTok('{', catBegin), csTok("color")}
+	if hasModel {
+		out = append(out, chTok('[', catOther))
+		out = append(out, model...)
+		out = append(out, chTok(']', catOther))
+	}
+	out = append(out, chTok('{', catBegin))
+	out = append(out, name...)
+	out = append(out, chTok('}', catEnd))
+	out = append(out, text...)
+	e.push(append(out, chTok('}', catEnd)))
+}
+
+// doColorbox implements \colorbox{name}{content}: content on a filled background
+// (with \fboxsep padding, no border).
+func (e *Engine) doColorbox() frameNode {
+	bg := e.resolveColor(e.readBraceName())
+	list, _ := e.grabHboxList()
+	return frameNode{inner: hpackSP(list, packNatural, 0), sep: fboxSep, rule: 0, bg: bg}
+}
+
+// doFcolorbox implements \fcolorbox{frame}{bg}{content}: a filled background with a
+// coloured frame.
+func (e *Engine) doFcolorbox() frameNode {
+	frame := e.resolveColor(e.readBraceName())
+	bg := e.resolveColor(e.readBraceName())
+	list, _ := e.grabHboxList()
+	return frameNode{inner: hpackSP(list, packNatural, 0), sep: fboxSep, rule: fboxRule, bg: bg, ruleColor: frame}
+}
+
+// doDefineColor implements xcolor's \definecolor, adding a named colour.
+// Models: rgb (three 0–1 floats), RGB (three 0–255 ints), gray (one 0–1 float),
+// HTML (six hex digits), cmyk (four 0–1 floats).
+//
+// The full signature carries TWO optional arguments, and both are read here:
+//
+//	\def\definecolor{\@testopt{\XC@definecolor}{}}
+//	\def\XC@definecolor[#1]#2{\@testopt{\XC@definec@lor[#1]{#2}}\colornameprefix}
+//	\def\XC@definec@lor[#1]#2[#3]#4#5{…}          xcolor.sty:473-476
+//
+// so it is \definecolor[type]{name}[prefix]{model}{spec}, the type being `named`
+// or `ps`. Reading only the three mandatory arguments left the whole call in the
+// input, and every token of it was then TYPESET: acmart declares its palette that
+// way (acmart.cls:561-568), so eight lines of "[named]ACMBluecmyk1,0.1,0,0.1"
+// came out on page 1 of every acmart paper.
+//
+// The type and the prefix change which colour STACK a name lands on in xcolor;
+// this engine keeps one flat table, so they are consumed and dropped — the colour
+// itself is defined either way, which is what a renderer needs.
+func (e *Engine) doDefineColor() {
+	e.scanOptBracketToks() // [type]
+	name := e.readBraceName()
+	e.scanOptBracketToks() // [prefix]
+	model := e.readBraceName()
+	spec := e.readBraceName()
+	if name == "" {
+		return
+	}
+	if e.colors == nil {
+		e.colors = map[string]uint32{}
+	}
+	e.colors[name] = parseColorSpec(model, spec)
+	e.publishColor(name, e.colors[name])
+}
+
+// parseColorSpec turns a color model + spec string into 0xRRGGBB.
+func parseColorSpec(model, spec string) uint32 {
+	fields := strings.Split(spec, ",")
+	switch model {
+	case "rgb":
+		if len(fields) == 3 {
+			return packRGB(unitToByte(fields[0]), unitToByte(fields[1]), unitToByte(fields[2]))
+		}
+	case "RGB":
+		if len(fields) == 3 {
+			return packRGB(intToByte(fields[0]), intToByte(fields[1]), intToByte(fields[2]))
+		}
+	case "gray", "grey":
+		g := unitToByte(spec)
+		return packRGB(g, g, g)
+	case "HTML":
+		if v, err := strconv.ParseUint(strings.TrimSpace(spec), 16, 32); err == nil {
+			return uint32(v) & 0xFFFFFF
+		}
+	case "cmyk":
+		if len(fields) == 4 {
+			c, m, y, k := unitFloat(fields[0]), unitFloat(fields[1]), unitFloat(fields[2]), unitFloat(fields[3])
+			r := uint8(255*(1-c)*(1-k) + 0.5)
+			g := uint8(255*(1-m)*(1-k) + 0.5)
+			b := uint8(255*(1-y)*(1-k) + 0.5)
+			return packRGB(r, g, b)
+		}
+	}
+	return 0
+}
+
+// unitFloat parses a 0–1 float component, clamped (for the cmyk model).
+func unitFloat(s string) float64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil || f < 0 {
+		return 0
+	}
+	if f > 1 {
+		return 1
+	}
+	return f
+}
+
+// doColorlet implements \colorlet{name}{expr}: define a named colour equal to the
+// evaluated colour expression (so later \color{name} reuses the mix).
+func (e *Engine) doColorlet() {
+	// xcolor's optional model argument — \colorlet[named]{a}{b} asks it to convert
+	// through a colour model. This engine keeps colours as RGB throughout, so the
+	// hint changes nothing; it must still be consumed, or it lands on the page.
+	e.scanOptBracketToks()
+	name := e.readBraceName()
+	c := e.resolveColor(e.readBraceName())
+	if name == "" {
+		return
+	}
+	if e.colors == nil {
+		e.colors = map[string]uint32{}
+	}
+	e.colors[name] = c
+	e.publishColor(name, c)
+}
+
+// doPagecolor implements \pagecolor{expr}: fill the page background with the colour
+// (the drivers paint it behind the content). \nopagecolor clears it.
+func (e *Engine) doPagecolor() {
+	e.pageColor = e.resolveColor(e.readBraceName())
+	e.hasPageColor = true
+}
+
+// doNormalcolor implements \normalcolor: reset the current text colour to the
+// default (black), group-scoped like \color.
+func (e *Engine) doNormalcolor() {
+	e.selectColor(0)
+}
+
+func packRGB(r, g, b uint8) uint32 { return uint32(r)<<16 | uint32(g)<<8 | uint32(b) }
+
+// unitToByte parses a 0–1 float component to a 0–255 byte.
+func unitToByte(s string) uint8 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0
+	}
+	if f < 0 {
+		f = 0
+	} else if f > 1 {
+		f = 1
+	}
+	return uint8(f*255 + 0.5)
+}
+
+// intToByte parses a 0–255 integer component, clamped.
+func intToByte(s string) uint8 {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0
+	}
+	if n < 0 {
+		n = 0
+	} else if n > 255 {
+		n = 255
+	}
+	return uint8(n)
+}
+
+// hexColor formats a 0xRRGGBB value as an SVG/CSS colour "#rrggbb".
+func hexColor(c uint32) string {
+	const hex = "0123456789abcdef"
+	b := []byte{'#', 0, 0, 0, 0, 0, 0}
+	for i := 0; i < 6; i++ {
+		shift := uint(20 - 4*i)
+		b[1+i] = hex[(c>>shift)&0xF]
+	}
+	return string(b)
+}
