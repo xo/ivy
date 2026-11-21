@@ -10,7 +10,6 @@ package layout
 
 import (
 	"iter"
-	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -338,23 +337,23 @@ func relativePositioning(box, containingBlock *Box) {
 
 		var translateX, translateY float64
 		switch {
-		case box.Left != Auto && box.Right != Auto:
+		case box.extra().Left != Auto && box.extra().Right != Auto:
 			if isStr(box.Style.Get("direction"), "ltr") {
-				translateX = box.Left
+				translateX = box.extra().Left
 			} else {
-				translateX = -box.Right
+				translateX = -box.extra().Right
 			}
-		case box.Left != Auto:
-			translateX = box.Left
-		case box.Right != Auto:
-			translateX = -box.Right
+		case box.extra().Left != Auto:
+			translateX = box.extra().Left
+		case box.extra().Right != Auto:
+			translateX = -box.extra().Right
 		}
 
 		switch {
-		case box.Top != Auto:
-			translateY = box.Top
-		case box.Bottom != Auto:
-			translateY = -box.Bottom
+		case box.extra().Top != Auto:
+			translateY = box.extra().Top
+		case box.extra().Bottom != Auto:
+			translateY = -box.extra().Bottom
 		}
 
 		box.Translate(translateX, translateY, false)
@@ -994,21 +993,15 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 // the layout of the lines reads.
 func styleDict(style *Style) *Style {
 	d := style.Copy()
-	d.values = make(map[string]Value, len(style.cascaded))
+	d.keepOnly(style, style.cascaded)
 	d.flow = 0
-	for key := range style.cascaded {
-		d.values[key] = style.Get(key)
-	}
 	return d
 }
 
 // mergeStyleDict is the operator |= of the dicts of styleDict: it sets the
 // items of other in d.
 func mergeStyleDict(d, other *Style) {
-	if d.values == nil {
-		d.values = map[string]Value{}
-	}
-	maps.Copy(d.values, other.values)
+	d.merge(other)
 	d.flow = 0
 }
 

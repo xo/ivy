@@ -128,6 +128,11 @@ func collapseSpaces(text string, lineFeeds bool) string {
 			j++
 		}
 		if !changed && (j-i > 1 || text[i] != ' ') {
+			if i == 0 && j == len(text) {
+				// The text is one run, as between the tags of most
+				// documents. The constant needs no new string.
+				return " "
+			}
 			changed = true
 			b.Grow(len(text))
 			b.WriteString(text[:i])

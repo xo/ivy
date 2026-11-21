@@ -41,6 +41,21 @@ func percentage(value Value, computed *Style, referTo float64) Value {
 	return nil
 }
 
+// usedPercentage is usedValue(percentage(value, computed, referTo)).
+//
+// Port: percentage gives a Float in a Value, which the port makes only
+// for the values that are not lengths.
+func usedPercentage(value Value, computed *Style, referTo float64) float64 {
+	if d, ok := value.(Dimension); ok {
+		if d.Unit == "%" {
+			return referTo * d.Value / 100
+		}
+		// px
+		return d.Value
+	}
+	return usedValue(percentage(value, computed, referTo))
+}
+
 // percentageToken is percentage for a token of tinycss2: a math function
 // that it resolves, or the token that resolve_math returns.
 func percentageToken(token tinycss2.Node, computed *Style, referTo float64, depth int) Value {
@@ -113,13 +128,13 @@ func (b *Box) usedField(name string) *float64 {
 	case "max_height":
 		return &b.MaxHeight
 	case "top":
-		return &b.Top
+		return &b.ownExtra().Top
 	case "right":
-		return &b.Right
+		return &b.ownExtra().Right
 	case "bottom":
-		return &b.Bottom
+		return &b.ownExtra().Bottom
 	case "left":
-		return &b.Left
+		return &b.ownExtra().Left
 	case "text_indent":
 		return &b.textIndent
 	}
@@ -134,13 +149,51 @@ func (b *Box) usedField(name string) *float64 {
 // replaces the percentages. No caller of upstream does that.
 func resolveOnePercentage(box *Box, propertyName string, referTo float64) {
 	// box attributes are used values
-	percent := usedValue(percentage(box.Style.Get(propertyName), box.Style, referTo))
+	percent := usedPercentage(box.Style.Get(propertyName), box.Style, referTo)
 	field := box.usedField(propertyName)
 	if field == nil {
 		return
 	}
 	*field = percent
 	if percent == Auto && (propertyName == "min_width" || propertyName == "min_height") {
+		*field = 0
+	}
+}
+
+// The properties that resolvePercentages reads.
+var (
+	knownBorderBottomWidth = newKnownProperty("border_bottom_width")
+	knownBorderCollapse    = newKnownProperty("border_collapse")
+	knownBorderLeftWidth   = newKnownProperty("border_left_width")
+	knownBorderRightWidth  = newKnownProperty("border_right_width")
+	knownBorderTopWidth    = newKnownProperty("border_top_width")
+	knownBoxSizing         = newKnownProperty("box_sizing")
+	knownHeight            = newKnownProperty("height")
+	knownMarginBottom      = newKnownProperty("margin_bottom")
+	knownMarginLeft        = newKnownProperty("margin_left")
+	knownMarginRight       = newKnownProperty("margin_right")
+	knownMarginTop         = newKnownProperty("margin_top")
+	knownMaxHeight         = newKnownProperty("max_height")
+	knownMaxWidth          = newKnownProperty("max_width")
+	knownMinHeight         = newKnownProperty("min_height")
+	knownMinWidth          = newKnownProperty("min_width")
+	knownPaddingBottom     = newKnownProperty("padding_bottom")
+	knownPaddingLeft       = newKnownProperty("padding_left")
+	knownPaddingRight      = newKnownProperty("padding_right")
+	knownPaddingTop        = newKnownProperty("padding_top")
+	knownWidth             = newKnownProperty("width")
+)
+
+// resolveKnownPercentage is resolveOnePercentage for a knownProperty.
+func resolveKnownPercentage(box *Box, p knownProperty, referTo float64) {
+	// box attributes are used values
+	percent := usedPercentage(box.Style.getKnown(p), box.Style, referTo)
+	field := box.usedField(p.name)
+	if field == nil {
+		return
+	}
+	*field = percent
+	if percent == Auto && (p.name == "min_width" || p.name == "min_height") {
 		*field = 0
 	}
 }
@@ -166,24 +219,24 @@ func resolvePercentages(box, containingBlock *Box) {
 	if box.Kind == KindPage {
 		maybeHeight = cbHeight
 	}
-	resolveOnePercentage(box, "margin_left", cbWidth)
-	resolveOnePercentage(box, "margin_right", cbWidth)
-	resolveOnePercentage(box, "margin_top", maybeHeight)
-	resolveOnePercentage(box, "margin_bottom", maybeHeight)
-	resolveOnePercentage(box, "padding_left", cbWidth)
-	resolveOnePercentage(box, "padding_right", cbWidth)
-	resolveOnePercentage(box, "padding_top", maybeHeight)
-	resolveOnePercentage(box, "padding_bottom", maybeHeight)
-	resolveOnePercentage(box, "width", cbWidth)
-	resolveOnePercentage(box, "min_width", cbWidth)
-	resolveOnePercentage(box, "max_width", cbWidth)
+	resolveKnownPercentage(box, knownMarginLeft, cbWidth)
+	resolveKnownPercentage(box, knownMarginRight, cbWidth)
+	resolveKnownPercentage(box, knownMarginTop, maybeHeight)
+	resolveKnownPercentage(box, knownMarginBottom, maybeHeight)
+	resolveKnownPercentage(box, knownPaddingLeft, cbWidth)
+	resolveKnownPercentage(box, knownPaddingRight, cbWidth)
+	resolveKnownPercentage(box, knownPaddingTop, maybeHeight)
+	resolveKnownPercentage(box, knownPaddingBottom, maybeHeight)
+	resolveKnownPercentage(box, knownWidth, cbWidth)
+	resolveKnownPercentage(box, knownMinWidth, cbWidth)
+	resolveKnownPercentage(box, knownMaxWidth, cbWidth)
 
 	// XXX later: top, bottom, left and right on positioned elements
 
 	if cbHeight == Auto {
 		// Special handling when the height of the containing block
 		// depends on its content.
-		height := box.Style.Get("height")
+		height := box.Style.getKnown(knownHeight)
 		d, isDimension := height.(Dimension)
 		if !isDimension || d.Unit == "%" || checkMath(height) {
 			box.Height = Auto
@@ -191,23 +244,23 @@ func resolvePercentages(box, containingBlock *Box) {
 			// Port: upstream asserts that the unit is px.
 			box.Height = d.Value
 		}
-		resolveOnePercentage(box, "min_height", 0)
-		resolveOnePercentage(box, "max_height", math.Inf(1))
+		resolveKnownPercentage(box, knownMinHeight, 0)
+		resolveKnownPercentage(box, knownMaxHeight, math.Inf(1))
 	} else {
-		resolveOnePercentage(box, "height", cbHeight)
-		resolveOnePercentage(box, "min_height", cbHeight)
-		resolveOnePercentage(box, "max_height", cbHeight)
+		resolveKnownPercentage(box, knownHeight, cbHeight)
+		resolveKnownPercentage(box, knownMinHeight, cbHeight)
+		resolveKnownPercentage(box, knownMaxHeight, cbHeight)
 	}
 
-	collapse := isStr(box.Style.Get("border_collapse"), "collapse")
+	collapse := isStr(box.Style.getKnown(knownBorderCollapse), "collapse")
 	// Used value == computed value
 	// border-{side}-width would have been resolved during border conflict
 	// resolution for collapsed-borders
 	if !collapse || !box.bordersSet {
-		box.BorderTopWidth = num(box.Style.Get("border_top_width"))
-		box.BorderRightWidth = num(box.Style.Get("border_right_width"))
-		box.BorderBottomWidth = num(box.Style.Get("border_bottom_width"))
-		box.BorderLeftWidth = num(box.Style.Get("border_left_width"))
+		box.BorderTopWidth = num(box.Style.getKnown(knownBorderTopWidth))
+		box.BorderRightWidth = num(box.Style.getKnown(knownBorderRightWidth))
+		box.BorderBottomWidth = num(box.Style.getKnown(knownBorderBottomWidth))
+		box.BorderLeftWidth = num(box.Style.getKnown(knownBorderLeftWidth))
 		box.bordersSet = true
 	}
 
@@ -272,7 +325,7 @@ func resolveRadiiPercentages(box *Box) {
 // axis is "width" or "height".
 func adjustBoxSizing(box *Box, axis string) {
 	var delta float64
-	switch str(box.Style.Get("box_sizing")) {
+	switch str(box.Style.getKnown(knownBoxSizing)) {
 	case "border-box":
 		if axis == "width" {
 			delta = box.PaddingLeft + box.PaddingRight + box.BorderLeftWidth + box.BorderRightWidth

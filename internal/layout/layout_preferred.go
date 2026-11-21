@@ -244,7 +244,9 @@ func marginWidth(box *Box, width float64, left, right bool) float64 {
 	// It is a set of computed values for border-left-width, padding-left,
 	// padding-right, and border-right-width (along with zero values for
 	// margin-left and margin-right)
-	var values []string
+	// Port: the list of upstream is an array on the stack.
+	var buf [4]string
+	values := buf[:0]
 	if left {
 		values = append(values, "margin_left", "padding_left")
 	}

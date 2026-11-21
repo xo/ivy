@@ -271,7 +271,7 @@ func (f *URLFetcher) fetchFile(u string) (*URLFetcherResponse, error) {
 	}
 	defer func() { _ = file.Close() }()
 	// Port: the size of a resource is bounded by ivy.Limits.MaxMemory.
-	body, err := io.ReadAll(io.LimitReader(file, f.maxSize()+1))
+	body, err := readAll(file, f.maxSize())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrURLFetching, err)
 	}
@@ -279,6 +279,38 @@ func (f *URLFetcher) fetchFile(u string) (*URLFetcherResponse, error) {
 		return nil, fmt.Errorf("%w: %w: file larger than %d bytes: %s", ErrURLFetching, ivy.ErrLimit, f.maxSize(), u)
 	}
 	return &URLFetcherResponse{URL: u, Body: body, ContentType: guessType(name)}, nil
+}
+
+// readAll is io.ReadAll of at most limit+1 bytes of a file.
+//
+// Port: io.ReadAll grows its buffer as it reads, so it allocates about
+// twice the size of a large file. readAll makes the buffer of the size
+// that Stat gives, when Stat gives one within the limit.
+func readAll(file fs.File, limit int64) ([]byte, error) {
+	r := io.LimitReader(file, limit+1)
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > limit {
+		body, err := io.ReadAll(r)
+		if err != nil {
+			return body, fmt.Errorf("reading the file: %w", err)
+		}
+		return body, nil
+	}
+	// The extra byte lets the read that finds the end need no new buffer.
+	buf := make([]byte, 0, info.Size()+1)
+	for {
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if errors.Is(err, io.EOF) {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, fmt.Errorf("reading the file: %w", err)
+		}
+	}
 }
 
 // fileTypes maps the extensions of files to their media types, as

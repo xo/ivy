@@ -94,7 +94,7 @@ func absoluteWidthWithoutMinMax(box *Box, lc *layoutContext, cbX, cbWidth float6
 	defaultTranslateX := cbX - box.PositionX
 
 	switch {
-	case box.Left == Auto && box.Right == Auto && box.Width == Auto:
+	case box.extra().Left == Auto && box.extra().Right == Auto && box.Width == Auto:
 		if box.MarginLeft == Auto {
 			box.MarginLeft = 0
 		}
@@ -109,11 +109,11 @@ func absoluteWidthWithoutMinMax(box *Box, lc *layoutContext, cbX, cbWidth float6
 			translateBoxWidth = true
 			translateX = defaultTranslateX + availableWidth
 		}
-	case box.Left != Auto && box.Right != Auto && box.Width != Auto:
-		widthForMargins := cbWidth - (box.Right + box.Left + box.Width + paddingsBorders)
+	case box.extra().Left != Auto && box.extra().Right != Auto && box.Width != Auto:
+		widthForMargins := cbWidth - (box.extra().Right + box.extra().Left + box.Width + paddingsBorders)
 		switch {
 		case box.MarginLeft == Auto && box.MarginRight == Auto:
-			if box.Width+paddingsBorders+box.Right+box.Left <= cbWidth {
+			if box.Width+paddingsBorders+box.extra().Right+box.extra().Left <= cbWidth {
 				box.MarginLeft = widthForMargins / 2
 				box.MarginRight = widthForMargins / 2
 			} else {
@@ -132,7 +132,7 @@ func absoluteWidthWithoutMinMax(box *Box, lc *layoutContext, cbX, cbWidth float6
 		default:
 			box.MarginLeft = widthForMargins
 		}
-		translateX = box.Left + defaultTranslateX
+		translateX = box.extra().Left + defaultTranslateX
 	default:
 		if box.MarginLeft == Auto {
 			box.MarginLeft = 0
@@ -142,26 +142,26 @@ func absoluteWidthWithoutMinMax(box *Box, lc *layoutContext, cbX, cbWidth float6
 		}
 		spacing := paddingsBorders + box.MarginLeft + box.MarginRight
 		switch {
-		case box.Left == Auto && box.Width == Auto:
-			box.Width = shrinkToFit(lc, box, cbWidth-spacing-box.Right)
-			translateX = cbWidth - box.Right - spacing + defaultTranslateX
+		case box.extra().Left == Auto && box.Width == Auto:
+			box.Width = shrinkToFit(lc, box, cbWidth-spacing-box.extra().Right)
+			translateX = cbWidth - box.extra().Right - spacing + defaultTranslateX
 			translateBoxWidth = true
-		case box.Left == Auto && box.Right == Auto:
+		case box.extra().Left == Auto && box.extra().Right == Auto:
 			if !ltr {
 				availableWidth := cbWidth - (paddingsBorders + box.MarginLeft + box.MarginRight)
 				translateBoxWidth = true
 				translateX = defaultTranslateX + availableWidth
 			}
-		case box.Width == Auto && box.Right == Auto:
-			box.Width = shrinkToFit(lc, box, cbWidth-spacing-box.Left)
-			translateX = box.Left + defaultTranslateX
-		case box.Left == Auto:
-			translateX = cbWidth + defaultTranslateX - (box.Right + spacing + box.Width)
+		case box.Width == Auto && box.extra().Right == Auto:
+			box.Width = shrinkToFit(lc, box, cbWidth-spacing-box.extra().Left)
+			translateX = box.extra().Left + defaultTranslateX
+		case box.extra().Left == Auto:
+			translateX = cbWidth + defaultTranslateX - (box.extra().Right + spacing + box.Width)
 		case box.Width == Auto:
-			box.Width = cbWidth - box.Right - box.Left - spacing
-			translateX = box.Left + defaultTranslateX
-		case box.Right == Auto:
-			translateX = box.Left + defaultTranslateX
+			box.Width = cbWidth - box.extra().Right - box.extra().Left - spacing
+			translateX = box.extra().Left + defaultTranslateX
+		case box.extra().Right == Auto:
+			translateX = box.extra().Left + defaultTranslateX
 		}
 	}
 
@@ -180,7 +180,7 @@ func absoluteHeight(box *Box, cbY, cbHeight float64) absoluteTranslation {
 	defaultTranslateY := cbY - box.PositionY
 
 	switch {
-	case box.Top == Auto && box.Bottom == Auto && box.Height == Auto:
+	case box.extra().Top == Auto && box.extra().Bottom == Auto && box.Height == Auto:
 		// Keep the static position
 		if box.MarginTop == Auto {
 			box.MarginTop = 0
@@ -188,8 +188,8 @@ func absoluteHeight(box *Box, cbY, cbHeight float64) absoluteTranslation {
 		if box.MarginBottom == Auto {
 			box.MarginBottom = 0
 		}
-	case box.Top != Auto && box.Bottom != Auto && box.Height != Auto:
-		heightForMargins := cbHeight - (box.Top + box.Bottom + box.Height + paddingsBorders)
+	case box.extra().Top != Auto && box.extra().Bottom != Auto && box.Height != Auto:
+		heightForMargins := cbHeight - (box.extra().Top + box.extra().Bottom + box.Height + paddingsBorders)
 		switch {
 		case box.MarginTop == Auto && box.MarginBottom == Auto:
 			box.MarginTop = heightForMargins / 2
@@ -199,7 +199,7 @@ func absoluteHeight(box *Box, cbY, cbHeight float64) absoluteTranslation {
 		default:
 			box.MarginBottom = heightForMargins
 		}
-		translateY = box.Top + defaultTranslateY
+		translateY = box.extra().Top + defaultTranslateY
 	default:
 		if box.MarginTop == Auto {
 			box.MarginTop = 0
@@ -209,20 +209,20 @@ func absoluteHeight(box *Box, cbY, cbHeight float64) absoluteTranslation {
 		}
 		spacing := paddingsBorders + box.MarginTop + box.MarginBottom
 		switch {
-		case box.Top == Auto && box.Height == Auto:
-			translateY = cbHeight - box.Bottom - spacing + defaultTranslateY
+		case box.extra().Top == Auto && box.Height == Auto:
+			translateY = cbHeight - box.extra().Bottom - spacing + defaultTranslateY
 			translateBoxHeight = true
-		case box.Top == Auto && box.Bottom == Auto:
+		case box.extra().Top == Auto && box.extra().Bottom == Auto:
 			// Keep the static position
-		case box.Height == Auto && box.Bottom == Auto:
-			translateY = box.Top + defaultTranslateY
-		case box.Top == Auto:
-			translateY = cbHeight + defaultTranslateY - (box.Bottom + spacing + box.Height)
+		case box.Height == Auto && box.extra().Bottom == Auto:
+			translateY = box.extra().Top + defaultTranslateY
+		case box.extra().Top == Auto:
+			translateY = cbHeight + defaultTranslateY - (box.extra().Bottom + spacing + box.Height)
 		case box.Height == Auto:
-			box.Height = cbHeight - box.Bottom - box.Top - spacing
-			translateY = box.Top + defaultTranslateY
-		case box.Bottom == Auto:
-			translateY = box.Top + defaultTranslateY
+			box.Height = cbHeight - box.extra().Bottom - box.extra().Top - spacing
+			translateY = box.extra().Top + defaultTranslateY
+		case box.extra().Bottom == Auto:
+			translateY = box.extra().Top + defaultTranslateY
 		}
 	}
 
@@ -366,16 +366,16 @@ func absoluteReplaced(box *Box, cbX, cbY, cbWidth, cbHeight float64) *Box {
 	ltr := parentIsLTR(box)
 
 	// https://www.w3.org/TR/CSS21/visudet.html#abs-replaced-width
-	if box.Left == Auto && box.Right == Auto {
+	if box.extra().Left == Auto && box.extra().Right == Auto {
 		// static position:
 		if ltr {
-			box.Left = box.PositionX - cbX
+			box.ownExtra().Left = box.PositionX - cbX
 		} else {
-			box.Right = cbX + cbWidth - box.PositionX
+			box.ownExtra().Right = cbX + cbWidth - box.PositionX
 		}
 	}
 	switch {
-	case box.Left == Auto || box.Right == Auto:
+	case box.extra().Left == Auto || box.extra().Right == Auto:
 		if box.MarginLeft == Auto {
 			box.MarginLeft = 0
 		}
@@ -383,14 +383,14 @@ func absoluteReplaced(box *Box, cbX, cbY, cbWidth, cbHeight float64) *Box {
 			box.MarginRight = 0
 		}
 		remaining := cbWidth - box.MarginWidth()
-		if box.Left == Auto {
-			box.Left = remaining - box.Right
+		if box.extra().Left == Auto {
+			box.ownExtra().Left = remaining - box.extra().Right
 		}
-		if box.Right == Auto {
-			box.Right = remaining - box.Left
+		if box.extra().Right == Auto {
+			box.ownExtra().Right = remaining - box.extra().Left
 		}
 	case box.MarginLeft == Auto || box.MarginRight == Auto:
-		remaining := cbWidth - (box.BorderWidth() + box.Left + box.Right)
+		remaining := cbWidth - (box.BorderWidth() + box.extra().Left + box.extra().Right)
 		switch {
 		case box.MarginLeft == Auto && box.MarginRight == Auto:
 			switch {
@@ -410,18 +410,18 @@ func absoluteReplaced(box *Box, cbX, cbY, cbWidth, cbHeight float64) *Box {
 	default:
 		// Over-constrained
 		if ltr {
-			box.Right = cbWidth - (box.MarginWidth() + box.Left)
+			box.ownExtra().Right = cbWidth - (box.MarginWidth() + box.extra().Left)
 		} else {
-			box.Left = cbWidth - (box.MarginWidth() + box.Right)
+			box.ownExtra().Left = cbWidth - (box.MarginWidth() + box.extra().Right)
 		}
 	}
 
 	// https://www.w3.org/TR/CSS21/visudet.html#abs-replaced-height
-	if box.Top == Auto && box.Bottom == Auto {
-		box.Top = box.PositionY - cbY
+	if box.extra().Top == Auto && box.extra().Bottom == Auto {
+		box.ownExtra().Top = box.PositionY - cbY
 	}
 	switch {
-	case box.Top == Auto || box.Bottom == Auto:
+	case box.extra().Top == Auto || box.extra().Bottom == Auto:
 		if box.MarginTop == Auto {
 			box.MarginTop = 0
 		}
@@ -429,14 +429,14 @@ func absoluteReplaced(box *Box, cbX, cbY, cbWidth, cbHeight float64) *Box {
 			box.MarginBottom = 0
 		}
 		remaining := cbHeight - box.MarginHeight()
-		if box.Top == Auto {
-			box.Top = remaining - box.Bottom
+		if box.extra().Top == Auto {
+			box.ownExtra().Top = remaining - box.extra().Bottom
 		}
-		if box.Bottom == Auto {
-			box.Bottom = remaining - box.Top
+		if box.extra().Bottom == Auto {
+			box.ownExtra().Bottom = remaining - box.extra().Top
 		}
 	case box.MarginTop == Auto || box.MarginBottom == Auto:
-		remaining := cbHeight - (box.BorderHeight() + box.Top + box.Bottom)
+		remaining := cbHeight - (box.BorderHeight() + box.extra().Top + box.extra().Bottom)
 		switch {
 		case box.MarginTop == Auto && box.MarginBottom == Auto:
 			box.MarginTop = math.Floor(remaining / 2)
@@ -448,11 +448,11 @@ func absoluteReplaced(box *Box, cbX, cbY, cbWidth, cbHeight float64) *Box {
 		}
 	default:
 		// Over-constrained
-		box.Bottom = cbHeight - (box.MarginHeight() + box.Top)
+		box.ownExtra().Bottom = cbHeight - (box.MarginHeight() + box.extra().Top)
 	}
 
 	// No children for replaced boxes, no need to .translate()
-	box.PositionX = cbX + box.Left
-	box.PositionY = cbY + box.Top
+	box.PositionX = cbX + box.extra().Left
+	box.PositionY = cbY + box.extra().Top
 	return box
 }

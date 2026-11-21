@@ -18,11 +18,14 @@ package layout
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"math"
+	"math/bits"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/xo/okage/cssselect2"
 	"github.com/xo/okage/tinycss2"
@@ -1006,10 +1009,18 @@ func textDecoration(key string, value, parentValue Value, cascaded bool) Value {
 // returns the style sheets of the elements style and link of the document,
 // in the order of the document.
 func findStylesheets(ctx *cssContext, root *cssselect2.ElementWrapper, deviceMediaType, baseURL string) []*CSS {
-	selectors, _ := cssselect2.CompileSelectorList("style, link", nil)
+	// Port: upstream matches the selector list "style, link" on the wrappers
+	// of cssselect2. The port reads the local names of the elements in the
+	// same order, without a wrapper for each element of the document.
 	var sheets []*CSS
-	for wrapper := range root.QueryAll(selectors...) {
-		element := wrapperElement(wrapper)
+	rootElement := wrapperElement(root)
+	if rootElement == nil {
+		return nil
+	}
+	for element := range rootElement.Iter() {
+		if local, _ := element.localName(); local != "style" && local != "link" {
+			continue
+		}
 		mimeType, _, _ := strings.Cut(element.GetDefault("type", "text/css"), ";")
 		// Only keep 'type/subtype' from 'type/subtype ; param1; param2'.
 		if strings.TrimSpace(mimeType) != "text/css" {
@@ -2126,16 +2137,16 @@ type Style struct {
 	// RootStyle is the style of the root element, or the initial style for
 	// the root element itself.
 	RootStyle *Style
-	// IsRootElement is true for the style of the root element.
-	IsRootElement bool
 	// PseudoType is the pseudo-element type of a computed style, or "".
 	PseudoType string
 	// BaseURL is the base URL of a computed style.
 	BaseURL string
+	// IsRootElement is true for the style of the root element.
+	IsRootElement bool
 
+	// The fields of one byte follow IsRootElement, so that the style is
+	// smaller.
 	kind styleKind
-	// cascadedSet holds the known properties of cascaded.
-	cascadedSet propertySet
 	// initialSpecified holds a bit for position and float when their
 	// specified value is their initial value, which missingComputed does
 	// not store in specified.
@@ -2143,6 +2154,14 @@ type Style struct {
 	// copied is true for a copy. The layout sets the values of a copy,
 	// such as the values of the first line, after its copy.
 	copied bool
+	// fontKeysSet holds a bit for each key of fontKeys that the style
+	// keeps.
+	fontKeysSet uint8
+	// flow caches the flags of flowFlags. Set and Delete clear it.
+	flow uint8
+
+	// cascadedSet holds the known properties of cascaded.
+	cascadedSet propertySet
 	// inheritFrom is the style that gives the value of each fromParent
 	// property and each custom property of this computed style, or nil.
 	// The style does not store these values. A computed style has one when
@@ -2156,22 +2175,31 @@ type Style struct {
 	// one step.
 	inheritFrom *Style
 
+	// stored holds the ids of the known properties whose computed values
+	// the style holds, and vals holds these values in the order of the
+	// ids. other holds the values of the custom properties, and of the
+	// names that are not properties, which Set can store.
+	//
+	// Port: a style of upstream is a dict. The port keeps the values of the
+	// known properties in a slice, without a map and without the hash of
+	// the name for each value that the style holds. See propertyInfo.
+	stored propertySet
+	vals   []Value
+	other  map[string]Value
+
 	solving   map[string]bool
-	values    map[string]Value
 	specified map[string]Value
 	cascaded  map[string]cascadedValue
 	ctx       *StyleContext
 	anonymous *Style
 
 	// fontKeys caches the keys of fontStyleCacheKey, without and with the
-	// size, when the bit of fontKeysSet is set. Set and Delete clear them.
+	// size, when the bit of fontKeysSet is set. Set and Delete clear the
+	// keys that the property changes. See fontKeyBits.
 	//
 	// Port: upstream makes the key for each line. A computed value does
 	// not change once computed, except through Set and Delete.
-	fontKeys    [2]string
-	fontKeysSet uint8
-	// flow caches the flags of flowFlags. Set and Delete clear it.
-	flow uint8
+	fontKeys [2]string
 	// fonts is the fontmap of the style for the shaping, or nil. Set and
 	// Delete clear it.
 	fonts *styleFonts
@@ -2181,36 +2209,137 @@ type Style struct {
 // property, and computes it first when needed. It returns nil for an
 // unknown property.
 func (s *Style) Get(key string) Value {
-	if v, ok := s.values[key]; ok {
+	return s.get(key, propertyInfos[key])
+}
+
+// knownProperty is a known property that a hot path of the layout reads
+// with getKnown, without the hash of its name. Make one with
+// newKnownProperty in a variable of the package.
+type knownProperty struct {
+	name string
+	info func() *propertyInfo
+}
+
+// newKnownProperty returns the knownProperty of a name. It finds the
+// propertyInfo at its first use, after the init functions of the package.
+func newKnownProperty(name string) knownProperty {
+	return knownProperty{name, sync.OnceValue(func() *propertyInfo { return propertyInfos[name] })}
+}
+
+// getKnown is Get for a knownProperty.
+func (s *Style) getKnown(p knownProperty) Value {
+	return s.get(p.name, p.info())
+}
+
+// get is Get for a key and its propertyInfo, which is nil for a custom
+// property and for a name that is not a property.
+func (s *Style) get(key string, info *propertyInfo) Value {
+	if v, ok := s.lookup(key, info); ok {
 		return v
 	}
 	switch s.kind {
 	case kindInitial:
 		return s.missingInitial(key)
 	case kindAnonymous:
-		return s.missingAnonymous(key)
+		return s.missingAnonymous(key, info)
 	}
-	return s.missingComputed(key)
+	return s.missingComputed(key, info)
+}
+
+// lookup returns the value that the style holds for a key, and whether it
+// holds one.
+func (s *Style) lookup(key string, info *propertyInfo) (Value, bool) {
+	if info == nil {
+		v, ok := s.other[key]
+		return v, ok
+	}
+	if !s.stored.has(info.id) {
+		return nil, false
+	}
+	return s.vals[s.stored.rank(info.id)], true
 }
 
 // Set is style[key] = value of upstream.
 func (s *Style) Set(key string, value Value) {
 	s.store(key, value)
-	s.fontKeysSet = 0
+	s.fontKeysSet &^= fontKeyBits(key)
 	s.flow = 0
 	s.fonts = nil
 }
 
-// store keeps the computed value of a property, and makes the map of the
-// values first if needed.
-//
-// Port: a style of upstream is a dict. The map of a style that holds no
-// value is nil, as most styles of the pseudo-elements hold none.
+// store keeps the computed value of a property.
 func (s *Style) store(key string, value Value) {
-	if s.values == nil {
-		s.values = make(map[string]Value)
+	s.storeInfo(key, propertyInfos[key], value)
+}
+
+// storeInfo is store for a key and its propertyInfo.
+func (s *Style) storeInfo(key string, info *propertyInfo, value Value) {
+	if info == nil {
+		if s.other == nil {
+			s.other = make(map[string]Value)
+		}
+		s.other[key] = value
+		return
 	}
-	s.values[key] = value
+	i := s.stored.rank(info.id)
+	if s.stored.has(info.id) {
+		s.vals[i] = value
+		return
+	}
+	s.stored.add(info.id)
+	if s.vals == nil {
+		// Most styles that hold a value hold a few.
+		s.vals = make([]Value, 0, 4)
+	}
+	s.vals = slices.Insert(s.vals, i, value)
+}
+
+// remove removes the value that the style holds for a key, if any.
+func (s *Style) remove(key string, info *propertyInfo) {
+	if info == nil {
+		delete(s.other, key)
+		return
+	}
+	if !s.stored.has(info.id) {
+		return
+	}
+	i := s.stored.rank(info.id)
+	s.vals = slices.Delete(s.vals, i, i+1)
+	s.stored.clear(info.id)
+}
+
+// storedKeys returns the names of the properties whose values the style
+// holds, in no order.
+func (s *Style) storedKeys() []string {
+	keys := make([]string, 0, len(s.vals)+len(s.other))
+	for id := range s.stored.all() {
+		keys = append(keys, propertyFacts[id].name)
+	}
+	for key := range s.other {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// keepOnly makes the style hold the values of keys, as style computes
+// them, and no other value. styleDict uses it.
+func (s *Style) keepOnly(style *Style, keys map[string]cascadedValue) {
+	s.stored, s.vals, s.other = propertySet{}, nil, nil
+	for key := range keys {
+		s.store(key, style.Get(key))
+	}
+}
+
+// merge stores the values that other holds in the style.
+func (s *Style) merge(other *Style) {
+	i := 0
+	for id := range other.stored.all() {
+		s.store(propertyFacts[id].name, other.vals[i])
+		i++
+	}
+	for key, value := range other.other {
+		s.store(key, value)
+	}
 }
 
 // Has is key in style of upstream: it reports whether the value of a
@@ -2219,14 +2348,14 @@ func (s *Style) store(key string, value Value) {
 // Port: Has is false for a value that the style gives without storing it.
 // See propertyInfo.
 func (s *Style) Has(key string) bool {
-	_, ok := s.values[key]
+	_, ok := s.lookup(key, propertyInfos[key])
 	return ok
 }
 
 // Delete is del style[key] of upstream.
 func (s *Style) Delete(key string) {
-	delete(s.values, key)
-	s.fontKeysSet = 0
+	s.remove(key, propertyInfos[key])
+	s.fontKeysSet &^= fontKeyBits(key)
 	s.flow = 0
 	s.fonts = nil
 }
@@ -2268,7 +2397,8 @@ func (s *Style) AnonymousStyle() *Style {
 // weasyprint/css/__init__.py.
 func (s *Style) Copy() *Style {
 	c := *s
-	c.values = maps.Clone(s.values)
+	c.vals = slices.Clone(s.vals)
+	c.other = maps.Clone(s.other)
 	c.copied = true
 	c.anonymous = nil
 	c.solving = nil
@@ -2283,7 +2413,7 @@ func (s *Style) Copy() *Style {
 // newInitialStyle is InitialStyle.__init__ in weasyprint/css/__init__.py, a
 // dummy computed style used to store initial values.
 func newInitialStyle(ctx *StyleContext) *Style {
-	return &Style{kind: kindInitial, values: map[string]Value{}, ctx: ctx}
+	return &Style{kind: kindInitial, ctx: ctx}
 }
 
 // missingInitial is InitialStyle.__missing__.
@@ -2314,47 +2444,75 @@ func newAnonymousStyle(parentStyle *Style) *Style {
 	}
 }
 
-// missingAnonymous is AnonymousStyle.__missing__.
-func (s *Style) missingAnonymous(key string) Value {
+// missingAnonymous is AnonymousStyle.__missing__. info is the
+// propertyInfo of key, or nil.
+func (s *Style) missingAnonymous(key string, info *propertyInfo) Value {
 	// Port: see propertyInfo. The border widths and the width of the
 	// outline are 0, as newAnonymousStyle says. An anonymous style stores
 	// the values of its parent, as the layout reads the style of a text
 	// many times.
-	if info := propertyInfos[key]; info != nil {
-		switch {
-		case info.constant || info.specified != 0:
-			return info.initial
-		case info.zeroWidth:
-			return Int(0)
-		}
-	}
-	var value Value
-	switch {
-	case Inherited[key] || strings.HasPrefix(key, "__"):
-		value = s.ParentStyle.Get(key)
-		s.store(key, value)
-	case key == "page":
-		// page is not inherited but taken from the ancestor if 'auto'.
-		value = s.ParentStyle.Get(key)
-		s.store(key, value)
-	case strings.HasPrefix(key, "text_decoration_"):
-		value = textDecoration(key, InitialValues[key], s.ParentStyle.Get(key), false)
-		s.store(key, value)
-	default:
-		var ok bool
-		value, ok = InitialValues[key]
-		if !ok {
+	if info == nil {
+		if !strings.HasPrefix(key, "__") {
 			return nil
 		}
-		if computer, ok := computerFunctions[key]; ok && initialNotComputed[key] {
+		value := s.ParentStyle.get(key, nil)
+		s.storeInfo(key, nil, value)
+		return value
+	}
+	switch {
+	case info.constant || info.specified != 0:
+		return info.initial
+	case info.zeroWidth:
+		return Int(0)
+	}
+	fact := &propertyFacts[info.id]
+	var value Value
+	switch {
+	case fact.inherited:
+		value = s.ParentStyle.get(key, info)
+	case key == "page":
+		// page is not inherited but taken from the ancestor if 'auto'.
+		value = s.ParentStyle.get(key, info)
+	case fact.textDecoration:
+		value = textDecoration(key, fact.initial, s.ParentStyle.get(key, info), false)
+	default:
+		value = fact.initial
+		if fact.computer != nil && fact.initialNotComputed {
 			// Value not computed yet: compute.
-			value = computer(s, key, value)
+			value = fact.computer(s, key, value)
 		}
 		// The value is the same as when computed.
-		s.store(key, value)
 	}
+	s.storeInfo(key, info, value)
 	return value
 }
+
+// propertyFact is what does not change of a known property, for the
+// styles that compute its value.
+//
+// Port: upstream reads these facts in its dicts, by the name of the
+// property. The port reads them by the number of the property, without a
+// hash of the name.
+type propertyFact struct {
+	// name is the name of the property, such as "margin_top".
+	name string
+	// inherited is Inherited[name].
+	inherited bool
+	// textDecoration is true for a property of the text decorations.
+	textDecoration bool
+	// initialNotComputed is initialNotComputed[name].
+	initialNotComputed bool
+	// initial is InitialValues[name].
+	initial Value
+	// computer is computerFunctions[name], or nil.
+	computer computerFunc
+	// physical is physicalFunctions[name], or nil.
+	physical func(block, inline string) string
+}
+
+// propertyFacts holds the propertyFact of each known property, by its
+// propertyInfo.id.
+var propertyFacts []propertyFact
 
 // newComputedStyle is ComputedStyle.__init__ in weasyprint/css/__init__.py,
 // the computed style used for the boxes that are not anonymous.
@@ -2437,6 +2595,41 @@ func (p *propertySet) add(id int) {
 	p[id/64] |= 1 << (id % 64)
 }
 
+// clear removes the property id from the set.
+func (p *propertySet) clear(id int) {
+	p[id/64] &^= 1 << (id % 64)
+}
+
+// has reports whether the property id is in the set.
+func (p *propertySet) has(id int) bool {
+	return p[id/64]&(1<<(id%64)) != 0
+}
+
+// all returns the ids of the set, in increasing order.
+func (p *propertySet) all() iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for w, word := range p {
+			for word != 0 {
+				if !yield(w*64 + bits.TrailingZeros64(word)) {
+					return
+				}
+				word &= word - 1
+			}
+		}
+	}
+}
+
+// rank returns the number of the properties of the set whose id is less
+// than id.
+func (p *propertySet) rank(id int) int {
+	w := id / 64
+	n := bits.OnesCount64(p[w] & (1<<(id%64) - 1))
+	for i := range w {
+		n += bits.OnesCount64(p[i])
+	}
+	return n
+}
+
 // intersects reports whether the two sets have a property in common.
 func (p *propertySet) intersects(o *propertySet) bool {
 	return p[0]&o[0] != 0 || p[1]&o[1] != 0 || p[2]&o[2] != 0 || p[3]&o[3] != 0
@@ -2449,14 +2642,25 @@ var propertyInfos map[string]*propertyInfo
 func newPropertyInfos() map[string]*propertyInfo {
 	keys := slices.Sorted(maps.Keys(InitialValues))
 	if len(keys) > len(propertySet{})*64 {
-		// The fast paths need a bit for each property.
-		return map[string]*propertyInfo{}
+		// The styles need a bit for each property.
+		panic("layout: too many properties for a propertySet")
 	}
 	m := make(map[string]*propertyInfo, len(keys))
+	propertyFacts = make([]propertyFact, len(keys))
 	for id, key := range keys {
+		textDecoration := strings.HasPrefix(key, "text_decoration_")
 		m[key] = &propertyInfo{
 			id:         id,
-			fromParent: Inherited[key] || key == "page" || strings.HasPrefix(key, "text_decoration_"),
+			fromParent: Inherited[key] || key == "page" || textDecoration,
+		}
+		propertyFacts[id] = propertyFact{
+			name:               key,
+			inherited:          Inherited[key],
+			textDecoration:     textDecoration,
+			initialNotComputed: initialNotComputed[key],
+			initial:            InitialValues[key],
+			computer:           computerFunctions[key],
+			physical:           physicalFunctions[key],
 		}
 	}
 	// cascade adds a property and its logical properties to set.
@@ -2509,18 +2713,18 @@ func (s *Style) inheritedFrom() *Style {
 	return s
 }
 
-// missingComputed is ComputedStyle.__missing__.
-func (s *Style) missingComputed(key string) Value {
+// missingComputed is ComputedStyle.__missing__. info is the propertyInfo
+// of key, or nil.
+func (s *Style) missingComputed(key string, info *propertyInfo) Value {
 	// Port: see propertyInfo.
-	info := propertyInfos[key]
 	known := info != nil
 	switch {
 	case !known:
 		if s.inheritFrom != nil && strings.HasPrefix(key, "__") {
-			return s.inheritFrom.Get(key)
+			return s.inheritFrom.get(key, nil)
 		}
 	case s.inheritFrom != nil && info.fromParent:
-		return s.inheritFrom.Get(key)
+		return s.inheritFrom.get(key, info)
 	case s.cascadedSet.intersects(&info.cascades):
 	case info.constant:
 		return info.initial
@@ -2533,7 +2737,7 @@ func (s *Style) missingComputed(key string) Value {
 		}
 		// The layout reads them often, so they are stored.
 		s.initialSpecified |= info.specified
-		s.store(key, info.initial)
+		s.storeInfo(key, info, info.initial)
 		return info.initial
 	}
 	switch key {
@@ -2551,6 +2755,10 @@ func (s *Style) missingComputed(key string) Value {
 		// Port: upstream raises KeyError for an unknown property.
 		return nil
 	}
+	fact := &propertyFact{}
+	if known {
+		fact = &propertyFacts[info.id]
+	}
 
 	var value Value
 	var w weight
@@ -2560,7 +2768,7 @@ func (s *Style) missingComputed(key string) Value {
 	} else {
 		// Property not defined in cascaded properties, define as inherited
 		// or initial value.
-		if Inherited[key] || isCustom {
+		if fact.inherited || isCustom {
 			value = String("inherit")
 		} else {
 			value = String("initial")
@@ -2568,12 +2776,14 @@ func (s *Style) missingComputed(key string) Value {
 	}
 	_, pending := value.(*Pending)
 
-	wantedKey := strings.ReplaceAll(key, "_", "-")
-	if logicalFunction, ok := physicalFunctions[key]; ok {
+	// Port: the name of the property in the CSS, with hyphens, is only
+	// for the values of var(), so the port makes it there.
+	wantedKey := key
+	if logicalFunction := fact.physical; logicalFunction != nil {
 		// TODO: use writing-mode and text-orientation.
 		logicalKey := logicalFunction("ttb", str(s.Get("direction")))
 		if c, ok := s.cascaded[logicalKey]; ok && c.weight.compare(w) >= 0 {
-			wantedKey = strings.ReplaceAll(logicalKey, "_", "-")
+			wantedKey = logicalKey
 			value = c.value
 			_, pending = value.(*Pending)
 		}
@@ -2589,9 +2799,9 @@ func (s *Style) missingComputed(key string) Value {
 		var solvedTokens []tinycss2.Node
 		tooLong := false
 		for _, token := range p.Tokens {
-			s.store(key, nil) // Mark property as invalid to avoid endless loops.
+			s.storeInfo(key, info, nil) // Mark property as invalid to avoid endless loops.
 			tokens, ok := resolveVar(s, token, parentStyle)
-			delete(s.values, key)
+			s.remove(key, info)
 			switch {
 			case !ok:
 				solvedTokens = append(solvedTokens, token)
@@ -2613,21 +2823,21 @@ func (s *Style) missingComputed(key string) Value {
 			err = invalidValues("too many tokens in the value of the variables")
 			s.ctx.log.warning("Ignored `%s`, too many tokens in the value of the variables.", p.Name)
 		} else {
-			value, err = p.solve(s.ctx.log, solvedTokens, wantedKey, s.BaseURL)
+			value, err = p.solve(s.ctx.log, solvedTokens, strings.ReplaceAll(wantedKey, "_", "-"), s.BaseURL)
 		}
 		if err != nil {
 			switch {
-			case Inherited[key] && parentStyle != nil:
+			case fact.inherited && parentStyle != nil:
 				// Values in parent_style are already computed.
-				value = parentStyle.Get(key)
-				s.store(key, value)
+				value = parentStyle.get(key, info)
+				s.storeInfo(key, info, value)
 			case isCustom:
 				value = nil
 			default:
-				value = InitialValues[key]
-				if !initialNotComputed[key] {
+				value = fact.initial
+				if !fact.initialNotComputed {
 					// The value is the same as when computed.
-					s.store(key, value)
+					s.storeInfo(key, info, value)
 				}
 			}
 		}
@@ -2637,33 +2847,33 @@ func (s *Style) missingComputed(key string) Value {
 		if isCustom {
 			value = Tokens{}
 		} else {
-			value = InitialValues[key]
+			value = fact.initial
 		}
-		if !initialNotComputed[key] {
+		if !fact.initialNotComputed {
 			// The value is the same as when computed.
-			s.store(key, value)
+			s.storeInfo(key, info, value)
 		}
 	} else if isStr(value, "inherit") {
 		// Values in parent_style are already computed.
-		value = parentStyle.Get(key)
-		s.store(key, value)
+		value = parentStyle.get(key, info)
+		s.storeInfo(key, info, value)
 		// display depends on float, and float on position, call computer
 		// again.
 		if key == "display" || key == "float" {
-			value = computerFunctions[key](s, key, value)
-			s.store(key, value)
+			value = fact.computer(s, key, value)
+			s.storeInfo(key, info, value)
 		}
 	}
 
 	switch {
-	case strings.HasPrefix(key, "text_decoration_") && parentStyle != nil:
+	case fact.textDecoration && parentStyle != nil:
 		// Text decorations are not inherited but propagated. See
 		// https://www.w3.org/TR/css-text-decor-3/#line-decoration.
-		if computer, ok := computerFunctions[key]; ok {
-			value = computer(s, key, value)
+		if fact.computer != nil {
+			value = fact.computer(s, key, value)
 		}
 		_, cascaded := s.cascaded[key]
-		s.store(key, textDecoration(key, value, parentStyle.Get(key), cascaded))
+		s.storeInfo(key, info, textDecoration(key, value, parentStyle.get(key, info), cascaded))
 	case key == "page" && isStr(value, "auto"):
 		// The page property does not inherit. However, if the page value on
 		// an element is auto, then its used value is the value specified on
@@ -2673,9 +2883,9 @@ func (s *Style) missingComputed(key string) Value {
 		if parentStyle == nil {
 			value = String("")
 		} else {
-			value = parentStyle.Get("page")
+			value = parentStyle.get(key, info)
 		}
-		delete(s.values, key)
+		s.remove(key, info)
 	case key == "position" || key == "float" || key == "display":
 		// Save specified values to define computed values for these specific
 		// properties. See https://www.w3.org/TR/CSS21/visuren.html#dis-pos-flo.
@@ -2689,17 +2899,17 @@ func (s *Style) missingComputed(key string) Value {
 		value = s.solveMath(key, value)
 	}
 
-	if v, ok := s.values[key]; ok {
+	if v, ok := s.lookup(key, info); ok {
 		// Value already computed and saved: return.
 		return v
 	}
 
-	if computer, ok := computerFunctions[key]; ok {
+	if fact.computer != nil {
 		// Value not computed yet: compute.
-		value = computer(s, key, value)
+		value = fact.computer(s, key, value)
 	}
 
-	s.store(key, value)
+	s.storeInfo(key, info, value)
 	return value
 }
 

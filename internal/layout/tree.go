@@ -163,6 +163,52 @@ func clarkName(namespace, local string) string {
 	return "{" + namespace + "}" + local
 }
 
+// clarkNames keeps the names in the Clark notation of a tree, so that the
+// elements and the attributes of a name share one string.
+//
+// Port: ElementTree makes a string for each element. The names of a tree
+// are few, and the elements of a book are many.
+type clarkNames map[[2]string]string
+
+// name returns clarkName(namespace, local).
+func (c clarkNames) name(namespace, local string) string {
+	if namespace == "" {
+		return local
+	}
+	key := [2]string{namespace, local}
+	if name, ok := c[key]; ok {
+		return name
+	}
+	name := clarkName(namespace, local)
+	c[key] = name
+	return name
+}
+
+// slab gives new values of a type from blocks, for the many values of a
+// tree that last as long as the tree, such as its elements and its boxes.
+// Each block is twice as large as the last one, up to maxSlab values.
+//
+// Port: upstream makes each value on its own. A block makes many values
+// with one allocation.
+type slab[T any] struct {
+	free []T
+	size int
+}
+
+// maxSlab is the largest number of values of a block of a slab.
+const maxSlab = 128
+
+// next returns a new zero value.
+func (s *slab[T]) next() *T {
+	if len(s.free) == 0 {
+		s.size = min(max(2*s.size, 8), maxSlab)
+		s.free = make([]T, s.size)
+	}
+	v := &s.free[0]
+	s.free = s.free[1:]
+	return v
+}
+
 // treeBudget counts the elements that a tree builds, against a limit.
 type treeBudget struct {
 	elements int
@@ -190,7 +236,8 @@ func TreeFromHTML(doc *html.Document, maxElements, maxDepth int) *Element {
 	if !budget.take() {
 		return nil
 	}
-	el := htmlElement(root)
+	var elements slab[Element]
+	el := htmlElement(root, &elements)
 	type frame struct {
 		src   *html.Node
 		dst   *Element
@@ -200,6 +247,16 @@ func TreeFromHTML(doc *html.Document, maxElements, maxDepth int) *Element {
 	for len(stack) > 0 {
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		// Port: the list of the children has the size of their number.
+		n := 0
+		for child := range f.src.Children() {
+			if child.Type() == html.ElementNode {
+				n++
+			}
+		}
+		if n > 0 {
+			f.dst.Children = make([]*Element, 0, n)
+		}
 		for child := range f.src.Children() {
 			switch child.Type() {
 			case html.TextNode:
@@ -208,7 +265,7 @@ func TreeFromHTML(doc *html.Document, maxElements, maxDepth int) *Element {
 				if f.depth >= maxDepth || !budget.take() {
 					continue
 				}
-				c := htmlElement(child)
+				c := htmlElement(child, &elements)
 				f.dst.appendChild(c)
 				stack = append(stack, frame{child, c, f.depth + 1})
 			}
@@ -218,13 +275,15 @@ func TreeFromHTML(doc *html.Document, maxElements, maxDepth int) *Element {
 }
 
 // htmlElement makes an Element of an element of okage, with no children.
-func htmlElement(n *html.Node) *Element {
+// elements gives the element.
+func htmlElement(n *html.Node, elements *slab[Element]) *Element {
 	tag := n.Name()
 	if ns := n.Namespace(); ns != "" && ns != html.NamespaceHTML {
 		tag = clarkName(ns, tag)
 	}
 	attrs := n.Attributes()
-	el := &Element{Tag: tag, Attrib: make([]Attr, len(attrs))}
+	el := elements.next()
+	el.Tag, el.Attrib = tag, make([]Attr, len(attrs))
 	for i, attr := range attrs {
 		el.Attrib[i] = Attr{Name: clarkName(attr.Namespace, attr.Name), Value: attr.Value}
 	}
@@ -246,7 +305,9 @@ func TreeFromXML(doc *roxmltree.Document, maxElements, maxDepth int) *Element {
 	if !budget.take() {
 		return nil
 	}
-	el := xmlElement(root)
+	names := clarkNames{}
+	var elements slab[Element]
+	el := xmlElement(root, names, &elements)
 	type frame struct {
 		src   roxmltree.Node
 		dst   *Element
@@ -256,6 +317,16 @@ func TreeFromXML(doc *roxmltree.Document, maxElements, maxDepth int) *Element {
 	for len(stack) > 0 {
 		f := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+		// Port: the list of the children has the size of their number.
+		n := 0
+		for child := range f.src.Children() {
+			if child.IsElement() {
+				n++
+			}
+		}
+		if n > 0 {
+			f.dst.Children = make([]*Element, 0, n)
+		}
 		for child := range f.src.Children() {
 			switch {
 			case child.IsText():
@@ -265,7 +336,7 @@ func TreeFromXML(doc *roxmltree.Document, maxElements, maxDepth int) *Element {
 				if f.depth >= maxDepth || !budget.take() {
 					continue
 				}
-				c := xmlElement(child)
+				c := xmlElement(child, names, &elements)
 				f.dst.appendChild(c)
 				stack = append(stack, frame{child, c, f.depth + 1})
 			}
@@ -275,17 +346,26 @@ func TreeFromXML(doc *roxmltree.Document, maxElements, maxDepth int) *Element {
 }
 
 // xmlElement makes an Element of an element of roxmltree, with no children.
-func xmlElement(n roxmltree.Node) *Element {
+// names keeps the names of the tree, and elements gives the element.
+func xmlElement(n roxmltree.Node, names clarkNames, elements *slab[Element]) *Element {
 	name := n.TagName()
 	ns, _ := name.Namespace()
 	tag := name.Name()
 	if ns != nsHTML {
-		tag = clarkName(ns, tag)
+		tag = names.name(ns, tag)
 	}
-	el := &Element{Tag: tag}
+	el := elements.next()
+	el.Tag = tag
+	count := 0
+	for range n.Attributes() {
+		count++
+	}
+	if count > 0 {
+		el.Attrib = make([]Attr, 0, count)
+	}
 	for attr := range n.Attributes() {
 		ans, _ := attr.Namespace()
-		el.Attrib = append(el.Attrib, Attr{Name: clarkName(ans, attr.Name()), Value: attr.Value()})
+		el.Attrib = append(el.Attrib, Attr{Name: names.name(ans, attr.Name()), Value: attr.Value()})
 	}
 	return el
 }

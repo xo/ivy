@@ -24,6 +24,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
@@ -956,14 +957,23 @@ func (l *TextLayout) setWrapChar() {
 //
 // Port: Pango tailors the rules for some languages. The port does not.
 func logAttrs(text string) []LogAttr {
-	runes := []rune(text)
+	// Port: the segmenter and the runes come from logScratch, as the
+	// layout reads the attributes of many short texts.
+	scratch := logScratch.Get().(*logAttrsScratch)
+	defer logScratch.Put(scratch)
+	runes := textRunes(&scratch.runes, text, -1)
 	attrs := make([]LogAttr, len(runes)+1)
 	if len(runes) == 0 {
 		return attrs
 	}
-	var seg segmenter.Segmenter
+	seg := &scratch.seg
+	if len(runes) > maxScratch {
+		// The segmenter keeps its buffers, so a long text gets a segmenter
+		// of its own.
+		seg = new(segmenter.Segmenter)
+	}
 	seg.Init(runes)
-	setLineBreaks(&seg, runes, attrs)
+	setLineBreaks(seg, runes, attrs)
 	words := seg.WordIterator()
 	for words.Next() {
 		word := words.Word()
@@ -975,6 +985,15 @@ func logAttrs(text string) []LogAttr {
 	}
 	return attrs
 }
+
+// logAttrsScratch holds the buffers of logAttrs.
+type logAttrsScratch struct {
+	seg   segmenter.Segmenter
+	runes []rune
+}
+
+// logScratch holds the logAttrsScratch that no call of logAttrs uses.
+var logScratch = sync.Pool{New: func() any { return new(logAttrsScratch) }}
 
 // lineBreaks returns the log attributes of a text with only IsLineBreak
 // set, as logAttrs sets it. It reuses the buffers of the configuration.
@@ -1547,13 +1566,53 @@ func fontStyleCacheKey(style *Style, includeSize bool) string {
 	if style.fontKeysSet&bit != 0 {
 		return style.fontKeys[i]
 	}
-	key := fontKey(style)
-	if includeSize {
-		key += ValueString(style.Get("font_size")) + ValueString(style.Get("line_height"))
+	var key string
+	switch from := style.fontKeyFrom(); {
+	case from != nil:
+		key = fontStyleCacheKey(from, includeSize)
+	case includeSize:
+		key = fontStyleCacheKey(style, false) +
+			ValueString(style.Get("font_size")) + ValueString(style.Get("line_height"))
+	default:
+		key = fontKey(style)
 	}
 	style.fontKeys[i] = key
 	style.fontKeysSet |= bit
 	return key
+}
+
+// fontKeyFrom returns the style whose key of fontStyleCacheKey is the key
+// of style, or nil. The properties of the key are inherited. An anonymous
+// style and a computed style with inheritFrom take their values from that
+// style, unless the style is a copy, whose values the layout sets.
+//
+// Port: upstream makes the key of each style. The styles of a book share
+// most keys.
+func (s *Style) fontKeyFrom() *Style {
+	switch {
+	case s.copied:
+		return nil
+	case s.kind == kindAnonymous:
+		return s.ParentStyle.inheritedFrom()
+	case s.kind == kindComputed:
+		return s.inheritFrom
+	}
+	return nil
+}
+
+// fontKeyBits returns the bits of Style.fontKeysSet of the keys of
+// fontStyleCacheKey that the value of a property changes.
+//
+// Port: Set and Delete clear only these keys, as the copy of a style that
+// sets letter-spacing or line-height keeps its font.
+func fontKeyBits(key string) uint8 {
+	switch {
+	case key == "font_size" || key == "line_height":
+		return 2
+	case slices.Contains(fontKeyProperties[:], key):
+		return 3
+	}
+	return 0
 }
 
 // Strut is strut in weasyprint/text/line_break.py. It returns the used

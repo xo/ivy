@@ -570,10 +570,10 @@ func blockFields(t *testing.T, name string, box *Box, fields map[string]float64)
 		"margin_width":        box.MarginWidth(),
 		"border_height":       box.BorderHeight(),
 		"border_width":        box.BorderWidth(),
-		"top":                 box.Top,
-		"left":                box.Left,
-		"right":               box.Right,
-		"bottom":              box.Bottom,
+		"top":                 box.extra().Top,
+		"left":                box.extra().Left,
+		"right":               box.extra().Right,
+		"bottom":              box.extra().Bottom,
 		"baseline":            box.Baseline,
 	}
 	for field, want := range fields {

@@ -688,18 +688,22 @@ var genericFamilies = map[string]svg.FontFamily{
 // without the size: the key of the font of a style.
 func fontKey(style *Style) string {
 	var b strings.Builder
-	for _, name := range []string{
-		"font_family", "font_style", "font_stretch", "font_weight",
-		"font_variant_ligatures", "font_variant_position",
-		"font_variant_caps", "font_variant_numeric",
-		"font_variant_alternates", "font_variant_east_asian",
-		"font_feature_settings", "font_variation_settings",
-		"font_language_override", "lang",
-	} {
+	for _, name := range fontKeyProperties {
 		b.WriteString(ValueString(style.Get(name)))
 		b.WriteByte(0)
 	}
 	return b.String()
+}
+
+// fontKeyProperties are the properties whose values make the key of
+// fontKey. Each one is inherited.
+var fontKeyProperties = [...]string{
+	"font_family", "font_style", "font_stretch", "font_weight",
+	"font_variant_ligatures", "font_variant_position",
+	"font_variant_caps", "font_variant_numeric",
+	"font_variant_alternates", "font_variant_east_asian",
+	"font_feature_settings", "font_variation_settings",
+	"font_language_override", "lang",
 }
 
 // maxFamilies bounds the families of font-family that select the faces.

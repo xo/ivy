@@ -47,6 +47,29 @@ var boxKindFromDisplay = map[string]Kind{
 	"table-caption":      KindTableCaption,
 }
 
+// displayKey is the key of a value of display in boxKinds: its first two
+// keywords, and their number.
+type displayKey struct {
+	first, second string
+	n             int
+}
+
+// boxKinds is boxKindFromDisplay by displayKey.
+//
+// Port: upstream joins the keywords with a space for each box. The port
+// reads the keywords without a new string.
+var boxKinds = func() map[displayKey]Kind {
+	m := make(map[displayKey]Kind, len(boxKindFromDisplay))
+	for key, kind := range boxKindFromDisplay {
+		if first, second, ok := strings.Cut(key, " "); ok {
+			m[displayKey{first, second, 2}] = kind
+		} else {
+			m[displayKey{key, "", 1}] = kind
+		}
+	}
+	return m
+}()
+
 // maxRowspanCells bounds the cells that the row spans of a table mark as
 // occupied.
 //
@@ -85,6 +108,16 @@ type builder struct {
 	// error of a limit.
 	boxes int
 	err   error
+
+	// slab holds the boxes that allocBox gives.
+	slab slab[Box]
+
+	// one holds the list of one box that handleElement returns.
+	//
+	// Port: upstream makes a new list for each element. Each caller of
+	// elementToBox reads the list before its next call, so the builder
+	// keeps one.
+	one [1]*Box
 }
 
 // BuildOptions holds the arguments of BuildFormattingStructure.
@@ -222,19 +255,46 @@ func createAnonymousBoxes(b *builder, box *Box) *Box {
 
 // makeBox is make_box in weasyprint/formatting_structure/build.py.
 func makeBox(elementTag string, style *Style, content []*Box, element *Element) *Box {
+	return makeBoxIn(new(Box), elementTag, style, content, element)
+}
+
+// makeBoxIn is makeBox for the box b, which it makes new.
+func makeBoxIn(b *Box, elementTag string, style *Style, content []*Box, element *Element) *Box {
 	display, _ := style.Get("display").(Tuple)
-	key := make([]string, 0, 2)
-	for _, item := range display[:min(len(display), 2)] {
-		key = append(key, str(item))
+	key := displayKey{n: min(len(display), 2)}
+	if key.n > 0 {
+		key.first = str(display[0])
 	}
-	kind, ok := boxKindFromDisplay[strings.Join(key, " ")]
+	if key.n > 1 {
+		key.second = str(display[1])
+	}
+	kind, ok := boxKinds[key]
 	if !ok {
 		// Port: upstream raises KeyError for a display that has no box,
 		// such as none. The box is a block box.
 		kind = KindBlock
 	}
-	return newBox(kind, elementTag, style, element, content)
+	return initBox(b, kind, elementTag, style, element, content)
 }
+
+// allocBox returns a new box for the box tree of the builder.
+//
+// Port: upstream makes each box on its own. The builder makes the boxes of
+// the elements and of their texts in blocks, as a book has many of them
+// and they last as long as the box tree.
+func (b *builder) allocBox() *Box {
+	return b.slab.next()
+}
+
+// textFrom is anonymousTextFrom with a box of allocBox.
+func (b *builder) textFrom(parent *Box, text string) *Box {
+	box := initBox(b.allocBox(), KindText, parent.ElementTag, parent.Style.AnonymousStyle(), parent.Element, nil)
+	box.Text = text
+	return box
+}
+
+// displayNone is the value none of display. Nothing changes it.
+var displayNone = tupleOf("none")
 
 // elementToBoxRoot is element_to_box for the root element, with the
 // counters and the quotes of a new document.
@@ -242,7 +302,7 @@ func (b *builder) elementToBoxRoot(element *Element) []*Box {
 	quoteDepth := 0
 	counterValues := map[string][]int{"footnote": {0}, "note": {0}}
 	counterScopes := []map[string]bool{{"footnote": true, "note": true}}
-	return b.elementToBox(element, &quoteDepth, counterValues, &counterScopes)
+	return slices.Clone(b.elementToBox(element, &quoteDepth, counterValues, &counterScopes))
 }
 
 // elementToBox is element_to_box in weasyprint/formatting_structure/
@@ -279,7 +339,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 	// TODO: should be the used value. When does the used value for
 	// `display` differ from the computer value?
 	display := style.Get("display")
-	if Equal(display, tupleOf("none")) {
+	if Equal(display, displayNone) {
 		return nil
 	}
 
@@ -292,7 +352,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 		}
 	}
 
-	box := makeBox(element.Tag, style, nil, element)
+	box := makeBoxIn(b.allocBox(), element.Tag, style, nil, element)
 	// Port: the box keeps the styles in boxExtra, which it makes only for
 	// a style that is not nil.
 	if firstLetter := b.styleFor(element, "first-letter"); firstLetter != nil {
@@ -305,9 +365,17 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 	updateCounters(counterValues, *counterScopes, style)
 	// If this element’s direct children create new scopes, the counter
 	// names will be in this new list.
-	*counterScopes = append(*counterScopes, map[string]bool{})
+	//
+	// Port: the list holds nil for a scope without names, and
+	// updateCounters makes the map of the scope for its first name.
+	*counterScopes = append(*counterScopes, nil)
 
+	// Port: upstream grows the list. The port makes it for a text, the
+	// children and their tails.
 	var children []*Box
+	if n := 2*len(element.Children) + 1; element.Text != "" || len(element.Children) > 0 {
+		children = make([]*Box, 0, n)
+	}
 
 	var markerBoxes []*Box
 	if tupleHas(style.Get("display"), "list-item") {
@@ -325,7 +393,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 	}
 
 	if text := element.Text; text != "" {
-		children = append(children, anonymousTextFrom(box, text))
+		children = append(children, b.textFrom(box, text))
 	}
 
 	for _, childElement := range element.Children {
@@ -367,7 +435,7 @@ func (b *builder) elementToBox(element *Element, quoteDepth *int, counterValues 
 			if len(children) > 0 && children[len(children)-1].Kind == KindText {
 				children[len(children)-1].Text += text
 			} else {
-				children = append(children, anonymousTextFrom(box, text))
+				children = append(children, b.textFrom(box, text))
 			}
 		}
 	}
@@ -452,7 +520,7 @@ func (b *builder) beforeAfterToBox(element *Element, pseudoType string, quoteDep
 		return nil
 	}
 
-	if Equal(style.Get("display"), tupleOf("none")) {
+	if Equal(style.Get("display"), displayNone) {
 		return nil
 	}
 	if isStrIn(style.Get("content"), "normal", "inhibit", "none") {
@@ -488,7 +556,7 @@ func (b *builder) markerToBox(element *Element, quoteDepth *int, counterValues m
 
 	// Port: upstream makes the box before it checks display: none, and
 	// fails to make a box of display: none.
-	if Equal(style.Get("display"), tupleOf("none")) {
+	if Equal(style.Get("display"), displayNone) {
 		return nil
 	}
 	if !b.spend(1) {
@@ -959,7 +1027,15 @@ func (b *builder) setContentLists(element *Element, box *Box, style *Style, coun
 // updateCounters is update_counters in weasyprint/formatting_structure/
 // build.py. It handles the properties counter-*.
 func updateCounters(counterValues map[string][]int, counterScopes []map[string]bool, style *Style) {
-	siblingScopes := counterScopes[len(counterScopes)-1]
+	last := len(counterScopes) - 1
+	siblingScopes := counterScopes[last]
+	addScope := func(name string) {
+		if siblingScopes == nil {
+			siblingScopes = map[string]bool{}
+			counterScopes[last] = siblingScopes
+		}
+		siblingScopes[name] = true
+	}
 
 	pairs := func(v Value) [][2]any {
 		t, _ := v.(Tuple)
@@ -979,7 +1055,7 @@ func updateCounters(counterValues map[string][]int, counterScopes []map[string]b
 				counterValues[name] = values[:len(values)-1]
 			}
 		} else {
-			siblingScopes[name] = true
+			addScope(name)
 		}
 		counterValues[name] = append(counterValues[name], value)
 	}
@@ -989,7 +1065,7 @@ func updateCounters(counterValues map[string][]int, counterScopes []map[string]b
 		values := counterValues[name]
 		if len(values) == 0 {
 			// Port: upstream asserts that the name is not in the scopes.
-			siblingScopes[name] = true
+			addScope(name)
 			values = append(values, 0)
 		}
 		values[len(values)-1] = value
@@ -1013,7 +1089,7 @@ func updateCounters(counterValues map[string][]int, counterScopes []map[string]b
 		values := counterValues[name]
 		if len(values) == 0 {
 			// Port: upstream asserts that the name is not in the scopes.
-			siblingScopes[name] = true
+			addScope(name)
 			values = append(values, 0)
 		}
 		values[len(values)-1] += value
@@ -1028,8 +1104,11 @@ func wrapImproper(b *builder, box *Box, children []*Box, wrapperKind Kind, test 
 	if test == nil {
 		test = func(child *Box) bool { return child.Is(wrapperKind) }
 	}
+	// Port: upstream makes a new list. The port returns children when each
+	// child passes test, and makes a list at the first child that does not.
 	var result, improper []*Box
-	for _, child := range children {
+	changed := false
+	for i, child := range children {
 		if test(child) {
 			if len(improper) > 0 {
 				wrapper := anonymousFrom(wrapperKind, box, nil)
@@ -1037,8 +1116,14 @@ func wrapImproper(b *builder, box *Box, children []*Box, wrapperKind Kind, test 
 				result = append(result, tableBoxesChildren(b, wrapper, improper))
 				improper = nil
 			}
-			result = append(result, child)
+			if changed {
+				result = append(result, child)
+			}
 		} else {
+			if !changed {
+				changed = true
+				result = append(make([]*Box, 0, len(children)), children[:i]...)
+			}
 			improper = append(improper, child)
 		}
 	}
@@ -1046,6 +1131,9 @@ func wrapImproper(b *builder, box *Box, children []*Box, wrapperKind Kind, test 
 		wrapper := anonymousFrom(wrapperKind, box, nil)
 		// Apply the rules again on the new wrapper
 		result = append(result, tableBoxesChildren(b, wrapper, improper))
+	}
+	if !changed && len(children) > 0 {
+		return children
 	}
 	return result
 }
@@ -1060,9 +1148,17 @@ func anonymousTableBoxes(b *builder, box *Box) *Box {
 	}
 
 	// Do recursion.
-	children := make([]*Box, len(box.Children))
+	//
+	// Port: upstream makes a new list. The port makes one only when a child
+	// changes.
+	children, cloned := box.Children, false
 	for i, child := range box.Children {
-		children[i] = anonymousTableBoxes(b, child)
+		if c := anonymousTableBoxes(b, child); c != child {
+			if !cloned {
+				children, cloned = slices.Clone(box.Children), true
+			}
+			children[i] = c
+		}
 	}
 	return tableBoxesChildren(b, box, children)
 }
@@ -1121,17 +1217,26 @@ func tableBoxesChildren(b *builder, box *Box, children []*Box) *Box {
 		// 1.3 are also removed by rule 1.4 below.
 	}
 
-	filtered := make([]*Box, 0, len(children))
+	// Port: upstream makes a new list. The port makes one only when it
+	// removes a child.
+	var filtered []*Box
 	for i, child := range children {
 		// Ignore some whitespace: rule 1.4
 		if i > 0 && children[i-1].internalTableOrCaption() &&
 			i+1 < len(children) && children[i+1].internalTableOrCaption() &&
 			child.IsWhitespace() {
+			if filtered == nil {
+				filtered = append(make([]*Box, 0, len(children)), children[:i]...)
+			}
 			continue
 		}
-		filtered = append(filtered, child)
+		if filtered != nil {
+			filtered = append(filtered, child)
+		}
 	}
-	children = filtered
+	if filtered != nil {
+		children = filtered
+	}
 
 	switch {
 	case box.IsTable():
@@ -1369,11 +1474,13 @@ func flexBoxes(box *Box) *Box {
 	}
 
 	// Do recursion.
-	children := make([]*Box, len(box.Children))
-	for i, child := range box.Children {
-		children[i] = flexBoxes(child)
+	//
+	// Port: upstream makes a new list of the children. flexBoxes returns
+	// the box that it takes, so the port keeps the list.
+	for _, child := range box.Children {
+		flexBoxes(child)
 	}
-	box.Children = flexChildren(box, children)
+	box.Children = flexChildren(box, box.Children)
 	return box
 }
 
@@ -1408,11 +1515,13 @@ func gridBoxes(box *Box) *Box {
 	}
 
 	// Do recursion.
-	children := make([]*Box, len(box.Children))
-	for i, child := range box.Children {
-		children[i] = gridBoxes(child)
+	//
+	// Port: upstream makes a new list of the children. gridBoxes returns
+	// the box that it takes, so the port keeps the list.
+	for _, child := range box.Children {
+		gridBoxes(child)
 	}
-	box.Children = gridChildren(box, children)
+	box.Children = gridChildren(box, box.Children)
 	return box
 }
 
@@ -1485,9 +1594,12 @@ func inlineInBlock(box *Box) *Box {
 		box.LeadingCollapsibleSpace = boxChildren[0].LeadingCollapsibleSpace
 	}
 
-	var children []*Box
+	// Port: upstream makes a new list of the children. inlineInBlock
+	// returns the box that it takes, so the port keeps the list of the
+	// children until it removes one.
+	children, removed := boxChildren, false
 	trailingCollapsibleSpace := false
-	for _, child := range boxChildren {
+	for i, child := range boxChildren {
 		// Keep track of removed collapsing spaces for wrap opportunities,
 		// and remove empty text boxes.
 		// (They may have been emptied by process_whitespace().)
@@ -1498,10 +1610,20 @@ func inlineInBlock(box *Box) *Box {
 
 		if child.Kind == KindText && child.Text == "" {
 			trailingCollapsibleSpace = child.LeadingCollapsibleSpace
+			if !removed {
+				removed = true
+				children = append(make([]*Box, 0, len(boxChildren)-1), boxChildren[:i]...)
+			}
 		} else {
 			trailingCollapsibleSpace = false
-			children = append(children, inlineInBlock(child))
+			inlineInBlock(child)
+			if removed {
+				children = append(children, child)
+			}
 		}
+	}
+	if len(children) == 0 {
+		children = nil
 	}
 
 	if !box.TrailingCollapsibleSpace {
@@ -1698,8 +1820,28 @@ func innerBlockInInline(box *Box, stack *buildSkipStack) (*Box, *Box, *buildSkip
 		skip, stack = stack.index, stack.next
 	}
 
+	// Port: upstream makes the list of the new children for each box. The
+	// port makes it only for a copy of the box. Until then, the new
+	// children are the first children, and kept counts them.
+	children := box.Children[min(skip, len(box.Children)):]
+	kept := 0
+	keep := func(newChild *Box) {
+		if !changed && newChildren == nil && newChild == children[kept] {
+			kept++
+			return
+		}
+		if newChildren == nil && kept > 0 {
+			newChildren = append(make([]*Box, 0, len(children)), children[:kept]...)
+		}
+		newChildren = append(newChildren, newChild)
+	}
+	materialize := func() {
+		if newChildren == nil && kept > 0 {
+			newChildren = slices.Clone(children[:kept])
+		}
+	}
 	found := false
-	for i, child := range box.Children[min(skip, len(box.Children)):] {
+	for i, child := range children {
 		index := i + skip
 		if child.IsBlockLevel() && child.IsInNormalFlow() {
 			// Port: upstream asserts that the stack is empty here.
@@ -1718,16 +1860,18 @@ func innerBlockInInline(box *Box, stack *buildSkipStack) (*Box, *Box, *buildSkip
 			if newChild != child {
 				changed = true
 			}
-			newChildren = append(newChildren, newChild)
+			keep(newChild)
 		}
 		if blockLevelBox != nil {
 			resumeAt = &buildSkipStack{index, resumeAt}
+			materialize()
 			box = box.CopyWithChildren(newChildren)
 			found = true
 			break
 		}
 	}
 	if !found && (changed || skip != 0) {
+		materialize()
 		box = box.CopyWithChildren(newChildren)
 	}
 

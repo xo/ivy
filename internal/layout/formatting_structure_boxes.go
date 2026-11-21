@@ -207,12 +207,9 @@ type Box struct {
 	BorderLeftWidth      float64
 
 	// The used values of min-width, max-width, min-height and max-height,
-	// and of the offsets top, right, bottom and left of a positioned box,
-	// set by the layout. An offset can be Auto.
+	// set by the layout. boxExtra holds the offsets of a positioned box.
 	MinWidth, MaxWidth   float64
 	MinHeight, MaxHeight float64
-	Top, Right           float64
-	Bottom, Left         float64
 
 	// Background is the layout of the background of the box, or nil for
 	// the None of upstream. layout/background.py sets it.
@@ -303,6 +300,15 @@ type boxExtra struct {
 
 	// Replacement is the image of a replaced box.
 	Replacement Image
+
+	// Top, Right, Bottom and Left are the used values of the offsets of a
+	// positioned box, set by the layout. An offset can be Auto.
+	//
+	// Port: upstream sets them as attributes of the box. Only the
+	// positioned boxes have them, so the port keeps them here and the box
+	// is smaller.
+	Top, Right   float64
+	Bottom, Left float64
 
 	// TransformationMatrix is the transformation of the box, set by the
 	// drawing, or nil.
@@ -503,7 +509,12 @@ func (b *Box) shareRemovedSides() {
 // children are the children of a parent box, text is the text of a text
 // box, and image is the replacement of a replaced box.
 func newBox(kind Kind, elementTag string, style *Style, element *Element, children []*Box) *Box {
-	b := &Box{
+	return initBox(new(Box), kind, elementTag, style, element, children)
+}
+
+// initBox is newBox for the box b, which it makes new. It returns b.
+func initBox(b *Box, kind Kind, elementTag string, style *Style, element *Element, children []*Box) *Box {
+	*b = Box{
 		Kind:       kind,
 		ElementTag: elementTag,
 		Element:    element,
@@ -1213,15 +1224,27 @@ func (b *Box) PageValues() (start, end Value) {
 	// See https://www.w3.org/TR/css-break-4/#break-propagation.
 	// The specification only includes in-flow boxes, but as page breaks
 	// can appear between floats, it makes sense to include them here too.
-	children := b.InFlowOrFloatedChildren()
-	switch {
-	case len(children) == 1:
-		childStart, childEnd := children[0].PageValues()
+	//
+	// Port: upstream makes the list of these children. The port finds the
+	// first and the last one.
+	var first, last *Box
+	for _, child := range b.Children {
+		if child.IsInNormalFlow() || child.IsFloated() {
+			if first == nil {
+				first = child
+			}
+			last = child
+		}
+	}
+	switch first {
+	case nil:
+	case last:
+		childStart, childEnd := first.PageValues()
 		start = pyOr(childStart, start)
 		end = pyOr(childEnd, end)
-	case len(children) > 1:
-		childStart, _ := children[0].PageValues()
-		_, childEnd := children[len(children)-1].PageValues()
+	default:
+		childStart, _ := first.PageValues()
+		_, childEnd := last.PageValues()
 		start = pyOr(childStart, start)
 		end = pyOr(childEnd, end)
 	}

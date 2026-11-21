@@ -229,7 +229,9 @@ func handleElement(b *builder, element *Element, box *Box, baseURL string) []*Bo
 	if handler, ok := htmlHandlers[box.ElementTag]; ok {
 		return handler(b, element, box, baseURL)
 	}
-	return []*Box{box}
+	// Port: see builder.one.
+	b.one[0] = box
+	return b.one[:]
 }
 
 // makeReplacedBox is make_replaced_box in weasyprint/html.py. It wraps an

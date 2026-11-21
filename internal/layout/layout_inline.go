@@ -105,10 +105,7 @@ func appendBoxes(list *[]*Box, boxes ...*Box) {
 // Port: the keys of a style of upstream are in the order of their
 // computation. The order does not change the result.
 func styleKeys(style *Style) []string {
-	keys := make([]string, 0, len(style.values))
-	for key := range style.values {
-		keys = append(keys, key)
-	}
+	keys := style.storedKeys()
 	sort.Strings(keys)
 	return keys
 }

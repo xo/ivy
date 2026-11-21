@@ -487,7 +487,8 @@ func TestBoxSize(t *testing.T) {
 // boxExtra, tableFields and flexItem, and shares the set of the removed
 // sides, as copy.copy does in upstream.
 func TestBoxCopy(t *testing.T) {
-	style := &Style{values: map[string]Value{"box_decoration_break": String("slice")}}
+	style := &Style{}
+	style.store("box_decoration_break", String("slice"))
 	box := newBox(KindBlock, "div", style, nil, nil)
 	if box.ext != nil || box.tbl != nil || box.flx != nil {
 		t.Fatalf("expected no attributes, got: %v %v %v", box.ext, box.tbl, box.flx)
