@@ -357,8 +357,8 @@ of phase 7b" in D58 says. The work that is left is under "Left by phase
 ### Phase 8. LaTeX (8 to 13 weeks)
 
 ivy reads and writes LaTeX with a copy of `go-tex/engine` that draws with
-okage (D62). okage holds the layout of math (okage D72), which zuzu also
-uses. Each estimate is for one agent with a maintainer.
+okage (D62). okage holds the layout of math (okage D78, `texmath`), which zuzu
+also uses. Each estimate is for one agent with a maintainer.
 
 | Phase | What it gives | Estimate |
 | --- | --- | --- |

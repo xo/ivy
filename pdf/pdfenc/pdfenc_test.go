@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/xo/okage"
+	"golang.org/x/image/font/gofont/gomono"
 	"golang.org/x/image/font/gofont/goregular"
 
 	"github.com/xo/ivy"
@@ -760,8 +761,11 @@ func TestSaveRestore(t *testing.T) {
 }
 
 // TestTextSubsetFails draws text with a font whose subset the writer
-// cannot make: the location of a glyph points past the table glyf. Encode
-// draws the pages again with the glyphs of that font as paths (D58).
+// cannot make: the location of a glyph points past the table glyf. The
+// writer of okage draws the glyphs of that font as paths, with the text as
+// invisible text (okage D80), and keeps the subset of the other font. The
+// good font has another name, because the writer gives fonts of one name
+// one subset.
 func TestTextSubsetFails(t *testing.T) {
 	data := bytes.Clone(goregular.TTF)
 	head := tableOffset(t, data, "head")
@@ -780,14 +784,14 @@ func TestTextSubsetFails(t *testing.T) {
 	page := &scenePage{w: 200, h: 200, draw: func(d display.Device) {
 		draws++
 		d.FillGlyphs(textRun(t, data, "BAD", 10, 100, okage.IdentityTransform()), solid(0, 0, 0, 255))
-		d.FillGlyphs(textRun(t, goregular.TTF, "Good", 10, 150, okage.IdentityTransform()), solid(0, 0, 0, 255))
+		d.FillGlyphs(textRun(t, gomono.TTF, "Good", 10, 150, okage.IdentityTransform()), solid(0, 0, 0, 255))
 	}}
 	var buf bytes.Buffer
 	if err := Encode(t.Context(), &buf, &document{pages: []ivy.Page{page}}); err != nil {
 		t.Fatal(err)
 	}
-	if draws != 2 {
-		t.Errorf("expected the page drawn twice, got: %d", draws)
+	if draws != 1 {
+		t.Errorf("expected the page drawn once, got: %d", draws)
 	}
 	if n := bytes.Count(buf.Bytes(), []byte("/FontFile2")); n != 1 {
 		t.Errorf("expected one embedded font, got: %d", n)

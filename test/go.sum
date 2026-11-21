@@ -1,7 +1,7 @@
 github.com/xo/magic v0.9.1 h1:guCjtXfLTheyp4QBUQcNQVhDgztVQP6o5REw9P4bYDE=
 github.com/xo/magic v0.9.1/go.mod h1:kMMI9TJd1/WU7yMDVYZVmcVC9yEm8Pc2AlxPbED1+r8=
-github.com/xo/okage v0.18.0 h1:wmEx+qfrqUZwcmMISwKh2c8OBGZ5Z0JYY3vX/EUKisw=
-github.com/xo/okage v0.18.0/go.mod h1:pte/3aqjk2ElZwxYex0erXC3kT2tqxOwWuIHA8fhKOM=
+github.com/xo/okage v0.19.1-0.20261120233039-5e860c67f8c8 h1:PFG00w+uvBj4xzoXC/MdFor13+LhvG0NaE4eob/pIqc=
+github.com/xo/okage v0.19.1-0.20261120233039-5e860c67f8c8/go.mod h1:pte/3aqjk2ElZwxYex0erXC3kT2tqxOwWuIHA8fhKOM=
 golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=
 golang.org/x/crypto v0.58.0/go.mod h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w=
 golang.org/x/image v0.47.0 h1:za/8gVz++PPZqmZJBNSISICN5Rrj5zixP/8K++fgmqo=

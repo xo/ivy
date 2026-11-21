@@ -77,7 +77,7 @@ func TestSfntTablesUnpadded(t *testing.T) {
 	}
 	// ot.WriteTTF does not pad the tables. The font has no cmap table, so
 	// the reader builds the font twice.
-	data := ot.WriteTTF(list)
+	data := ot.WriteOpentype(list, ot.TrueType)
 	orig := bytes.Clone(data)
 	p, err := newFontProgram(data, 0)
 	if err != nil {

@@ -56,11 +56,11 @@ it too.
    of okage, when okage releases it. Until then the copy keeps
    `go-tex/math`, which needs the approval of the maintainers for its
    outside modules (D7), or the math waits.
-6. okage holds the layout of math: a reader of the MATH table, a tree of
-   math nodes, a parser of the syntax of TeX math ported from
-   `go-tex/math`, and the layout of TeX Appendix G. Its result draws with
-   okage, gives its outlines as paths, or gives its glyphs and rules. okage
-   decides its API in okage D72. zuzu draws the math of its Mermaid labels
+6. okage holds the layout of math: a reader of the MATH table, a tree of math
+   nodes, a parser of the syntax of TeX math ported from `go-tex/math`, and
+   the layout of TeX Appendix G. Its result draws with okage, gives its
+   outlines as paths, or gives its glyphs and rules. okage decides its API in
+   okage D78, the package `texmath`. zuzu draws the math of its Mermaid labels
    with it. ivy draws the equations of Office Math, MathML and OpenDocument
    with it, from a tree that ivy builds.
 7. A program gives the classes and the packages of LaTeX through

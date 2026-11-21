@@ -185,7 +185,7 @@ func goTextFont(tabs map[ot.Tag][]byte) (*gofont.Font, error) {
 	})
 	var font *gofont.Font
 	err := safely(func() error {
-		ld, err := ot.NewLoader(bytes.NewReader(ot.WriteTTF(list)))
+		ld, err := ot.NewLoader(bytes.NewReader(ot.WriteOpentype(list, ot.TrueType)))
 		if err != nil {
 			return goTextError(err)
 		}

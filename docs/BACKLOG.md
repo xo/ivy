@@ -206,7 +206,7 @@ reads and writes LaTeX, and phase 8 of `PLAN.md` gives its steps.
 3. Draw the equations of Office Math (`docx`), MathML (`html` and `epub`)
    and the formulas of OpenDocument as math. `docx` now writes the text of
    an equation in italics, in `converter.math` of `docx/paragraph.go`. This
-   needs the layout of math of item 4 of "Work for okage". Source: D62,
+   needs the layout of math of item 2 of "Work for okage". Source: D62,
    2026-11-20.
 
 ## Left by the charts
@@ -258,11 +258,13 @@ The pages of Visio came on 2026-11-17 (D30).
 3. Keep the text of a group that the PDF device draws as pixels, such as a
    group of a blend mode that PDF does not have. The device can draw the
    text again over the pixels as invisible text. Source: `pdf/pdfenc`.
-4. Draw the pages once when the subset of a font fails. pdfenc now makes
-   the subset of each font in a file of its own and draws every page again,
-   because the writer of okage reports a failed subset only in
-   `Document.Finish`. Item 1 of "Work for okage" asks for the change.
-   Source: `pdf/pdfenc`.
+4. Remove the second drawing of the pages in pdfenc when the subset of a font
+   fails, and use the check of the ranges of `DrawGlyphs` that okage exports.
+   Since okage D80 the writer of okage draws such a font as paths with its
+   text as invisible text, so the fallback of pdfenc in `encoder.failedFonts`
+   no longer runs. The writer gives one subset to fonts of one name, so when a
+   font fails, another font of the same name is drawn as paths too. Source:
+   `pdf/pdfenc` and okage D80, 2026-11-21.
 
 ## Left by phase 7a
 
@@ -461,34 +463,33 @@ time is for a page at 96 dpi.
    `pg1342-images.html`, and about 1.6 for `pg24264.txt`. A last text that
    holds the whole paragraph, or a cut at each end of a part, can give these
    texts their glyphs too. Source: `internal/layout`, 2026-11-19.
+10. Find why the line breaks of page 3 of `idpf/epub/accessible-epub-3.epub`
+    change between okage v0.18.0 and the commit `5e860c67` of okage. Four
+    lines break at another word, such as "are" and "registered". The book sets
+    its text in its own FreeSerif. The shaping of each of these lines, the
+    advances of the glyphs and the flags unsafe-to-break are the same in both
+    versions, so the cause is in another part of the layout of the line: the
+    break opportunities of the segmenter, the loading of a font of
+    `@font-face`, or the shaping of okage D77. No other page of the corpus
+    changes. Source: the update to okage `5e860c67`, 2026-11-21.
 
 ## Work for okage
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
 
-1. In `pdf`, when the subset of a font fails in `Document.Finish`, draw the
-   glyphs of that font as paths and write the file, or give a method that
-   makes the subset of a font before `Finish`. Today one font that the
-   subsetter refuses makes the whole file fail, and pdfenc draws every
-   page again without that font. Source: `pdf/pdfenc`, 2026-11-19.
-2. In `pdf`, export the test of the ranges of `DrawGlyphs`, so that a
-   caller knows that the ranges of its glyphs are valid before the call.
-   Today a range that is not valid makes `Document.Finish` fail, and pdfenc
-   tests the ranges itself with `display.GlyphRun.TextRanges`. Source:
-   `pdf/pdfenc`, 2026-11-19.
-3. Give the blur and the color matrix of the filters of `svg` an API on a
+1. Give the blur and the color matrix of the filters of `svg` an API on a
    `Mask` and on a `Pixmap`. `internal/drawingml` blurs the masks of the
    shadows, the glows and the soft edges with box blurs of its own, in
    `blur.go`, and changes the colors of the pictures itself, in `recolor.go`.
    Source: `internal/drawingml`, 2026-11-19.
-4. Read the OpenType MATH table in `typesetting`, and give a layout of math: a
+2. Read the OpenType MATH table in `typesetting`, and give a layout of math: a
    tree of math nodes, a parser of TeX math ported from `go-tex/math`, and the
    layout of TeX Appendix G, whose result draws with okage, gives its outlines
    as paths, or gives its glyphs and rules. ivy draws the math of LaTeX,
    Office Math, MathML and OpenDocument with it, and zuzu the math of its
    Mermaid labels. Also give the metrics, the kerning of a pair and the
    ligature of a pair of glyphs, for the engine of D62. okage decides the API
-   in okage D72. Source: D62, 2026-11-20.
+   in okage D78 (`texmath`). Source: D62, 2026-11-20.
 
 ## Work for magic
 
