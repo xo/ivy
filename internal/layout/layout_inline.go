@@ -186,10 +186,12 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 
 	linebox.PositionY = positionY
 
+	minWidth := 0.0
 	if len(lc.excludedShapes()) > 0 {
 		// Width and height must be calculated to avoid floats
 		linebox.Width = inlineMinContentWidth(lc, linebox, true, skip, true, false)
 		linebox.Height, _ = strut(linebox.Style)
+		minWidth = linebox.Width
 	} else {
 		// No float, width and height will be set by the lines
 		linebox.Width, linebox.Height = 0, 0
@@ -271,7 +273,19 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 		lc.spend(1)
 
 		newExcludedShapes := lc.swapExcludedShapes(excludedShapes)
+		// Port: upstream finds the place of the taller line with the width
+		// that the line took at the full width of the column, so the line
+		// goes below a float that starts inside it. A page float of
+		// -ivy-float-position can start inside a line, and a word processor
+		// puts the line beside it. So the line keeps its minimum width when
+		// it touches a page float, and the next try lays it out beside the
+		// float (D60).
+		lineWidth := line.Width
+		if lc.touchesPageFloat(positionY, line.Height) {
+			line.Width = minWidth
+		}
 		positionX, positionY, availableWidth = avoidCollisions(lc, line, containingBlock, false)
+		line.Width = lineWidth
 
 		if firstLineStyle != nil {
 			firstLineBox := line.CopyWithChildren(line.Children)

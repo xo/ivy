@@ -1519,6 +1519,75 @@ func TestTableZeroWidth(t *testing.T) {
     `)
 }
 
+// TestTableSplitCellBorders tests the collapsed borders of a row that a
+// page break splits. It is not a test of upstream. With
+// box-decoration-break: clone on the table and the cells, each part of the
+// row has its borders, as LibreOffice draws them. Without clone, the parts
+// have no border at the split, as upstream.
+func TestTableSplitCellBorders(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		clone bool
+		width float64
+		lines [2]int
+	}{
+		// The text of the first page starts at y = 2, below the halves of
+		// the top border of the table and of the cell. 4 lines of 10px end
+		// at y = 42. With clone, the cell keeps its half of the bottom
+		// border, 1px, so the fourth line does not fit in the 42.5px of the
+		// page.
+		{"clone", true, 1, [2]int{3, 3}},
+		{"slice", false, 0, [2]int{4, 2}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			clone := ""
+			if tt.clone {
+				clone = "table, td { box-decoration-break: clone }"
+			}
+			pages := tablePagesN(t, `
+      <style>
+        @page { size: 100px 42.5px }
+        body { margin: 0 }
+        table { font: 10px/1 weasyprint; border-collapse: collapse }
+        td { border: 2px solid; padding: 0; orphans: 1; widows: 1 }
+        `+clone+`
+      </style>
+      <table><tr><td>a<br>b<br>c<br>d<br>e<br>f</td></tr></table>`, 2)
+			for i, page := range pages {
+				var table, cell *Box
+				page.Descendants(func(d *Box) bool {
+					switch d.Kind {
+					case KindTable:
+						table = d
+					case KindTableCell:
+						cell = d
+					}
+					return true
+				})
+				if table == nil || cell == nil {
+					t.Fatalf("page %d has no table or no cell", i+1)
+				}
+				if n := len(cell.Children); n != tt.lines[i] {
+					t.Errorf("page %d: got %d lines, want %d", i+1, n, tt.lines[i])
+				}
+				if i == 0 {
+					tableEq(t, "page 1: table.border_bottom_width", table.BorderBottomWidth, tt.width)
+					tableEq(t, "page 1: cell.border_bottom_width", cell.BorderBottomWidth, tt.width)
+					if table.table().SkipCellBorderBottom == tt.clone {
+						t.Errorf("page 1: got skip_cell_border_bottom %v, want %v", table.table().SkipCellBorderBottom, !tt.clone)
+					}
+					continue
+				}
+				tableEq(t, "page 2: table.border_top_width", table.BorderTopWidth, tt.width)
+				tableEq(t, "page 2: cell.border_top_width", cell.BorderTopWidth, tt.width)
+				if table.table().SkipCellBorderTop == tt.clone {
+					t.Errorf("page 2: got skip_cell_border_top %v, want %v", table.table().SkipCellBorderTop, !tt.clone)
+				}
+			}
+		})
+	}
+}
+
 func TestTableInlineAtomicNowrap(t *testing.T) {
 	// Regression test for #2661.
 	page := tablePage(t, `

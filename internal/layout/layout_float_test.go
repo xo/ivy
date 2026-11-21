@@ -754,6 +754,34 @@ func TestFloatBreakAfterPageNoFit(t *testing.T) {
 	blockAssertPageDivs(t, pages, []int{2, 2, 2}, []string{"start", "float", "end"})
 }
 
+// TestPageFloatInsideLine tests a line next to a page float whose top is
+// below the strut of the line and inside the line. It is not a test of
+// upstream (D60).
+func TestPageFloatInsideLine(t *testing.T) {
+	// The strut of P1 is 20px high, and its text makes the line 30px high,
+	// from y = 50 to y = 80. The float starts at y = 75.
+	for _, tt := range []struct {
+		name, text, want string
+	}{
+		// The line goes beside the float, as in a word processor. At the
+		// full width of the page area, the line holds "P1 aa", which is
+		// wider than the room beside the float.
+		{"beside", "P1 aa", "F1@50,75 P1@150,50 P2@150,110 P3@150,130 P4@50,150"},
+		// A word wider than the room beside the float puts the line below
+		// the float.
+		{"below", "P1xxxx", "F1@50,75 P1xxxx@50,135 P2@50,165 P3@50,185 P4@50,205"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pages, _ := renderPageFloats(t, pageFloatStyle+
+				`<p><span style="font-size: 30px; line-height: 30px">`+tt.text+`</span></p>`+
+				pageFloatDiv("1", "margin 25px", "")+paragraphs(2, 3))
+			if got := describePages(pages); got != tt.want {
+				t.Errorf("got %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFloatDisplayInherit(t *testing.T) {
 	// Regression test for #2998.
 	body := blockBody(t, `

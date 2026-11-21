@@ -336,3 +336,16 @@ func avoidCollisions(lc *layoutContext, box, containingBlock *Box, outer bool) (
 
 	return positionX, positionY, availableWidth
 }
+
+// touchesPageFloat reports whether a page float of -ivy-float-position is
+// next to a line that starts at top and is height high (D60).
+//
+// Port: upstream has no page floats. It is not a function of upstream.
+func (lc *layoutContext) touchesPageFloat(top, height float64) bool {
+	for _, shape := range lc.excludedShapes() {
+		if lc.pageFloats.shapes[shape] && shape.PositionY < top+height && top < shape.PositionY+shape.MarginHeight() {
+			return true
+		}
+	}
+	return false
+}

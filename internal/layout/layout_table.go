@@ -424,6 +424,15 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 	hasHeader := len(table.Children) > 0 && table.Children[0].table().IsHeader
 	hasFooter := len(table.Children) > 0 && table.Children[len(table.Children)-1].table().IsFooter
 	collapse := isStr(table.Style.Get("border_collapse"), "collapse")
+	// Port: upstream does not draw the collapsed borders at the edges of a
+	// row that a page break splits, also with box-decoration-break: clone
+	// on the table. With clone on the table, the port draws the border
+	// above the split row at the top of the next part of the table, and
+	// the border below it at the bottom of this part, as LibreOffice draws
+	// the borders of a split cell on both pages. A cell with clone keeps
+	// its half of each border and its padding on both pages, as upstream
+	// keeps them.
+	cloneCollapsed := collapse && isStr(table.Style.Get("box_decoration_break"), "clone")
 	removeStartDecoration := skip != nil && !hasHeader
 	table.RemoveDecoration(removeStartDecoration, false)
 
@@ -479,7 +488,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				skippedRows += len(group.Children)
 			}
 		}
-		if !splitCells && !hasHeader {
+		if (!splitCells || cloneCollapsed) && !hasHeader {
 			if grid := table.table().CollapsedBorderGrid; grid != nil && len(grid.Horizontal) > 0 {
 				// Port: upstream fails on a row out of the grid.
 				if row, ok := pyIndex(skippedRows, len(grid.Horizontal)); ok && len(grid.Horizontal[row]) > 0 {
@@ -596,7 +605,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 							}
 							cell.PositionY += width
 						}
-					} else {
+					} else if !cloneCollapsed {
 						// We don’t have a header, we have to skip the
 						// decoration at the top of the table when it’s
 						// drawn.
@@ -853,7 +862,7 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 			pageIsEmpty = false
 			skip = nil
 
-			if breakCell && collapse && !hasFooter {
+			if breakCell && collapse && !hasFooter && !cloneCollapsed {
 				table.ownTable().SkipCellBorderBottom = true
 			}
 
@@ -1082,6 +1091,17 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 	}
 	table.ownTable().ColumnGroups = columnGroups
 	removeEndDecoration := resumeAt != nil && !hasFooter
+	if cloneCollapsed && removeEndDecoration && len(newTableChildren) > 0 {
+		// Port: with clone, the bottom border of this part of the table is
+		// the other half of the collapsed border below its last row.
+		group := newTableChildren[len(newTableChildren)-1]
+		if len(group.Children) > 0 {
+			table.BorderBottomWidth = 0
+			for _, cell := range group.Children[len(group.Children)-1].Children {
+				table.BorderBottomWidth = max(table.BorderBottomWidth, cell.BorderBottomWidth)
+			}
+		}
+	}
 	table.RemoveDecoration(removeStartDecoration, removeEndDecoration)
 	if collapse {
 		table.ownTable().SkippedRows = skippedRows

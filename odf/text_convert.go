@@ -28,8 +28,8 @@ const odtDocumentName = "index.xhtml"
 const odtStyleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.17; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; margin-break: discard }
-table { border-collapse: collapse; border-spacing: 0; margin-break: discard }
-td { padding: 0; vertical-align: top; border: none }
+table { border-collapse: collapse; border-spacing: 0; margin-break: discard; box-decoration-break: clone }
+td { padding: 0; vertical-align: top; border: none; box-decoration-break: clone }
 a { color: inherit; text-decoration: none }
 .pg::before { content: counter(page) }
 .pgs::before { content: counter(pages) }
