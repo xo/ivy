@@ -18,14 +18,21 @@ import (
 // cx:chartData, apart from the series.
 
 // exData is one cx:data: the categories and the values of a series.
+// levels are the levels of the categories of a tree, from the innermost:
+// levels[0] holds the names of the points, and cats is levels[0].
 type exData struct {
 	cats   []string
+	levels [][]string
 	vals   []float64
 	format string
 }
 
 // maxBins is the number of the bins of a histogram.
 const maxBins = 1000
+
+// maxLevels is the number of the levels of the categories of a chart of
+// Office 2016.
+const maxLevels = 16
 
 // chartEx reads cx:chartSpace, whose cx:chart is chart.
 func (p *dmlParser) chartEx(root, chart roxmltree.Node) {
@@ -60,21 +67,34 @@ func (p *dmlParser) chartEx(root, chart roxmltree.Node) {
 func (p *dmlParser) exData(n roxmltree.Node) exData {
 	var d exData
 	for dim := range elements(n) {
-		lvl, ok := child(dim, "lvl")
-		if !ok {
+		name := dim.TagName().Name()
+		texts, nums, format := p.exLevels(dim)
+		if len(texts) == 0 {
 			continue
 		}
-		count := 0
-		if v, err := strconv.Atoi(ooxml.Attr(lvl, "ptCount")); err == nil && v > 0 {
-			count = v
+		switch typ := ooxml.Attr(dim, "type"); {
+		case name == "strDim" && d.cats == nil:
+			d.cats, d.levels = texts[0], texts
+		case name == "numDim" && (typ == "val" || typ == "size" || typ == "y") && d.vals == nil:
+			d.format, d.vals = format, nums[0]
+		case name == "numDim" && d.cats == nil:
+			d.cats = texts[0]
 		}
-		limit := max(0, min(p.budget, maxCategories*4))
-		if count > limit {
-			p.c.truncated = true
-			count = limit
+	}
+	return d
+}
+
+// exLevels returns the levels of a cx:strDim or a cx:numDim, from the
+// innermost: the texts of their points, their numbers, or NaN, and the
+// format of the numbers. The levels come from the caches, cx:lvl, or from
+// the cells of the reference cx:f when the dimension has no cache.
+func (p *dmlParser) exLevels(dim roxmltree.Node) (texts [][]string, nums [][]float64, format string) {
+	for lvl := range elements(dim) {
+		if lvl.TagName().Name() != "lvl" || len(texts) >= maxLevels {
+			continue
 		}
-		p.budget -= count
-		texts := make([]string, count)
+		count := p.exCount(ooxml.Attr(lvl, "ptCount"))
+		level := make([]string, count)
 		for pt := range elements(lvl) {
 			if pt.TagName().Name() != "pt" {
 				continue
@@ -83,25 +103,136 @@ func (p *dmlParser) exData(n roxmltree.Node) exData {
 			if err != nil || i < 0 || i >= count {
 				continue
 			}
-			texts[i] = text(pt)
+			level[i] = text(pt)
 		}
-		switch typ := ooxml.Attr(dim, "type"); {
-		case dim.TagName().Name() == "strDim" && d.cats == nil:
-			d.cats = texts
-		case dim.TagName().Name() == "numDim" && (typ == "val" || typ == "size" || typ == "y") && d.vals == nil:
-			d.format = ooxml.Attr(lvl, "formatCode")
-			d.vals = make([]float64, count)
-			for i, t := range texts {
-				d.vals[i] = math.NaN()
-				if v, ok := parseNumber(t); ok {
-					d.vals[i] = v
-				}
+		if format == "" {
+			format = ooxml.Attr(lvl, "formatCode")
+		}
+		values := make([]float64, count)
+		for i, t := range level {
+			values[i] = math.NaN()
+			if v, ok := parseNumber(t); ok {
+				values[i] = v
 			}
-		case dim.TagName().Name() == "numDim" && d.cats == nil:
-			d.cats = texts
 		}
+		texts, nums = append(texts, level), append(nums, values)
 	}
-	return d
+	if len(texts) > 0 || p.srcCells == nil {
+		return texts, nums, format
+	}
+	f, ok := child(dim, "f")
+	if !ok {
+		return nil, nil, ""
+	}
+	ref := strings.TrimSpace(text(f))
+	if p.srcFormat != nil {
+		format = p.srcFormat(ref)
+	}
+	cells := p.boundCells(p.srcCells(ref))
+	return cellLevels(cells), cellValues(cells), format
+}
+
+// exCount returns the number of points of a level, from its ptCount,
+// within the budget of the chart.
+func (p *dmlParser) exCount(s string) int {
+	count := 0
+	if v, err := strconv.Atoi(s); err == nil && v > 0 {
+		count = v
+	}
+	limit := max(0, min(p.budget, maxCategories*4))
+	if count > limit {
+		p.c.truncated = true
+		count = limit
+	}
+	p.budget -= count
+	return count
+}
+
+// cellGrid returns the cells of a reference as levels of points, from the
+// innermost. A range with at least as many rows as columns holds a point
+// in each row, and a level in each column, the last column innermost, as
+// Excel reads it. A wider range holds a point in each column.
+func cellGrid[T any](rows [][]Cell, of func(Cell) T) [][]T {
+	if len(rows) == 0 {
+		return nil
+	}
+	cols := 0
+	for _, r := range rows {
+		cols = max(cols, len(r))
+	}
+	at := func(r, c int) Cell {
+		if c < len(rows[r]) {
+			return rows[r][c]
+		}
+		return Cell{}
+	}
+	var out [][]T
+	if len(rows) >= cols {
+		for c := cols - 1; c >= 0 && len(out) < maxLevels; c-- {
+			level := make([]T, len(rows))
+			for r := range rows {
+				level[r] = of(at(r, c))
+			}
+			out = append(out, level)
+		}
+		return out
+	}
+	for r := len(rows) - 1; r >= 0 && len(out) < maxLevels; r-- {
+		level := make([]T, cols)
+		for c := range cols {
+			level[c] = of(at(r, c))
+		}
+		out = append(out, level)
+	}
+	return out
+}
+
+// cellLevels returns the texts of the cells of a reference, as levels.
+func cellLevels(rows [][]Cell) [][]string {
+	return cellGrid(rows, func(c Cell) string {
+		if len(c.Text) > maxText {
+			return c.Text[:maxText]
+		}
+		return c.Text
+	})
+}
+
+// cellValues returns the numbers of the cells of a reference, or NaN, as
+// levels.
+func cellValues(rows [][]Cell) [][]float64 {
+	return cellGrid(rows, func(c Cell) float64 {
+		if c.Number && !math.IsNaN(c.Value) && !math.IsInf(c.Value, 0) {
+			return c.Value
+		}
+		if v, ok := parseNumber(c.Text); ok {
+			return v
+		}
+		return math.NaN()
+	})
+}
+
+// boundCells bounds the cells of a reference by the limits of the chart,
+// and takes their number from its budget.
+func (p *dmlParser) boundCells(rows [][]Cell) [][]Cell {
+	limit := max(0, min(p.budget, maxCategories*4))
+	if len(rows) > limit {
+		p.c.truncated = true
+		rows = rows[:limit]
+	}
+	out := make([][]Cell, 0, len(rows))
+	for _, r := range rows {
+		if p.budget <= 0 {
+			p.c.truncated = true
+			break
+		}
+		if len(r) > limit {
+			p.c.truncated = true
+			r = r[:limit]
+		}
+		out = append(out, r)
+		p.budget -= max(1, len(r))
+	}
+	return out
 }
 
 // plotAreaEx reads cx:plotArea: its series and its axes.
@@ -301,9 +432,25 @@ func (p *dmlParser) seriesEx(n roxmltree.Node, data map[string]exData) {
 			}
 			return
 		}
-	case "treemap", "sunburst", "regionMap":
+	case "treemap", "sunburst":
+		// A tree draws its first series only, as Excel does.
+		if len(c.plots) > 0 {
+			return
+		}
+		pl.kind, pl.special, pl.parents = kindTree, layout, "overlapping"
+		pl.tree = buildTree(d.levels, d.vals)
+		pl.labelColor = s.labels.text.hasColor
+		if hasLayout {
+			if pll, ok := child(layoutPr, "parentLabelLayout"); ok {
+				switch v := ooxml.Attr(pll, "val"); v {
+				case "banner", "overlapping", "none":
+					pl.parents = v
+				}
+			}
+		}
+	case "regionMap":
 		if c.unsupported == "" {
-			c.unsupported = map[string]string{"treemap": "treemap", "sunburst": "sunburst chart", "regionMap": "region map"}[layout]
+			c.unsupported = "region map"
 		}
 		return
 	default:

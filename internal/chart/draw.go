@@ -146,6 +146,10 @@ func (cv *canvas) draw() {
 		cv.frame(plotBox)
 	case c.plots[0].kind == kindPie:
 		cv.pie(plotBox, inner)
+	case c.plots[0].special == "treemap":
+		cv.treemap(plotBox)
+	case c.plots[0].special == "sunburst":
+		cv.sunburst(plotBox)
 	case c.plots[0].kind == kindRadar:
 		cv.radar(plotBox)
 	default:
@@ -248,6 +252,12 @@ func (cv *canvas) entries() []entry {
 		}
 		return visible(out)
 	}
+	if first.kind == kindTree && first.tree != nil && len(first.series) > 0 {
+		for _, n := range first.tree.children {
+			add(entry{text: n.name, fill: cv.treeColor(first.series[0], n)})
+		}
+		return visible(out)
+	}
 	if first.special == "waterfall" {
 		for i, name := range []string{"Increase", "Decrease", "Total"} {
 			add(entry{text: name, fill: c.palette(i)})
@@ -270,6 +280,18 @@ func (cv *canvas) entries() []entry {
 				}
 			}
 			add(e)
+		}
+	}
+	// The trendlines follow the series, as in Excel.
+	for _, p := range c.plots {
+		for _, s := range p.series {
+			for _, t := range s.trends {
+				col, width, dash := cv.trendLine(s, t)
+				if t.noLine {
+					col = color.NRGBA{}
+				}
+				add(entry{text: trendName(s, t), line: true, stroke: col, lineWidth: width, dash: dash})
+			}
 		}
 	}
 	return visible(out)
@@ -432,26 +454,32 @@ func (cv *canvas) drawLegend(l legendLayout) {
 		}
 		e := l.entries[i]
 		x, y := at[0], at[1]
-		if e.line {
-			w := min(e.lineWidth, 3)
-			if !(w > 0) {
-				w = 2.25
-			}
-			cv.stroke(polyline([][2]float64{{x, y}, {x + l.symW, y}}), e.stroke, w, e.dash, false)
-		}
-		switch {
-		case e.marker != "" && e.s != nil:
-			cv.marker(e.marker, x+l.symW/2, y, min(cv.markerSize(e.p, e.s), em*0.8), e.s, e.stroke)
-		case !e.line:
-			q := em * 0.6
-			b := box{x + (l.symW-q)/2, y - q/2, x + (l.symW+q)/2, y + q/2}
-			fill := e.fill
-			if e.noFill {
-				fill = color.NRGBA{}
-			}
-			cv.rect(b, fill, e.stroke, thin)
-		}
+		cv.symbol(e, x, y, l.symW, em)
 		cv.t.draw(cv.dev, block{lines: []string{e.text}, st: st}, x+l.symW+em*0.35, y, alignStart, alignCenter, 0)
+	}
+}
+
+// symbol draws the symbol of an entry of the legend, symW wide, from the
+// left side x and the middle y of its line, for a text of the size em.
+func (cv *canvas) symbol(e entry, x, y, symW, em float64) {
+	if e.line {
+		w := min(e.lineWidth, 3)
+		if !(w > 0) {
+			w = 2.25
+		}
+		cv.stroke(polyline([][2]float64{{x, y}, {x + symW, y}}), e.stroke, w, e.dash, false)
+	}
+	switch {
+	case e.marker != "" && e.s != nil:
+		cv.marker(e.marker, x+symW/2, y, min(cv.markerSize(e.p, e.s), em*0.8), e.s, e.stroke)
+	case !e.line:
+		q := em * 0.6
+		b := box{x + (symW-q)/2, y - q/2, x + (symW+q)/2, y + q/2}
+		fill := e.fill
+		if e.noFill {
+			fill = color.NRGBA{}
+		}
+		cv.rect(b, fill, e.stroke, thin)
 	}
 }
 

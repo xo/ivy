@@ -105,7 +105,7 @@ func TestQuartile(t *testing.T) {
 }
 
 func TestChartExFrame(t *testing.T) {
-	for _, layout := range []string{"treemap", "sunburst", "regionMap"} {
+	for _, layout := range []string{"regionMap"} {
 		c, err := Parse(exXML("Map", layout, "", []string{"a", "b"}, []float64{1, 2}), Options{})
 		if err != nil {
 			t.Fatal(err)

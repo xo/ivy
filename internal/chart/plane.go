@@ -36,8 +36,10 @@ type plane struct {
 	// and of the secondary values.
 	fmtX, fmt1, fmt2 string
 	catL             catLabels
-	// labels are the labels on the data, which draw last.
+	// labels are the labels on the data, which draw last, and rich the
+	// labels of the trendlines, which draw after them.
 	labels []placed
+	rich   []richLabel
 }
 
 // placed is a label on the data at its place.
@@ -85,6 +87,9 @@ func (cv *canvas) plane(b box, inner bool) {
 	pl.axes()
 	for _, l := range pl.labels {
 		cv.t.draw(cv.dev, l.b, l.x, l.y, l.ha, l.va, 0)
+	}
+	for _, l := range pl.rich {
+		cv.drawRich(l)
 	}
 }
 
@@ -323,6 +328,9 @@ func (pl *plane) extent(secondary bool) (lo, hi float64) {
 				for _, v := range s.vals {
 					add(v)
 				}
+				if p.special == "" {
+					trendExtent(p, s, add)
+				}
 			}
 		}
 	}
@@ -330,6 +338,42 @@ func (pl *plane) extent(secondary bool) (lo, hi float64) {
 		return 0, 1
 	}
 	return lo, hi
+}
+
+// trendExtent calls add with the values of the trendlines of a series, as
+// Excel takes them into the scale of the axis of values.
+func trendExtent(p *plot, s *series, add func(float64)) {
+	if len(s.trends) == 0 {
+		return
+	}
+	xs := catXs(len(s.vals))
+	if p.kind == kindScatter {
+		for i := range xs {
+			xs[i] = xOf(s, i)
+		}
+	}
+	for _, t := range s.trends {
+		if t.noLine || t.kind == "movingAvg" {
+			continue
+		}
+		f, ok := t.fit(xs, s.vals)
+		if !ok {
+			continue
+		}
+		lo, hi := math.Inf(1), math.Inf(-1)
+		for i, x := range xs {
+			if !math.IsNaN(x) && !math.IsNaN(s.vals[i]) {
+				lo, hi = min(lo, x), max(hi, x)
+			}
+		}
+		if math.IsInf(lo, 0) {
+			continue
+		}
+		lo, hi = lo-t.backward, hi+t.forward
+		for k := range trendSteps + 1 {
+			add(f(lo + (hi-lo)*float64(k)/trendSteps))
+		}
+	}
 }
 
 // extentX returns the smallest and the largest value of x of a scatter
@@ -485,7 +529,9 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 	}
 	// The axis of categories, or of x.
 	var catDepth, catHalf float64
-	if c.cat.shown() {
+	if pl.hasTable() {
+		catDepth = pl.catL.depth
+	} else if c.cat.shown() {
 		catDepth = pl.catL.depth + gapLabel + pl.tickOut(c.cat)
 		if pl.scatter || !pl.between {
 			st := c.cat.text
@@ -527,6 +573,10 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 	}
 	left, bottom, top = valDepth, catDepth, max(valHalf, 2)
 	right = max(catHalf, 2)
+	if pl.hasTable() {
+		left = max(left, pl.tableNames())
+		right = max(right, 2)
+	}
 	if valRight {
 		left, right = max(catHalf, 2), valDepth
 	}
@@ -545,6 +595,11 @@ func (pl *plane) categoryLabels() catLabels {
 	st := c.cat.text
 	lh := st.size * lineHeight
 	var out catLabels
+	if pl.hasTable() {
+		// the data table holds the names of the categories
+		out.depth = pl.tableHeight()
+		return out
+	}
 	if !c.cat.shown() {
 		return out
 	}
@@ -868,6 +923,9 @@ func (pl *plane) axes() {
 	if c.cat.present && !c.cat.deleted {
 		pl.catAxis(catAt)
 	}
+	if pl.hasTable() {
+		pl.table()
+	}
 	if c.val.present && !c.val.deleted {
 		pl.valueAxis(c.val, pl.vs, pl.fmt1, valAt, valEnd)
 	}
@@ -936,6 +994,10 @@ func (pl *plane) catAxis(at float64) {
 	tickCol := col
 	if tickCol.A == 0 {
 		tickCol = pl.axisColor(axis{}, false)
+	}
+	if pl.hasTable() {
+		// the lines of the data table take the place of the tick marks
+		return
 	}
 	pl.ticks(ticks, at, pl.tick(a.majorTick), tickLen, !pl.horizontal, false, tickCol)
 	if !a.shown() {

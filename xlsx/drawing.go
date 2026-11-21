@@ -342,6 +342,7 @@ func (b *book) chartObject(part string, w, h float64) layout.Object {
 			Config:       b.cfg,
 			Fonts:        fontdb.Of(b.cfg),
 			SourceFormat: b.sourceFormat,
+			SourceCells:  b.sourceCells,
 			Width:        w,
 			Height:       h,
 		})
@@ -357,6 +358,7 @@ func (b *book) chartObject(part string, w, h float64) layout.Object {
 // reference ref of a chart, such as 'Budget'!$E$9:$F$9, when the cell
 // holds a number of a sheet that the book read, or "".
 func (b *book) sourceFormat(ref string) string {
+	ref = b.chartRef(ref)
 	i := strings.LastIndexByte(ref, '!')
 	if i <= 0 {
 		return ""
@@ -381,6 +383,71 @@ func (b *book) sourceFormat(ref string) string {
 		}
 	}
 	return ""
+}
+
+// chartRef returns the range of a reference of a chart: the reference, or
+// the range of the defined name that it names, such as _xlchart.v1.0 of a
+// chart of Office 2016.
+func (b *book) chartRef(ref string) string {
+	ref = strings.TrimPrefix(strings.TrimSpace(ref), "=")
+	if strings.ContainsRune(ref, '!') {
+		return ref
+	}
+	if def, ok := b.definedName(-1, ref); ok {
+		return strings.TrimPrefix(strings.TrimSpace(def), "=")
+	}
+	return ref
+}
+
+// maxChartCells is the number of the cells of a reference of a chart.
+const maxChartCells = 1 << 16
+
+// sourceCells returns the cells of the reference ref of a chart of Office
+// 2016, by rows: a range of a sheet that the book read, such as
+// Sheet1!$A$2:$C$17, or a defined name of such a range. It returns nil for
+// another reference. Excel writes such a chart without a cache of its
+// data, so the chart reads the cells.
+func (b *book) sourceCells(ref string) [][]chart.Cell {
+	name, cells, found := cutSheet(b.chartRef(ref))
+	if !found {
+		return nil
+	}
+	sh := b.sheets[name]
+	if sh == nil || len(sh.Rows) == 0 {
+		return nil
+	}
+	r, ok := parseRange(strings.ReplaceAll(cells, "$", ""))
+	if !ok {
+		return nil
+	}
+	// A range of whole columns ends at the last row of the sheet.
+	r.Row1 = min(r.Row1, sh.Rows[len(sh.Rows)-1].Index)
+	if r.Row1 < r.Row0 || (r.Row1-r.Row0+1)*(r.Col1-r.Col0+1) > min(maxChartCells, b.lim.MaxObjects) {
+		return nil
+	}
+	out := make([][]chart.Cell, r.Row1-r.Row0+1)
+	for i := range out {
+		out[i] = make([]chart.Cell, r.Col1-r.Col0+1)
+	}
+	k, _ := slices.BinarySearchFunc(sh.Rows, r.Row0, func(row sheet.Row, v int) int { return row.Index - v })
+	for ; k < len(sh.Rows) && sh.Rows[k].Index <= r.Row1; k++ {
+		row := sh.Rows[k]
+		for _, c := range row.Cells {
+			if c.Col < r.Col0 || c.Col > r.Col1 {
+				continue
+			}
+			text := c.Text
+			if text == "" && len(c.Runs) > 0 {
+				var sb strings.Builder
+				for _, run := range c.Runs {
+					sb.WriteString(run.Text)
+				}
+				text = sb.String()
+			}
+			out[row.Index-r.Row0][c.Col-r.Col0] = chart.Cell{Text: text, Value: c.Value, Number: c.Kind == sheet.KindNumber}
+		}
+	}
+	return out
 }
 
 // chartTitle returns the text of the title of a chart part, or "".

@@ -21,14 +21,15 @@
 //
 // The charts of the types bar, column, line, area, pie, doughnut, scatter,
 // bubble, radar and stock draw in their own form, and a combination of them
-// draws with a secondary axis of values. The trendlines, the error bars and
-// the drop lines of a series draw too, and a date axis places its
-// categories by their dates. A 3D chart draws as its 2D form, and a bar of
-// pie or a pie of pie as a pie. Of the charts of Office 2016, the funnel,
-// the waterfall, the histogram, the Pareto chart and the box and whisker
-// chart draw in their own form, and a hidden series draws nothing. A
-// surface chart, a treemap, a sunburst and a region map draw as a frame
-// with their title and their type. The data tables are left out.
+// draws with a secondary axis of values. The trendlines with their
+// equations and their R squared, the error bars and the drop lines of a
+// series draw too, and a date axis places its categories by their dates.
+// The data table of a chart of categories draws below its plot. A 3D chart
+// draws as its 2D form, and a bar of pie or a pie of pie as a pie. Of the
+// charts of Office 2016, the funnel, the waterfall, the histogram, the
+// Pareto chart, the box and whisker chart, the treemap and the sunburst
+// draw in their own form, and a hidden series draws nothing. A surface
+// chart and a region map draw as a frame with their title and their type.
 package chart
 
 import (
@@ -80,10 +81,25 @@ type Options struct {
 	// the cache, which can come from another locale. It is nil for a
 	// chart without cells.
 	SourceFormat func(ref string) string
+	// SourceCells returns the cells of a reference of a chart of Office
+	// 2016, cx:f, by rows, or nil. Excel writes such a chart of a workbook
+	// without a cache of its data, so the chart takes its data from the
+	// cells. It is nil for a chart without cells.
+	SourceCells func(ref string) [][]Cell
 	// Width and Height are the size of the frame of the chart in points,
 	// or zero. A chart of DrawingML has no size of its own, and the frame
 	// that holds it gives the size.
 	Width, Height float64
+}
+
+// Cell is a cell of a reference of a chart, as Options.SourceCells gives
+// it.
+type Cell struct {
+	// Text is the text that the cell shows.
+	Text string
+	// Value is the number of the cell, if Number.
+	Value  float64
+	Number bool
 }
 
 // look is the set of defaults of a chart: the colors, the sizes of the text
@@ -150,6 +166,8 @@ type Chart struct {
 	// order.
 	colors []color.NRGBA
 	look   look
+	// table is the data table of the chart, or nil.
+	table *dataTable
 	// rotX is the angle of the view of a 3D chart, in degrees.
 	rotX float64
 	// unsupported names the type of a chart that draws as a frame.
@@ -175,6 +193,9 @@ const (
 	kindScatter
 	kindRadar
 	kindBox
+	// kindTree is a treemap or a sunburst, whose points are the leaves of
+	// a tree of categories.
+	kindTree
 )
 
 // plot is one chart type of a plot area, such as c:barChart. A combination
@@ -218,8 +239,15 @@ type plot struct {
 	// last value.
 	hiLow, upDown bool
 	// special is the layout of a chart of Office 2016 that draws as bars:
-	// funnel, waterfall or pareto.
+	// funnel, waterfall or pareto, or the layout of a tree: treemap or
+	// sunburst.
 	special string
+	// tree is the tree of the categories of a treemap or a sunburst, and
+	// parents the labels of its parents: overlapping, banner or none.
+	// labelColor says that the file gives the color of the labels.
+	tree       *treeNode
+	parents    string
+	labelColor bool
 	// drop is the line of the drop lines of a line or an area chart, or
 	// nil.
 	drop   *stroke
@@ -532,7 +560,13 @@ func (c *Chart) styleText() {
 		p.labels.text = p.labels.text.merge(label)
 		for _, s := range p.series {
 			s.labels.text = s.labels.text.merge(p.labels.text)
+			for i := range s.trends {
+				s.trends[i].text = s.trends[i].text.merge(small)
+			}
 		}
+	}
+	if c.table != nil {
+		c.table.text = c.table.text.merge(small)
 	}
 }
 

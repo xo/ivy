@@ -4,6 +4,7 @@ import (
 	"image/color"
 	"math"
 	"strconv"
+	"strings"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/roxmltree"
@@ -43,6 +44,17 @@ type trendline struct {
 	intercept    float64
 	hasIntercept bool
 	stroke
+	// eq and r2 show the equation and the R squared of the trendline in
+	// its label, c:dispEq and c:dispRSqr. format is the number format of
+	// the label, or empty for the format of Excel, and text its style. dx
+	// and dy move the label from its place, as fractions of the size of
+	// the chart.
+	eq, r2 bool
+	// name is the name of the trendline in the legend, c:name, or empty.
+	name   string
+	format string
+	text   textStyle
+	dx, dy float64
 }
 
 // errBars are the error bars of a series.
@@ -107,9 +119,50 @@ func (p *dmlParser) trendline(n roxmltree.Node) trendline {
 			if f, ok := parseNumber(v); ok {
 				t.intercept, t.hasIntercept = f, true
 			}
+		case "name":
+			t.name = text(e)
+			if len(t.name) > maxText {
+				t.name = t.name[:maxText]
+			}
+		case "dispEq":
+			t.eq = boolVal(e)
+		case "dispRSqr":
+			t.r2 = boolVal(e)
+		case "trendlineLbl":
+			p.trendLabel(e, &t)
 		}
 	}
 	return t
+}
+
+// trendLabel reads c:trendlineLbl, the label of a trendline: its number
+// format, its style and its offset.
+func (p *dmlParser) trendLabel(n roxmltree.Node, t *trendline) {
+	for e := range elements(n) {
+		switch e.TagName().Name() {
+		case "numFmt":
+			if code := ooxml.Attr(e, "formatCode"); ooxml.Attr(e, "sourceLinked") != "1" && code != "General" {
+				t.format = code
+			}
+		case "txPr":
+			t.text = p.bodyStyle(e)
+		case "layout":
+			if ml, ok := child(e, "manualLayout"); ok {
+				for m := range elements(ml) {
+					v, ok := parseNumber(ooxml.Attr(m, "val"))
+					if !ok || v < -2 || v > 2 {
+						continue
+					}
+					switch m.TagName().Name() {
+					case "x":
+						t.dx = v
+					case "y":
+						t.dy = v
+					}
+				}
+			}
+		}
+	}
 }
 
 // errBars reads c:errBars.
@@ -152,10 +205,117 @@ func (cv *canvas) extraLine(st stroke, def color.NRGBA, width float64) (color.NR
 	return col, width
 }
 
+// trendLine returns the color, the width and the dash of the line of a
+// trendline of a series.
+func (cv *canvas) trendLine(s *series, t trendline) (color.NRGBA, float64, string) {
+	col, width := cv.extraLine(t.stroke, s.color, 1.5)
+	dash := t.dash
+	if !t.hasColor && dash == "" && cv.c.look == lookModern {
+		dash = "sysDot"
+	}
+	return col, width, dash
+}
+
+// trendNames are the names of the kinds of trendlines in a legend, as
+// Excel gives them.
+var trendNames = map[string]string{
+	"linear": "Linear", "exp": "Expon.", "log": "Log.", "poly": "Poly.", "power": "Power",
+}
+
+// trendName returns the name of a trendline of a series in the legend: its
+// own, or its kind and the name of the series, such as Linear (Sales).
+func trendName(s *series, t trendline) string {
+	if t.name != "" {
+		return t.name
+	}
+	kind := trendNames[t.kind]
+	if t.kind == "movingAvg" {
+		kind = strconv.Itoa(t.period) + " per. Mov. Avg."
+	}
+	if kind == "" {
+		kind = "Trend"
+	}
+	return kind + " (" + seriesName(s) + ")"
+}
+
 // fit returns the function of the trendline t through the points of xs and
 // ys, and false when the points do not give one.
 func (t trendline) fit(xs, ys []float64) (func(float64) float64, bool) {
-	var px, py []float64
+	r, ok := t.regress(xs, ys)
+	if !ok {
+		return nil, false
+	}
+	poly := r.poly
+	switch t.kind {
+	case "exp":
+		return func(x float64) float64 { return math.Exp(poly(x)) }, true
+	case "log":
+		return func(x float64) float64 {
+			if x <= 0 {
+				return math.NaN()
+			}
+			return poly(math.Log(x))
+		}, true
+	case "power":
+		return func(x float64) float64 {
+			if x <= 0 {
+				return math.NaN()
+			}
+			return math.Exp(poly(math.Log(x)))
+		}, true
+	}
+	return poly, true
+}
+
+// regression is the fit of a trendline: the coefficients of the polynomial
+// from c0, through the points px and py, which are the points of the
+// series in the space where the fit is linear, such as ln y for an
+// exponential trendline.
+type regression struct {
+	coef   []float64
+	px, py []float64
+	// fixed says that the trendline sets its intercept.
+	fixed bool
+}
+
+// poly returns the value of the polynomial of r at x.
+func (r regression) poly(x float64) float64 {
+	y := 0.0
+	for k := len(r.coef) - 1; k >= 0; k-- {
+		y = y*x + r.coef[k]
+	}
+	return y
+}
+
+// r2 returns the R squared of the fit, in the space where the fit is
+// linear, as Excel computes it. With a fixed intercept, the sum of the
+// squares goes from zero.
+func (r regression) r2() float64 {
+	mean := 0.0
+	for _, y := range r.py {
+		mean += y
+	}
+	mean /= float64(len(r.py))
+	if r.fixed {
+		mean = 0
+	}
+	var sse, sst float64
+	for k, x := range r.px {
+		d := r.py[k] - r.poly(x)
+		sse += d * d
+		m := r.py[k] - mean
+		sst += m * m
+	}
+	if sst == 0 {
+		return 1
+	}
+	return 1 - sse/sst
+}
+
+// regress fits the trendline t through the points of xs and ys, and
+// returns false when the points do not give a fit.
+func (t trendline) regress(xs, ys []float64) (regression, bool) {
+	var r regression
 	for i := range min(len(xs), len(ys)) {
 		x, y := xs[i], ys[i]
 		if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) {
@@ -178,56 +338,33 @@ func (t trendline) fit(xs, ys []float64) (func(float64) float64, bool) {
 			}
 			x, y = math.Log(x), math.Log(y)
 		}
-		px, py = append(px, x), append(py, y)
+		r.px, r.py = append(r.px, x), append(r.py, y)
 	}
 	order := 1
 	if t.kind == "poly" {
 		order = t.order
 	}
-	if len(px) < 2 {
-		return nil, false
+	if len(r.px) < 2 {
+		return r, false
 	}
 	var fixed *float64
 	if t.hasIntercept && (t.kind == "linear" || t.kind == "poly" || t.kind == "exp") {
 		v := t.intercept
 		if t.kind == "exp" {
 			if v <= 0 {
-				return nil, false
+				return r, false
 			}
 			v = math.Log(v)
 		}
 		fixed = &v
+		r.fixed = true
 	}
-	coef, ok := leastSquares(px, py, min(order, len(px)-1), fixed)
+	coef, ok := leastSquares(r.px, r.py, min(order, len(r.px)-1), fixed)
 	if !ok {
-		return nil, false
+		return r, false
 	}
-	poly := func(x float64) float64 {
-		y := 0.0
-		for k := len(coef) - 1; k >= 0; k-- {
-			y = y*x + coef[k]
-		}
-		return y
-	}
-	switch t.kind {
-	case "exp":
-		return func(x float64) float64 { return math.Exp(poly(x)) }, true
-	case "log":
-		return func(x float64) float64 {
-			if x <= 0 {
-				return math.NaN()
-			}
-			return poly(math.Log(x))
-		}, true
-	case "power":
-		return func(x float64) float64 {
-			if x <= 0 {
-				return math.NaN()
-			}
-			return math.Exp(poly(math.Log(x)))
-		}, true
-	}
-	return poly, true
+	r.coef = coef
+	return r, true
 }
 
 // leastSquares returns the coefficients c0 to c[order] of the polynomial
@@ -307,11 +444,7 @@ func (pl *plane) trendlines(s *series, xs, ys []float64, at func(x, y float64) (
 		if t.noLine {
 			continue
 		}
-		col, width := pl.cv.extraLine(t.stroke, s.color, 1.5)
-		dash := t.dash
-		if !t.hasColor && dash == "" && pl.c.look == lookModern {
-			dash = "sysDot"
-		}
+		col, width, dash := pl.cv.trendLine(s, t)
 		var points [][2]float64
 		if t.kind == "movingAvg" {
 			points = movingAverage(xs, ys, t.period, at)
@@ -338,6 +471,11 @@ func (pl *plane) trendlines(s *series, xs, ys []float64, at func(x, y float64) (
 				x := lo + (hi-lo)*float64(k)/float64(steps)
 				cx, cy := at(x, f(x))
 				points = append(points, [2]float64{cx, cy})
+			}
+			if t.eq || t.r2 {
+				if r, ok := t.regress(xs, ys); ok {
+					pl.trendLabel(t, r, points[len(points)-1])
+				}
 			}
 		}
 		if path := curve(points, false, ""); path != nil {
@@ -542,4 +680,210 @@ func catXs(n int) []float64 {
 		xs[i] = float64(i + 1)
 	}
 	return xs
+}
+
+// segment is a part of a line of rich text, raised as a superscript when
+// sup is set.
+type segment struct {
+	text string
+	sup  bool
+}
+
+// richLabel is a label of rich text: its lines, its style, and the point
+// of the middle of its right side.
+type richLabel struct {
+	lines [][]segment
+	st    textStyle
+	x, y  float64
+}
+
+// The size of a superscript, as a part of the size of its text, and how
+// high its baseline rises, in ems of the text.
+const (
+	supSize = 0.65
+	supRise = 0.35
+)
+
+// richWidth returns the width of a line of rich text.
+func (cv *canvas) richWidth(line []segment, st textStyle) float64 {
+	w := 0.0
+	sup := st
+	sup.size *= supSize
+	for _, sg := range line {
+		if sg.sup {
+			w += cv.t.width(sg.text, sup)
+		} else {
+			w += cv.t.width(sg.text, st)
+		}
+	}
+	return w
+}
+
+// drawRich draws a label of rich text, each line centered on the widest
+// line.
+func (cv *canvas) drawRich(l richLabel) {
+	st := l.st
+	sup := st
+	sup.size *= supSize
+	widest := 0.0
+	for _, line := range l.lines {
+		widest = max(widest, cv.richWidth(line, st))
+	}
+	lh := st.size * lineHeight
+	top := l.y - float64(len(l.lines))*lh/2
+	for i, line := range l.lines {
+		x := l.x - widest + (widest-cv.richWidth(line, st))/2
+		y := top + float64(i)*lh
+		for _, sg := range line {
+			if sg.sup {
+				// the top of the superscript, so that its baseline is
+				// supRise ems above the baseline of the line
+				ty := y + (ascent-supRise)*st.size - ascent*sup.size
+				cv.t.draw(cv.dev, block{lines: []string{sg.text}, st: sup}, x, ty, alignStart, alignStart, 0)
+				x += cv.t.width(sg.text, sup)
+				continue
+			}
+			cv.t.draw(cv.dev, block{lines: []string{sg.text}, st: st}, x, y, alignStart, alignStart, 0)
+			x += cv.t.width(sg.text, st)
+		}
+	}
+}
+
+// trendGap is the gap between the end of a trendline and the right side of
+// its label, in points.
+const trendGap = 9
+
+// trendLabel adds the label of a trendline, with its equation and its R
+// squared, left of the end of the line at end, as Excel places it.
+func (pl *plane) trendLabel(t trendline, r regression, end [2]float64) {
+	var lines [][]segment
+	if t.eq {
+		if eq := equation(t, r); len(eq) > 0 {
+			lines = append(lines, eq)
+		}
+	}
+	if t.r2 {
+		lines = append(lines, []segment{{text: "R"}, {text: "2", sup: true}, {text: " = " + trendNumber(r.r2(), t.format)}})
+	}
+	if len(lines) == 0 {
+		return
+	}
+	cv := pl.cv
+	st := t.text
+	w := 0.0
+	for _, line := range lines {
+		w = max(w, cv.richWidth(line, st))
+	}
+	h := float64(len(lines)) * st.size * lineHeight
+	x := end[0] - trendGap + t.dx*cv.w
+	y := end[1] + t.dy*cv.h
+	in := pl.in
+	x = max(min(x, in.x1), in.x0+w)
+	y = max(min(y, in.y1-h/2), in.y0+h/2)
+	if math.IsNaN(x) || math.IsNaN(y) {
+		return
+	}
+	pl.rich = append(pl.rich, richLabel{lines: lines, st: st, x: x, y: y})
+}
+
+// equation returns the equation of a trendline, as Excel writes it, such
+// as y = 2.5x + 1, y = 0.5x² - 3x + 2, y = 1.2e^0.3x, y = 2ln(x) + 1 or
+// y = 3x^0.5. A coefficient of 1 is left out, and so is a term whose
+// coefficient is 0 in its format.
+func equation(t trendline, r regression) []segment {
+	line := []segment{{text: "y = "}}
+	first := true
+	// term adds the term of a coefficient and its variable, with the sign
+	// between the terms.
+	term := func(c float64, variable []segment) {
+		num := trendNumber(math.Abs(c), t.format)
+		if num == "0" || num == "" {
+			return
+		}
+		switch {
+		case first && c < 0:
+			line = append(line, segment{text: "-"})
+		case !first && c < 0:
+			line = append(line, segment{text: " - "})
+		case !first:
+			line = append(line, segment{text: " + "})
+		}
+		first = false
+		if num != "1" || len(variable) == 0 {
+			line = append(line, segment{text: num})
+		}
+		line = append(line, variable...)
+	}
+	c := r.coef
+	switch t.kind {
+	case "exp":
+		if len(c) < 2 {
+			return nil
+		}
+		line = append(line, segment{text: trendNumber(math.Exp(c[0]), t.format) + "e"},
+			segment{text: trendNumber(c[1], t.format) + "x", sup: true})
+		return line
+	case "power":
+		if len(c) < 2 {
+			return nil
+		}
+		line = append(line, segment{text: trendNumber(math.Exp(c[0]), t.format) + "x"})
+		if b := trendNumber(c[1], t.format); b != "1" {
+			line = append(line, segment{text: b, sup: true})
+		}
+		if line[1].text == "1x" {
+			line[1].text = "x"
+		}
+		return line
+	case "log":
+		if len(c) < 2 {
+			return nil
+		}
+		term(c[1], []segment{{text: "ln(x)"}})
+		term(c[0], nil)
+	default:
+		for k := len(c) - 1; k >= 0; k-- {
+			switch k {
+			case 0:
+				term(c[k], nil)
+			case 1:
+				term(c[k], []segment{{text: "x"}})
+			default:
+				term(c[k], []segment{{text: "x"}, {text: strconv.Itoa(k), sup: true}})
+			}
+		}
+	}
+	if first {
+		line = append(line, segment{text: "0"})
+	}
+	return line
+}
+
+// trendNumber formats a number of the label of a trendline: in format, or
+// as Excel writes it without one, with five significant digits and four
+// decimals at most.
+func trendNumber(v float64, format string) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return ""
+	}
+	if format != "" {
+		return formatValue(v, format)
+	}
+	if v == 0 {
+		return "0"
+	}
+	if a := math.Abs(v); a < 1e-4 || a >= 1e11 {
+		mant, exp, _ := strings.Cut(strconv.FormatFloat(v, 'E', 4, 64), "E")
+		return strings.TrimRight(strings.TrimRight(mant, "0"), ".") + "E" + exp
+	}
+	digits := 5 - (int(math.Floor(math.Log10(math.Abs(v)))) + 1)
+	digits = max(0, min(4, digits))
+	s := strconv.FormatFloat(v, 'f', digits, 64)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+	}
+	if s == "-0" {
+		s = "0"
+	}
+	return s
 }
