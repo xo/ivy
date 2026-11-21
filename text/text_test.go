@@ -67,6 +67,11 @@ func TestJoin(t *testing.T) {
 		{"japanese and latin", "吾輩は\nCat である\nand dog", "<p>吾輩はCat であるand dog</p>\n"},
 		{"korean", "가나\n다라", "<p>가나 다라</p>\n"},
 		{"escape", "a <\n& b", "<p>a &lt; &amp; b</p>\n"},
+		{"heading, rule and text", "第一回　甄士隱\n----------\n此開卷第一回也，\n作者自云。", "<p>第一回　甄士隱</p>\n<p>----------</p>\n<p>此開卷第一回也，作者自云。</p>\n"},
+		{"rule between paragraphs", "One\nline.\n  ****  \nTwo\nlines.", "<p>One line.</p>\n<p>  ****</p>\n<p>Two lines.</p>\n"},
+		{"box drawing rule", "a\n────\nb", "<p>a</p>\n<p>────</p>\n<p>b</p>\n"},
+		{"mixed punctuation", "a\n-=-=\nb", "<p>a -=-= b</p>\n"},
+		{"short rule", "a\n---\nb", "<p>a --- b</p>\n"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := string(toHTML(tt.text, "", "", true))

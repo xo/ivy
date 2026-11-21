@@ -293,7 +293,8 @@ func (d *Document) convert(data []byte, title, lang string, join bool) ([]byte, 
 // set, a line joins the line before it, with one space, and without the
 // space next to a letter of Chinese or Japanese, which does not separate
 // its words with spaces. A line that starts with white space keeps the
-// break before it (D34).
+// break before it (D34). A rule line, such as a line of dashes, is a
+// paragraph of its own, as it is in the file (D67).
 func toHTML(text, title, lang string, join bool) []byte {
 	text = strings.NewReplacer("\r\n", "\n", "\r", "\n", "\x00", "�").Replace(text)
 	var b strings.Builder
@@ -320,6 +321,14 @@ func toHTML(text, title, lang string, join bool) []byte {
 			}
 			continue
 		}
+		if join && ruleLine(line) {
+			if open {
+				b.WriteString("</p>\n")
+				open = false
+			}
+			b.WriteString("<p>" + html.EscapeString(strings.TrimRightFunc(line, unicode.IsSpace)) + "</p>\n")
+			continue
+		}
 		switch {
 		case !open:
 			b.WriteString("<p>")
@@ -342,6 +351,25 @@ func toHTML(text, title, lang string, join bool) []byte {
 	}
 	b.WriteString("</body>\n</html>\n")
 	return []byte(b.String())
+}
+
+// ruleLine reports whether line is a rule line: one character of
+// punctuation or of a symbol, repeated four times or more, such as ----,
+// ==== or ────, with white space around it (D67).
+func ruleLine(line string) bool {
+	line = strings.TrimSpace(line)
+	first, _ := utf8.DecodeRuneInString(line)
+	if !unicode.IsPunct(first) && !unicode.IsSymbol(first) {
+		return false
+	}
+	n := 0
+	for _, r := range line {
+		if r != first {
+			return false
+		}
+		n++
+	}
+	return n >= 4
 }
 
 // startsWithSpace reports whether line starts with white space, such as a

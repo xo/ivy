@@ -1,6 +1,6 @@
 # D34. A text file joins the lines of a paragraph
 
-Status: Decided.
+Status: Decided. Amended by D67.
 
 calibre joins the lines of a paragraph of a text file that a program
 wrapped, such as a book of Project Gutenberg. ivy kept each line. Question 7

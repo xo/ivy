@@ -53,7 +53,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D31 | [pdf can render another page box](D031-pdf-can-render-another-page-box.md) | Decided |
 | D32 | [A program chooses the paper of a document without one](D032-a-program-chooses-the-paper-of-a-document-without-one.md) | Decided. Amended by D33 |
 | D33 | [An ebook takes the paper of the configuration](D033-an-ebook-takes-the-paper-of-the-configuration.md) | Decided. Amends D32 |
-| D34 | [A text file joins the lines of a paragraph](D034-a-text-file-joins-the-lines-of-a-paragraph.md) | Decided |
+| D34 | [A text file joins the lines of a paragraph](D034-a-text-file-joins-the-lines-of-a-paragraph.md) | Decided. Amended by D67 |
 | D35 | [ivy.Info has the publisher and the identifier](D035-ivy-info-has-the-publisher-and-the-identifier.md) | Decided |
 | D36 | [csv has an option for its separator, and does not guess dates](D036-csv-has-an-option-for-its-separator-and-does-not-guess-dates.md) | Decided |
 | D37 | [The text and the outline of a document wait for one capability](D037-the-text-and-the-outline-of-a-document-wait-for-one-capability.md) | Decided |
@@ -86,3 +86,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D64 | [A page gives its text and its places through one capability](D064-a-page-gives-its-text-and-its-places-through-one-capability.md) | Decided |
 | D65 | [A program gives LaTeX its TeX files and its folder](D065-a-program-gives-latex-its-tex-files-and-its-folder.md) | Decided |
 | D66 | [A program gives LaTeX the job name of a document](D066-a-program-gives-latex-the-job-name-of-a-document.md) | Decided |
+| D67 | [A rule line of a text file stands alone](D067-a-rule-line-of-a-text-file-stands-alone.md) | Decided. Amends D34 |
