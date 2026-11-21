@@ -84,9 +84,12 @@ ivy also keeps files that are data, not code:
 1. The module `fonts` keeps the font files of Liberation, Carlito and
    Caladea as they are, under the SIL Open Font License (D24), and Droid
    Sans Fallback of the Android Open Source Project, under the Apache
-   License 2.0, in `fonts/droid` with its `NOTICE`. Each one has
-   a row in `upstream/upstreams.tsv` of the kind `copy`, and its folder
-   keeps its license. `fonts/README.md` holds the URL, the version and the
+   License 2.0, in `fonts/droid` with its `NOTICE`. It keeps Latin Modern
+   and Latin Modern Math under the GUST Font License, an instance of the
+   LaTeX Project Public License 1.3c, in `fonts/lm` with the license, the
+   manifests and the notices of the authors (D62). Each one has a row in
+   `upstream/upstreams.tsv` of the kind `copy`, and its folder keeps its
+   license. `fonts/README.md` holds the URL, the version and the
    SHA-256 of each file. The license forbids a change to a font that keeps
    its name, so ivy does not change them.
 2. `internal/drawingml/testdata/ecma` keeps `presetShapeDefinitions.xml` of

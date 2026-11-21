@@ -80,3 +80,40 @@ in okage is about 3 to 5 weeks, and it can run at the same time. The
 encoder is not estimated. The copy needs an update from upstream again and
 again, and a test of the engine that compares a PDF file of `go-pdfkit`
 changes or goes.
+
+## The build of phase 8a
+
+On 2026-11-21 phases 8a and 8b, and the math of the engine of phase 8d,
+were built. The build differs from the decision in these points:
+
+1. The copy is of the commit `8234996d66f827438f248e8b0059031f52cb9964`.
+   It leaves out `image.go`, `lmoptical.go`, `lmfonts.go` and `texmf.go`
+   too, because they use go-gfx or embed fonts and files of LaTeX. The
+   files of ivy, `ivy_*.go`, hold their parts that ivy keeps.
+2. The fonts of okage have no helper for the kerning or the ligature of a
+   pair, so `latex/internal/opentype` shapes the pair with the shaper of
+   okage, with only that feature on. Item 4 of "Work for okage" in
+   `BACKLOG.md` still asks for the helpers.
+3. okage released `texmath` (okage D78) before this build, so the copy
+   does not keep `go-tex/math`. `latex/internal/mathsvg` gives the API of
+   go-tex/math on texmath, and the driver draws the glyphs of a formula as
+   runs of glyphs.
+4. The copy keeps `golang.org/x/text/unicode/norm` in `accents.go`. The
+   module of ivy already requires golang.org/x/text (D7).
+5. go-typeset/linebreak and go-typeset/hyphenation are under BSD-3-Clause.
+   They are copies in `latex/internal`. The patterns of hyphenation of
+   American English that upstream holds are under a license that allows a
+   copy, so the copy keeps them.
+6. The engine reads no file of the disk and no variable of the environment.
+   The files of the copy that import the package os import
+   `latex/internal/nofs`. The package `latex` gives the files of a
+   document through the resolver of the engine: the folder of the document
+   and the tree of TeX files of D65.
+7. The engine changes maps of its package when it builds a run, so two
+   runs race. ivy runs one engine at a time.
+8. Latin Modern is in the folder `lm` of the module `fonts`, and the
+   function `TeX` of the module gives it, apart from `FS` (D65).
+9. The links of a page are kept on the page, because the display list has
+   no link yet (phase 7c). Real TeX is an oracle of the test module with
+   pdfLaTeX and Ghostscript.
+

@@ -77,8 +77,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 63, and the next question is
-question 26.
+repeat. The next decision has the number 66, and the next question is
+question 29.
 
 ## Hard rules
 
@@ -177,6 +177,7 @@ On 2026-11-16 the repository holds these files:
 | `internal/goldmark/` | the copy of goldmark, for Markdown (D7, D21) |
 | `emf/` | EMF, EMF+ and WMF, with EMZ and WMZ, the first format of phase 5 |
 | `internal/gowemf/`, `internal/metafile/` | the copy of github.com/mgilbir/gowemf (D7, D24), and the playback of a metafile onto the display list, which the Office formats call for an embedded EMF or WMF image |
+| `latex/` | LaTeX and plain TeX, the format of phase 8: `latex/internal/engine` holds the copy of go-tex/engine with the driver of ivy onto the display list, `latex/internal/linebreak` and `latex/internal/hyphenation` the copies of go-typeset, and `latex/internal/opentype`, `latex/internal/mathsvg` and `latex/internal/nofs` the APIs of go-opentype, go-tex/math and os that the copy calls, on okage and without the disk (D62) |
 | `djvu/` | DjVu, the format of phase 6. `djvu/internal/` holds the copy of the decoders of dejapdf: `iff`, `zp`, `bzz`, `jb2`, `iw44` and the document model `doc` (D26) |
 | `internal/drawingml/` | the shapes of DrawingML and the slides: the tables of the preset shapes, made from `presetShapeDefinitions.xml` of ECMA-376, which `testdata/ecma` holds with the copyright notice of Ecma (D24), the colors, fills, lines, pictures and text bodies, and the scene that draws a page of fixed positions, with its text through `internal/layout` |
 | `odf/internal/drawpage/` | the pages of the presentations and the drawings of OpenDocument, on the display list |
@@ -191,7 +192,7 @@ On 2026-11-16 the repository holds these files:
 | `internal/fontdb/` | the font database of a program, from `ivy.Config.Fonts`, the Go fonts and the fonts of the system, which the layout, the metafiles and the charts share (D23, D24) |
 | `internal/chart/` | the charts of DrawingML, of Office 2016 (cx:chartSpace) and of OpenDocument: ivy lays them out and draws them onto the display list as Office and LibreOffice do, with the scales of the axes of Excel and the fonts of fontdb (D27) |
 | `internal/offcrypto/`, `odf/internal/odfcrypt/` | the encryption of MS-OFFCRYPTO (Agile, Standard, RC4 CryptoAPI and RC4), and the encryption of OpenDocument (D12, D24) |
-| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24) |
+| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24), and Latin Modern for LaTeX in `fonts/lm`, which `fonts.TeX` gives apart from `fonts.FS`, under the GUST Font License (D62, D65) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17). `internal/moxcms/assets` holds the default CMYK profile, which `pdf`, `internal/jpeg2000` and `icc` share (D61) |
 | `icc/` | the public package of color management for iv: an image converted to sRGB with an ICC profile, with the default CMYK profile, or with CICP code points, over `internal/moxcms` (D61) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10. The layout also reads EMF and WMF, and draws the objects of a format, such as the charts |

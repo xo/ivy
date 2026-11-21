@@ -38,7 +38,8 @@ images, in pure Go:
 3. Page descriptions: PDF, XPS, PostScript, EPS, Adobe Illustrator, EMF and
    WMF.
 4. Images with layers: Photoshop, OpenRaster and Krita.
-5. Containers that carry an icon or a preview: Apple disk images,
+5. LaTeX and plain TeX, with a TeX engine in Go.
+6. Containers that carry an icon or a preview: Apple disk images,
    applications and packages for macOS, iOS, Android, Windows and Linux, and
    camera RAW files.
 
@@ -92,6 +93,7 @@ its pages or both:
 | `github.com/xo/ivy/djvu` | DjVu, single and bundled: the pages, the thumbnails, and the title, the authors and the dates of the metadata |
 | `github.com/xo/ivy/emf` | EMF, EMF+ and WMF, also compressed as EMZ and WMZ: the page, and the program and the title of an EMF file |
 | `github.com/xo/ivy/markdown` | Markdown, with the extensions of GitHub: the pages and the title |
+| `github.com/xo/ivy/latex` | LaTeX and plain TeX: the pages, set by a copy of the TeX engine of go-tex/engine, with the math, the figures in PNG, JPEG, PDF, EPS and SVG, and the title and the author. A program gives the classes and the packages with the field `TeX` of `ivy.Config` |
 
 The other formats come in the phases of [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -129,8 +131,10 @@ holds Liberation Sans, Serif and Mono, Carlito and Caladea, which have the
 metrics of Arial, Times New Roman, Courier New, Calibri and Cambria. Lines
 and pages then break as they do in Office. It also holds Droid Sans
 Fallback, under the Apache License 2.0, which draws the Chinese, Japanese and
-Korean characters that a document does not embed. The module adds about
-10.9 MB to a program.
+Korean characters that a document does not embed. `fonts.TeX()` gives
+Latin Modern, the fonts of TeX, under the GUST Font License, for the field
+`TeX` of `ivy.Config` and the package `latex`. The module adds about 14.1 MB
+to a program.
 
 A document that has no pages, such as a camera RAW file, gives its preview:
 

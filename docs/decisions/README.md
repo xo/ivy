@@ -82,3 +82,6 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D60 | [The layout places a float at a position on the page](D060-the-layout-places-a-float-at-a-position-on-the-page.md) | Decided |
 | D61 | [The package icc converts the colors of an image to sRGB](D061-the-package-icc-converts-the-colors-of-an-image-to-srgb.md) | Decided. Amends D16 |
 | D62 | [ivy reads and writes LaTeX with a copy of go-tex/engine](D062-ivy-reads-and-writes-latex-with-a-copy-of-go-tex-engine.md) | Decided |
+| D63 | [The layout wraps the text on both sides of a float](D063-the-layout-wraps-the-text-on-both-sides-of-a-float.md) | Decided |
+| D64 | [A page gives its text and its places through one capability](D064-a-page-gives-its-text-and-its-places-through-one-capability.md) | Decided |
+| D65 | [A program gives LaTeX its TeX files and its folder](D065-a-program-gives-latex-its-tex-files-and-its-folder.md) | Decided |

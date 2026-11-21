@@ -11,3 +11,7 @@ caladea	https://github.com/huertatipografica/Caladea	copy	OFL-1.1	336a529cfad3d1
 dejapdf	https://github.com/sergev/dejapdf	copy	MIT	2b6ca0c1123cc45f868cca3be99dd8123d5cdc6f	2b6ca0c1123cc45f868cca3be99dd8123d5cdc6f	djvu/internal
 droid-sans-fallback	https://android.googlesource.com/platform/frameworks/base	copy	Apache-2.0	1cdfff555f4a21f71ccc978290e2e212e2f8b168	1cdfff555f4a21f71ccc978290e2e212e2f8b168	fonts/droid
 poi	https://github.com/apache/poi	copy	Apache-2.0	8d9b40ac4cb62b1c61759c900fb422abfeac4367	8d9b40ac4cb62b1c61759c900fb422abfeac4367	pptx/tablestyles
+go-tex-engine	https://github.com/go-tex/engine	copy	BSD-3-Clause	8234996d66f827438f248e8b0059031f52cb9964	8234996d66f827438f248e8b0059031f52cb9964	latex/internal/engine
+go-typeset-linebreak	https://github.com/go-typeset/linebreak	copy	BSD-3-Clause	48917899e7b189c44cac60ab22e30bd3d9c6eb7a	48917899e7b189c44cac60ab22e30bd3d9c6eb7a	latex/internal/linebreak
+go-typeset-hyphenation	https://github.com/go-typeset/hyphenation	copy	BSD-3-Clause	d9d3c0ca2e61e69ca9fa7252ec732164d6b6e436	d9d3c0ca2e61e69ca9fa7252ec732164d6b6e436	latex/internal/hyphenation
+latin-modern	https://github.com/go-tex/engine	copy	LPPL-1.3c	8234996d66f827438f248e8b0059031f52cb9964	8234996d66f827438f248e8b0059031f52cb9964	fonts/lm

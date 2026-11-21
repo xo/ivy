@@ -643,3 +643,60 @@ dots for each inch. 349 pages have words.
 shows 384 fonts in 163 documents, and each one is embedded and a subset.
 The files are smaller: a document of text, such as
 `poi/docx/illustrative-cases.docx`, goes from 1.5 MB to 54 KB.
+
+## The build of phase 7c
+
+The build of 2026-11-21 gives the links, the anchors and the bookmarks of
+the layout, of the books, of `pdf`, of `xps` and of `djvu` to the PDF
+device. The device writes them as link annotations, named destinations and
+the outline. The build differs from this decision in these places:
+
+1. The writer of okage needs the destination of a link annotation when
+   the page of the link is drawn. It cannot resolve a name after the last
+   page. So the device keeps the anchors of the pages that it drew. When a
+   link goes to an anchor of a later page, `Encode` draws all the pages a
+   second time, with the anchors of the first drawing. A file without
+   such a link draws its pages once. Item 3 of "Work for okage" in
+   `BACKLOG.md` asks for a link to a name that the writer resolves in
+   `Document.Finish`.
+2. `display.PageAnchor` names a destination that the file gives no name,
+   such as an explicit destination of PDF or a page of DjVu. Each page of
+   `xps` and `djvu` names its top with it. The device makes a named
+   destination of such an anchor only when a link of the file goes to it.
+   Every other anchor becomes a named destination.
+3. A book names the anchor of the id X of the document at the path P as
+   "P#X", and the start of the document as "P". A link to another document
+   of the book goes to its anchor. A link to a file of the book that is not
+   a document, such as an image, is dropped. So is a link with the scheme
+   `data` or `javascript`.
+4. `layout.BookOptions.Links` turns on the links and the bookmarks of a
+   book. `internal/ebook` sets it for the pages of the formats of the
+   layout. The book of the text of a shape does not set it, so the text of
+   a slide gives no link yet.
+5. `layout.Source.TOC` holds the table of contents of a book. `epub` reads
+   the navigation document of EPUB 3, or else the NCX of EPUB 2. `mobi`
+   reads the NCX index of MOBI 6 and KF8. `fb2` gives its sections with a
+   title, and `chm` reads its `.hhc` file. When the table holds an entry,
+   the headings give no bookmark.
+6. A bookmark of a heading keeps its `bookmark-state`. An entry of a table
+   of contents is open. An entry of the outline of PDF is open when its
+   `Count` is positive. A viewer shows an entry without children as closed.
+7. The content of a group that the device draws with the raster fallback
+   keeps its links. The device takes them from the recording of the group.
+   The content of a soft mask gives no link.
+8. `pdf` gives the rectangle `/Rect` of each link annotation, without its
+   quad points, and only the actions `URI` and `GoTo`. `xps` makes an
+   anchor only of a name that `LinkTargets` of the FixedDocument lists. A
+   link and an entry of the outline of `djvu` go to the top of their page,
+   because DjVu gives no point on the page.
+
+The test of the corpus also reads the links, the named destinations and
+the outline of each written file. `pdfinfo -url` of Poppler must list each
+URI that the pages link to, and no other. `pdfinfo -dests` must list each
+anchor of the pages. `mutool show outline` of MuPDF must list one entry for
+each bookmark, with its label, and `mutool show grep` must find the link
+annotations. The written pages of 282 documents hold 162 links to a URI in
+24 documents, 342 links to an anchor in 27 documents, 753 anchors, and 100
+entries of the outline in 37 documents. Each oracle finds them, and `qpdf
+--check` finds no error and no warning. The pixels of `ivy.RenderImage` of
+the 292 documents do not change.

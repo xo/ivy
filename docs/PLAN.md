@@ -352,7 +352,9 @@ the file without a new encode, and a writer that streams its pages.
 Phase 7a was done on 2026-11-19. The work that is left is under "Left by
 phase 7a" in `BACKLOG.md`. Phase 7b was done on 2026-11-19, as "The build
 of phase 7b" in D58 says. The work that is left is under "Left by phase
-7b" in `BACKLOG.md`.
+7b" in `BACKLOG.md`. Phase 7c was done on 2026-11-21, as "The build of
+phase 7c" in D58 says. The work that is left is under "Left by phase 7c" in
+`BACKLOG.md`.
 
 ### Phase 8. LaTeX (8 to 13 weeks)
 
@@ -367,6 +369,11 @@ also uses. Each estimate is for one agent with a maintainer.
 | 8c. The package | `latex/` with the document API of D11, the classes and packages from `ivy.Config`, the fuzz test, the corpus, and real TeX as an oracle | 1.5 to 2 weeks |
 | 8d. The math | the math of the engine, and the equations of Office Math, MathML and OpenDocument, through the layout of math of okage, after its release | 1 to 2 weeks in ivy, and 3 to 5 weeks in okage at the same time |
 | 8e. The writer | `latex/latexenc`, which writes the HTML of a document of the layout as LaTeX | not estimated |
+
+Phase 8a and phase 8b were done on 2026-11-21, with the math of the
+engine of phase 8d, as "The build of phase 8a" in D62 says. The work that
+is left is under "Left by phase 8a" in `BACKLOG.md`. D65 says how a program
+gives the files of TeX.
 
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.
@@ -387,5 +394,6 @@ The answer becomes a decision. The questions were numbered again when the
 decisions were consolidated (D4). D22 answers question 3, D23 answers question
 4, and D25 answers question 5. D33 to D45 answer questions 1 and 6 to 20. D55
 answers question 21, D57 answers question 22, D58 answers question 23, and
-D60 answers question 24, and D62 answers question 25. No question is open.
-The next question is question 26.
+D60 answers question 24, D62 answers question 25, D63 answers question 26,
+D64 answers question 27, and D65 answers question 28. No question is open.
+The next question is question 29.

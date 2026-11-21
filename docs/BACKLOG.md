@@ -10,7 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-No unit is in progress on 2026-11-20.
+No unit is in progress on 2026-11-21.
 
 ## Found by the visual review
 
@@ -48,16 +48,20 @@ found these faults. Each item names a file of the corpus.
    `poi/xlsx/landscape-a4-tables.xlsx`. Excel prints 17 of the 156 rows of set
    heights of `xlsx/testdata/row-heights-*.xlsx` 1 dot away from trunc(h × P /
    S), in both directions. Source: `internal/sheet`.
-5. Reserve the borders of a cell where a row of a table splits across pages,
-   as LibreOffice does. LibreOffice draws the top and the bottom border of the
-   split cell on both pages. ivy collapses the borders and reserves nothing at
-   the split, so on page 15 of `libreoffice/odt/landscape-a4-table.odt` ivy
-   fits one line more, and the pages drift by up to 3 lines around pages 20 to
-   25. Source: `internal/layout` (layout_table.go).
+5. Find why a row of `libreoffice/odt/landscape-a4-table.odt` whose
+   paragraphs have a line spacing of 1.5 is taller in ivy than in
+   LibreOffice. The row "K bodu 96" on page 19 is about 7 pixels taller, and
+   the pages from 20 to 29 drift by up to 3 lines. The layout draws the
+   borders of a split cell on both pages since 2026-11-21, and pages 14 to 19
+   now hold the same lines as in LibreOffice. LibreOffice also ends a split
+   cell at its last line, and the layout makes it fill the page to the bottom,
+   as CSS Fragmentation says. Source: `odf` and `-ivy-line-multiple` (D56).
 6. Wrap the text on both sides of a picture with square wrapping that is in
    the middle of the column, as Word does on page 6 of
    `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
-   side. Source: `msdoc`.
+   side. LibreOffice also wraps the text on both sides there. D63 decides
+   the property `-ivy-wrap-flow`, and the formats give it. Source: `msdoc`,
+   `docx`, `odf`, `rtf` and the layout, D63.
 7. Measure the page floats of D60 in Word, with the files `float-*.docx` of
    `docx/testdata` and `float-*.doc` of `msdoc/testdata`. LibreOffice 26.8
    places the floats of these files within 0.05 inch of ivy, except for two
@@ -162,16 +166,12 @@ found these faults. Each item names a file of the corpus.
     COM in the Windows VM of the review, but Word 2024 stopped when the script
     saved or exported the document, so these pictures have no reference.
     Source: `internal/odraw`, 2026-11-19.
-25. Lay out a line beside a float whose top is inside the line. The layout
-    tries the line at the height of its strut, and it lays out the line at the
-    full width of the column when the float is below that height. When the
-    line is then taller than its strut and touches the float, the layout
-    moves the line below the float. In `odf/testdata/float-f-late.odt`, the
-    paragraphs have a strut of Calibri of 11 points and text of 12 points, so
-    the text after the second paragraph goes below the frame, and LibreOffice
-    puts it beside the frame. A float of CSS starts at the top of a line, so
-    it is rare there. A page float of D60 can start anywhere. Source:
-    `internal/layout` (layout_inline.go), D60.
+25. Measure in Word how it draws the borders of a row that a page break
+    splits. `odf` gives `box-decoration-break: clone` to its tables and its
+    cells, so the layout draws the borders of a split cell on both pages, as
+    LibreOffice does. `docx`, `msdoc` and `rtf` keep the rule of WeasyPrint,
+    with no border at the split. No file of the corpus with a reference of
+    Word has a split row. Source: `docx`, `msdoc` and `rtf`, 2026-11-21.
 
 ## Left by the package icc
 
@@ -200,7 +200,8 @@ reads and writes LaTeX, and phase 8 of `PLAN.md` gives its steps.
 
 1. Read LaTeX: put a `.tex` document on pages, with its macros, classes,
    packages, math, tables, figures, cross-references and bibliography.
-   Source: the maintainers, 2026-11-20.
+   Phases 8a and 8b give the package `latex`. "Left by phase 8a" holds
+   what is left. Source: the maintainers, 2026-11-20.
 2. Write LaTeX: `latex/latexenc` writes a document of ivy as LaTeX source.
    Source: the maintainers, 2026-11-20.
 3. Draw the equations of Office Math (`docx`), MathML (`html` and `epub`)
@@ -209,16 +210,87 @@ reads and writes LaTeX, and phase 8 of `PLAN.md` gives its steps.
    needs the layout of math of item 2 of "Work for okage". Source: D62,
    2026-11-20.
 
+## Left by phase 8a
+
+The build of phase 8a of 2026-11-21 left these items. D62 and D65 say what
+was built.
+
+1. `parseTransform` of `mathpdf.go` of upstream panics on a transform of a
+   special such as `a)b(c`, which the fuzz test of `latex` found. `ivy_svg.go`
+   holds the fix. ivy posts nothing to go-tex/engine (`AGENTS.md`, rule 13),
+   so an update of the copy checks whether upstream changed `parseTransform`,
+   and keeps the fix of ivy until it does. Source: phase 8a, 2026-11-21.
+2. The engine loses the text of a document that loads the `amsmath.sty` of TeX
+   Live, as `latex/testdata/math.tex` does with the tree
+   `/usr/share/texmf-dist/tex`. With the files that upstream embeds, it does
+   not. Find the cause in the copy of the engine. ivy posts nothing to
+   go-tex/engine (`AGENTS.md`, rule 13). Source: phase 8a, 2026-11-21.
+3. Give the links and the destinations of a page to the device through
+   `display.Linker`, and the outline of `Doc.Outline` through
+   `display.Bookmarker`, which phase 7c added. Today `Doc.Links` of
+   `latex/internal/engine/ivy_driver.go` holds them, and a PDF file of a LaTeX
+   document has no links. Source: phase 8a, 2026-11-21.
+4. Draw the pages of `\includepdf` with the package `pdf`, as the figures
+   are drawn. Today they are empty, because upstream rasterizes them with a
+   renderer that a program wires. Source: phase 8a, 2026-11-21.
+5. Load the real pgf and TikZ, which upstream loads only with its variable
+   GOTEX_PGF, and add `pgfsys-gotex.def` of upstream, under BSD-3-Clause,
+   to the files that the resolver gives. Today a picture of TikZ is a
+   framed box. Source: phase 8a, 2026-11-21.
+6. Run more than one engine at a time. The engine changes maps of its
+   package when it builds a run, such as `expandableSet` in
+   `primitives.go`, `etexif.go` and `readstreams.go`, so `Compile` runs
+   one engine at a time. A change of upstream that builds those maps once
+   lifts the limit. Source: phase 8a, 2026-11-21.
+7. Map the limits of `ivy.Config` onto the limits of the engine: the steps
+   of expansion, the depth of the input and the size of a paragraph. Today
+   the engine keeps its own limits, and the context stops a run. Source:
+   phase 8a, 2026-11-21.
+8. Add the corpus of LaTeX documents to `test/review/corpus.tsv`, and the
+   format to the review command. Source: phase 8a, 2026-11-21.
+9. Update the copy from upstream, which merges about 10 changes each day,
+   as `docs/UPSTREAM.md` says. Source: D62.
+10. The tests of the test module and the review command give the folder
+    `fonts` to the formats with `os.DirFS`, and the folder now holds `lm`,
+    which `fonts.FS` leaves out (D65). `test/cmd/perf` hides it, so that its
+    hashes stay those of `fonts.FS`. Hide it in the others too, such as
+    `test/review/render.go` and `test/galley_test.go`. Source: phase 8a,
+    2026-11-21.
+
 ## Left by the charts
 
-1. Draw the treemap, the sunburst and the region map of Office 2016. They
-   draw as a frame with their title. The corpus has no file with a treemap
-   or a sunburst, and the region map needs map data. Source:
-   `internal/chart` (D27).
-2. Draw the data tables of the charts of DrawingML, and the equation and
-   the R² of a trendline. Source: `internal/chart`.
-3. Draw the depth of a 3D chart. A 3D pie draws as a flat ellipse, and the
+1. Draw the region map of Office 2016. It draws as a frame with its
+   title. Excel takes the shapes of the regions from the Bing Maps
+   service of Microsoft, and no data under a license that ivy can bundle
+   gives the same shapes. Excel keeps the answers of the service in the
+   chart part, in `cx:geoCache`: XML that raw deflate compresses, with the
+   polygons in the point compression of Bing Maps, and the copyrights of
+   Microsoft and OpenStreetMap. ivy can draw the map from that cache, and
+   bundle nothing. The maintainers decide whether ivy draws data of the
+   service from a file. `libreoffice/xlsx/region-map.xlsx` holds such a
+   cache. Source: `internal/chart` (D27).
+2. Draw the depth of a 3D chart. A 3D pie draws as a flat ellipse, and the
    other 3D charts as their 2D form. Source: `internal/chart`.
+3. Draw the data table of a chart whose bars go across, and the
+   trendlines and the data tables of a chart of OpenDocument and of a chart
+   of Excel 97 to 2003. `internal/chart` draws the data table of a chart
+   of DrawingML whose categories go along the bottom, and the trendlines of
+   DrawingML only. Source: `internal/chart`, 2026-11-21.
+4. Find how Excel places the label of a trendline. ivy puts the right
+   side of the label 9 points left of the end of the line, and its middle
+   at the height of the end. In `repo/xlsx/chart-trendline-labels.xlsx`,
+   Excel puts the right side 9 to 19 points left of the end. Source:
+   `internal/chart`, 2026-11-21.
+5. Find when Excel puts the children of a node of a treemap side by side
+   in a box that is a little higher than wide. In the banners of
+   `repo/xlsx/chart-treemap-banner.xlsx`, Excel puts Potato and Carrot side
+   by side in a box of 126.0 by 127.1 points. The squarified layout puts
+   them one over the other. Source: `internal/chart`, 2026-11-21.
+6. Give a chart of Office 2016 the fill and the line of its chart area
+   from its style part, `cs:chartStyle`, when the chart part has no
+   `cx:spPr`. Word and Excel draw the white chart area and the gray border
+   of the style, as on page 3 of `poi/docx/chartex.docx`. ivy draws no
+   border. Source: `internal/chart` and its callers, 2026-11-21.
 
 ## Left by the CJK fonts of the system
 
@@ -244,6 +316,48 @@ The pages of Visio came on 2026-11-17 (D30).
 2. `vsdx`: draw an OLE object that has no picture, and the theme effects
    other than the shadow: the bevel, the glow and the reflection. No sample
    is in the corpus.
+
+## Left by phase 7c
+
+1. Draw the pages once when a page links to an anchor of a later page.
+   pdfenc now draws every page a second time, because the writer of okage
+   needs the destination of a link when its page is drawn. Item 3 of "Work
+   for okage" asks for the change. Source: `pdf/pdfenc`, 2026-11-21.
+2. Give the links of the text of a shape, such as a link of a slide of
+   `pptx` or of a drawing of `odf`. The book of a text body does not set
+   `BookOptions.Links`, so such a text gives no link. Source:
+   `internal/drawingml`, D58.
+3. Give the quad points of a link annotation of PDF. `pdf` gives the
+   rectangle `/Rect` of each link, so a link that covers two lines of text
+   covers the space between them too. Source: `pdf/links.go`.
+4. Give the links of PDF that go to another file (`/GoToR`) or start a
+   program (`/Launch`), and the actions of a `Next` chain. `pdf` gives only
+   `URI` and `GoTo`. Source: `pdf/links.go`.
+5. Read the links of a PDF file only for the pages that a writer asks for.
+   Today the first `Draw` onto a device that takes links reads the
+   annotations of every page, to find the explicit destinations that the
+   links use. On a file of many pages and many links, that read comes
+   before the first page. Source: `pdf/links.go`.
+6. Give a link of XPS to a name that `PageContent.LinkTargets` does not
+   list. Today `xps` makes an anchor only of a name that LinkTargets lists,
+   because some files put a Name on every element. A link to any other
+   name is dropped. Source: `xps/links.go`.
+7. Give the links of the elements of a `VisualBrush` in XPS. Today the walk
+   of a visual gives no link. Source: `xps/links.go`.
+8. Give a link of a DjVu file the point of its target, not only the top of
+   the page. NAVM and maparea name a page and no point, so every link and
+   bookmark of `djvu` goes to the top of its target page. Source:
+   `djvu/links.go`.
+9. Give the highlights and the comments of a maparea of DjVu, such as
+   `(hilite)`, `(border)` and the text of the comment. `djvu` gives only the
+   URL and the box of the shape. Source: `djvu/internal/doc/links.go`.
+10. In a KF8 book, give an `id` to the element at a `kindle:pos:fid`
+    position that has only an `aid`, as calibre does. Today a link or an
+    entry of the table of contents that targets such an element goes to
+    the start of its part. Source: `mobi/kf8.go`, `links.position`.
+11. Read the table of contents of a MOBI 6 book without an NCX index from
+    the page that the "toc" reference of its guide names. Today such a book
+    gives no bookmarks. Source: `mobi/mobi6.go`.
 
 ## Left by phase 7b
 
@@ -294,9 +408,13 @@ The pages of Visio came on 2026-11-17 (D30).
 
 ## Left by phase 6
 
-1. Read the text layer (TXTa and TXTz), the outline (NAVM) and the links of
-   the annotations of DjVu, when the API has a capability for them. D37
-   waits for one capability for every format. Source: phase 6.
+1. Read the outline (NAVM) and the links of the annotations of DjVu, when
+   the API has a capability for them. D37 waits for one capability for
+   every format. Source: phase 6.
+2. Give the text layer of DjVu to a program and to pdfenc. `doc.Page.Text`
+   in `djvu/internal/doc` reads it into zones, and no code calls it yet.
+   D64 decides the capability `ivy.Texter`, in the phases 64a, 64b and 64c.
+   Source: phase 6.
 
 ## Left by phase 5
 
@@ -412,15 +530,25 @@ time is for a page at 96 dpi.
    `drawImageWithAlphaMask`, which has no key for the cache. Find whether
    the mask of the image can have a key, or draw it without a group.
    Source: `internal/hayro/render` and `internal/display`.
-3. Allocate less in the boxes of a book. `PageCount` of
-   `idpf/epub/linear-algebra.epub` now allocates 2.1 GB, down from 2.5 GB, in
-   26.4 million objects instead of 31.8 million. 397,000 of its 524,000 text
-   boxes hold only white space, and `inlineInBlock` drops most of them later.
-   A box is 384 bytes, so these boxes take about 150 MB. The layout cannot
-   leave them out, because the collapsible spaces of `ProcessWhitespace` go
-   from one text box to the next. Most of the rest comes from okage:
-   `roxmltree`, `newElementWrapper` and `addRelevantSelectors` of
-   `cssselect2`. Source: `internal/layout` and okage.
+3. Allocate less in the boxes of a book. On 2026-11-21 `PageCount` of
+   `idpf/epub/linear-algebra.epub` allocates 1,716 MB in 12.3 million
+   objects, down from 2,088 MB in 23.3 million with okage at 5e860c67. Most
+   of the rest comes from three places:
+   - The lines. `splitInlineBox` of `layout_inline.go` makes about 1.9
+     million objects for each count: the lists `waitingChildren`,
+     `childWaitingFloats` and `newChildren`, the copies of the boxes, and
+     the set of the removed sides that `Box.Copy` makes for each copy.
+   - The text boxes of white space. About 400,000 of the 524,000 text
+     boxes hold only white space, and `inlineInBlock` drops most of them.
+     The layout cannot leave them out, because the collapsible spaces of
+     `ProcessWhitespace` go from one text box to the next. The builder now
+     makes them in blocks, without a new string, and a box is 352 bytes.
+   - okage: `roxmltree` and `cssselect2`. See item 5 of "Work for okage".
+
+   `zipdoc.Archive.Read` also reads each file of a book with
+   `raster.ReadAll`, whose buffer grows as it reads. The size of the entry
+   can give the size of the buffer. Source: `internal/layout`,
+   `internal/zipdoc` and okage, 2026-11-21.
 4. Render each page of a long sheet without a second layout of its parts.
    `PageCount` lays out the parts on goroutines and drops their layouts (D48),
    so the pages after it lay out each part again, with its lead page and its
@@ -489,7 +617,36 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    Office Math, MathML and OpenDocument with it, and zuzu the math of its
    Mermaid labels. Also give the metrics, the kerning of a pair and the
    ligature of a pair of glyphs, for the engine of D62. okage decides the API
-   in okage D78 (`texmath`). Source: D62, 2026-11-20.
+   in okage D78 (`texmath`). texmath came with okage at 5e860c67. The
+   helpers for the kerning and the ligature of a pair are not in okage yet,
+   and `latex/internal/opentype` shapes the pair to find them. Source: D62,
+   2026-11-20.
+3. In `pdf`, take a link annotation to a named destination by its name
+   alone, and resolve the name in `Document.Finish`, after the last page.
+   Today the destination of a link must be known when its page is drawn,
+   so pdfenc draws every page a second time when a page links to a later
+   page. Source: `pdf/pdfenc`, 2026-11-21.
+4. Allocate less in `roxmltree` and in `cssselect2` for a large document.
+   `idpf/epub/linear-algebra.epub` holds 25 MB of XHTML with about 270,000
+   elements. On 2026-11-21 one run of `test/cmd/perf` on it, which opens
+   the book and counts its pages, allocates these:
+   - `roxmltree.parse` allocates about 410 MB. The guess of the number of
+     nodes, `strings.Count(text, "<")`, does not count the text nodes, so
+     `appendNode` grows the list of the nodes, about 175 MB. Then
+     `shrinkToFit` copies the list again, about 90 MB.
+   - `processText` makes a new `textBuffer` for each text that holds an
+     entity, the buffer grows, and `finish` copies it. These are about 1.1
+     million objects. One buffer for the parse can serve each text.
+   - `IterSubtree` of `cssselect2` makes an `ElementWrapper` for each
+     element, about 270,000 objects and 63 MB, and a `frame` on the heap
+     for each element, about 270,000 objects. A list of frames by value
+     needs no object for each element.
+   - `EtreeChildren` grows the list of the children with `append`, and the
+     iterator of `Element.Children` makes two closures for each element.
+     These are about 900,000 objects. An optional method of `Element` that
+     gives the children as a slice, or their number, needs none of them.
+
+   Source: item 3 of "Left by the speed of 2026-11-18", 2026-11-21.
 
 ## Work for magic
 

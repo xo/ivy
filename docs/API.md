@@ -49,7 +49,8 @@ github.com/xo/ivy                the root package: the document API (D11)
 ├── dmg/  ipa/  apk/  msi/       the containers with an icon or a preview
 ├── camera/  iwork/              camera RAW, iWork
 ├── drm/                         a module of its own, for DRM that needs a key (D12)
-├── fonts/                       a module of its own: the fonts with the metrics of Office (D24)
+├── latex/                       LaTeX and plain TeX, with a copy of go-tex/engine (D62)
+├── fonts/                       a module of its own: the fonts with the metrics of Office (D24), and Latin Modern in fonts.TeX (D62, D65)
 ├── icc/                         color management: an image converted to sRGB, for iv (D61)
 ├── internal/
 │   ├── display/                 the display list and the okage device (D10)
@@ -261,6 +262,12 @@ type Config struct {
 	// for Calibri (D24). The format reads TrueType, OpenType, WOFF and
 	// WOFF2 files within Limits, and ignores the other files.
 	Fonts fs.FS
+	// TeX holds the files of TeX that a LaTeX document reads by name, such
+	// as its class and its packages: a tree of a TeX distribution, or a
+	// folder of .cls and .sty files. The format latex finds a file by its
+	// base name, anywhere in the tree, within Limits. The module of ivy
+	// holds no file of LaTeX (D62, D65).
+	TeX fs.FS
 	// Paper is the page of a document whose file gives none, such as a
 	// text file, an HTML file or an ebook. The zero Paper keeps the default
 	// of the format, US Letter in portrait (D32).
@@ -447,6 +454,13 @@ func WithSeparator(r rune) Option // package csv
 // safe for concurrent use. Without it, an indirect document gives
 // ErrUnsupported (D38).
 func WithDir(dir fs.FS) Option // package djvu
+
+// WithDir gives the folder of the document. The document reads the files
+// that it names, such as \input{chapter1} and \includegraphics{fig}, from
+// dir, by their paths relative to the folder. dir must be safe for
+// concurrent use. Without it, the document reads only the files of the
+// field TeX of ivy.Config (D65).
+func WithDir(dir fs.FS) Option // package latex
 ```
 
 A format that holds one image, such as `psd`, also has `Decode` and
@@ -487,7 +501,9 @@ func WithRasterDPI(dpi float32) Option   // 300 by default
 `display.Drawer` goes into the file as vectors. A run of glyphs with a text
 goes into the file as text of an embedded subset of its font, so a reader
 can search and copy it. Another page goes into the file as one image of
-`ivy.RenderImage`. The limits and the errors are those of D58.
+`ivy.RenderImage`. The links of the pages become link annotations, their
+anchors become named destinations, and their bookmarks become the outline.
+The limits and the errors are those of D58.
 
 ## The package icc
 
@@ -529,8 +545,10 @@ a program needs one, the maintainers decide to export it.
    that draws onto a device is a `Drawer`, whose method `Draw` gives pdfenc
    the commands of the page (D58). A `GlyphRun` holds the text of its
    glyphs, and each glyph holds the bytes of the text of its cluster, for
-   the writer of PDF. Phase 7c adds the optional interfaces
-   `Linker` and `Bookmarker` of D58, for the links and the outline. A path
+   the writer of PDF. The optional interfaces `Linker` and `Bookmarker`
+   of D58 take the links, the anchors and the bookmarks of a page, for the
+   links and the outline of the file. `PageAnchor` names a destination
+   that the file gives no name, such as a page of a DjVu file. A path
    of okage changes in place when it transforms, so a shared path, such as
    the outline of a glyph, is cloned first with `display.Clone`.
 2. `internal/font` reads the faces: the TrueType, OpenType and CFF fonts with
