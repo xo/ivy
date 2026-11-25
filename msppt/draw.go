@@ -342,6 +342,9 @@ func (b *builder) addShape(sh *shape, t *odraw.Transform) {
 	}
 	if tx := b.textOf(sh); tx != nil {
 		f.Text = b.textBody(tx, c, sh.props9)
+		if sh.metro != nil {
+			setMetroMargins(f.Text, metroParagraphs(sh.metro, b.d.cfg.Limits))
+		}
 	}
 	b.add(f)
 }

@@ -364,6 +364,7 @@ func (t *Tree) cell(c roxmltree.Node, style *cellStyle, list *ListStyle, pics Pi
 	if body, ok := child(c, "txBody"); ok {
 		run := style.text
 		cell.Text = t.Colors.ParseTextBody(body, list, &run, BodyStyle{}, t.Fields)
+		cell.Text.ResolvePictures(pics)
 	}
 	return cell
 }

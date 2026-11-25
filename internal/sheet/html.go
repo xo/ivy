@@ -310,10 +310,10 @@ func (w *writer) document() (string, bool, error) {
 		if !ok {
 			return "", false, nil
 		}
-		if w.wb.Excel {
-			// Excel prints a sheet without a print area from its cell
-			// A1, so the empty rows and columns before the used range
-			// take their place on the page.
+		if w.wb.Excel || w.wb.FromA1 {
+			// Excel and LibreOffice print a sheet without a print area
+			// from its cell A1, so the empty rows and columns before the
+			// used range take their place on the page.
 			used.Row0, used.Col0 = 0, 0
 		}
 		ranges = []Range{used}
@@ -831,7 +831,7 @@ func (w *writer) css(b *strings.Builder) {
 	b.WriteString("span.r{display:inline-block}\n")
 	b.WriteString("span.sl,span.sb{display:inline-block;width:0}\nspan.sl>span,span.sb>span{display:inline-block}\n")
 	b.WriteString("span.sl>span{transform:translateX(-100%)}\nspan.sb>span{transform:translateX(-50%)}\n")
-	b.WriteString("div.ph{position:absolute;border:0.75pt solid #808080;background:#f2f2f2;color:#404040;font-size:9pt;white-space:normal;text-align:center;overflow:hidden}\n")
+	b.WriteString("div.ph{position:absolute;border:0.75pt solid #808080;background:#f2f2f2;color:#404040;font-size:9pt;white-space:normal;text-align:center;overflow:hidden}\ndiv.pl{border-color:transparent;background:none}\n")
 	b.WriteString("p.note{margin:6pt 0 0;font-family:sans-serif;font-size:9pt;color:#606060}\n")
 	b.WriteString("div.cm{break-before:page;white-space:pre-wrap}\ndiv.cm p{margin:0 0 10pt}\n")
 	ids := make([]int, 0, len(w.used))
@@ -898,7 +898,7 @@ func (w *writer) styleCSS(b *strings.Builder, st *Style, own bool) {
 		if st.HAlign == "right" {
 			side = "right"
 		}
-		b.WriteString("padding-" + side + ":" + pt((cellPadding+st.Indent)*s) + ";")
+		b.WriteString("padding-" + side + ":" + pt(cellPadding*s+st.Indent) + ";")
 	}
 }
 
@@ -994,6 +994,23 @@ func (w *writer) marginBoxes(b *strings.Builder, hf HeaderFooter, side string, e
 		// poi/xls/basic-expense-template-2011.xls and
 		// poi/xls/conditional-formatting-samples.xls).
 		edge += footerRaise
+	}
+	if side == "top" && w.wb.Excel && w.sh.Lines != nil {
+		// Excel prints a line of a header as high as a line of a cell
+		// that wraps (ExcelRows.Line), with the room above the text: 3.5
+		// points lower than a line that starts at the header margin, in
+		// Calibri 11 (poi/xlsx/header-footer.xlsx)
+		size := font.Size
+		if !(size > 0) {
+			size = def.Size
+		}
+		if size > 0 {
+			s := 1.0
+			if w.sh.Page.ScaleHeaderFooter && w.scale > 0 {
+				s = w.scale
+			}
+			edge += max(0, w.sh.Lines.Line(font)-size) * s
+		}
 	}
 	for _, part := range []struct {
 		name   string
@@ -1413,12 +1430,19 @@ func (w *writer) cells(i int, row *Row, band []int, cover []*mergeState, text []
 				// goes in a block of their height, with lines that fit
 				size, avail := w.room(cell, st, h)
 				clipText = avail
-				normal := 1.22
-				if eastAsian(cell) {
-					normal = 1.5
+				// the lines are as high as Excel prints them, or else of the
+				// normal height of the font
+				line := w.line(cell, st) * w.scale
+				if line <= 0 {
+					line = size * w.scale * 1.22
+					if eastAsian(cell) {
+						line = size * w.scale * 1.5
+					}
 				}
-				if n := w.lines(cell, st, h); n >= 2 && size*w.scale*normal*float64(n) > avail {
+				if n := w.lines(cell, st, h); n >= 2 && line*float64(n) > avail {
 					inline = append(inline, "line-height:"+pt(max(0.1, avail/float64(n))))
+				} else if w.sh.Lines != nil {
+					inline = append(inline, "line-height:"+pt(line))
 				}
 			}
 		}
@@ -1682,18 +1706,40 @@ func (w *writer) room(cell *Cell, st *Style, h float64) (size, avail float64) {
 }
 
 // lines returns the number of lines of the text of a cell that rows of the
-// printed height h hold, with lines of 1.22 times the size of the font, as
-// Excel lays out Calibri and MS PGothic. The lines are printed at the scale
-// of the rows (Sheet.RowScale) too, and the borders of the rows do not
+// printed height h hold, with lines as high as Excel prints them
+// (Sheet.Lines). Without Lines, a line is 1.22 times the size of the font, at
+// the scale of the rows (Sheet.RowScale). The borders of the rows do not
 // count: Excel fits 2 lines of MS PGothic of 11 points in a row of 27
 // points, twice its default height.
 func (w *writer) lines(cell *Cell, st *Style, h float64) int {
+	if line := w.line(cell, st); line > 0 {
+		return int(h/line + 0.01)
+	}
 	size, _ := w.room(cell, st, h)
 	scale := w.sh.RowScale
 	if !(scale > 0) {
 		scale = calibriRowScale
 	}
 	return int(h/(size*1.22*scale) + 0.01)
+}
+
+// line returns the height that Excel prints for a line of the text of a
+// cell that wraps, in points: the line of the largest font of its runs
+// (Sheet.Lines). It returns 0 for a sheet without Lines.
+func (w *writer) line(cell *Cell, st *Style) float64 {
+	if w.sh.Lines == nil {
+		return 0
+	}
+	f := st.Font
+	for _, r := range cell.Runs {
+		if r.Font != nil && r.Font.Size > f.Size {
+			f.Family, f.Size = r.Font.Family, r.Font.Size
+			if f.Family == "" {
+				f.Family = st.Font.Family
+			}
+		}
+	}
+	return w.sh.Lines.Line(f)
 }
 
 // calibriRowScale is the scale of the rows of a workbook whose default font
@@ -1841,12 +1887,7 @@ func (w *writer) image(p placed) {
 			return
 		}
 		if img.Path == "" {
-			// the slice of a frame reaches 1 point into the next row,
-			// which draws its own slice over it, so that no seam shows
-			// between the rows
-			b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt((p.clipH+1)*s) + `">`)
-			w.imageTag(img, pos)
-			b.WriteString("</div>")
+			w.frameSlice(p)
 			return
 		}
 		b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt(p.clipH*s) + `">`)

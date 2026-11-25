@@ -36,6 +36,9 @@
 //   - -ivy-line-baseline puts the baseline of a line where PowerPoint
 //     puts it, from the Windows metrics of the font, see baselineShift
 //     (D71).
+//   - -ivy-text-outline draws the outlines of the glyphs of a text in its
+//     color, and does not fill them, as Word draws the outline effect of a
+//     run, see drawFirstLine.
 
 package layout
 
@@ -60,6 +63,7 @@ var ivyProperties = map[string]bool{
 	"wrap-flow":      true,
 	"stroke-adjust":  true,
 	"line-baseline":  true,
+	"text-outline":   true,
 }
 
 // validateMarginBoxFit validates -ivy-margin-box-fit: 'none' or 'grow'.
@@ -280,3 +284,19 @@ func computeWrapFlow(style *Style, name string, value Value) Value {
 var validateStrokeAdjust = singleKeyword(func(keyword string) bool {
 	return keyword == "none" || keyword == "pixels"
 })
+
+// validateTextOutline validates -ivy-text-outline: 'none', or the width of
+// the outlines of the glyphs, a length that is not negative. The property
+// is inherited.
+func validateTextOutline(tokens []tinycss2.Node, _ string) (Value, error) {
+	if getSingleKeyword(tokens) == "none" {
+		return String("none"), nil
+	}
+	if len(tokens) != 1 {
+		return nil, nil
+	}
+	if d, ok := getLength(tokens[0], false, false).(Dimension); ok {
+		return d, nil
+	}
+	return nil, nil
+}

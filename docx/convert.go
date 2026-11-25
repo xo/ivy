@@ -23,7 +23,8 @@ const documentName = "index.xhtml"
 
 // styleSheet is the style sheet of the format. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
-// section after this style sheet.
+// section after this style sheet. The separator of the footnotes is a line
+// 144 points long, as Word draws it.
 const styleSheet = `html { font-family: serif; font-size: 10pt; line-height: 1.17; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note; -ivy-text-autospace: ideograph-alpha ideograph-numeric }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2 }
@@ -40,7 +41,7 @@ img { vertical-align: baseline }
 .endnote-ref { vertical-align: super; font-size: 0.65em }
 .endnotes { break-before: auto; margin-top: 12pt; border-top: 0.5pt solid black; padding-top: 6pt; -ivy-line-numbers: none }
 @page {
-  @footnote { margin-top: 6pt; padding-top: 3pt; border-top: 0.5pt solid black }
+  @footnote { margin-top: 6pt; padding-top: 3pt; border-top: 0.5pt solid transparent; background: linear-gradient(black, black) border-box no-repeat; background-size: 144pt 0.5pt }
   @top-center { width: 100%; vertical-align: top; text-align: left }
   @bottom-center { width: 100%; vertical-align: bottom; text-align: left }
 }
@@ -77,6 +78,9 @@ type converter struct {
 	// and the spacing before the next one, where it else puts the larger
 	// of the two.
 	addSpacing bool
+	// joinBorder is set for the run that the conversion writes when the run
+	// before it, at 0, or the run after it, at 1, has the same border.
+	joinBorder [2]bool
 	// themeLang is the East Asian language that selects the East Asian
 	// fonts of the theme: the w:eastAsia of w:themeFontLang, or else of the
 	// w:lang of the default run properties.

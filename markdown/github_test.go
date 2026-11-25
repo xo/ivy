@@ -104,6 +104,10 @@ func TestHTMLAlign(t *testing.T) {
 		"img left":   {text: `<img src="b.png" width="100" height="20" align="left" alt="b">` + "\n\nText.", left: 72, right: 172},
 		// the text of the cell starts after half of the border of 1 pixel,
 		// as the borders collapse, and the padding of 13 pixels of the cell
+		"div center table": {
+			text: `<div align="center"><table><tr><td align="center" width="200">` + img + `</td></tr></table></div>`,
+			left: 358, right: 458,
+		},
 		"td center": {text: `<table><tr><td align="center" width="400">` + img + `</td></tr></table>`, left: 86 + 150, right: 86 + 250},
 	} {
 		t.Run(name, func(t *testing.T) {

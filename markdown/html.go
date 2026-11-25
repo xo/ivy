@@ -75,8 +75,7 @@ const maxLangScan = 64 << 10
 //     them. The line is hidden, and a reference to a footnote takes the
 //     brackets of GitHub.
 //   - An alert of GitHub is a block quote with the classes of the alert, as
-//     alerts makes it. GitHub makes a div, and shows an icon before the
-//     title. The title here has no icon.
+//     alerts makes it. GitHub makes a div.
 //   - A details element without the attribute open shows only its summary,
 //     after a triangle that points right. The text of the element outside
 //     the summary has a size of 0, so that it does not show. An open
@@ -118,7 +117,7 @@ li + li { margin-top: .25em; }
 li:has(> input[type="checkbox"]:first-child) { list-style-type: none; }
 li > input[type="checkbox"]:first-child { display: inline-block; margin: 0 .2em .25em -1.4em; vertical-align: middle; }
 dl { padding: 0; }
-dl dt { padding: 0; margin-top: 1rem; font-size: 1em; font-style: italic; font-weight: 600; }
+dl dt { padding: 0; margin-top: 1rem; break-after: avoid; page-break-after: avoid; font-size: 1em; font-style: italic; font-weight: 600; }
 dl dd { margin-left: 0; padding: 0 1rem; margin-bottom: 1rem; }
 code, kbd, pre, samp, tt { font-family: monospace; }
 code, tt { padding: .2em .4em; margin: 0; font-size: 85%; background-color: #818b981f; border-radius: 6px; }
@@ -139,6 +138,8 @@ table img { background-color: transparent; }
 img { border-style: none; max-width: 100%; box-sizing: content-box; }
 img[align=right i] { padding-left: 20px; }
 img[align=left i] { padding-right: 20px; }
+[align=center i] > table { margin-left: auto; margin-right: auto; }
+[align=right i] > table { margin-left: auto; margin-right: 0; }
 tr:has(img) { break-inside: avoid; }
 .footnotes { font-size: 12px; color: #59636e; border-top: 1px solid #d1d9e0; }
 .footnotes > hr { display: none; }
@@ -149,6 +150,7 @@ blockquote.markdown-alert { padding: 0.5rem 1rem; margin-bottom: 1rem; color: in
 .markdown-alert > :first-child { margin-top: 0; }
 .markdown-alert > :last-child { margin-bottom: 0; }
 .markdown-alert .markdown-alert-title { font-weight: 500; line-height: 1; }
+.markdown-alert .markdown-alert-title img.octicon { margin-right: 8px; vertical-align: text-bottom; }
 .markdown-alert.markdown-alert-note { border-left-color: #0969da; }
 .markdown-alert.markdown-alert-note .markdown-alert-title { color: #0969da; }
 .markdown-alert.markdown-alert-important { border-left-color: #8250df; }

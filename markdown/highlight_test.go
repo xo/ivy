@@ -183,9 +183,11 @@ func TestAlerts(t *testing.T) {
 	doc := sourceHTML(t, text)
 	for _, want := range []string{
 		`<blockquote class="markdown-alert markdown-alert-note">` +
-			`<p class="markdown-alert-title">Note</p>` + "\n<p>Useful text.</p>",
+			`<p class="markdown-alert-title"><img src="data:image/svg+xml;base64,`,
+		`Note</p>` + "\n<p>Useful text.</p>",
 		`<blockquote class="markdown-alert markdown-alert-warning">` +
-			`<p class="markdown-alert-title">Warning</p>` + "\n<p>Second paragraph.</p>",
+			`<p class="markdown-alert-title"><img src="data:image/svg+xml;base64,`,
+		`Warning</p>` + "\n<p>Second paragraph.</p>",
 		"<blockquote>\n<p>[!TIP] text on the line</p>",
 		"<blockquote>\n<p>[!OTHER]\nNot an alert.</p>",
 		"<blockquote>\n<p>[!CAUTION]</p>",

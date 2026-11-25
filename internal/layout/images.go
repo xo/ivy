@@ -1728,6 +1728,12 @@ func drawGradient(s *stream, layout GradientLayout, repeating bool, concreteWidt
 	}
 	function := createStitchingFunction(domain, encode, bounds, subFunctions)
 	sh := s.addShading(shadingType, domain, layout.Points, extend, function)
+	// Port: upstream paints the shading over the whole clip, so a gradient
+	// with a background-size and no-repeat covers the whole painting area.
+	// The port clips the shading to the size of the image.
+	s.rectangle(0, 0, concreteWidth, concreteHeight)
+	s.clip(false)
+	s.end()
 	s.transform(1, 0, 0, scaleY, 0, 0)
 
 	if slices.ContainsFunc(alphas, func(alpha float64) bool { return alpha != 1 }) {

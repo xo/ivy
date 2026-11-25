@@ -86,6 +86,14 @@ const (
 	printDPI  = 600
 )
 
+// IndentStep is the width of a step of the indent of a cell of Excel, in
+// points: 11 pixels. Excel prints the steps of the cells of
+// poi/xls/legal-portrait.xls, in Arial of 10 points, 8.25 points apart on
+// a page of a scale of 37%, so the scale of the page does not apply to the
+// indent. poi/xlsx/landscape-letter-budget.xlsx, in Century Gothic of 9
+// points, gives about 9 points.
+const IndentStep = 8.25
+
 // Digit is the width of a digit of the default font of a workbook, the
 // unit of the widths of the columns of Excel.
 type Digit struct {

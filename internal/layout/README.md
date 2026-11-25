@@ -673,7 +673,7 @@ import the module of the fonts.
 
 ## The properties of ivy
 
-`css_ivy.go` is not a port. It adds thirteen properties for the formats of
+`css_ivy.go` is not a port. It adds fourteen properties for the formats of
 the word processors, such as `docx` and `odf`. Upstream does not have them. A
 style sheet names each one with the prefix `-ivy-`, such as
 `-ivy-tab-stops`, and the validation ignores the name without the prefix.
@@ -824,6 +824,11 @@ style sheet names each one with the prefix `-ivy-`, such as
     usWinAscent over the sum of usWinAscent and usWinDescent of the font,
     as PowerPoint puts it (D71). The text bodies of DrawingML,
     `msppt` and `msxls` give it.
+14. `-ivy-text-outline` is `none`, the initial value, or a length that is
+    not negative. With a length, the layout strokes the outlines of the
+    glyphs of a text with that width in the color of the text, and does
+    not fill them, as Word draws the outline effect of a run. `docx` gives
+    it for `w:outline`. The property is inherited.
 
 ## The hooks for the later stages
 

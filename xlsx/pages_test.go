@@ -118,7 +118,9 @@ func TestWorkbookHTML(t *testing.T) {
 	for _, want := range []string{
 		// A4 in landscape, with the margins of the sheet
 		"@page{size:841.89pt 595.28pt;margin:72pt 36pt 72pt 36pt;",
-		`@top-left{content:"Report";vertical-align:top;padding-top:28.8pt;white-space:pre;font-family:"Arial", sans-serif;font-size:12pt;font-weight:bold;}`,
+		// the header goes 2.52 points under the header margin, as high
+		// as Excel prints a line of Arial of 12 points that wraps
+		`@top-left{content:"Report";vertical-align:top;padding-top:31.32pt;white-space:pre;font-family:"Arial", sans-serif;font-size:12pt;font-weight:bold;}`,
 		`@top-right{content:"Page " counter(page) " of " counter(pages);`,
 		// 20.71 characters with their padding, of 7 pixels: 145 pixels,
 		// and the default of 64 pixels. Excel prints them in digits of
@@ -291,9 +293,12 @@ func TestImageAndChart(t *testing.T) {
 			`<div class="cl" style="left:0.75pt;top:13.52pt;width:98.5pt;height:2pt"><img style="position:absolute;left:-0.75pt;top:-13.52pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
 		`<td class="a"><div class="cl" style="width:103.13pt;height:14.52pt"><img style="position:absolute;left:0pt;top:-43.56pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
 		// each row shows the slice of the chart in a box with a margin of
-		// 4 points, which reaches 1 point into the next row
-		`<img style="position:absolute;left:-4pt;top:-4pt;width:162.7pt;height:23.52pt" src="ivy-object:chart2~1~1" alt="">`,
-		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart: Sales</div>`,
+		// 4 points, which reaches 1 point into the row above
+		`<img style="position:absolute;left:-4pt;top:-5pt;width:162.7pt;height:23.52pt" src="ivy-object:chart2~1~5" alt="">`,
+		// the fill and the border of a frame are a slice too, and its
+		// label goes over them
+		`<img style="position:absolute;left:-4pt;top:-5pt;width:111.13pt;height:23.52pt" src="ivy-object:frame~1~1" alt="">`,
+		`<div class="cl" style="top:-1pt;width:103.13pt;height:15.52pt"><div class="ph pl" style="left:0pt;top:1pt;width:100pt;height:50pt">Chart: Sales</div></div>`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, doc)

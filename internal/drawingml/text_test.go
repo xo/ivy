@@ -144,8 +144,46 @@ func TestPictureBullet(t *testing.T) {
 	p.Style.Bullet.Set(Bullet{Kind: BulletPicture})
 	sb.Reset()
 	writeBullet(&sb, &p, &run, nil, 1)
-	if got := sb.String(); !strings.Contains(got, "• </span>") {
+	if got := sb.String(); !strings.Contains(got, "•</span>") {
 		t.Errorf("expected a round bullet, got %s", got)
+	}
+}
+
+// testPictures is the pictures of a part, by relationship.
+type testPictures map[string][]byte
+
+// Picture satisfies Pictures.
+func (p testPictures) Picture(id string) *Picture {
+	if b, ok := p[id]; ok {
+		return NewPicture(b, ivy.Config{})
+	}
+	return nil
+}
+
+// TestBulletPictureRel checks that the picture of a:buBlip comes from the
+// pictures of the part of the paragraph or of the list style, and that a
+// bullet of another part keeps its picture, as slide 42 of
+// custom-geometry.pptx and the master of key02.pptx draw them.
+func TestBulletPictureRel(t *testing.T) {
+	c := &Colors{}
+	list := c.ParseListStyle(parse(t, `<a:lstStyle><a:lvl1pPr><a:buBlip><a:blip r:embed="rId1"/></a:buBlip></a:lvl1pPr></a:lstStyle>`))
+	list.ResolvePictures(testPictures{"rId1": []byte("master")})
+	if b := list[1].Bullet.V; b.Kind != BulletPicture || string(b.Picture) != "master" || b.Rel != "" {
+		t.Errorf("expected the picture of the master, got %+v", b)
+	}
+	body := parse(t, `<a:txBody><a:bodyPr/><a:p><a:r><a:t>a</a:t></a:r></a:p>`+
+		`<a:p><a:pPr><a:buBlip><a:blip r:embed="rId1"/></a:buBlip></a:pPr><a:r><a:t>b</a:t></a:r></a:p></a:txBody>`)
+	tb := c.ParseTextBody(body, list, &RunStyle{}, BodyStyle{}, Fields{})
+	tb.ResolvePictures(testPictures{"rId1": []byte("slide")})
+	for i, want := range []string{"master", "slide"} {
+		if got := string(tb.Paragraphs[i].Style.Bullet.V.Picture); got != want {
+			t.Errorf("paragraph %d: expected the picture %q, got %q", i, want, got)
+		}
+	}
+	list = c.ParseListStyle(parse(t, `<a:lstStyle><a:lvl1pPr><a:buBlip><a:blip r:embed="rId9"/></a:buBlip></a:lvl1pPr></a:lstStyle>`))
+	list.ResolvePictures(testPictures{})
+	if b := list[1].Bullet.V; b.Picture != nil || b.Rel != "" {
+		t.Errorf("expected a round bullet without a picture, got %+v", b)
 	}
 }
 

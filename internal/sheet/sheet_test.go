@@ -92,11 +92,20 @@ func TestPrintFromA1(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := document(t, src, 0)
-	if want := `<tbody><tr><td colspan="2"></td></tr><tr><td colspan="2"></td></tr><tr><td></td><td>Year</td></tr>`; !strings.Contains(doc, want) {
+	want := `<tbody><tr><td colspan="2"></td></tr><tr><td colspan="2"></td></tr><tr><td></td><td>Year</td></tr>`
+	if !strings.Contains(doc, want) {
 		t.Errorf("expected the two empty rows and the empty column before the cell:\n%s", doc)
 	}
 	if strings.Count(doc, "<col ") != 2 {
 		t.Errorf("expected the columns A and B:\n%s", doc)
+	}
+	// LibreOffice prints a sheet from its cell A1 too
+	src, err = (&Workbook{Sheets: []*Sheet{sh}, FromA1: true}).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc := document(t, src, 0); !strings.Contains(doc, want) {
+		t.Errorf("expected the two empty rows and the empty column before the cell:\n%s", doc)
 	}
 	// a workbook of another program prints its used range
 	src, err = (&Workbook{Sheets: []*Sheet{sh}}).Source(t.Context(), Options{})
@@ -553,5 +562,42 @@ func TestColumnWidths(t *testing.T) {
 	}
 	if _, _, ok := PaperSize(1000); ok {
 		t.Error("expected no paper 1000")
+	}
+}
+
+// TestExcelLines checks the lines of a text that wraps in a sheet of
+// Excel: as high as Excel prints a line of Calibri of 11 points, 14.52
+// points, and the indent of a cell, which the scale of the page does not
+// change.
+func TestExcelLines(t *testing.T) {
+	rows := NewExcelRows(nil, Font{Family: "Calibri", Size: 11})
+	if got := rows.Line(Font{}); math.Abs(got-14.52) > 1e-9 {
+		t.Errorf("expected a line of 14.52 points, got: %g", got)
+	}
+	styles := []Style{
+		{Font: Font{Family: "Calibri", Size: 11}},
+		{Font: Font{Family: "Calibri", Size: 11}, Wrap: true},
+		{Font: Font{Family: "Calibri", Size: 11}, Indent: 2 * IndentStep},
+	}
+	sh := &Sheet{Name: "Lines", DefaultColWidth: 48, DefaultRowHeight: 14.52, Page: DefaultPage,
+		FixedRows: true, Lines: rows, Rows: []Row{
+			{Index: 0, Height: 43.56, Cells: []Cell{{Col: 0, Text: "one two three", Style: 1}}},
+			{Index: 1, Cells: []Cell{{Col: 0, Text: "indent", Style: 2}}},
+		}}
+	sh.Page.Scale = 0.5
+	src, err := (&Workbook{Styles: styles, Sheets: []*Sheet{sh}, Excel: true}).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	for _, want := range []string{
+		// three lines of 14.52 points at half the size
+		`<td class="s1 c" style="line-height:7.26pt">`,
+		// the padding at half the size, and the indent of two steps
+		`padding-left:17.25pt;`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected %q in the sheet:\n%s", want, doc)
+		}
 	}
 }

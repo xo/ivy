@@ -119,7 +119,7 @@ func (w *workbook) style(xf []byte) sheet.Style {
 	case rot <= 90:
 		st.Rotation = rot
 	}
-	st.Indent = float64(xf[8]&0x0F) * 6.75
+	st.Indent = float64(xf[8]&0x0F) * sheet.IndentStep
 	st.Shrink = xf[8]&0x10 != 0
 	dg := le.Uint16(xf[10:])
 	icv := le.Uint16(xf[12:])
@@ -230,6 +230,7 @@ func (w *workbook) toSheet(raw *rawSheet, rows *sheet.ExcelRows, digit sheet.Dig
 		Gridlines:        raw.gridlines,
 		FixedRows:        true,
 		RowScale:         rows.Scale(),
+		Lines:            rows,
 		RowDots:          true,
 		Header:           sheet.ParseHeaderFooter(raw.header),
 		Footer:           sheet.ParseHeaderFooter(raw.footer),

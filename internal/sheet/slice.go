@@ -31,30 +31,59 @@ import (
 // per inch and more.
 const sliceMargin = 4
 
+// sliceReach is the height of the part of the row above that a slice
+// covers, in points. The row draws its cell, with the gridline at its top,
+// after the row above. The slice draws over the gridline and over the
+// edge of the slice of the row above, so that no seam shows between the
+// rows.
+const sliceReach = 1
+
 // objectSlice writes the slice p of an object, which shows the part of the
-// object in its row. The slice reaches 1 point into the next row, which
-// draws its own slice over it, so that no seam shows between the rows.
+// object in its row.
 func (w *writer) objectSlice(p placed) {
 	img := p.img
 	obj := w.wb.Objects[img.Object]
 	if obj == nil {
 		return
 	}
+	w.slice(obj, img.Object, p.dx, p.dy, img.Width, img.Height, p)
+}
+
+// frameSlice writes the slice p of the frame of a picture that ivy does
+// not draw, as objectSlice writes the slice of an object. The fill and the
+// border of the frame are an object. The label goes over them, in a clip of
+// the layout that reaches into the row above as the slice does.
+func (w *writer) frameSlice(p placed) {
+	img := p.img
+	// the border of div.ph lies outside the box of the frame
+	f := frame{w: img.Width + 2*frameBorder, h: img.Height + 2*frameBorder}
+	w.slice(f, "frame", p.dx, p.dy, f.w, f.h, p)
+	s := w.scale
+	b := &w.body
+	b.WriteString(`<div class="cl" style="top:` + pt(-sliceReach*s) + ";width:" + pt(p.clipW*s) + ";height:" + pt((p.clipH+sliceReach)*s) + `">`)
+	b.WriteString(`<div class="ph pl" style="left:` + pt(p.dx*s) + ";top:" + pt((p.dy+sliceReach)*s) + ";width:" + pt(img.Width*s) +
+		";height:" + pt(img.Height*s) + `">` + html.EscapeString(img.Label) + `</div>`)
+	b.WriteString("</div>")
+}
+
+// slice writes the slice p of the object obj, which takes the box of ow by
+// oh points at (x, y) from the corner of the cell. key names the object.
+func (w *writer) slice(obj layout.Object, key string, x, y, ow, oh float64, p placed) {
 	if w.slices == nil {
 		w.slices = make(map[string]layout.Object)
 	}
-	name := img.Object + "~" + w.id + "~" + strconv.Itoa(len(w.slices)+1)
-	s := &slice{obj: obj, w: p.clipW, h: p.clipH + 1, x: p.dx, y: p.dy, ow: img.Width, oh: img.Height}
+	name := key + "~" + w.id + "~" + strconv.Itoa(len(w.slices)+1)
+	s := &slice{obj: obj, w: p.clipW, h: p.clipH + sliceReach, x: x, y: y + sliceReach, ow: ow, oh: oh}
 	w.slices[name] = s
 	sc := w.scale
 	bw, bh := s.Size()
-	w.body.WriteString(`<img style="position:absolute;left:` + pt(-sliceMargin*sc) + ";top:" + pt(-sliceMargin*sc) +
+	w.body.WriteString(`<img style="position:absolute;left:` + pt(-sliceMargin*sc) + ";top:" + pt(-(sliceMargin+sliceReach)*sc) +
 		";width:" + pt(bw*sc) + ";height:" + pt(bh*sc) + `" src="` + html.EscapeString(layout.ObjectURL(name)) + `" alt="">`)
 }
 
-// slice is the part of an object in a row: the box of w by h points at the
-// corner of the cell. The object takes the box of ow by oh points at (x, y)
-// from the corner of the cell.
+// slice is the part of an object in a row: the box of w by h points from
+// sliceReach above the corner of the cell. The object takes the box of ow by
+// oh points at (x, y) from the corner of that box.
 type slice struct {
 	obj          layout.Object
 	w, h         float64
@@ -88,4 +117,36 @@ func (s *slice) Draw(ctx context.Context, dev display.Device, rect okage.Rect) e
 	dev.Concat(okage.TransformFromRow(float32(rw/bw), 0, 0, float32(rh/bh), rect.X(), rect.Y()))
 	display.ClipAdjusted(dev, keep)
 	return s.obj.Draw(ctx, dev, box)
+}
+
+// frameBorder is the width of the border of a frame, in points.
+const frameBorder = 0.75
+
+// frame is the fill and the border of the frame of a picture that ivy does
+// not draw, as div.ph draws them: a gray fill and a border of 0.75 points
+// inside the box of w by h points.
+type frame struct {
+	w, h float64
+}
+
+// Size satisfies the interface Object of the layout.
+func (f frame) Size() (float64, float64) {
+	return f.w, f.h
+}
+
+// Draw satisfies the interface Object of the layout.
+func (f frame) Draw(_ context.Context, dev display.Device, rect okage.Rect) error {
+	if r, ok := okage.RectFromXYWH(rect.X(), rect.Y(), rect.Width(), rect.Height()); ok {
+		dev.FillPath(okage.PathFromRect(r), okage.FillRuleWinding, okage.SolidColor(okage.ColorFromRGBA8(0xf2, 0xf2, 0xf2, 0xff)))
+	}
+	sx, sy := float64(rect.Width())/f.w, float64(rect.Height())/f.h
+	in := frameBorder / 2
+	r, ok := okage.RectFromXYWH(rect.X()+float32(in*sx), rect.Y()+float32(in*sy),
+		rect.Width()-float32(2*in*sx), rect.Height()-float32(2*in*sy))
+	if !ok {
+		return nil
+	}
+	stroke := okage.Stroke{Width: float32(frameBorder * min(sx, sy)), MiterLimit: 4}
+	dev.StrokePath(okage.PathFromRect(r), stroke, okage.SolidColor(okage.ColorFromRGBA8(0x80, 0x80, 0x80, 0xff)))
+	return nil
 }

@@ -775,6 +775,8 @@ func (fc *FontConfiguration) chain(style *Style) []svg.FontID {
 //     that ivy/internal/font.Substitute gives, such as Carlito for Calibri.
 //  4. The other faces of the program, such as the Go fonts and the fonts of
 //     the system.
+//  5. All the faces of the program, for the alias of the family that
+//     fontdb.Alias gives, such as URW Gothic for Century Gothic.
 //
 // A family of the faces of a step hides the same family in the faces of the
 // later steps, as the fonts of @font-face rules do in CSS.
@@ -794,7 +796,13 @@ func (fc *FontConfiguration) query(family svg.FontFamily, q svg.FontQuery) (svg.
 			return id, true
 		}
 	}
-	return fc.queryRange(fc.first, fc.base, name, q)
+	if id, ok := fc.queryRange(fc.first, fc.base, name, q); ok {
+		return id, true
+	}
+	if alias, ok := fontdb.Alias(name); ok && family.Kind == svg.FontFamilyNamed {
+		return fc.queryRange(0, fc.base, alias, q)
+	}
+	return 0, false
 }
 
 // eastAsianFaces returns the East Asian faces of the program, such as the

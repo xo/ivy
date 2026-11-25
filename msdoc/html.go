@@ -266,7 +266,8 @@ func pt(twips int) string {
 }
 
 // css returns the style sheet of the document: the page of the first
-// section and the default font.
+// section and the default font. The separator of the footnotes is a line
+// 144 points long, as Word draws it.
 func (p *parser) css(pg page) string {
 	family := "serif"
 	if st := p.styles.resolve(0, p.lim.MaxDepth); st != nil && st.stk == stkParagraph {
@@ -345,7 +346,9 @@ body {
   @footnote {
     margin-top: 6pt;
     padding-top: 3pt;
-    border-top: 0.5pt solid black;
+    border-top: 0.5pt solid transparent;
+    background: linear-gradient(black, black) border-box no-repeat;
+    background-size: 144pt 0.5pt;
   }
 }
 `, pg.size(), pt(pg.top), pt(pg.right), pt(pg.bottom), pt(pg.left), family, pt(p.defaultTab()))
@@ -423,6 +426,7 @@ var lineRatios = map[string]float64{
 	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
 	"verdana": 1.2153, "tahoma": 1.207,
+	"century gothic": 1.2261, "urw gothic": 1.2261,
 }
 
 // lineRatio returns the height of a single line of the font ftc, as a

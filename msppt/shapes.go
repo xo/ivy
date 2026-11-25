@@ -21,6 +21,9 @@ type shape struct {
 	// props9 are the picture bullets and the automatic numbers of the
 	// paragraphs of the text, from the extension of PowerPoint 2000.
 	props9 []pf9
+	// metro is the metroBlob of the shape, the shape in DrawingML that
+	// PowerPoint 2007 and later write, or nil.
+	metro []byte
 }
 
 // drawing is the shapes of a slide or of a master.
@@ -68,6 +71,7 @@ func newShape(sh *odraw.Shape, maxObjects int) *shape {
 		s.placeholder = int(ph[4])
 	}
 	s.props9 = shapeProps9(sh.ClientData, maxObjects)
+	s.metro = sh.Props.Complex(propMetroBlob)
 	if sh.ClientTextbox != nil {
 		var texts []text
 		for th, tb := range children(sh.ClientTextbox) {

@@ -166,109 +166,70 @@ found these faults. Each item names a file of the corpus.
     inline formula with scripts makes its line higher. Compare the height of
     such lines with calibre. Source: `internal/formula` and the layout,
     2026-11-25.
-25. Find where a file of PowerPoint 97 to 2003 that PowerPoint 2007 wrote
-    keeps the margin of a paragraph (`marL` of `pptx`). Page 42 of
-    `poi/ppt/custom-geometry.ppt` shows the indent in PowerPoint and
-    LibreOffice, but its StyleTextPropAtom has no margin and level 0. Page 48
-    starts the first line of a paragraph without a bullet at the indent, as
-    PowerPoint does, which goes against `TestNoBulletIndent` (page 38).
-    Source: `msppt`, 2026-11-25.
-26. Start the text of a paragraph right after a number that is wider than its
-    hanging indent, as PowerPoint does. On page 22 of
-    `poi/ppt/custom-geometry.ppt`, the number "10." pushes its text one space
-    to the right. Draw the picture bullets of `pptx` (`a:buBlip`) with
-    `Bullet.Picture`, as `msppt` does. Source: `internal/drawingml`,
-    2026-11-25.
-27. Give `datasets/csv/country-codes.csv` the bands of columns of LibreOffice.
-    On A4 landscape ivy makes 13 bands (91 pages) and LibreOffice makes 14 (98
-    pages). `sheet.ArialTextWidth` measures a character past U+017F at 0.5 em,
-    so Cyrillic and Arabic fields measure narrower than in LibreOffice. The
-    cap of 300 points also wraps the long fields, which LibreOffice does not
-    do. Source: `csv`, 2026-11-25.
-28. Clip the slice of a placeholder frame of a sheet (`div.ph`) on the grid of
-    the pixels, as `internal/sheet/slice.go` clips the slice of an object with
-    `display.ClipAdjusted`. Its border and its fill still show the light seam
-    of a clip that covers a part of a pixel. Source: `internal/sheet`,
-    2026-11-25.
-29. Check where Office draws the axis of categories of a waterfall chart of
+25. Give `datasets/csv/country-codes.csv` the bands of columns of LibreOffice.
+    The widths of the columns match LibreOffice within 2 points since
+    2026-11-25. The cap of 300 points still gives 13 bands on A4 landscape,
+    where LibreOffice gives 14, because LibreOffice gives columns of 319, 324
+    and 421 points. LibreOffice measures some Chinese fields wrongly, such as
+    14 points for a field with "，". Source: `csv`, 2026-11-25.
+26. Check where Office draws the axis of categories of a waterfall chart of
     Office 2016 with negative totals. `internal/chart` puts it at the bottom
     for a box and whisker chart only. Source: `internal/chart`, 2026-11-25.
-30. Give a continuous section of `docx` its own left and right margins, with
+27. Give a continuous section of `docx` its own left and right margins, with
     headers that follow on later pages, as in
     `libreoffice/docx/mixed-orientation.docx`. It needs the wrap around a
     float in a section with columns first (D60, open point 6), or page 2 gets
     worse. Source: `docx`, 2026-11-25.
-31. Give the text of a wrapped cell of `xlsx` and `msxls` the line pitch of
-    Excel, about 1.32 em for Calibri, where ivy gives 1.0 em. The text of a
-    cell also sits 0.1 to 1 point left of Excel. Source: `internal/sheet`,
-    2026-11-25.
-32. Draw a bullet of the font Symbol or Wingdings with that font when the
-    program has it. ivy draws a bullet of Times New Roman. Source: `msdoc` and
-    `docx`, 2026-11-25.
-33. Make the header cells of a pivot table bold, as its style says, and give a
-    rich label of a chart the style of each of its runs. Source: `xlsx`,
+28. Put the lines of a wrapped cell of `xlsx` about 1 point lower in Calibri.
+    The pitch of the lines matches Excel since 2026-11-25. Excel puts the room
+    of a line above the text. Source: `internal/sheet`, 2026-11-25.
+29. Give a rich label of a chart the style of each of its runs.
+    `internal/chart` takes the style of the first run. Source:
     `internal/chart`, 2026-11-25.
-34. Take Microsoft JhengHei, as Word does, for the East Asian text of zh-TW
-    when the font of the document is missing. ivy takes SimSun. Take URW
-    Gothic, which has the metrics of Century Gothic, when Century Gothic is
-    missing. Source: `internal/fontdb`, 2026-11-25.
-35. Draw the outline text and the borders of a run (`w:bdr`) of `docx`.
-    Source: `docx`, 2026-11-25.
-36. Measure the baseline of a slide whose text autofit reduces the line
-    spacing (`lnSpcReduction`). About 0.02 em of error is left after D71.
-    Source: `internal/drawingml`, 2026-11-25.
-37. Measure the wrap of a turned picture of `poi/doc/floating-pictures.doc`.
-    ivy gives one more line beside each picture of pages 6 and 7 than Word,
-    about 14 points each (D63). Source: the layout, 2026-11-25.
-38. Put the text of a header of `xlsx` about 3.4 points lower, as Excel does.
-    Only `poi/xlsx/header-footer.xlsx` measures it. Source: `internal/sheet`,
-    2026-11-25.
-39. Draw the indents of the cells of `poi/xls/legal-portrait.xls`, which Excel
-    shows and ivy does not. The cause is not found. Source: `msxls`,
-    2026-11-25.
-40. Draw the separator of the footnotes 144 points long, as Word does. ivy
-    draws it across the width of the column. Source: `docx` and the layout,
-    2026-11-25.
-41. Break page 1 of `poi/docx/form-footnotes.docx` before row H, as Office
+30. Wrap the text around the wrap polygon of a picture with tight wrap, as
+    Word does on page 6 of `poi/doc/floating-pictures.doc`. ivy wraps around
+    the box of the picture and gives one more line. Word also keeps the empty
+    paragraph after page 5 on that page, and ivy moves it to the top of page
+    6. Source: `msdoc` and the layout, 2026-11-25.
+31. Break page 1 of `poi/docx/form-footnotes.docx` before row H, as Office
     does. From page 9 of `poi/docx/drawing.docx`, the pages drift by 25 to 167
-    points from the row of the banner and from the line heights. The empty
-    lines of `w:br` in `poi/docx/landscape-letter.docx` are 2.6 points short
-    each. Source: `docx`, 2026-11-25.
-42. Subtract the margin of a cell from `tblpX` of a floating table only in the
-    mode of Word before 2013. Source: `docx`, 2026-11-25.
-43. Check whether LibreOffice prints a sheet of ODS from A1, as Excel does.
-    ivy prints a sheet of Excel from A1 since 2026-11-25, and a sheet of ODS
-    from its used range. Source: `internal/sheet`, 2026-11-25.
-44. Follow the HTML sanitizer of GitHub in `markdown`: GitHub drops the
-    `style` attributes and the `script` and `style` elements, and keeps the
-    content of a tag that it does not allow. ivy keeps all of them. A `div
-    align="center"` does not center a child table or block, because the
-    presentational hints set only `text-align`. Source: `markdown`,
+    points from the row of the banner and from the line heights. `docx` adds
+    the top and bottom margins of the cells to a row of least height since
+    2026-11-25, as Word does. Measure whether Word does the same for a row of
+    exact height. Source: `docx`, 2026-11-25.
+32. Sanitize the reference page `test/review/markdownit.html` as GitHub does.
+    It keeps the `style` and `class` attributes and the `script` elements, so
+    the review compares ivy, which drops them, with a page that keeps them.
+    Source: the review, 2026-11-25.
+33. Color the code of the review as Shiki does where transit does not tell the
+    tokens apart: the names of functions in Go, `*` in SQL, the references to
+    classes in Python and JavaScript, and `$` in bash. Shiki colors them by
+    their context. It needs work on the grammars of transit. Source:
+    `test/review`, 2026-11-25.
+34. Read more of the metroBlob (property 0x03A9) of a shape that PowerPoint
+    2007 or later wrote into a .ppt file. `msppt` takes only `marL` and
+    `indent` of its paragraphs, when the number of paragraphs matches.
+    PowerPoint draws the whole DrawingML shape when the checksums of
+    `drs/downrev.xml` (shapeCheckSum and textCheckSum) match the binary shape.
+    Source: `msppt`, 2026-11-25.
+35. Draw `w:sym` F094 of Symbol as Word does, with the empty box of the font,
+    in `poi/docx/form-footnotes.docx`. ivy draws nothing. Source: `docx`,
     2026-11-25.
-45. Check the fonts of Chrome in the review before Chrome becomes a primary
-    renderer (D69). Chrome draws no glyph for the CJK fonts that
-    `pdfjs/pdf/text-cjk-nonembedded.pdf` does not embed. Source: the review,
-    2026-11-25.
-46. Draw the octicon of each alert of GitHub before its title in `markdown`,
-    as GitHub does, and keep a `dt` of a definition list on the page of its
-    `dd`. Source: `markdown`, 2026-11-25.
-47. Compare the colors of code of the review with Shiki when the reference of
-    D70 is built. transit has no grammar for YAML, TOML, CSS, Markdown, diff,
-    Dockerfile or Makefile, so those blocks keep one color in the review, and
-    the style "github" of transit colors some tokens, such as variables, in
-    another way than Shiki. Source: `test/review`, 2026-11-25.
-48. Add a command to the review that writes `test/review/markdownit.tsv` again
-    from the imports of the page of markdown-it (D70). Today a walk by hand
-    made it, as `test/review/SOURCES.md` says, and jsDelivr can build a `+esm`
-    bundle again with another sha256. The page hides the YAML front matter, as
-    VS Code does, where GitHub shows it as a table. The rules of `$` of
-    `@vscode/markdown-it-katex` differ from GitHub in some cases. Source: the
-    review, 2026-11-25.
-49. Change the colors of the pictures of `internal/drawingml/recolor.go` with
-    the package `filter` of okage (okage D88): the gray and the duotone are
-    color matrices, and the contrast and the brightness are a linear transfer
-    function. Since okage v0.22.0, `blur.go` blurs with `filter.BlurMask`.
-    Source: `internal/drawingml`, 2026-11-25.
+36. Give the text of `-ivy-text-outline` to a writer of PDF. The stroked
+    outlines have no text that a reader can search or copy. Source: the
+    layout, 2026-11-25.
+37. Measure the line ratio of Century Gothic, 1.2261, which `docx` and `msdoc`
+    give to Century Gothic and to URW Gothic. It is not read from the font.
+    Page 1 of `poi/doc/floating-pictures.doc` matches Word with it. Source:
+    `docx` and `msdoc`, 2026-11-25.
+38. Draw the table styles of `xlsx`, such as TableStyleMedium2 of
+    `tableStyleInfo`, and the fills and the borders of the pivot styles. It
+    needs the preset styles of ECMA-376. See `poi/xlsx/pivot-table.xlsx`.
+    Source: `xlsx`, 2026-11-25.
+39. Measure the step of the indent of Excel with more fonts.
+    `sheet.IndentStep` is 8.25 points, which fits Arial 10, and Excel does not
+    scale it with the page. Century Gothic 9 gives about 9 points. Source:
+    `internal/sheet`, 2026-11-25.
 
 ## Left by the package icc
 

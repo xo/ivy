@@ -96,6 +96,29 @@ func TestFind(t *testing.T) {
 	}
 }
 
+// TestFindAlias checks that Find takes the alias of a font that the
+// database does not hold, and the font itself when the database holds it.
+func TestFindAlias(t *testing.T) {
+	db := fakeDB(
+		[]svg.FontFamilyName{{Name: "URW Gothic", Language: lcidEnglish}},
+	)
+	id, ok := Find(db, "Century Gothic", 400, false)
+	if !ok || id != 0 {
+		t.Errorf("expected URW Gothic for Century Gothic, got: %d %t", id, ok)
+	}
+	db.PushFaceInfo(fakeFace(svg.FontFamilyName{Name: "Century Gothic", Language: lcidEnglish}))
+	id, ok = Find(db, "Century Gothic", 400, false)
+	if !ok || id != 1 {
+		t.Errorf("expected Century Gothic, got: %d %t", id, ok)
+	}
+	if alias, ok := Alias(" CENTURY GOTHIC "); !ok || alias != "URW Gothic" {
+		t.Errorf("expected URW Gothic, got: %q %t", alias, ok)
+	}
+	if alias, ok := Alias("Arial"); ok {
+		t.Errorf("expected no alias for Arial, got: %q", alias)
+	}
+}
+
 // TestCovering checks that Covering finds Droid Sans Fallback of the module
 // github.com/xo/ivy/fonts for a character of each CJK collection, and
 // nothing in the Go fonts.
@@ -129,7 +152,7 @@ func TestCovering(t *testing.T) {
 	}
 }
 
-// TestDraws checks that draws reads the character map of a face, and that
+// TestDraws checks that Draws reads the character map of a face, and that
 // a table cmap that ends past the data draws nothing.
 func TestDraws(t *testing.T) {
 	db := svg.NewFontDatabase()
@@ -137,13 +160,13 @@ func TestDraws(t *testing.T) {
 	if len(ids) != 1 {
 		t.Fatalf("expected one face of Go Regular, got: %d", len(ids))
 	}
-	if !draws(db, ids[0], 'a') {
+	if !Draws(db, ids[0], 'a') {
 		t.Error("expected Go Regular to draw 'a'")
 	}
-	if draws(db, ids[0], 'あ') {
+	if Draws(db, ids[0], 'あ') {
 		t.Error("expected Go Regular not to draw 'あ'")
 	}
-	if draws(db, ids[0]+1, 'a') {
+	if Draws(db, ids[0]+1, 'a') {
 		t.Error("expected no face after Go Regular")
 	}
 	data := bytes.Clone(goregular.TTF)
@@ -156,7 +179,7 @@ func TestDraws(t *testing.T) {
 	}
 	db = svg.NewFontDatabase()
 	ids = db.LoadFontData(data)
-	if len(ids) == 1 && draws(db, ids[0], 'a') {
+	if len(ids) == 1 && Draws(db, ids[0], 'a') {
 		t.Error("expected no character in a table cmap that ends past the data")
 	}
 }

@@ -227,9 +227,13 @@ func (c *converter) floatTable(s *css, t roxmltree.Node, tp props, total float64
 		w = tw / 20
 	}
 	x := anchorX(attrOf(pp, "horzAnchor"), attrOf(pp, "tblpXSpec"), number(attrOf(pp, "tblpX"), 0)/20, w, colWidth, sec)
-	// The text of the first cell lines up with the place of the table, so
-	// the table starts a cell margin to the left, as a table in the flow.
-	x -= tp.num("mar.left", 108) / 20
+	// Before Word 2013, the text of the first cell lines up with the place
+	// of the table, so the table starts a cell margin to the left, as a
+	// table in the flow. Word 2013 and later put the edge of the table
+	// there.
+	if c.compatMode < 15 {
+		x -= tp.num("mar.left", 108) / 20
+	}
 	var dist [4]float64
 	for i, name := range [...]string{"topFromText", "rightFromText", "bottomFromText", "leftFromText"} {
 		dist[i] = min(max(number(attrOf(pp, name), 0)/20, 0), 720)
@@ -412,6 +416,11 @@ func (c *converter) row(st *style, tp props, rows []*tableRow, r, cols int) {
 	tp = tp.over(row.ex)
 	var s css
 	if h := number(row.tr["height"], 0) / 20; h > 0 {
+		if row.tr["hRule"] != "exact" {
+			// Word gives a row of a least height the top and the bottom
+			// margins of its cells on top of that height.
+			h += rowMargins(tp, row)
+		}
 		s.set("height", pt(h))
 	}
 	if row.tr["cantSplit"] != "" {
@@ -429,6 +438,19 @@ func (c *converter) row(st *style, tp props, rows []*tableRow, r, cols int) {
 		c.cell(st, tp, rows, r, cols, cell)
 	}
 	c.w.WriteString("</tr>")
+}
+
+// rowMargins returns the largest sum of the top and the bottom margins of
+// the cells of the row, in points, from the properties tp of the table and
+// the properties of each cell.
+func rowMargins(tp props, row *tableRow) float64 {
+	m := 0.0
+	for _, cell := range row.cells {
+		top := cell.tc.num("mar.top", tp.num("mar.top", 0))
+		bottom := cell.tc.num("mar.bottom", tp.num("mar.bottom", 0))
+		m = max(m, (top+bottom)/20)
+	}
+	return min(m, 1584)
 }
 
 // cell converts a cell of row r of a table.

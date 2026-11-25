@@ -289,7 +289,12 @@ func (s *slide) textStyle(ph *drawingml.Placeholder) *drawingml.ListStyle {
 	}
 	if tx, ok := child(s.master, "txStyles"); ok {
 		if e, ok := child(tx, kind+"Style"); ok {
-			st.Over(s.colors.ParseListStyle(e))
+			ls := s.colors.ParseListStyle(e)
+			if s.masterPics != nil {
+				// a picture bullet of the master is a picture of the master
+				ls.ResolvePictures(s.masterPics)
+			}
+			st.Over(ls)
 		}
 	}
 	s.styles[kind] = &st

@@ -161,8 +161,7 @@ func (s *styles) addXf(xf roxmltree.Node) {
 		st.VAlign = attr(a, "vertical")
 		st.Wrap = flag(a, "wrapText", false)
 		st.Shrink = flag(a, "shrinkToFit", false)
-		// an indent is about three spaces, 9 pixels at 100%
-		st.Indent = math.Min(250, math.Max(0, number(a, "indent", 0))) * 6.75
+		st.Indent = math.Min(250, math.Max(0, number(a, "indent", 0))) * sheet.IndentStep
 		rot := integer(a, "textRotation", 0)
 		switch {
 		case rot == 255:

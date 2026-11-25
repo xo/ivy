@@ -549,3 +549,26 @@ func TestDrawGradientDegenerate(t *testing.T) {
 		})
 	}
 }
+
+// TestDrawGradientSize checks that a gradient with a background-size and
+// no-repeat covers only its size. Upstream has no such test.
+func TestDrawGradientSize(t *testing.T) {
+	for _, tc := range []struct{ gradient, row string }{
+		{"blue, blue", "BBBB_____"},
+		{"to right, blue 50%, lime 50%", "BBGG_____"},
+	} {
+		t.Run(tc.gradient, func(t *testing.T) {
+			assertPixels(t, "gradient_size", tc.row+"\n"+tc.row+"\n_________\n_________", `
+      <style>
+        @page { size: 9px 4px }
+        div {
+          height: 4px;
+          background: linear-gradient(`+tc.gradient+`) no-repeat;
+          background-size: 4px 2px;
+        }
+      </style>
+      <div></div>
+    `)
+		})
+	}
+}

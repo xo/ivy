@@ -4,6 +4,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // This file reads the lists of a document of Word 97: the PlfLst, with the
@@ -200,6 +202,7 @@ func (p *parser) marker(ilfo, ilvl int, base chp) (string, chp, bool) {
 	if lvl.nfc == nfcNone {
 		return "", chp{}, false
 	}
+	keep := lvl.nfc == nfcBullet && p.drawsSymbols(c.ftc, lvl.text)
 	var b strings.Builder
 	for _, u := range utf16.Decode(lvl.text) {
 		switch {
@@ -217,7 +220,7 @@ func (p *parser) marker(ilfo, ilvl int, base chp) (string, chp, bool) {
 				n = l.levels[k].start
 			}
 			b.WriteString(formatNumber(n, nfc))
-		case u >= 0xF000 && u <= 0xF0FF:
+		case u >= 0xF000 && u <= 0xF0FF && !keep:
 			b.WriteRune(symbolRune(u - 0xF000))
 		default:
 			b.WriteRune(u)
@@ -230,6 +233,34 @@ func (p *parser) marker(ilfo, ilvl int, base chp) (string, chp, bool) {
 		b.WriteByte(' ')
 	}
 	return b.String(), c, true
+}
+
+// drawsSymbols reports whether text holds characters of the private area
+// from U+F000 to U+F0FF only, where a font of symbols, such as Symbol or
+// Wingdings, puts its characters, and whether the font ftc of the program
+// draws them. Word then draws the bullet with that font.
+func (p *parser) drawsSymbols(ftc int, text []uint16) bool {
+	if ftc < 0 || ftc >= len(p.fonts) || p.fonts[ftc].name == "" || len(text) == 0 {
+		return false
+	}
+	for _, u := range text {
+		if u < 0xF000 || u > 0xF0FF {
+			return false
+		}
+	}
+	if p.fontDB == nil {
+		p.fontDB = fontdb.Of(p.cfg)
+	}
+	id, ok := fontdb.Find(p.fontDB, p.fonts[ftc].name, 400, false)
+	if !ok {
+		return false
+	}
+	for _, u := range text {
+		if !fontdb.Draws(p.fontDB, id, rune(u)) {
+			return false
+		}
+	}
+	return true
 }
 
 // symbolRune returns the character of the code c of a font of symbols, such

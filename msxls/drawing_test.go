@@ -202,7 +202,7 @@ func TestDrawings(t *testing.T) {
 	// default height of Arial of 10 points, 103 dots
 	for _, want := range []string{
 		`src="media/image1.png"`,
-		`<div class="ph" style="left:0pt;top:0pt;width:201.87pt;height:74.16pt">Chart</div>`,
+		`<div class="ph pl" style="left:0pt;top:1pt;width:201.87pt;height:74.16pt">Chart</div>`,
 	} {
 		if !strings.Contains(docs[0], want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, docs[0])

@@ -227,6 +227,8 @@ func parse(text []byte) ast.Node {
 func render(doc ast.Node, text []byte, colored map[*ast.CodeBlock]string) (string, error) {
 	r := html.New(
 		html.WithNodeRendererDecorators(map[ast.NodeKind]html.NodeRendererDecorator{
+			ast.KindHTMLBlock: markRaw,
+			ast.KindRawHTML:   markRaw,
 			ast.KindCodeBlock: func(next html.NodeRenderer) html.NodeRenderer {
 				return html.NodeRendererFunc(func(w io.Writer, src []byte, n ast.Node, entering bool, rc renderer.Context) (ast.WalkStatus, error) {
 					s, ok := colored[n.(*ast.CodeBlock)]
@@ -253,7 +255,21 @@ func render(doc ast.Node, text []byte, colored map[*ast.CodeBlock]string) (strin
 	if err := r.Render(&b, text, doc); err != nil {
 		return "", fmt.Errorf("rendering markdown: %w", err)
 	}
-	return b.String(), nil
+	return sanitize(b.String()), nil
+}
+
+// markRaw makes a renderer write the NUL byte before and after the raw HTML
+// of the text, so that sanitize finds it.
+func markRaw(next html.NodeRenderer) html.NodeRenderer {
+	return html.NodeRendererFunc(func(w io.Writer, src []byte, n ast.Node, entering bool, rc renderer.Context) (ast.WalkStatus, error) {
+		if !entering {
+			return next.Render(w, src, n, entering, rc)
+		}
+		_, _ = io.WriteString(w, rawMark)
+		st, err := next.Render(w, src, n, entering, rc)
+		_, _ = io.WriteString(w, rawMark)
+		return st, err
+	})
 }
 
 // checkTree returns an error that wraps ivy.ErrLimit if the tree nests

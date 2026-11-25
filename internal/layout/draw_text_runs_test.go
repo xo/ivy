@@ -58,3 +58,30 @@ func TestDrawTextRuns(t *testing.T) {
 		t.Errorf("expected the words %q, got %q", want, got)
 	}
 }
+
+// TestDrawTextOutline checks that -ivy-text-outline strokes the outlines of
+// the glyphs in the color of the text, and does not fill them.
+func TestDrawTextOutline(t *testing.T) {
+	assertPixels(t, "text_outline", `
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+        zzzz____zzzz
+        zzRz____zRzz
+        zzzz____zzzz
+        zzzz____zzzz
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+        zzzzzzzzzzzz
+    `, `
+      <style>
+        @page { size: 12px }
+        body {
+          margin: 2px; color: red; font-family: weasyprint; font-size: 8px;
+          line-height: 1; -ivy-text-outline: 2px
+        }
+      </style>
+      <body>X`)
+}

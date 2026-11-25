@@ -46,6 +46,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	sh.DefaultRowHeight = rows.Default()
 	sh.FixedRows = true
 	sh.RowScale = rows.Scale()
+	sh.Lines = rows
 	sh.RowDots = true
 	sh.Page = sheet.Page{
 		Width: sheet.LetterWidth, Height: sheet.LetterHeight,
@@ -169,6 +170,7 @@ func (b *book) readWorksheet(sh *sheet.Sheet, part string, index int) error {
 	}
 	sh.Page.Fit = fit
 	sh.Sort()
+	b.readPivotTables(sh, part)
 	rows.Fit(sh, b.styles.cells)
 	b.printSetup(sh, index)
 	if drawing != "" {

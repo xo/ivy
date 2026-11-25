@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	"image/png"
@@ -43,7 +44,7 @@ var chromeProgram = func() string {
 // chromeRenderer draws a page of a PDF file with Chrome, whose viewer draws
 // with PDFium (D69). The tag changes with the way that the review takes the
 // picture of the page.
-var chromeRenderer = pageRenderer{id: "chrome", name: "Chrome", tag: "pdfium4", tools: []string{chromeProgram}, render: chromeDraw}
+var chromeRenderer = pageRenderer{id: "chrome", name: "Chrome", tag: "pdfium5", tools: []string{chromeProgram}, render: chromeDraw}
 
 // chromeViewer starts the URL of the frame of the PDF viewer of Chrome, a
 // component extension.
@@ -94,7 +95,7 @@ func (c *chromeBrowser) start(env []string) error {
 		chromedp.Flag("hide-scrollbars", false),
 		chromedp.UserDataDir(filepath.Join(c.dir, "profile")),
 		chromedp.NoInheritEnv,
-		chromedp.Env(slices.Concat(env, []string{"TMPDIR=" + c.dir})...),
+		chromedp.Env(slices.Concat(env, []string{"TMPDIR=" + c.dir}, c.fontsEnv(env))...),
 	)
 	actx, acancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	// chromedp logs the events of the frames of the viewer that it does not
@@ -109,6 +110,58 @@ func (c *chromeBrowser) start(env []string) error {
 		return fmt.Errorf("starting Chrome: %w", err)
 	}
 	return nil
+}
+
+// cjkAliases are the CJK families that a PDF file names without embedding
+// them, with the font that Chrome draws them with. The viewer of Chrome asks
+// fontconfig for the family by its name, and fontconfig answers with a font
+// that has none of the glyphs, so the page shows no CJK text. Droid Sans
+// Fallback is a font of ivy, which fontconfig finds in the fonts of the
+// review (D28).
+var cjkAliases = []string{
+	// Japanese
+	"KozMinPr6N-Regular", "KozMinPro-Regular", "KozGoPr6N-Medium", "KozGoPro-Medium", "HeiseiMin-W3",
+	"HeiseiKakuGo-W5", "Ryumin-Light", "GothicBBB-Medium", "MS-Mincho", "MS-Gothic", "MSMincho", "MSGothic",
+	// Simplified Chinese
+	"STSong-Light", "STSongStd-Light", "STSong", "SimSun", "SimHei", "MHei-Medium", "AdobeSongStd-Light",
+	"AdobeHeitiStd-Regular", "AdobeFangsongStd-Regular", "AdobeKaitiStd-Regular",
+	// Traditional Chinese
+	"MSung-Light", "MSungStd-Light", "MingLiU", "AdobeMingStd-Light",
+	// Korean
+	"HYSMyeongJo-Medium", "HYGoThic-Medium", "HYSMyeongJoStd-Medium", "HYGothic-Medium", "Batang", "Gulim",
+	"AdobeMyungjoStd-Medium", "AdobeGothicStd-Bold",
+}
+
+// fontsEnv returns the variable FONTCONFIG_FILE for Chrome, or none. The
+// file that it names includes the configuration of fontconfig in env, and
+// maps cjkAliases to Droid Sans Fallback. A failure leaves Chrome with the
+// configuration of the other references.
+func (c *chromeBrowser) fontsEnv(env []string) []string {
+	var base string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "FONTCONFIG_FILE="); ok {
+			base = v
+		}
+	}
+	if base == "" {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">` + html.EscapeString(base) + `</include>
+`)
+	for _, name := range cjkAliases {
+		b.WriteString(`  <alias binding="strong"><family>` + html.EscapeString(name) +
+			`</family><prefer><family>Droid Sans Fallback</family></prefer></alias>` + "\n")
+	}
+	b.WriteString("</fontconfig>\n")
+	conf := filepath.Join(c.dir, "fonts.conf")
+	if err := os.WriteFile(conf, []byte(b.String()), 0o644); err != nil {
+		return nil
+	}
+	return []string{"FONTCONFIG_FILE=" + conf}
 }
 
 // closeChrome ends the Chrome process of the run, if it started, and

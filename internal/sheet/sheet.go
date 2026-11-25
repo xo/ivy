@@ -60,6 +60,10 @@ type Workbook struct {
 	// prints them: a sheet without a print area from its cell A1, and the
 	// text of a footer a little above the footer margin.
 	Excel bool
+	// FromA1 prints a sheet without a print area from its cell A1, as
+	// LibreOffice prints it, without the other changes of Excel. Without it
+	// or Excel, such a sheet prints its used range.
+	FromA1 bool
 }
 
 // Sheet is one sheet. The indexes of the rows and the columns count from 0.
@@ -105,6 +109,10 @@ type Sheet struct {
 	// height FixedRows keeps (ExcelRows.Scale). 0 takes 0.968, the scale
 	// of Calibri of 11 points.
 	RowScale float64
+	// Lines gives the height of a line of a text that wraps, as Excel
+	// prints it, in a sheet whose FixedRows is set (ExcelRows.Line).
+	// Without it, a line takes the normal height of its font.
+	Lines *ExcelRows
 	// RowDots rounds the height of each row down to a dot of 600 dots per
 	// inch, as Excel prints the grid of the cells. A picture across the
 	// rows takes their heights without the rounding.
@@ -222,7 +230,8 @@ type Style struct {
 	VAlign string
 	// Wrap breaks the text into lines.
 	Wrap bool
-	// Indent is the indent of the text in points.
+	// Indent is the indent of the text in points (IndentStep). The scale
+	// of the page does not apply to it, as Excel prints it.
 	Indent float64
 	// Rotation is the angle of the text in degrees, counterclockwise, from
 	// -90 to 90, or 255 for letters stacked from top to bottom.

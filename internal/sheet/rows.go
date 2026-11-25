@@ -129,6 +129,21 @@ func (e *ExcelRows) Scale() float64 {
 	return float64(e.print) * screenDPI / (float64(e.screen) * printDPI)
 }
 
+// Line returns the height that Excel prints for a line of a text that wraps
+// in the font f, in points: S of the font, at the scale of the rows. A size
+// of 0 is the size of the default font. Excel prints a line of Calibri of
+// 11 points 14.52 points high, 1.32 times the size of the font.
+func (e *ExcelRows) Line(f Font) float64 {
+	if !(f.Size > 0) {
+		f.Size = e.def.Size
+	}
+	if f.Family == "" {
+		f.Family = e.def.Family
+	}
+	f.Size = min(f.Size, 409)
+	return e.printed(float64(e.metrics(f).screen))
+}
+
 // Fit sets the height of each row of sh whose Fit is set to the height of
 // its cells, as Excel fits it when it opens the file: the highest cell, in
 // lines of the screen height of its font. An empty cell takes one line. A

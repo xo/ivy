@@ -5,6 +5,7 @@ import (
 	"image/draw"
 	"math"
 
+	"github.com/xo/okage/filter"
 	"github.com/xo/okage/roxmltree"
 )
 
@@ -101,28 +102,58 @@ func (c *Colors) ParseRecolor(n roxmltree.Node) Recolor {
 	return r
 }
 
-// table returns the change of each channel for the contrast and the
-// brightness, from 0 to 255. Office keeps the middle gray for the contrast
-// alone. With a contrast below 1, Office adds less of the brightness: the
-// washout of Word, a factor of 0.3 and a brightness of 0.7, gives 0.3 x +
-// 0.805, which the export of Word to PDF shows.
-func (r Recolor) table() *[256]uint8 {
+// half is half a level of 8 bits. The functions of filter truncate each
+// channel to 8 bits, and half added to each constant makes them round it.
+const half = 0.5 / 255
+
+// transfer returns the change of each channel for the contrast and the
+// brightness, a linear function from 0 to 1. It returns false when r changes
+// neither. Office keeps the middle gray for the contrast alone. With a
+// contrast below 1, Office adds less of the brightness: the washout of Word,
+// a factor of 0.3 and a brightness of 0.7, gives 0.3 x + 0.805, which the
+// export of Word to PDF shows.
+func (r Recolor) transfer() (filter.TransferFunction, bool) {
 	if r.Bright == 0 && r.Contrast == 0 {
-		return nil
+		return filter.TransferFunction{}, false
 	}
 	k := r.factor()
 	b := r.Bright * (1 + min(k, 1)) / 2
-	var t [256]uint8
-	for i := range t {
-		v := k*(float64(i)/255-0.5) + 0.5 + b
-		t[i] = uint8(math.Round(unit(v) * 255))
-	}
-	return &t
+	return filter.TransferLinear(float32(k), float32(0.5-k/2+b+half)), true
 }
+
+// matrix returns the color matrix of the gray or of the duotone of r. Each
+// channel is the color between the two colors that the luminance of the
+// pixel gives: black and white for the gray. The alpha stays. It returns
+// false when r changes no color by the luminance. The black and white of
+// BiLevel makes each pixel gray before the matrix, so the duotone of a
+// black and white picture also takes this matrix.
+func (r Recolor) matrix() (filter.ColorMatrix, bool) {
+	from, to := Black, White
+	switch {
+	case r.HasDuotone:
+		from, to = r.Duotone[0], r.Duotone[1]
+	case !r.Gray || r.BiLevel:
+		return filter.ColorMatrix{}, false
+	}
+	var m [20]float32
+	for i, c := range [3][2]float64{{from.R, to.R}, {from.G, to.G}, {from.B, to.B}} {
+		d := c[1] - c[0]
+		m[5*i], m[5*i+1], m[5*i+2], m[5*i+4] = float32(d*lumR), float32(d*lumG), float32(d*lumB), float32(c[0]+half)
+	}
+	m[18], m[19] = 1, half
+	return filter.NewColorMatrix(m), true
+}
+
+// The weights of the luminance of a color.
+const (
+	lumR = 0.299
+	lumG = 0.587
+	lumB = 0.114
+)
 
 // luminance returns the luminance of the color of 8 bits, from 0 to 1.
 func luminance(r, g, b uint8) float64 {
-	return (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)) / 255
+	return (lumR*float64(r) + lumG*float64(g) + lumB*float64(b)) / 255
 }
 
 // Apply returns img with its colors changed by r, as an image of its own.
@@ -139,34 +170,34 @@ func (r Recolor) Apply(img image.Image) *image.NRGBA {
 	return out
 }
 
-// applyNRGBA changes the colors of img in place.
+// applyNRGBA changes the colors of img in place, with the transfer function
+// and the color matrix of the package filter of okage. No filter of okage
+// compares a value with a threshold, so the black and white is a loop of its
+// own.
 func (r Recolor) applyNRGBA(img *image.NRGBA) {
-	t := r.table()
+	if f, ok := r.transfer(); ok {
+		filter.ApplyComponentTransferNRGBA(img, f, f, f, filter.TransferFunction{})
+	}
+	if r.BiLevel {
+		r.threshold(img)
+	}
+	if m, ok := r.matrix(); ok {
+		filter.ApplyColorMatrixNRGBA(img, m)
+	}
+}
+
+// threshold makes each pixel of img black or white, in place: white when its
+// luminance is at least the threshold of r.
+func (r Recolor) threshold(img *image.NRGBA) {
 	b := img.Rect
 	for y := range b.Dy() {
 		row := img.Pix[y*img.Stride : y*img.Stride+4*b.Dx()]
 		for i := 0; i+4 <= len(row); i += 4 {
-			cr, cg, cb := row[i], row[i+1], row[i+2]
-			if t != nil {
-				cr, cg, cb = t[cr], t[cg], t[cb]
+			var v uint8
+			if luminance(row[i], row[i+1], row[i+2]) >= r.Threshold {
+				v = 255
 			}
-			if r.Gray || r.BiLevel || r.HasDuotone {
-				lum := luminance(cr, cg, cb)
-				if r.BiLevel {
-					lum = 0
-					if luminance(cr, cg, cb) >= r.Threshold {
-						lum = 1
-					}
-				}
-				if r.HasDuotone {
-					m := r.Duotone[0].Mix(r.Duotone[1], lum).NRGBA()
-					cr, cg, cb = m.R, m.G, m.B
-				} else {
-					v := uint8(math.Round(lum * 255))
-					cr, cg, cb = v, v, v
-				}
-			}
-			row[i], row[i+1], row[i+2] = cr, cg, cb
+			row[i], row[i+1], row[i+2] = v, v, v
 		}
 	}
 }

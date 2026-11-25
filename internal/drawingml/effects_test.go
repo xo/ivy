@@ -12,11 +12,14 @@ import (
 	"github.com/xo/ivy/internal/fixture"
 )
 
-// TestRecolorTable checks the change of a channel by the contrast and the
+// TestRecolorTransfer checks the change of a channel by the contrast and the
 // brightness. The washout of Word, a factor of contrast of 0.3 and a
 // brightness of 0.7, gives 0.3 x + 0.805, as the export of
-// floating-pictures.doc to PDF by Word shows.
-func TestRecolorTable(t *testing.T) {
+// floating-pictures.doc to PDF by Word shows. Three values fall half way
+// between two levels: 64 with the contrast 2, 100 with the brightness 0.5
+// and 255 with the brightness -0.5. The arithmetic of float32 in the
+// transfer function of okage decides which level each one takes.
+func TestRecolorTransfer(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		r    Recolor
@@ -24,22 +27,27 @@ func TestRecolorTable(t *testing.T) {
 		want []int
 	}{
 		{"washout", Recolor{Bright: 0.7, Contrast: ContrastOf(0.3)}, []int{0, 128, 255}, []int{205, 244, 255}},
-		{"contrast 2", Recolor{Contrast: ContrastOf(2)}, []int{0, 64, 128, 192, 255}, []int{0, 0, 129, 255, 255}},
+		{"contrast 2", Recolor{Contrast: ContrastOf(2)}, []int{0, 64, 128, 192, 255}, []int{0, 1, 129, 255, 255}},
 		{"contrast 0", Recolor{Contrast: ContrastOf(0)}, []int{0, 255}, []int{128, 128}},
-		{"brightness 0.5", Recolor{Bright: 0.5}, []int{0, 100, 200}, []int{128, 227, 255}},
-		{"darker", Recolor{Bright: -0.5}, []int{0, 200, 255}, []int{0, 73, 128}},
+		{"brightness 0.5", Recolor{Bright: 0.5}, []int{0, 100, 200}, []int{128, 228, 255}},
+		{"darker", Recolor{Bright: -0.5}, []int{0, 200, 255}, []int{0, 73, 127}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			tab := c.r.table()
+			img := image.NewNRGBA(image.Rect(0, 0, len(c.in), 1))
 			for i, v := range c.in {
-				if got := int(tab[v]); got != c.want[i] {
-					t.Errorf("expected %d for %d, got %d", c.want[i], v, got)
+				img.SetNRGBA(i, 0, color.NRGBA{uint8(v), uint8(v), uint8(v), 255})
+			}
+			out := c.r.Apply(img)
+			for i, v := range c.in {
+				want := uint8(c.want[i])
+				if got := out.NRGBAAt(i, 0); got != (color.NRGBA{want, want, want, 255}) {
+					t.Errorf("expected %d for %d, got %v", want, v, got)
 				}
 			}
 		})
 	}
-	if (Recolor{}).table() != nil {
-		t.Error("expected no table for the zero change")
+	if _, ok := (Recolor{}).transfer(); ok {
+		t.Error("expected no transfer function for the zero change")
 	}
 }
 

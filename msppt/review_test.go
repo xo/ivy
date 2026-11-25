@@ -168,9 +168,9 @@ func TestLinks(t *testing.T) {
 	}
 }
 
-// TestNoBulletIndent checks that the text of a paragraph without a bullet
-// starts at its left margin: the indent is the place of the bullet, as
-// page 38 of custom-geometry.ppt shows it.
+// TestNoBulletIndent checks that the first line of a paragraph without a
+// bullet starts at its indent, and the next lines at its left margin, as
+// "RL.1.2" on page 17 of custom-geometry.ppt shows it.
 func TestNoBulletIndent(t *testing.T) {
 	b := testBuilder(nil, nil)
 	var p pf
@@ -178,8 +178,8 @@ func TestNoBulletIndent(t *testing.T) {
 	p.indent.set(0)
 	p.hasBullet.set(false)
 	ps := b.paraStyle(&p, &cf{})
-	if ps.MarL.V != 27 || ps.Indent.V != 0 {
-		t.Errorf("expected a margin of 27 points without an indent, got %v and %v", ps.MarL.V, ps.Indent.V)
+	if ps.MarL.V != 27 || ps.Indent.V != -27 {
+		t.Errorf("expected a margin of 27 points with a hanging first line, got %v and %v", ps.MarL.V, ps.Indent.V)
 	}
 	p.hasBullet.set(true)
 	ps = b.paraStyle(&p, &cf{})

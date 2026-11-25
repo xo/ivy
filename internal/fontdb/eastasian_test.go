@@ -227,6 +227,32 @@ func TestEastAsianFamilies(t *testing.T) {
 	}
 }
 
+// TestEastAsianFamiliesLang checks that a family of the language of the
+// text comes before a family of the kind for the other Chinese, so that
+// Traditional Chinese takes Microsoft JhengHei before SimSun, as Word does.
+func TestEastAsianFamiliesLang(t *testing.T) {
+	db := fakeDB(
+		[]svg.FontFamilyName{{Name: "SimSun", Language: lcidEnglish}},
+		[]svg.FontFamilyName{{Name: "Microsoft JhengHei", Language: lcidEnglish}},
+		[]svg.FontFamilyName{{Name: "Yu Gothic", Language: lcidEnglish}},
+	)
+	e := NewEastAsian(db, 0, db.Len())
+	tests := []struct {
+		kind Kind
+		lang Lang
+		exp  []string
+	}{
+		{Serif, TraditionalChinese, []string{"Microsoft JhengHei", "SimSun", "Yu Gothic"}},
+		{Sans, SimplifiedChinese, []string{"SimSun", "Microsoft JhengHei", "Yu Gothic"}},
+		{Serif, Japanese, []string{"Yu Gothic", "SimSun", "Microsoft JhengHei"}},
+	}
+	for _, test := range tests {
+		if got := e.Families(test.kind, test.lang); !slices.Equal(got, test.exp) {
+			t.Errorf("%v %v: expected %q, got %q", test.kind, test.lang, test.exp, got)
+		}
+	}
+}
+
 // withFakeCJK returns the database of the fonts module with copies of the
 // face of Droid Sans Fallback that have the families of East Asian fonts:
 // a Japanese serif, a Simplified Chinese sans and a Korean sans. They draw

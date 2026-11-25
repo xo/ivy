@@ -163,7 +163,8 @@ func (d *Document) odsWorkbook(ctx context.Context) (*sheet.Workbook, error) {
 	for _, st := range r.styles.styles {
 		r.conds = r.conds || st.family == "table-cell" && len(st.maps) > 0
 	}
-	r.wb = &sheet.Workbook{Files: make(map[string][]byte)}
+	// LibreOffice prints a sheet without a print area from its cell A1
+	r.wb = &sheet.Workbook{Files: make(map[string][]byte), FromA1: true}
 	// The default style of the cells: the default style of the family
 	// with the style Default.
 	defProps := r.styles.props("table-cell", "Default")

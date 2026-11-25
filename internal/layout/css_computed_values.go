@@ -307,7 +307,7 @@ func init() {
 	registerComputer(computeBorderImageWidth, "border-image-width", "mask-border-width")
 	registerComputer(computeBorderImageOutset, "border-image-outset", "mask-border-outset")
 	registerComputer(computeBorderImageRepeat, "border-image-repeat", "mask-border-repeat")
-	registerComputer(computeLengthPixelsOnly, "column-width", "outline-offset")
+	registerComputer(computeLengthPixelsOnly, "column-width", "outline-offset", "text-outline")
 	registerComputer(computeBorderRadius,
 		"border-top-left-radius", "border-top-right-radius",
 		"border-bottom-left-radius", "border-bottom-right-radius")

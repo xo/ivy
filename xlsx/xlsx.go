@@ -230,6 +230,8 @@ func (d *Document) workbook(ctx context.Context) (*sheet.Workbook, error) {
 		}
 		wb.Sheets = append(wb.Sheets, sh)
 	}
+	// the pivot tables add styles
+	wb.Styles = b.styles.cells
 	wb.Objects = b.chartObjects
 	return wb, nil
 }

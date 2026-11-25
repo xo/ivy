@@ -106,6 +106,31 @@ func TestEastAsianSubstitute(t *testing.T) {
 	}
 }
 
+// TestFontAlias checks that a font that the program does not hold takes the
+// font of the system that fontdb.Alias gives, such as URW Gothic for
+// Century Gothic.
+func TestFontAlias(t *testing.T) {
+	db, first := fontdb.Load(officeFonts(t), false, ivy.Limits{}.WithDefaults(), testLogger())
+	db = db.Clone()
+	var sans *svg.FaceInfo
+	for face := range db.Faces() {
+		if face.PostScriptName == "LiberationSans" {
+			sans = face
+		}
+	}
+	if sans == nil {
+		t.Fatal("no Liberation Sans")
+	}
+	info := *sans
+	info.Families = []svg.FontFamilyName{{Name: "URW Gothic", Language: 0x0409}}
+	db.PushFaceInfo(info)
+	fc := NewFontConfiguration(db, FontConfigurationOptions{FirstFaces: first})
+	chain := fc.chain(eastAsianStyleOf(fc, "", "Century Gothic"))
+	if got := familyOf(t, fc, chain[0]); got != "URW Gothic" {
+		t.Errorf("Century Gothic: expected URW Gothic, got %s", got)
+	}
+}
+
 // TestEastAsianFallback checks the fallback face of an East Asian
 // character: the East Asian faces of the program, for the language and the
 // kind of the text, before Droid Sans Fallback.

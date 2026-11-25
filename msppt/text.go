@@ -182,13 +182,10 @@ func (b *builder) paraStyle(p *pf, c *cf) drawingml.ParaStyle {
 			}
 		}
 	default:
+		// the first line of a paragraph without a bullet starts at the
+		// indent, and the next lines at the left margin, as PowerPoint
+		// draws them. The metroBlob of a shape can give other margins.
 		ps.Bullet.Set(drawingml.Bullet{Kind: drawingml.BulletNone})
-		// the indent is the place of the bullet, and the text of a
-		// paragraph without a bullet starts at its left margin, as
-		// PowerPoint draws it
-		if p.leftMargin.ok {
-			ps.Indent.Set(0)
-		}
 	}
 	ps.Run = b.runStyle(c)
 	return ps

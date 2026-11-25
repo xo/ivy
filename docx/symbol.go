@@ -64,6 +64,25 @@ func symbolRune(font string, r rune) rune {
 	return c
 }
 
+// symbolCodes returns the text s of a symbol font with each character in the
+// private area from U+F020 to U+F0FF, where the character map of a symbol
+// font puts it. It returns false if a character is outside that area and
+// outside the range from U+0020 to U+00FF.
+func symbolCodes(s string) (string, bool) {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 0x20 && r <= 0xff:
+			b.WriteRune(r + 0xf000)
+		case r >= 0xf020 && r <= 0xf0ff:
+			b.WriteRune(r)
+		default:
+			return "", false
+		}
+	}
+	return b.String(), b.Len() > 0
+}
+
 // isSymbolFont reports whether the font maps its characters to symbols
 // instead of Unicode, such as Symbol and Wingdings.
 func isSymbolFont(font string) bool {

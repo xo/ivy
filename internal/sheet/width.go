@@ -1,6 +1,11 @@
 package sheet
 
-import "github.com/xo/ivy/internal/fontdb"
+import (
+	"github.com/xo/okage/svg"
+
+	"github.com/xo/ivy/internal/font"
+	"github.com/xo/ivy/internal/fontdb"
+)
 
 // calibriWidths are the advances of the characters of Calibri from U+0020
 // to U+017F, in units of 1/2048 of the size of the font: ASCII, Latin-1
@@ -81,17 +86,121 @@ func ArialTextWidth(s string, size float64) float64 {
 func textWidth(widths *[0x180 - 0x20]uint16, s string, size float64) float64 {
 	units := 0
 	for _, r := range s {
-		switch {
-		case r >= 0x20 && r < 0x180:
-			units += int(widths[r-0x20])
-		case r >= 0x300 && r <= 0x36f, r == 0x200b, r == 0xfeff:
-			// combining marks and characters without a width
-		case fontdb.IsCJK(r) && (r < 0xff61 || r > 0xffdc):
-			// the half-width forms are half as wide
-			units += 2048
-		case r >= 0x180:
-			units += 1024
-		}
+		units += runeUnits(widths, r)
 	}
 	return float64(units) * size / 2048
 }
+
+// runeUnits returns the advance of r in units of 1/2048 of the size of the
+// font, with the advances of widths from U+0020 to U+017F.
+func runeUnits(widths *[0x180 - 0x20]uint16, r rune) int {
+	switch {
+	case r >= 0x20 && r < 0x180:
+		return int(widths[r-0x20])
+	case r >= 0x300 && r <= 0x36f, r == 0x200b, r == 0xfeff:
+		// combining marks and characters without a width
+		return 0
+	case fontdb.IsCJK(r) && (r < 0xff61 || r > 0xffdc):
+		// the half-width forms are half as wide
+		return 2048
+	case r >= 0x180:
+		return 1024
+	}
+	return 0
+}
+
+// Measure measures text in Arial or Liberation Sans as ArialTextWidth
+// does, and measures a character past U+017F with the advance of a face of
+// a font database: the face of the family when it draws the character, or
+// else the face that Covering finds, which the layout draws it with too.
+// A character that no face draws takes the width that ArialTextWidth gives
+// it. A Measure is not safe for concurrent use.
+type Measure struct {
+	db    *svg.FontDatabase
+	first int
+	// base is the face of the family, and hasBase is set when db holds it.
+	base    svg.FontID
+	hasBase bool
+	faces   map[svg.FontID]*font.Face
+	// ems holds the advance of each character past U+017F, in ems, or -1
+	// for a character that no face draws.
+	ems map[rune]float64
+}
+
+// NewMeasure returns a Measure for the family of db, whose first faces
+// come from the font files of a program (fontdb.Load). A nil db gives the
+// widths of ArialTextWidth.
+func NewMeasure(db *svg.FontDatabase, first int, family string) *Measure {
+	m := &Measure{
+		db:    db,
+		first: first,
+		faces: make(map[svg.FontID]*font.Face),
+		ems:   make(map[rune]float64),
+	}
+	if db != nil {
+		m.base, m.hasBase = fontdb.Find(db, family, 400, false)
+	}
+	return m
+}
+
+// ArialTextWidth returns the width in points of the text s of the size
+// size.
+func (m *Measure) ArialTextWidth(s string, size float64) float64 {
+	units := 0.0
+	for _, r := range s {
+		if r >= 0x180 {
+			if em := m.em(r); em >= 0 {
+				units += em * 2048
+				continue
+			}
+		}
+		units += float64(runeUnits(&arialWidths, r))
+	}
+	return units * size / 2048
+}
+
+// em returns the advance of r in ems, or -1 when no face draws r.
+func (m *Measure) em(r rune) float64 {
+	if m.db == nil {
+		return -1
+	}
+	if em, ok := m.ems[r]; ok {
+		return em
+	}
+	if len(m.ems) >= maxMeasured {
+		return -1
+	}
+	em := -1.0
+	if m.hasBase {
+		em = m.advance(m.base, r)
+	}
+	if em < 0 {
+		if id, ok := fontdb.Covering(m.db, m.first, r); ok {
+			em = m.advance(id, r)
+		}
+	}
+	m.ems[r] = em
+	return em
+}
+
+// advance returns the advance of r in the face id, in ems, or -1 when the
+// face does not draw r.
+func (m *Measure) advance(id svg.FontID, r rune) float64 {
+	face, ok := m.faces[id]
+	if !ok {
+		face = fontdb.NewFace(m.db, id, nil)
+		m.faces[id] = face
+	}
+	if face == nil {
+		return -1
+	}
+	g, ok := face.Glyph(r)
+	if !ok || g == 0 {
+		return -1
+	}
+	return float64(face.Advance(g))
+}
+
+// maxMeasured is the number of characters that a Measure looks up in the
+// faces. The other characters take the widths of ArialTextWidth.
+const maxMeasured = 4096

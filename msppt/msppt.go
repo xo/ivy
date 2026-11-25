@@ -14,7 +14,9 @@
 // shadows. The text of a shape has the fonts, the sizes, the colors and
 // the bullets of its runs and paragraphs, over the styles of the master,
 // and its direction. The extension of PowerPoint 2000 of a shape gives the
-// picture bullets and the automatic numbers of its paragraphs. A text that
+// picture bullets and the automatic numbers of its paragraphs. The
+// metroBlob that PowerPoint 2007 and later write gives the left margins and
+// the indents of the paragraphs of a shape. A text that
 // PowerPoint fits to its shape keeps the sizes and the box that PowerPoint
 // writes into the file.
 // The colors come from the color scheme of the slide or of its master. The

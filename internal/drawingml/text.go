@@ -139,6 +139,21 @@ type Bullet struct {
 	// Picture is the file of the picture of BulletPicture, such as a PNG
 	// file or a metafile, or nil.
 	Picture []byte
+	// Rel is the relationship of the picture of a:buBlip, r:embed of its
+	// a:blip, until ResolvePictures sets Picture.
+	Rel string
+}
+
+// resolvePicture sets the picture of the bullet b of a:buBlip from pics,
+// the pictures of the part of the a:buBlip.
+func (b *Bullet) resolvePicture(pics Pictures) {
+	if b.Kind != BulletPicture || b.Picture != nil || b.Rel == "" || pics == nil {
+		return
+	}
+	if p := pics.Picture(b.Rel); p != nil {
+		b.Picture = p.data
+	}
+	b.Rel = ""
 }
 
 // BulletSize is the size of a bullet: a fraction of the size of the text, or
@@ -196,6 +211,18 @@ func (s *ParaStyle) Over(o *ParaStyle) {
 // p:titleStyle: the style of the paragraphs of each level. Index 0 is
 // a:defPPr, and 1 to 9 are a:lvl1pPr to a:lvl9pPr.
 type ListStyle [10]ParaStyle
+
+// ResolvePictures sets the pictures of the picture bullets of the levels
+// of s from pics, the pictures of the part that holds the list style. The
+// bullets of other parts keep their pictures.
+func (s *ListStyle) ResolvePictures(pics Pictures) *ListStyle {
+	for i := range s {
+		if s[i].Bullet.OK {
+			s[i].Bullet.V.resolvePicture(pics)
+		}
+	}
+	return s
+}
 
 // Over sets each field of each level of s that o sets.
 func (s *ListStyle) Over(o *ListStyle) {
@@ -278,6 +305,20 @@ type TextBody struct {
 // a body that a format builds itself. Colors.ParseTextBody counts them.
 func (tb *TextBody) Number() {
 	numberParagraphs(tb.Paragraphs)
+}
+
+// ResolvePictures sets the pictures of the picture bullets of the
+// paragraphs of tb from pics, the pictures of the part that holds the text.
+// The bullets that a list style of another part gives keep their pictures.
+func (tb *TextBody) ResolvePictures(pics Pictures) {
+	if tb == nil {
+		return
+	}
+	for i := range tb.Paragraphs {
+		if st := &tb.Paragraphs[i].Style; st.Bullet.OK {
+			st.Bullet.V.resolvePicture(pics)
+		}
+	}
 }
 
 // Empty reports whether the body holds no text to draw.
@@ -456,7 +497,11 @@ func (c *Colors) ParseParaStyle(n roxmltree.Node) ParaStyle {
 			start := int(numberAttr(e, "startAt", 1))
 			s.Bullet.Set(Bullet{Kind: BulletNumber, Scheme: attr(e, "type", "arabicPeriod"), Start: min(max(start, 1), 32767)})
 		case "buBlip":
-			s.Bullet.Set(Bullet{Kind: BulletPicture})
+			b := Bullet{Kind: BulletPicture}
+			if blip, ok := child(e, "blip"); ok {
+				b.Rel = relAttr(blip, "embed")
+			}
+			s.Bullet.Set(b)
 		case "buClrTx":
 			s.BulletColor.Set(nil)
 		case "buClr":

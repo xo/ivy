@@ -585,7 +585,7 @@ func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures,
 		}
 	}
 	if text {
-		f.Text = t.text(n, sp, ph)
+		f.Text = t.text(n, sp, ph, pics)
 		if e, ok := child(n, "txXfrm"); ok {
 			// the shape of a drawing of SmartArt gives the box of its
 			// text, in the space of the shape
@@ -599,8 +599,8 @@ func (t *Tree) shape(n roxmltree.Node, gs space, groupFill Paint, pics Pictures,
 }
 
 // text returns the text body of the shape, with the styles that it
-// inherits.
-func (t *Tree) text(n roxmltree.Node, sp *shapeProps, ph *Placeholder) *TextBody {
+// inherits. pics are the pictures of the part of the shape.
+func (t *Tree) text(n roxmltree.Node, sp *shapeProps, ph *Placeholder, pics Pictures) *TextBody {
 	body, ok := child(n, "txBody")
 	if !ok {
 		return nil
@@ -618,7 +618,7 @@ func (t *Tree) text(n roxmltree.Node, sp *shapeProps, ph *Placeholder) *TextBody
 			continue
 		}
 		if e, ok := child(tx, "lstStyle"); ok {
-			list.Over(t.Colors.ParseListStyle(e))
+			list.Over(t.Colors.ParseListStyle(e).ResolvePictures(sp.chain[i].Pictures))
 		}
 		if e, ok := child(tx, "bodyPr"); ok {
 			b := ParseBodyStyle(e)
@@ -643,7 +643,9 @@ func (t *Tree) text(n roxmltree.Node, sp *shapeProps, ph *Placeholder) *TextBody
 			}
 		}
 	}
-	return t.Colors.ParseTextBody(body, &list, &run, bs, t.Fields)
+	tb := t.Colors.ParseTextBody(body, &list, &run, bs, t.Fields)
+	tb.ResolvePictures(pics)
+	return tb
 }
 
 // picture draws p:pic.

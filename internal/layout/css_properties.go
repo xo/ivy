@@ -305,6 +305,7 @@ var InitialValues = map[string]Value{
 	"wrap_flow":      String("auto"),
 	"stroke_adjust":  String("none"),
 	"line_baseline":  String("normal"),
+	"text_outline":   String("none"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -375,6 +376,7 @@ var Inherited = map[string]bool{
 	"text_align_all":          true,
 	"text_align_last":         true,
 	"text_indent":             true,
+	"text_outline":            true,
 	"text_transform":          true,
 	"text_underline_offset":   true,
 	"visibility":              true,

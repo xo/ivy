@@ -84,6 +84,68 @@ func TestTableIndentCompat(t *testing.T) {
 	}
 }
 
+// TestFloatTableCompat checks that Word 2013 and later put the edge of a
+// floating table at its tblpX, and earlier versions put the text of its
+// first cell there.
+func TestFloatTableCompat(t *testing.T) {
+	body := `<w:tbl><w:tblPr><w:tblpPr w:vertAnchor="margin" w:horzAnchor="margin" w:tblpX="1440" w:tblpY="1440"/>` +
+		`<w:tblW w:w="4320" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/></w:tblGrid>` +
+		`<w:tr><w:tc><w:p><w:r><w:t>T</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>`
+	settings := func(mode string) fixture.WordPart {
+		return fixture.WordPart{ID: "rIdG", Type: "settings", Name: "word/settings.xml", Data: fixture.WordXML("w:settings",
+			`<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="`+mode+`"/></w:compat>`)}
+	}
+	html, _ := convertHTML(t, fixture.DOCX(body, settings("14")))
+	if !strings.Contains(html, " 66.6pt;") {
+		t.Errorf("expected the table a cell margin to the left of tblpX in mode 14:\n%s", html)
+	}
+	html, _ = convertHTML(t, fixture.DOCX(body, settings("15")))
+	if strings.Contains(html, "66.6pt") || !strings.Contains(html, " 72pt;") {
+		t.Errorf("expected the table at tblpX in mode 15:\n%s", html)
+	}
+}
+
+// TestRunBorderOutline checks that the runs of the same border have one
+// border around them, as on page 1 of aspose/docx/rendering.docx, and that
+// w:outline draws the outlines of the glyphs.
+func TestRunBorderOutline(t *testing.T) {
+	bdr := `<w:bdr w:val="single" w:sz="8" w:space="0" w:color="FF0000"/>`
+	body := `<w:p><w:r><w:t xml:space="preserve">and </w:t></w:r>` +
+		`<w:r><w:rPr>` + bdr + `</w:rPr><w:t>borders,</w:t></w:r><w:proofErr w:type="spellStart"/>` +
+		`<w:r><w:rPr>` + bdr + `</w:rPr><w:t xml:space="preserve"> and more</w:t></w:r>` +
+		`<w:r><w:rPr><w:outline/><w:sz w:val="36"/></w:rPr><w:t>Hollow</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	// The padding holds the rest of a single line of 10 points, which is
+	// 1.17 em high.
+	first := `border: 1pt solid rgba(255,0,0,1.000); padding: 0.85pt 0pt; border-right: none; padding-right: 0">borders,`
+	second := `border: 1pt solid rgba(255,0,0,1.000); padding: 0.85pt 0pt; border-left: none; padding-left: 0"> and more`
+	for _, want := range []string{first, second, "-ivy-text-outline: 0.25pt\">Hollow"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q:\n%s", want, html)
+		}
+	}
+}
+
+// TestRowHeightMargins checks that a row of a least height takes the top
+// and the bottom margins of its cells on top of that height, as Word does
+// in poi/docx/landscape-letter.docx, and that a row of an exact height
+// does not.
+func TestRowHeightMargins(t *testing.T) {
+	row := func(rule string) string {
+		return `<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:trPr><w:trHeight w:val="282"` + rule + `/></w:trPr>` +
+			`<w:tc><w:tcPr><w:tcMar><w:top w:w="39" w:type="dxa"/><w:bottom w:w="39" w:type="dxa"/></w:tcMar></w:tcPr>` +
+			`<w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+	}
+	html, _ := convertHTML(t, fixture.DOCX(row("")))
+	if !strings.Contains(html, `<tr style="height: 18pt">`) {
+		t.Errorf("expected a row of 14.1 + 3.9 points:\n%s", html)
+	}
+	html, _ = convertHTML(t, fixture.DOCX(row(` w:hRule="exact"`)))
+	if !strings.Contains(html, `<tr style="height: 14.1pt">`) {
+		t.Errorf("expected a row of 14.1 points:\n%s", html)
+	}
+}
+
 // TestHorizontalRule checks that a horizontal line of Word draws as a box
 // of the width of the column, as on page 1 of poi/docx/drawing.docx.
 func TestHorizontalRule(t *testing.T) {

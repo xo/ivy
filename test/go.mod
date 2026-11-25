@@ -6,7 +6,7 @@ require (
 	github.com/chromedp/cdproto v0.160.1
 	github.com/chromedp/chromedp v0.24.0
 	github.com/xo/ivy v0.0.0
-	github.com/xo/okage v0.22.0
+	github.com/xo/okage v0.22.1
 	github.com/xo/transit v0.7.8
 	github.com/xo/transit/grammars/bash v0.7.8
 	github.com/xo/transit/grammars/c v0.7.8

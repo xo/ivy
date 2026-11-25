@@ -32,6 +32,9 @@ type book struct {
 	theme    *drawingml.Theme
 	styles   *styles
 	strings  []richText
+	// bold holds the index of the bold copy of each style that a pivot
+	// table makes bold.
+	bold map[int]int
 	// names holds the defined names of each sheet, by the index of the
 	// sheet in the workbook, for the print areas and the print titles.
 	printAreas  map[int]string

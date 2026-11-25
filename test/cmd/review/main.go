@@ -12,6 +12,7 @@
 //		[-tex TREE]
 //	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 //		[-kind LIST]
+//	review markdownit [-out FILE] [-j N]
 //
 // The manifest is test/review/corpus.tsv of the repository, by default.
 // Each line names a document: name, kind, url, sha256, size, license,
@@ -39,6 +40,11 @@
 //
 // bundle copies the files of the corpus into a folder, at their names, with
 // the file passwords.tsv, for Microsoft Office on Windows.
+//
+// markdownit writes the manifest of the page of markdown-it, by default
+// test/review/markdownit.tsv of the repository, again. It walks the imports
+// of the page on cdn.jsdelivr.net, and it is the one command that needs the
+// network for more than fetch does (D70).
 //
 // The cache is test/review/cache of the repository, by default. Git
 // ignores it. The command finds the repository from the current folder.
@@ -83,9 +89,10 @@ Usage:
 		[-tex TREE] [-refs primary|all]
 	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 		[-kind LIST]
+	review markdownit [-out FILE] [-j N]
 
-Run "review fetch -h", "review render -h" or "review bundle -h" for the
-flags.
+Run "review fetch -h", "review render -h", "review bundle -h" or
+"review markdownit -h" for the flags.
 `
 
 // run runs the command with the arguments args.
@@ -93,7 +100,7 @@ func run(ctx context.Context, args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "-help" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprint(os.Stderr, usage)
 		if len(args) == 0 {
-			return errors.New("expected a command: fetch, render or bundle")
+			return errors.New("expected a command: fetch, render, bundle or markdownit")
 		}
 		return nil
 	}
@@ -204,6 +211,30 @@ func run(ctx context.Context, args []string) error {
 			fmt.Printf("%d documents in %.0f s: %s\n", len(rep.Docs), rep.Elapsed, filepath.Join(*out, "index.html"))
 		}
 		return err
+	case "markdownit":
+		out := fs.String("out", filepath.Join(repo, "test", "review", "markdownit.tsv"), "the `file` that gets the manifest")
+		fs.Usage = func() {
+			_, _ = fmt.Fprint(fs.Output(), "Usage: review markdownit [-out FILE] [-j N]\n\n"+
+				"Walks the imports of the page of markdown-it on cdn.jsdelivr.net, and writes its manifest again.\n\n")
+			fs.PrintDefaults()
+		}
+		if err := fs.Parse(args[1:]); err != nil {
+			return fmt.Errorf("reading the flags: %w", err)
+		}
+		entries, err := review.WalkMarkdownIt(ctx, review.WalkOptions{Jobs: max(*jobs, 8), Log: os.Stderr})
+		if err != nil {
+			return err
+		}
+		f, err := os.Create(*out)
+		if err != nil {
+			return fmt.Errorf("making the manifest: %w", err)
+		}
+		defer f.Close()
+		if err := review.WriteMarkdownItManifest(f, entries); err != nil {
+			return err
+		}
+		fmt.Printf("%d files in %s\n", len(entries), *out)
+		return nil
 	case "bundle":
 		out := fs.String("out", "", "the `folder` of the bundle (required)")
 		fs.Usage = func() {
@@ -231,7 +262,7 @@ func run(ctx context.Context, args []string) error {
 		fmt.Printf("%d files in %s\n", n, *out)
 		return err
 	}
-	return fmt.Errorf("unknown command %q: expected fetch, render or bundle", args[0])
+	return fmt.Errorf("unknown command %q: expected fetch, render, bundle or markdownit", args[0])
 }
 
 // findRepo returns the root of the repository of ivy: the first folder

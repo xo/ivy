@@ -40,6 +40,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/charset"
 	"github.com/xo/ivy/internal/ebook"
+	"github.com/xo/ivy/internal/fontdb"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/sheet"
 )
@@ -352,7 +353,9 @@ const (
 // workbook returns the sheet of the records.
 func (d *Document) workbook() *sheet.Workbook {
 	def := sheet.Style{Font: sheet.Font{Family: fontFamily, Size: fontSize}}
-	wb := &sheet.Workbook{Styles: []sheet.Style{def, def}}
+	// LibreOffice prints the file from its cell A1, also when the first
+	// column is empty
+	wb := &sheet.Workbook{Styles: []sheet.Style{def, def}, FromA1: true}
 	wb.Styles[1].Wrap = true
 	sh := &sheet.Sheet{
 		DefaultColWidth:  defColWidth,
@@ -363,6 +366,8 @@ func (d *Document) workbook() *sheet.Workbook {
 	// A CSV file gives no paper. The sheet takes the paper of the program,
 	// or US Letter in portrait, with the margins of Excel (D32).
 	sh.Page.SetPaper(d.cfg.Paper)
+	db, first := fontdb.Load(d.cfg.Fonts, d.cfg.SystemFonts, d.lim, d.cfg.Log())
+	m := sheet.NewMeasure(db, first, fontFamily)
 	var widths []float64
 	for i, rec := range d.rows {
 		if i >= sheet.MaxRows {
@@ -377,7 +382,7 @@ func (d *Document) workbook() *sheet.Workbook {
 				for len(widths) <= c {
 					widths = append(widths, 0)
 				}
-				widths[c] = max(widths[c], textWidth(f)+colPadding)
+				widths[c] = max(widths[c], textWidth(m, f)+colPadding)
 			}
 			if f == "" {
 				continue
@@ -418,14 +423,15 @@ func (d *Document) workbook() *sheet.Workbook {
 	return wb
 }
 
-// textWidth returns the width in points of the widest line of s.
-func textWidth(s string) float64 {
+// textWidth returns the width in points of the widest line of s, as m
+// measures it.
+func textWidth(m *sheet.Measure, s string) float64 {
 	if !strings.ContainsAny(s, "\r\n") {
-		return sheet.ArialTextWidth(s, fontSize)
+		return m.ArialTextWidth(s, fontSize)
 	}
 	width := 0.0
 	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r", "\n"), "\n") {
-		width = max(width, sheet.ArialTextWidth(line, fontSize))
+		width = max(width, m.ArialTextWidth(line, fontSize))
 	}
 	return width
 }

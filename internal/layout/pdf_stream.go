@@ -1026,6 +1026,30 @@ func (s *stream) fillBoldGlyphs(run display.GlyphRun, width float64) {
 	})
 }
 
+// strokeGlyphs strokes the outlines of a run of glyphs with the color of the
+// filling and a line of width points, and does not fill them, for
+// -ivy-text-outline.
+//
+// Port: upstream has no -ivy-text-outline.
+func (s *stream) strokeGlyphs(run display.GlyphRun, width float64) {
+	shader := s.shader(s.state.fill)
+	if shader == nil || run.Face == nil || len(run.Glyphs) == 0 {
+		return
+	}
+	p := run.Path()
+	if p == nil {
+		return
+	}
+	s.record(func(d display.Device) {
+		if sh := shader(); sh != nil {
+			st := okage.DefaultStroke()
+			st.Width = float32(width)
+			st.LineJoin = okage.LineJoinRound
+			d.StrokePath(p, st, sh)
+		}
+	})
+}
+
 // drawGlyphBitmap draws the bitmap of a glyph whose origin is at (x, y), at
 // the font size size: a color bitmap as an image, and a mask with the color
 // of the filling.

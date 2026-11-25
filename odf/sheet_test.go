@@ -336,8 +336,8 @@ func TestSheetChart(t *testing.T) {
 	d := openSheet(t, fixture.ODS(book), ivy.Config{})
 	doc := sheetDocs(t, d)[0]
 	for _, want := range []string{
-		`<img style="position:absolute;left:-4pt;top:-4pt;width:264pt;height:21.8pt" src="ivy-object:chart1~1~1" alt="">`,
-		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart</div>`,
+		`<img style="position:absolute;left:-4pt;top:-5pt;width:264pt;height:21.8pt" src="ivy-object:chart1~1~1" alt="">`,
+		`<div class="ph pl" style="left:0pt;top:1pt;width:100pt;height:50pt">Chart</div>`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, doc)

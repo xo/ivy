@@ -173,7 +173,14 @@ func colorCode(ctx context.Context, parser *transit.Parser, cursor *transit.Quer
 			continue
 		}
 		end := min(c.Node.EndByte(), len(capture))
+		if name == "type" && l.names[0] != "rust" && builtinTypes[string(src[c.Node.StartByte():end])] {
+			name = "type.builtin"
+		}
 		for j := c.Node.StartByte(); j < end; j++ {
+			// Shiki colors the key of a JSON object apart from a string
+			if name == "string" && capture[j] == "string.special.key" {
+				continue
+			}
 			capture[j] = name
 		}
 	}
@@ -194,11 +201,88 @@ func colorCode(ctx context.Context, parser *transit.Parser, cursor *transit.Quer
 	return b.String(), nil
 }
 
+// shikiColors maps a capture name of transit to the color that Shiki gives
+// the same token with its theme github-light-default, where the style
+// "github" of transit colors it in another way (D70, D73). The review looks
+// up a capture name as styles.Style.Lookup does: the whole name, then each
+// shorter prefix by dots. A capture without a prefix here keeps the color of
+// the style. An empty color leaves the token in the color of the text.
+//
+// The colors of Shiki come from its scopes of TextMate, which depend on the
+// grammar. The table follows them where most languages agree: Shiki colors
+// an operator like a keyword, the names of functions purple, the names of
+// types brown, the built-in values and this blue, the escapes of a string
+// red and the references to a variable black. Where a grammar of transit
+// does not tell two tokens apart, such as the name of a function in Go, the
+// review keeps the color of the style.
+var shikiColors = map[string]string{
+	"comment":            "#6e7781",
+	"operator":           "#cf222e",
+	"keyword.operator":   "#cf222e",
+	"keyword.directive":  "#cf222e",
+	"preproc":            "#cf222e",
+	"custom_directive":   "#cf222e",
+	"function":           "#8250df",
+	"method":             "#8250df",
+	"constructor":        "#8250df",
+	"decorator":          "#8250df",
+	"special":            "#8250df",
+	"module.builtin":     "#8250df",
+	"boolean":            "#0550ae",
+	"constant.builtin":   "#0550ae",
+	"constant.language":  "#0550ae",
+	"constant.null":      "#0550ae",
+	"variable.builtin":   "#0550ae",
+	"parameter.builtin":  "#0550ae",
+	"type":               "#953800",
+	"type.builtin":       "#cf222e",
+	"variable":           "#1f2328",
+	"variable.parameter": "#953800",
+	"parameter":          "#953800",
+	"escape":             "#cf222e",
+	"string.escape":      "#cf222e",
+	"string.special.key": "#116329",
+	"tag":                "#116329",
+	"tag.attribute":      "#0550ae",
+	"label":              "#953800",
+}
+
+// builtinTypes are the names of the types that the languages of the review
+// define. The queries of transit capture them as any other type, and Shiki
+// colors them like a keyword, where it colors the type of a program brown.
+var builtinTypes = map[string]bool{
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"float32": true, "float64": true, "complex64": true, "complex128": true,
+	"string": true, "bool": true, "byte": true, "rune": true, "error": true, "any": true,
+	"char": true, "short": true, "long": true, "float": true, "double": true, "void": true,
+	"signed": true, "unsigned": true, "size_t": true, "number": true, "boolean": true,
+	"object": true, "symbol": true, "bigint": true, "never": true, "unknown": true,
+}
+
+// shikiColor returns the color of Shiki for a capture name, if the table
+// holds one.
+func shikiColor(name string) (string, bool) {
+	for {
+		if c, ok := shikiColors[name]; ok {
+			return c, true
+		}
+		i := strings.LastIndexByte(name, '.')
+		if i < 0 {
+			return "", false
+		}
+		name = name[:i]
+	}
+}
+
 // captureCSS returns the declarations of the style of a capture name, or ""
 // for no capture name or a capture without a style.
 func captureCSS(style *styles.Style, name string) string {
 	if name == "" {
 		return ""
+	}
+	if c, ok := shikiColor(name); ok {
+		return "color: " + c
 	}
 	e := style.Lookup(name)
 	var decls []string

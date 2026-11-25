@@ -350,6 +350,7 @@ func init() {
 	property("wrap-flow", validateWrapFlow)
 	property("stroke-adjust", validateStrokeAdjust)
 	property("line-baseline", validateLineBaseline)
+	property("text-outline", validateTextOutline)
 	property("hyphens", validateHyphens, optUnstable)
 	property("hyphenate-character", validateHyphenateCharacter, optUnstable)
 	property("hyphenate-limit-zone", validateHyphenateLimitZone, optUnstable)

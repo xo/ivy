@@ -6,8 +6,8 @@ github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxq
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/xo/magic v0.9.1 h1:guCjtXfLTheyp4QBUQcNQVhDgztVQP6o5REw9P4bYDE=
 github.com/xo/magic v0.9.1/go.mod h1:kMMI9TJd1/WU7yMDVYZVmcVC9yEm8Pc2AlxPbED1+r8=
-github.com/xo/okage v0.22.0 h1:L2efJ/LrRS1//MIOuvBNgHJm8SH2KTX0RDPCtEYPfyA=
-github.com/xo/okage v0.22.0/go.mod h1:pte/3aqjk2ElZwxYex0erXC3kT2tqxOwWuIHA8fhKOM=
+github.com/xo/okage v0.22.1 h1:36FOgn8ULcg+c8ONzHHUjEVHo6H0CMizHGK71ezNxQg=
+github.com/xo/okage v0.22.1/go.mod h1:pte/3aqjk2ElZwxYex0erXC3kT2tqxOwWuIHA8fhKOM=
 github.com/xo/transit v0.7.8 h1:/YhM1w3retsPtY0wYOvqZgvcrUxhlR0HIzxUlfHuxNk=
 github.com/xo/transit v0.7.8/go.mod h1:ueke4BlW4h4kIbUEgQbZZSDLxKYSWWIMxXIjprpdT/8=
 github.com/xo/transit/grammars/bash v0.7.8 h1:RCusF4uTVBihlWCydqj5RM5vq0D/yWkOAggmOJ2Xm/4=

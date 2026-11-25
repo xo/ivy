@@ -3,6 +3,8 @@ package sheet
 import (
 	"math"
 	"testing"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 func TestTextWidth(t *testing.T) {
@@ -49,5 +51,26 @@ func TestArialTextWidth(t *testing.T) {
 		if got := ArialTextWidth(test.s, test.size); math.Abs(got-test.exp) > 1e-9 {
 			t.Errorf("ArialTextWidth(%q, %g): expected %g, got: %g", test.s, test.size, test.exp, got)
 		}
+	}
+}
+
+// TestMeasure checks that a Measure takes the advance of a face for a
+// character past U+017F, and the widths of ArialTextWidth for the others.
+func TestMeasure(t *testing.T) {
+	m := NewMeasure(fontdb.Default(), 0, "Go")
+	if got, exp := m.ArialTextWidth("Hello", 10), ArialTextWidth("Hello", 10); math.Abs(got-exp) > 1e-9 {
+		t.Errorf("expected %g for Latin text, got: %g", exp, got)
+	}
+	// Go draws Cyrillic, with an advance of its own
+	got := m.ArialTextWidth("Ж", 10)
+	if got <= 0 || math.Abs(got-5) < 1e-9 {
+		t.Errorf("expected the advance of Go for Ж, got: %g", got)
+	}
+	// no face of Go draws Arabic, which keeps half the size
+	if got := m.ArialTextWidth("ع", 10); math.Abs(got-5) > 1e-9 {
+		t.Errorf("expected 5 for ع, got: %g", got)
+	}
+	if got := NewMeasure(nil, 0, "Arial").ArialTextWidth("Ж", 10); math.Abs(got-5) > 1e-9 {
+		t.Errorf("expected 5 without a font database, got: %g", got)
 	}
 }

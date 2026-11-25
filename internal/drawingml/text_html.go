@@ -357,15 +357,22 @@ func writeBullet(sb *strings.Builder, p *Paragraph, first *RunStyle, theme *Them
 		color = *bc
 	}
 	width := max(-s.Indent.Or(0), 0)
+	// the text starts at the hanging indent, or right after a bullet that
+	// is wider, as PowerPoint draws "10." on page 22 of custom-geometry.ppt.
+	// Without a hanging indent, a space keeps the text from the bullet.
+	space := ""
+	if width == 0 {
+		space = " "
+	}
 	if b.Kind == BulletPicture && len(b.Picture) > 0 {
 		// the picture stands on the baseline, as PowerPoint draws it. The
 		// layout finds the type of the picture from its bytes.
-		fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt"><img src="data:application/octet-stream;base64,%s" style="height:%spt"> </span>`,
-			num(width), num(size), base64.StdEncoding.EncodeToString(b.Picture), num(size*pictureBullet))
+		fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt"><img src="data:application/octet-stream;base64,%s" style="height:%spt">%s</span>`,
+			num(width), num(size), base64.StdEncoding.EncodeToString(b.Picture), num(size*pictureBullet), space)
 		return
 	}
-	fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt;font-family:%s;color:%s">%s </span>`,
-		num(width), num(size), fontFamily(font, theme), color.CSS(), html.EscapeString(text))
+	fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt;font-family:%s;color:%s">%s%s</span>`,
+		num(width), num(size), fontFamily(font, theme), color.CSS(), html.EscapeString(text), space)
 }
 
 // writeRunStyle writes the declarations of CSS of the style of a run.

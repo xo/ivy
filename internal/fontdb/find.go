@@ -22,7 +22,9 @@ import (
 //     (MT, PSMT). Find compares the letters and the digits of the names
 //     only, in any case. TimesNewRomanPSMT finds Times New Roman.
 //  3. The family of the substitute of such a family, such as Liberation
-//     Sans for Arial (font.Substitute).
+//     Sans for Arial (font.Substitute), then the family of its alias among
+//     the fonts of the system, such as URW Gothic for Century Gothic
+//     (Alias).
 //  4. For an East Asian font, such as MS Mincho or ＭＳ 明朝, an East Asian
 //     face of db of the same kind and language (ClassifyName and
 //     EastAsian.Families) that draws the Probe of the language.
@@ -68,14 +70,16 @@ func Find(db *svg.FontDatabase, name string, weight uint16, italic bool) (svg.Fo
 			}
 		}
 	}
-	for _, c := range candidates {
-		sub, ok := font.Substitute(c)
-		if !ok {
-			continue
-		}
-		if family, ok := families[familyKey(sub)]; ok {
-			if id, ok := query(family); ok {
-				return id, true
+	for _, substitute := range [...]func(string) (string, bool){font.Substitute, Alias} {
+		for _, c := range candidates {
+			sub, ok := substitute(c)
+			if !ok {
+				continue
+			}
+			if family, ok := families[familyKey(sub)]; ok {
+				if id, ok := query(family); ok {
+					return id, true
+				}
 			}
 		}
 	}
@@ -85,11 +89,30 @@ func Find(db *svg.FontDatabase, name string, weight uint16, italic bool) (svg.Fo
 	}
 	probe := Probe(lang)
 	for _, family := range NewEastAsian(db, 0, db.Len()).Families(kind, lang) {
-		if id, ok := query(family); ok && draws(db, id, probe) {
+		if id, ok := query(family); ok && Draws(db, id, probe) {
 			return id, true
 		}
 	}
 	return 0, false
+}
+
+// aliases maps the family of a font of Microsoft Office, in lower case, to
+// the family of a font with the same metrics that the fonts of the system
+// can hold, and the module github.com/xo/ivy/fonts does not.
+var aliases = map[string]string{
+	// URW Gothic, of the URW base 35 fonts, has the widths of ITC Avant
+	// Garde Gothic, as Century Gothic has.
+	"century gothic": "URW Gothic",
+}
+
+// Alias returns the family of a font of the system that has the same
+// metrics as the font of the family, such as URW Gothic for Century Gothic,
+// and true. It returns false when it knows no such font. The case of family
+// does not matter. A program uses the alias only when it does not have the
+// font.
+func Alias(family string) (string, bool) {
+	s, ok := aliases[strings.ToLower(strings.TrimSpace(family))]
+	return s, ok
 }
 
 // familyKey returns the key of a family name: its letters and digits in
@@ -160,7 +183,7 @@ func Covering(db *svg.FontDatabase, first int, r rune) (svg.FontID, bool) {
 	hasBase := false
 	i := 0
 	for face := range db.Faces() {
-		if i < first && draws(db, face.ID, r) {
+		if i < first && Draws(db, face.ID, r) {
 			return face.ID, true
 		}
 		if i >= first && !hasBase {
@@ -178,10 +201,10 @@ func Covering(db *svg.FontDatabase, first int, r rune) (svg.FontID, bool) {
 	return id, ok
 }
 
-// draws reports whether the face id of db draws r. It reads the character
+// Draws reports whether the face id of db draws r. It reads the character
 // map that db keeps for each font file, and it does not parse the whole
 // face (okage D57).
-func draws(db *svg.FontDatabase, id svg.FontID, r rune) (ok bool) {
+func Draws(db *svg.FontDatabase, id svg.FontID, r rune) (ok bool) {
 	// go-text can panic on a malformed font (D5, D18).
 	defer func() {
 		if recover() != nil {

@@ -42,6 +42,7 @@ var lineRatios = map[string]float64{
 	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
 	"aptos": 1.2, "verdana": 1.2153, "tahoma": 1.207,
+	"century gothic": 1.2261, "urw gothic": 1.2261,
 }
 
 // defaultLineRatio is the height of a single line of a font that is not in
@@ -161,6 +162,24 @@ func (c *converter) hasFont(name string) bool {
 	return ok
 }
 
+// drawsAll reports whether the font name of the program draws each
+// character of s.
+func (c *converter) drawsAll(name, s string) bool {
+	if s == "" || !c.hasFont(name) {
+		return false
+	}
+	id, ok := fontdb.Find(c.fontDB, name, 400, false)
+	if !ok {
+		return false
+	}
+	for _, r := range s {
+		if !fontdb.Draws(c.fontDB, id, r) {
+			return false
+		}
+	}
+	return true
+}
+
 // fontSize returns the size of the font of the properties in points.
 func fontSize(p props) float64 {
 	sz := p.num("sz", 20) / 2
@@ -255,6 +274,12 @@ func own(p props) []decl {
 	} else if v, ok := hexColor(p["shd"]); ok {
 		out = append(out, decl{"background-color", v})
 	}
+	if p.on("outline") {
+		// Word draws the outlines of the glyphs in the color of the text,
+		// about a 72nd of the size of the font wide, and does not fill
+		// them.
+		out = append(out, decl{"-ivy-text-outline", pt(fontSize(p) / 72)})
+	}
 	switch p["vertAlign"] {
 	case "superscript":
 		out = append(out, decl{"vertical-align", "super"})
@@ -295,7 +320,37 @@ func (c *converter) runStyle(p, parent props) string {
 	for _, d := range own(p) {
 		s.set(d.name, d.value)
 	}
+	for _, d := range c.runBorder(p) {
+		s.set(d.name, d.value)
+	}
 	return s.String()
+}
+
+// runBorder returns the declarations of the border of a run with the
+// properties p (w:bdr), or nil. Word draws the border around a single line
+// of the font, at the distance of the border from it. The layout gives the
+// content of an inline box the height of the font size, in the middle of
+// the line, so the padding at the top and at the bottom holds the rest of
+// the single line. Word draws one border around the runs of the same
+// border, so the border has no side where joinBorder joins it to the run
+// before or after it, as in the package msdoc.
+func (c *converter) runBorder(p props) []decl {
+	value, space := border(p["bdr"])
+	if value == "" {
+		return nil
+	}
+	size := fontSize(p)
+	out := []decl{
+		{"border", value},
+		{"padding", pt((c.lineRatio(p)-1)/2*size+space) + " " + pt(space)},
+	}
+	if c.joinBorder[0] {
+		out = append(out, decl{"border-left", "none"}, decl{"padding-left", "0"})
+	}
+	if c.joinBorder[1] {
+		out = append(out, decl{"border-right", "none"}, decl{"padding-right", "0"})
+	}
+	return out
 }
 
 // border returns the value of a border of CSS for a border of

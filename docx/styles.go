@@ -113,6 +113,10 @@ func parseRPr(n roxmltree.Node) props {
 			if fill := shading(c); fill != "" {
 				p["shd"] = fill
 			}
+		case name == "bdr":
+			if v := borderOf(c); v != "" {
+				p["bdr"] = v
+			}
 		}
 	}
 	return p
@@ -246,24 +250,32 @@ func borders(p props, prefix string, n roxmltree.Node) {
 		case "end":
 			side = "right"
 		}
-		val := ooxml.Attr(c, "val")
-		if val == "" {
-			continue
+		if v := borderOf(c); v != "" {
+			p[prefix+side] = v
 		}
-		color := ooxml.Attr(c, "color")
-		if color == "" {
-			color = "auto"
-		}
-		sz := ooxml.Attr(c, "sz")
-		if sz == "" {
-			sz = "4"
-		}
-		space := ooxml.Attr(c, "space")
-		if space == "" {
-			space = "0"
-		}
-		p[prefix+side] = val + " " + sz + " " + color + " " + space
 	}
+}
+
+// borderOf returns a border element, such as w:top or w:bdr, as "val sz
+// color space", or "" for an element without w:val.
+func borderOf(n roxmltree.Node) string {
+	val := ooxml.Attr(n, "val")
+	if val == "" {
+		return ""
+	}
+	color := ooxml.Attr(n, "color")
+	if color == "" {
+		color = "auto"
+	}
+	sz := ooxml.Attr(n, "sz")
+	if sz == "" {
+		sz = "4"
+	}
+	space := ooxml.Attr(n, "space")
+	if space == "" {
+		space = "0"
+	}
+	return val + " " + sz + " " + color + " " + space
 }
 
 // parseTblPr reads the properties of a w:tblPr element.

@@ -448,9 +448,9 @@ func (e *EastAsian) Families(kind Kind, lang Lang) []string {
 		s := 0
 		switch {
 		case lang != NoLang && c.lang == lang:
-			s += 4
+			s += 8
 		case chinese(lang) && chinese(c.lang):
-			s += 3
+			s += 4
 		}
 		if kind != NoKind && c.kind == kind {
 			s += 2

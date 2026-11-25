@@ -106,7 +106,7 @@ func TestSource(t *testing.T) {
 		"<blockquote>\n<p>A quote.</p>",
 		"<dt>Term</dt>\n<dd>Definition</dd>",
 		`<a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a>`,
-		`<div class="raw">raw html</div>`,
+		`<div>raw html</div>`,
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected the html to hold %q, got:\n%s", want, doc)

@@ -246,6 +246,11 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		// Pango, and Cairo writes them into the PDF file. The run takes the
 		// text that its clusters cover, for a writer of PDF (D58).
 		setRunText(&glyphRun, layout.Text, lo, hi)
+		if width, ok := textOutline(style); ok {
+			// Port: upstream has no -ivy-text-outline.
+			s.strokeGlyphs(glyphRun, width)
+			continue
+		}
 		if fc.syntheticBold(run.Font, style) {
 			// Port: upstream has no synthetic bold, see syntheticBold.
 			// The stroke grows the outlines by a 48th of an em on each
@@ -255,6 +260,19 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		}
 		s.fillGlyphs(glyphRun)
 	}
+}
+
+// textOutline returns the width of the outlines of the glyphs of a text of
+// style with -ivy-text-outline, and true. It returns false for a text that
+// fills its glyphs.
+func textOutline(style *Style) (float64, bool) {
+	switch v := style.Get("text_outline").(type) {
+	case Float:
+		return float64(v), v > 0
+	case Int:
+		return float64(v), v > 0
+	}
+	return 0, false
 }
 
 // setRunText gives run the bytes lo to hi of text, and makes the range of

@@ -274,10 +274,17 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	mark0 := c.w.Len()
 	if lvl != nil && marker != "" {
 		mr := rpr.over(mark).over(lvl.rpr)
-		if isSymbolFont(c.font(mr["font"])) {
-			// The marker holds Unicode characters, which the font of the
-			// text draws.
-			mr["font"] = rpr["font"]
+		if font := c.font(mr["font"]); isSymbolFont(font) {
+			codes, ok := symbolCodes(lvl.text)
+			if lvl.format == "bullet" && ok && c.drawsAll(font, codes) {
+				// The program has the symbol font, which draws the
+				// bullet as Word does.
+				marker = codes
+			} else {
+				// The marker holds Unicode characters, which the font of
+				// the text draws.
+				mr["font"] = rpr["font"]
+			}
 		}
 		c.marker(marker, lvl, ppr, mr, rpr)
 	}
@@ -843,6 +850,24 @@ func (c *converter) text(s string, p, base props) {
 
 // run converts a w:r element.
 func (c *converter) run(r roxmltree.Node, base props) {
+	p := c.runProps(r, base)
+	join := c.joinBorder
+	c.joinBorder = [2]bool{}
+	if bdr := p["bdr"]; bdr != "" {
+		prev, prevOK := siblingRun(r, false)
+		next, nextOK := siblingRun(r, true)
+		c.joinBorder = [2]bool{
+			prevOK && c.runProps(prev, base)["bdr"] == bdr,
+			nextOK && c.runProps(next, base)["bdr"] == bdr,
+		}
+	}
+	defer func() { c.joinBorder = join }()
+	c.runContent(r, p, base)
+}
+
+// runProps returns the properties of the run r in a paragraph whose runs
+// have the properties base: its character style, then its own properties.
+func (c *converter) runProps(r roxmltree.Node, base props) props {
 	direct := props{}
 	if rpr, ok := child(r, "rPr"); ok {
 		direct = parseRPr(rpr)
@@ -853,8 +878,43 @@ func (c *converter) run(r roxmltree.Node, base props) {
 			p = p.over(st.rpr)
 		}
 	}
-	p = p.over(direct)
-	c.runContent(r, p, base)
+	return p.over(direct)
+}
+
+// siblingRun returns the run of text next to the run r, after it if next
+// is set, else before it, and true. The marks of a bookmark or of a
+// proofing error between them do not count. It returns false when no run
+// of text is next to r. A run that holds a drawing, a picture or a note is
+// not a run of text.
+func siblingRun(r roxmltree.Node, next bool) (roxmltree.Node, bool) {
+	n := r
+	for {
+		var ok bool
+		if next {
+			n, ok = n.NextSiblingElement()
+		} else {
+			n, ok = n.PrevSiblingElement()
+		}
+		if !ok {
+			return roxmltree.Node{}, false
+		}
+		switch n.TagName().Name() {
+		case "bookmarkStart", "bookmarkEnd", "proofErr", "permStart", "permEnd":
+			continue
+		case "r":
+			for e := range n.Children() {
+				if !e.IsElement() {
+					continue
+				}
+				switch e.TagName().Name() {
+				case "drawing", "pict", "object", "footnoteReference", "endnoteReference":
+					return roxmltree.Node{}, false
+				}
+			}
+			return n, true
+		}
+		return roxmltree.Node{}, false
+	}
 }
 
 // runContent converts the content of a run with the properties p.
