@@ -278,6 +278,42 @@ func TestPageTopSpaceColumns(t *testing.T) {
 	}
 }
 
+func TestPageTopSpaceCell(t *testing.T) {
+	four := strings.Repeat("<p>a</p>", 4)
+	for _, tt := range []struct {
+		name  string
+		space string
+		body  string
+		want  float64
+	}{
+		// The cell goes on at the top of the second page, and the first
+		// paragraph there loses its space before with 'discard'.
+		{"keep", "keep", `<table><tr><td>` + four + `<p style="margin-top: 10px">b</p></td></tr></table>`, 10},
+		{"discard", "discard", `<table><tr><td>` + four + `<p style="margin-top: 10px">b</p></td></tr></table>`, 0},
+		// A row that starts on the second page keeps the space.
+		{"row", "discard", `<table><tr><td>` + four + `</td></tr><tr><td><p style="margin-top: 10px">b</p></td></tr></table>`, 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `<div style="-ivy-page-top-space: ` + tt.space + `">` + tt.body + `</div>`
+			pages := renderPages(t, wordStyle+`<style>table { border-collapse: collapse } td { padding: 0 }</style>`+body)
+			if len(pages) != 2 {
+				t.Fatalf("got %d pages, want 2", len(pages))
+			}
+			var text *Box
+			pages[1].Descendants(func(b *Box) bool {
+				if b.Kind == KindText && b.Text == "b" && text == nil {
+					text = b
+				}
+				return true
+			})
+			if text == nil {
+				t.Fatal("no text b on the second page")
+			}
+			assertApprox(t, "the top of the text", text.PositionY, tt.want)
+		})
+	}
+}
+
 func TestPageTopSpaceFirstPage(t *testing.T) {
 	// The first page keeps the space before its first paragraph.
 	pages := renderPages(t, wordStyle+`<div style="-ivy-page-top-space: discard"><p style="margin-top: 10px">a</p></div>`)

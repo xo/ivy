@@ -316,7 +316,7 @@ func (e *Engine) pagesWithFloats() []*boxNode {
 	// (pagebuilder.go:240) and this pager kept `start := 0`, so a float document was
 	// charging page one for the interline glue in front of its very first line — 5.76pt
 	// on the witness below, where the reference has none.
-	start, fi := skipDiscardable(text, 0), 0
+	start, fi := pageTop(text, 0), 0 // ivy: pageTop, see ivy_pagebreak.go
 	savedVsize := e.vsize
 
 	fh := func(af anchoredFloat) int { return af.f.box.height + af.f.box.depth }
@@ -637,7 +637,7 @@ func (e *Engine) pagesWithFloats() []*boxNode {
 			}
 			deferred = append(deferred, af)
 		}
-		pageText := trimTrailingGlue(text[start:end])
+		pageText := withLastFil(text[start:end], trimTrailingGlue(text[start:end])) // ivy: see ivy_pagebreak.go
 
 		// Emit only a non-empty page (as paginateSingleList does): an empty text break with
 		// no floats to show would otherwise leave a blank leading/interior page.
@@ -648,7 +648,7 @@ func (e *Engine) pagesWithFloats() []*boxNode {
 				break
 			}
 		}
-		next := skipDiscardable(text, end)
+		next := pageTop(text, end) // ivy: see ivy_pagebreak.go
 		if next <= start {
 			next = start + 1
 		}

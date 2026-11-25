@@ -417,4 +417,5 @@ decisions were consolidated (D4). D22 answers question 3, D23 answers question
 answers question 21, D57 answers question 22, D58 answers question 23, and
 D60 answers question 24, D62 answers question 25, D63 answers question 26,
 D64 answers question 27, D65 answers question 28, and D67 answers question
-29. No question is open. The next question is question 30.
+29, and D71 answers question 30. No question is open. The next question is
+question 31.

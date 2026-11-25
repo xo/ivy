@@ -6,6 +6,7 @@ import (
 	"html"
 	"image/color"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -36,9 +37,16 @@ const maxImages = 4096
 // draws it at 100%.
 const cellPadding = 1.5
 
+// footerRaise is the distance in points between the bottom of the text
+// of a footer that Excel prints and the footer margin.
+const footerRaise = 2
+
 // gridColor is the color of the gridlines: light, so that they do not hide
-// the borders of the cells.
-const gridColor = "#c8c8c8"
+// the borders of the cells. LibreOffice prints its grid as black lines of
+// 0.1 points. A line of 0.5 points of this gray has as much ink, and on
+// whole pixels at 96 dots per inch it looks as MuPDF draws the line of
+// LibreOffice.
+const gridColor = "#cccccc"
 
 // Source converts the workbook into the source of the layout: one HTML
 // document for each sheet that prints something, in order. A workbook that
@@ -61,6 +69,7 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 	src := layout.Source{FS: &fsys, Title: wb.Title, Objects: wb.Objects}
 	parts := partPages(ctx)
 	sheets := map[string]*parted{}
+	ownObjects := false
 	for name, data := range wb.Files {
 		fsys.Add(name, data)
 	}
@@ -69,6 +78,7 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 			return layout.Source{}, fmt.Errorf("converting sheet %q: %w", sh.Name, err)
 		}
 		w := newWriter(ctx, wb, sh, lim)
+		w.id = strconv.Itoa(i + 1)
 		doc, ok, err := w.document()
 		if err != nil {
 			return layout.Source{}, err
@@ -86,6 +96,17 @@ func (wb *Workbook) Source(ctx context.Context, opts Options) (layout.Source, er
 		}
 		for path, data := range w.files {
 			fsys.Add(path, data)
+		}
+		if len(w.slices) > 0 {
+			// the slices go in a copy of the objects of the workbook,
+			// which the workbook keeps as they are
+			if !ownObjects {
+				src.Objects, ownObjects = maps.Clone(wb.Objects), true
+				if src.Objects == nil {
+					src.Objects = make(map[string]layout.Object, len(w.slices))
+				}
+			}
+			maps.Copy(src.Objects, w.slices)
 		}
 		src.Documents = append(src.Documents, name)
 	}
@@ -144,7 +165,11 @@ type writer struct {
 	// files holds the images that the document adds, such as the icons
 	// of the conditional formats.
 	files map[string][]byte
-	body  strings.Builder
+	// slices holds the slices of the objects in the rows of the sheet, by
+	// their names, and id names the sheet in their names.
+	slices map[string]layout.Object
+	id     string
+	body   strings.Builder
 	// tables holds the tables of body, for the parts of a long sheet. rec
 	// is the table whose rows the writer records, or nil. top and bottom
 	// are the widest borders at the top and at the bottom of the cells of
@@ -284,6 +309,12 @@ func (w *writer) document() (string, bool, error) {
 		used, ok := w.usedRange()
 		if !ok {
 			return "", false, nil
+		}
+		if w.wb.Excel {
+			// Excel prints a sheet without a print area from its cell
+			// A1, so the empty rows and columns before the used range
+			// take their place on the page.
+			used.Row0, used.Col0 = 0, 0
 		}
 		ranges = []Range{used}
 	}
@@ -787,7 +818,8 @@ func (w *writer) css(b *strings.Builder) {
 	b.WriteString("tr.pb{break-before:page}\n")
 	b.WriteString("td{padding:0 " + pt(cellPadding*s) + ";vertical-align:bottom;white-space:pre;text-align:left;overflow:visible;line-height:normal;")
 	if w.sh.Gridlines {
-		b.WriteString("border:" + pt(max(0.5, 0.5*s)) + " solid " + gridColor + ";")
+		// the gridlines fall on whole pixels, as a spreadsheet draws them
+		b.WriteString("border:" + pt(max(0.5, 0.5*s)) + " solid " + gridColor + ";-ivy-stroke-adjust:pixels;")
 	}
 	// the cells of the default style take its fill, its borders and its
 	// alignment
@@ -954,6 +986,14 @@ func (w *writer) marginBoxes(b *strings.Builder, hf HeaderFooter, side string, e
 	align := "top"
 	if side == "bottom" {
 		align = "bottom"
+	}
+	if side == "bottom" && w.wb.Excel {
+		// Excel prints the text of a footer 2 points higher than a line
+		// that ends at the footer margin, in Calibri 11, Times New Roman
+		// 11 and 12 (poi/xlsx/header-footer.xlsx and the footers of
+		// poi/xls/basic-expense-template-2011.xls and
+		// poi/xls/conditional-formatting-samples.xls).
+		edge += footerRaise
 	}
 	for _, part := range []struct {
 		name   string
@@ -1796,10 +1836,14 @@ func (w *writer) image(p placed) {
 		if p.clipW <= 0 || p.clipH <= 0 {
 			return
 		}
-		if img.Object != "" || img.Path == "" {
-			// the slice of a chart or of a frame reaches 1 point into the
-			// next row, which draws its own slice over it, so that no
-			// seam shows between the rows
+		if img.Object != "" {
+			w.objectSlice(p)
+			return
+		}
+		if img.Path == "" {
+			// the slice of a frame reaches 1 point into the next row,
+			// which draws its own slice over it, so that no seam shows
+			// between the rows
 			b.WriteString(`<div class="cl" style="width:` + pt(p.clipW*s) + ";height:" + pt((p.clipH+1)*s) + `">`)
 			w.imageTag(img, pos)
 			b.WriteString("</div>")

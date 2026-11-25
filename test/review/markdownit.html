@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- The page loads nothing from the network: each file comes from the
+     server of the review, which serves the files of markdownit.tsv and the
+     folder of the Markdown file (D70). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:">
+<title>markdown-it</title>
+<style>
+{{PAPER}}
+</style>
+<link rel="stylesheet" href="/npm/github-markdown-css@5.9.0/github-markdown-light.css">
+<link rel="stylesheet" href="/npm/katex@0.16.22/dist/katex.min.css">
+<style>
+/* The page has the margins of @page alone. */
+body { margin: 0; background: #ffffff; }
+/* A line of code that is wider than the page wraps, as in ivy. On GitHub,
+   the block scrolls, and a page of paper cannot scroll. */
+.markdown-body pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<script>
+// A script or a style sheet of the page that does not load, or an error of
+// a script, ends the conversion with the error. An image of the document
+// that does not load stays out of the page.
+window.addEventListener("error", (e) => {
+  if (e.target instanceof HTMLImageElement) {
+    return;
+  }
+  const what = e.target && e.target !== window ? (e.target.src || e.target.href || e.target.tagName) : "";
+  window.ivyState = "error: " + (e.message || "cannot load " + what);
+}, true);
+window.addEventListener("unhandledrejection", (e) => {
+  window.ivyState = "error: " + (e.reason && e.reason.stack || e.reason);
+});
+</script>
+<script type="application/json" id="source">{{SOURCE}}</script>
+<script type="module">
+import MarkdownIt from "/npm/markdown-it@15.0.3/+esm";
+import footnote from "/npm/markdown-it-footnote@4.0.0/+esm";
+import { full as emoji } from "/npm/markdown-it-emoji@3.1.0/+esm";
+import taskLists from "/npm/markdown-it-task-lists@2.1.1/+esm";
+import alerts from "/npm/markdown-it-github-alerts@1.0.1/+esm";
+import mathPlugin from "/npm/@vscode/markdown-it-katex@1.1.2/+esm";
+import katex from "/npm/katex@0.16.22/+esm";
+import { createHighlighter, bundledLanguages } from "/npm/shiki@4.6.0/+esm";
+
+const theme = "github-light-default";
+
+// fenceLang returns the language of the info string of a block of code.
+const fenceLang = (info) => (info || "").trim().split(/\s+/)[0].toLowerCase();
+
+async function main() {
+  // The preview of VS Code hides the front matter of YAML, and ivy drops it.
+  const src = JSON.parse(document.getElementById("source").textContent)
+    .replace(/^---\r?\n[\s\S]*?\r?\n(---|\.\.\.)[ \t]*(\r?\n|$)/, "");
+  const md = MarkdownIt({ html: true, linkify: true });
+  md.use(footnote).use(emoji).use(taskLists).use(alerts).use(mathPlugin.default || mathPlugin);
+
+  // Shiki loads the grammar of each language of the blocks of code.
+  const langs = new Set();
+  for (const t of md.parse(src, {})) {
+    const lang = t.type === "fence" ? fenceLang(t.info) : "";
+    if (lang && Object.hasOwn(bundledLanguages, lang)) {
+      langs.add(lang);
+    }
+  }
+  const hl = await createHighlighter({ themes: [theme], langs: [...langs] });
+  // The block takes the background of github-markdown-css, as on GitHub,
+  // and not the background of the theme.
+  const plain = { pre(node) { delete node.properties.style; delete node.properties.tabindex; } };
+  md.set({
+    highlight: (code, info) => {
+      const lang = fenceLang(info);
+      if (!langs.has(lang)) {
+        return "";
+      }
+      return hl.codeToHtml(code, { lang, theme, transformers: [plain] });
+    },
+  });
+  // GitHub draws a block of the language math as display math.
+  const fence = md.renderer.rules.fence;
+  md.renderer.rules.fence = (tokens, i, opts, env, self) => {
+    if (fenceLang(tokens[i].info) === "math") {
+      return '<div class="math math-display">' +
+        katex.renderToString(tokens[i].content, { displayMode: true, throwOnError: false }) + "</div>\n";
+    }
+    return fence(tokens, i, opts, env, self);
+  };
+
+  const tpl = document.createElement("template");
+  tpl.innerHTML = md.render(src);
+  // An image of another site becomes its alternate text, as in ivy, because
+  // the review runs without the network.
+  for (const img of tpl.content.querySelectorAll("img")) {
+    const url = new URL(img.getAttribute("src") || "", document.baseURI);
+    if (url.protocol !== "data:" && url.origin !== location.origin) {
+      img.replaceWith(document.createTextNode(img.getAttribute("alt") || ""));
+    }
+  }
+  for (const source of tpl.content.querySelectorAll("source")) {
+    source.remove();
+  }
+  document.querySelector("article").append(tpl.content);
+  await Promise.all([...document.images].map((img) => img.decode().catch(() => {})));
+  await document.fonts.ready;
+  if (!window.ivyState) {
+    window.ivyState = "done";
+  }
+}
+
+main().catch((e) => {
+  window.ivyState = "error: " + (e && e.stack || e);
+});
+</script>
+</head>
+<body>
+<article class="markdown-body"></article>
+</body>
+</html>

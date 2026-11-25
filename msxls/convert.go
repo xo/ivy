@@ -154,7 +154,7 @@ func (w *workbook) numberFormatOf(xf int) string {
 func (w *workbook) book(ctx context.Context, title string, cfg ivy.Config) (*sheet.Workbook, error) {
 	lim, paper := cfg.Limits, cfg.Paper
 	pics := odraw.NewPictures(w.store, nil, cfg)
-	book := &sheet.Workbook{Title: title}
+	book := &sheet.Workbook{Title: title, Excel: true}
 	if len(w.xfs) > 0 {
 		book.Styles = make([]sheet.Style, len(w.xfs))
 		for i, xf := range w.xfs {

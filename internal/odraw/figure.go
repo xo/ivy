@@ -354,6 +354,7 @@ func (s *Style) Figure(sh *Shape, c Chain, r Rect) *drawingml.Figure {
 	}
 	var filled bool
 	f.Paths, filled = s.Geometry(sh, c, w, h)
+	f.TextRect = s.TextRect(sh, c, w, h)
 	if WordArt(sh, c) {
 		if paths, ok := s.wordArt(sh, c, w, h); ok {
 			f.Paths, filled = paths, true

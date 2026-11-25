@@ -75,7 +75,7 @@ func (e *Engine) addVSpaceToPage(g glueSpec) {
 // lastGlueOnPage reports the glue that ends the main vertical list, if it ends with
 // glue. It is \lastskip, which is zero when the list ends with anything else.
 func (e *Engine) lastGlueOnPage() (glueSpec, bool) {
-	if n := len(e.mvl); n > 0 {
+	if n := lastVisible(e.mvl); n > 0 { // ivy: see ivy_pagebreak.go
 		if g, ok := e.mvl[n-1].(glueNode); ok {
 			return g.spec, true
 		}
@@ -91,7 +91,7 @@ func (e *Engine) lastGlueOnPage() (glueSpec, bool) {
 // list is addressable, so the same state is reached by overwriting — and the two differ
 // only in that ours has one node where TeX has three, with identical total height.
 func (e *Engine) replaceLastGlue(g glueSpec) {
-	if n := len(e.mvl); n > 0 {
+	if n := lastVisible(e.mvl); n > 0 { // ivy: see ivy_pagebreak.go
 		if _, ok := e.mvl[n-1].(glueNode); ok {
 			e.mvl[n-1] = glueNode{spec: g}
 			return

@@ -212,6 +212,22 @@ func TestCellBorderPadding(t *testing.T) {
 	}
 }
 
+// TestParagraphSpacing checks that the spacing before a paragraph is a
+// padding, which adds to the spacing after the paragraph before, and a
+// margin, which collapses with it, with \htmautsp, as Word then puts the
+// larger of the two.
+func TestParagraphSpacing(t *testing.T) {
+	body := `\pard\sb480\sa480 one\par\pard\sb480\sa480 two\par}`
+	html, _ := convertHTML(t, []byte(`{\rtf1\ansi `+body))
+	if !strings.Contains(html, `padding-top: 24pt`) {
+		t.Errorf("expected the spacing before as a padding:\n%s", html)
+	}
+	html, _ = convertHTML(t, []byte(`{\rtf1\ansi\htmautsp `+body))
+	if !strings.Contains(html, `margin-top: 24pt`) || strings.Contains(html, `padding-top: 24pt`) {
+		t.Errorf("expected the spacing before as a margin that collapses:\n%s", html)
+	}
+}
+
 func TestDescribe(t *testing.T) {
 	d, err := Open(t.Context(), bytes.NewReader(sample()))
 	if err != nil {

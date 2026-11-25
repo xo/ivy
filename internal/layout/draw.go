@@ -567,6 +567,7 @@ type collapsedSegment struct {
 	color  *tinycss2.Color
 	side   string
 	border [4]float64
+	adjust bool
 }
 
 // drawCollapsedBorders is draw_collapsed_borders in
@@ -680,7 +681,7 @@ func drawCollapsedBorders(s *stream, table *Box) {
 		}
 		segments = append(segments, collapsedSegment{
 			score: b.score, style: b.Style, width: b.Width, color: b.Color, side: "left",
-			border: [4]float64{posX, posY1, 0, posY2 - posY1},
+			border: [4]float64{posX, posY1, 0, posY2 - posY1}, adjust: b.adjust,
 		})
 	}
 
@@ -703,7 +704,7 @@ func drawCollapsedBorders(s *stream, table *Box) {
 		posX2 := columnPositions[x+1] + shiftAfter
 		segments = append(segments, collapsedSegment{
 			score: b.score, style: b.Style, width: b.Width, color: b.Color, side: "top",
-			border: [4]float64{posX1, posY, posX2 - posX1, 0},
+			border: [4]float64{posX1, posY, posX2 - posX1, 0}, adjust: b.adjust,
 		})
 	}
 
@@ -735,6 +736,8 @@ func drawCollapsedBorders(s *stream, table *Box) {
 		bx, by, bw, bh := segment.border[0], segment.border[1], segment.border[2], segment.border[3]
 		color := styledColor(segment.style, segment.color, segment.side)
 		s.stacked(func() {
+			// Port: upstream has no -ivy-stroke-adjust.
+			s.state.strokeAdjust = segment.adjust
 			drawLine(s, bx, by, bx+bw, by+bh, segment.width, segment.style, color, 0)
 		})
 	}

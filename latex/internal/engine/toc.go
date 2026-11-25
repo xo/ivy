@@ -453,10 +453,19 @@ func (e *Engine) emitTOCEntryTokens(b *tocTokens, entries []tocEntry) {
 			// \addvspace{1.0em}: the top entries stand apart from the ones under them.
 			// Braced: \addvspace takes ONE argument, and "1em" unbraced is "1" and an "em"
 			// typeset on the page.
-			b.cs("addvspace")
-			b.begin()
-			b.text(strconv.FormatFloat(shape.vspaceBefore, 'f', -1, 64) + "em")
-			b.end()
+			// ivy: \l@chapter of report.cls and book.cls says \vskip, which
+			// adds to the 40pt under the heading of the contents, where
+			// \addvspace took the larger of the two (ivy_pagebreak.go).
+			if tocVskip(en) {
+				b.cs("vskip")
+				b.text(strconv.FormatFloat(shape.vspaceBefore, 'f', -1, 64) + "em")
+				b.cs("relax")
+			} else {
+				b.cs("addvspace")
+				b.begin()
+				b.text(strconv.FormatFloat(shape.vspaceBefore, 'f', -1, 64) + "em")
+				b.end()
+			}
 		}
 		b.cs("par")
 		b.cs("noindent")
@@ -482,7 +491,12 @@ func (e *Engine) emitTOCEntryTokens(b *tocTokens, entries []tocEntry) {
 			b.cs("hfil")
 			b.end()
 		}
+		// ivy: the title in a group, as \@dottedtocline sets {#4}, so that a
+		// font switch of the title, such as \sffamily, does not reach the
+		// leader and the page number.
+		b.begin()
 		b.text(en.title)
+		b.end()
 		b.cs("nobreak")
 		if shape.dotted {
 			b.cs("@tocdotfill")

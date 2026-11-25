@@ -290,7 +290,9 @@ func TestImageAndChart(t *testing.T) {
 		`<td class="a"><div class="cl" style="width:103.13pt;height:14.52pt"><img style="position:absolute;left:0pt;top:0pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div>` +
 			`<div class="cl" style="left:0.75pt;top:13.52pt;width:98.5pt;height:2pt"><img style="position:absolute;left:-0.75pt;top:-13.52pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
 		`<td class="a"><div class="cl" style="width:103.13pt;height:14.52pt"><img style="position:absolute;left:0pt;top:-43.56pt;width:100pt;height:50pt" src="xl/media/image1.png" alt=""></div></td>`,
-		`<img style="position:absolute;left:0pt;top:0pt;width:154.7pt;height:145.2pt" src="ivy-object:chart2" alt="">`,
+		// each row shows the slice of the chart in a box with a margin of
+		// 4 points, which reaches 1 point into the next row
+		`<img style="position:absolute;left:-4pt;top:-4pt;width:162.7pt;height:23.52pt" src="ivy-object:chart2~1~1" alt="">`,
 		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart: Sales</div>`,
 	} {
 		if !strings.Contains(doc, want) {

@@ -391,14 +391,16 @@ func FormatFor(kind string) (ivy.Format, bool) {
 // links to from the folder of path (D22), and a TeX document reads its
 // figures, its inputs and its bibliography from it (D65). The manifest
 // fetches them as assets. A TeX document takes the name of the file as its
-// job name, so that it reads its .bbl file (D66).
+// job name, so that it reads its .bbl file (D66). A Markdown file colors
+// its code with the highlighter of the review (D73).
 func OpenIvy(ctx context.Context, format ivy.Format, src ivy.Source, cfg ivy.Config, path string) (ivy.Document, error) {
 	dir := filepath.Dir(path)
 	switch format.Name {
 	case html.Format.Name:
 		return html.Open(ctx, src, html.WithConfig(cfg), html.WithDir(os.DirFS(dir)))
 	case markdown.Format.Name:
-		return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(os.DirFS(dir)))
+		return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(os.DirFS(dir)),
+			markdown.WithHighlighter(highlighter(ctx, cfg.Log())))
 	case latex.Format.Name:
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		return latex.Open(ctx, src, latex.WithConfig(cfg), latex.WithDir(os.DirFS(dir)), latex.WithName(name))

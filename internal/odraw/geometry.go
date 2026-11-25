@@ -129,6 +129,27 @@ func (s *Style) Geometry(sh *Shape, c Chain, w, h float64) ([]drawingml.Path, bo
 	return paths, !open
 }
 
+// TextRect returns the box of the text of a shape of the type of sh with
+// the properties c and the size w by h points: the text rectangle of its
+// preset geometry, such as the rectangle inside an ellipse, or the whole
+// box. A shape of custom geometry and a text box have the whole box.
+func (s *Style) TextRect(sh *Shape, c Chain, w, h float64) okage.Rect {
+	box, _ := okage.RectFromXYWH(0, 0, float32(max(w, 1e-3)), float32(max(h, 1e-3)))
+	if c.Complex(PropVertices) != nil {
+		return box
+	}
+	name, ok := presets[sh.Type]
+	if !ok {
+		return box
+	}
+	g, ok := drawingml.Preset(name)
+	if !ok {
+		return box
+	}
+	_, text := drawingml.Evaluated(g, adjustOf(sh.Type, c, g.AdjustNames(), w, h), w, h, s.log())
+	return text
+}
+
 // The types of the segments of a path of MS-ODRAW 2.4.30.
 const (
 	segLineTo  = 0
@@ -205,6 +226,10 @@ func custom(c Chain, w, h float64) ([]drawingml.Path, bool) {
 		return paths, len(paths) > 0
 	}
 	for _, s := range segs {
+		if len(s) < 2 {
+			// a segment of a malformed file
+			continue
+		}
 		v := le.Uint16(s)
 		typ, n := int(v>>13), int(v&0x1FFF)
 		switch typ {

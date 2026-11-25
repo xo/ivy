@@ -147,6 +147,9 @@ type graphicsState struct {
 	lineCap      okage.LineCap
 	dash         []float64
 	dashOffset   float64
+	// strokeAdjust strokes with the stroke adjustment of PDF, the entry SA
+	// of a graphics state, for -ivy-stroke-adjust.
+	strokeAdjust bool
 	// groups is the number of groups of the soft masks that the state
 	// started, which its restore ends.
 	groups int
@@ -412,12 +415,18 @@ func (s *stream) stroke() {
 			st.Dash = sd
 		}
 	}
+	adjust := s.state.strokeAdjust
 	s.paintPath(func(p *okage.Path) {
 		if shader == nil {
 			return
 		}
 		s.record(func(d display.Device) {
-			if sh := shader(); sh != nil {
+			sh := shader()
+			switch {
+			case sh == nil:
+			case adjust:
+				display.StrokeAdjusted(d, p, st, sh)
+			default:
 				d.StrokePath(p, st, sh)
 			}
 		})

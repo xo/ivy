@@ -1019,6 +1019,10 @@ func adjustLineHeight(box *Box) {
 	if _, ok := box.Style.Get("line_multiple").(Float); ok {
 		shift = leadingShift(box.Style, lineHeight, strutTextHeight(box.Style))
 	}
+	// Port: upstream has no -ivy-line-baseline, see baselineShift.
+	if isStr(box.Style.Get("line_baseline"), "win") {
+		shift = baselineShift(box.Style, lineHeight, box.Baseline)
+	}
 	box.Baseline -= shift
 	box.MarginTop = halfLeading - shift - box.BorderTopWidth - box.PaddingTop
 	box.MarginBottom = halfLeading + shift - box.BorderBottomWidth - box.PaddingBottom
@@ -1368,6 +1372,10 @@ func splitTextBoxWidth(lc *layoutContext, box *Box, availableWidth *float64, ski
 		halfLeading := (lineHeight - m.Height) / 2
 		// Port: upstream has no -ivy-line-multiple, see adjustLineHeight.
 		shift := leadingShift(box.Style, lineHeight, m.Height)
+		if isStr(box.Style.Get("line_baseline"), "win") {
+			// Port: upstream has no -ivy-line-baseline, see baselineShift.
+			shift = baselineShift(box.Style, lineHeight, halfLeading+m.Baseline)
+		}
 		box.MarginTop = halfLeading - shift
 		box.MarginBottom = halfLeading + shift
 		// form the top of the content box

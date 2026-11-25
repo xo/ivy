@@ -322,7 +322,7 @@ func (d *drawing) figure(sh *odraw.Shape, r odraw.Rect) *drawingml.Figure {
 // properties c. The runs give the fonts of the characters, and a
 // character without a run takes the default font of the workbook.
 func (d *drawing) textBody(o *drawObj, c odraw.Chain) *drawingml.TextBody {
-	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c)}
+	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c), WinBaseline: true}
 	switch o.vAlign {
 	case 2:
 		tb.Body.Anchor.Set("ctr")

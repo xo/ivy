@@ -1043,12 +1043,19 @@ func (e *Engine) scanCS() tok {
 		e.bpos = after
 		return csTok("")
 	}
+	var name []rune
 	if e.catOf(r) != catLetter {
 		e.bpos = after
-		return csTok(string(r))
+		// ivy: a control space skips the spaces after it, as a control word
+		// does (tex.web §354). sample2e.tex writes "\ldots\   % comment", and
+		// the spaces before the comment gave a second space.
+		if e.catOf(r) != catSpace {
+			return csTok(string(r))
+		}
+		name = []rune{r}
 	}
-	var name []rune
-	for e.bpos < len(e.base) {
+	word := name == nil
+	for word && e.bpos < len(e.base) {
 		rr, nx, ok := e.mouthChar(e.bpos)
 		if !ok || e.catOf(rr) != catLetter {
 			break
@@ -2328,6 +2335,12 @@ func (e *Engine) beginParagraph(indent bool) {
 	if len(e.mvl) > 0 && !e.suppressParskip {
 		e.mvl = append(e.mvl, glueNode{spec: e.namedSkip("parskip")})
 	}
+	// ivy: the text after a display resumes the paragraph of TeX, so it has no
+	// \parindent either. A \par after the display clears the flag, and the next
+	// paragraph is indented, as in TeX.
+	if e.suppressParskip {
+		indent = false
+	}
 	e.suppressParskip = false
 	if indent {
 		e.parList = append(e.parList, &boxNode{kind: hbox, width: e.parindent})
@@ -2417,7 +2430,9 @@ func (e *Engine) execCS(t tok) bool {
 		// in every document back at body size. Measured against tectonic:
 		// {\Large\bfseries …} came out at 9.96 where {\Large …} alone came out at
 		// 13.95 and the reference gives 14.35 for both.
-		e.selectFont(e.faceAtCurrentSize(m.font)) // \rm etc., group-scoped
+		// ivy: the switch combines with the current family, series and
+		// shape for the family sans (ivy_fonts.go).
+		e.selectFont(e.faceAtCurrentSize(e.switchFace(m))) // \rm etc., group-scoped
 	case mPrim:
 		if !isExpandable(m.name) {
 			m.prim(e)
@@ -3365,6 +3380,16 @@ func (e *Engine) scanDimenValue(inf bool) (int, int) {
 				return e.scanExpr(false), 0
 			case m.kind == mPrim && m.name == "dimen":
 				return e.getDimen(e.scanInt()), 0
+			// ivy: \fontdimen is a dimension, as \the\fontdimen reads it.
+			// \textellipsis of latex.ltx kerns by \fontdimen3\font, and the
+			// kern was 0.
+			case m.kind == mPrim && m.name == "fontdimen":
+				n := e.scanInt()
+				f, ok := e.scanFontIdent()
+				if !ok {
+					f = e.curFont
+				}
+				return e.fontDimenOf(f, n), 0
 			case m.kind == mPrim && isFontCharDim(m.name):
 				return e.fontCharDim(m.name), 0
 			case m.kind == mPrim && m.name == "wd":
@@ -3399,6 +3424,11 @@ func (e *Engine) scanDimenValue(inf bool) (int, int) {
 				return e.rightskip.width, 0
 			case m.kind == mPrim && m.name == "lastskip":
 				return e.lastSkip().width, 0
+			// ivy: \prevdepth reads as a dimension. It ran as an assignment
+			// here, so \addpenalty of LaTeX, which reads it, set it to 0 and
+			// the next line moved down by the depth of the line before.
+			case m.kind == mPrim && m.name == "prevdepth":
+				return e.prevDepth, 0
 			}
 			// An internal INTEGER here is the FACTOR of the dimension, not the
 			// dimension itself: TeX's <dimen> is <factor><unit of measure>, and the
@@ -3781,6 +3811,8 @@ func (e *Engine) coerceInternalDimen() (int, bool) {
 				return e.rightskip.width, true
 			case m.kind == mPrim && m.name == "lastskip":
 				return e.lastSkip().width, true
+			case m.kind == mPrim && m.name == "prevdepth": // ivy: as in scanDimenValue
+				return e.prevDepth, true
 			case m.kind == mPrim && m.name == "dimexpr":
 				return e.scanExpr(true), true
 			}

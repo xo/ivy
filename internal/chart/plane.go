@@ -902,8 +902,13 @@ func (pl *plane) axes() {
 	cv := pl.cv
 	t := cv.t
 	in := pl.in
-	// The axis of categories crosses the axis of values at the origin.
+	// The axis of categories crosses the axis of values at the origin. Office
+	// draws the axis of categories of a box and whisker chart at the bottom
+	// of the plot, so that its line does not cross the boxes at zero.
 	o := pl.vs.cross(c.cat.crosses, c.cat.crossesAt)
+	if c.plots[0].kind == kindBox {
+		o = pl.vs.cross("min", math.NaN())
+	}
 	catAt := pl.valCoord(o, false)
 	if pl.scatter {
 		catAt = in.y1 - pl.vs.frac(o)*in.h()

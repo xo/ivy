@@ -377,6 +377,11 @@ func TestPageFloatShape(t *testing.T) {
 			"float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 10pt; -ivy-wrap-flow: both 9pt; width: 144pt; height: 20pt"},
 		{"none", floating{wr: 3, by: 0, top: 200}, 144,
 			"position: absolute; left: 0pt; top: 10pt; width: 144pt; height: 20pt"},
+		// an object above and below the text at a distance from its
+		// paragraph keeps the space after the paragraph before it
+		// (poi/doc/pictures-escher.doc)
+		{"paragraph top and bottom", floating{wr: 1, by: 2, left: 2880, top: 200}, 144,
+			"display: block; margin-left: 144pt; padding-top: 10pt; width: 144pt; height: 20pt"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := strings.Join(p.floatStyle(&tt.f, tt.w, 20), "; "); got != tt.want {

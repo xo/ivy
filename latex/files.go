@@ -211,6 +211,11 @@ func latinModern(trees []fs.FS, lim ivy.Limits) engine.Faces {
 		Italic:  lm.Italic,
 		Mono:    lm.Mono,
 		Math:    lm.Math,
+
+		Sans:           lm.Sans,
+		SansBold:       lm.SansBold,
+		SansItalic:     lm.SansItalic,
+		SansBoldItalic: lm.SansBoldItalic,
 	}
 }
 

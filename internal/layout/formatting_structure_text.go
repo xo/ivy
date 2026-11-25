@@ -148,6 +148,108 @@ func collapseSpaces(text string, lineFeeds bool) string {
 	return b.String()
 }
 
+// removeWideSegmentBreaks removes each line feed whose characters before
+// and after are wide, with the spaces and the tabs around it, as CSS Text 3
+// says in 4.1.3: Chinese and Japanese do not separate their words with
+// spaces, so a line feed of the source between two of their characters is
+// no space. With keepIdeographic, a line feed that an ideographic space
+// follows stays, as collapseKeepingIdeographicBreaks needs (D68).
+//
+// Port: upstream turns each line feed into a space.
+func removeWideSegmentBreaks(text string, keepIdeographic bool) string {
+	if strings.IndexByte(text, '\n') < 0 {
+		return text
+	}
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\n' {
+			continue
+		}
+		start := i
+		for start > 0 && isBlank(text[start-1]) {
+			start--
+		}
+		end := i + 1
+		for end < len(text) && isBlank(text[end]) {
+			end++
+		}
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if !wideRune(before) || !wideRune(after) || keepIdeographic && after == '\u3000' {
+			continue
+		}
+		if b.Len() == 0 && last == 0 {
+			b.Grow(len(text))
+		}
+		b.WriteString(text[last:start])
+		last = end
+		i = end - 1
+	}
+	if last == 0 {
+		return text
+	}
+	b.WriteString(text[last:])
+	return b.String()
+}
+
+// wideRune reports whether r is a character of Chinese or Japanese whose
+// East Asian width is full, wide or half: Han, Hiragana, Katakana,
+// Bopomofo, the symbols and the punctuation of CJK, and the forms of full
+// width and of half width. Hangul is not, because Korean separates its
+// words with spaces, as CSS Text 3 says.
+func wideRune(r rune) bool {
+	switch {
+	case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Bopomofo):
+		return true
+	case r >= 0x3000 && r <= 0x303f, r >= 0xff01 && r <= 0xff9f, r >= 0xffe0 && r <= 0xffe6:
+		return true
+	}
+	return false
+}
+
+// collapseKeepingIdeographicBreaks is collapseSpaces(text, true), except
+// that a line feed that one or more ideographic spaces (U+3000) follow
+// stays, without the spaces and the tabs around it. A text of Chinese or
+// Japanese then starts a paragraph that it indents with ideographic spaces
+// on a new line, as its text file does (D68). A line feed at the start of
+// the text collapses to a space, as CSS says, so that no line is empty.
+func collapseKeepingIdeographicBreaks(text string) string {
+	if strings.IndexByte(text, '\n') < 0 || !strings.ContainsRune(text, '\u3000') {
+		return collapseSpaces(text, true)
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	start := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '\n' {
+			continue
+		}
+		j := i + 1
+		for j < len(text) && isBlank(text[j]) {
+			j++
+		}
+		if !strings.HasPrefix(text[j:], "\u3000") {
+			continue
+		}
+		part := strings.TrimRight(text[start:i], " \t\n")
+		if part == "" && b.Len() == 0 {
+			// a line feed at the start, such as after the tag of a
+			// paragraph, collapses
+			continue
+		}
+		b.WriteString(collapseSpaces(part, true))
+		b.WriteByte('\n')
+		start = j
+		i = j - 1
+	}
+	if start == 0 {
+		return collapseSpaces(text, true)
+	}
+	b.WriteString(collapseSpaces(text[start:], true))
+	return b.String()
+}
+
 // transform is transform in weasyprint/formatting_structure/text.py. It
 // applies a value of text-transform to a text.
 func transform(function, text, langCode string) string {

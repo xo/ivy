@@ -29,6 +29,11 @@ type CollapsedBorder struct {
 	// score is the score of the resolution of the conflicts: hidden, the
 	// width and the rank of the style.
 	score [3]float64
+	// adjust is set when the box that gives the border has the
+	// -ivy-stroke-adjust 'pixels'.
+	//
+	// Port: upstream has no -ivy-stroke-adjust.
+	adjust bool
 }
 
 // CollapsedBorderGrid is the result of collapse_table_borders in
@@ -113,6 +118,7 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 		style := str(boxStyle.Get("border_" + side + "_style"))
 		width := num(boxStyle.Get("border_" + side + "_width"))
 		color := getColor(boxStyle, "border_"+side+"_color")
+		adjust := isStr(boxStyle.Get("stroke_adjust"), "pixels")
 
 		// See https://www.w3.org/TR/CSS21/tables.html#border-conflict-resolution.
 		hidden := 0.0
@@ -134,7 +140,7 @@ func collapseTableBorders(table *Box, gridWidth, gridHeight int) *CollapsedBorde
 		}
 		// Strict < so that the earlier call wins in case of a tie.
 		if lessScore(borderGrid[y][x].score, score) {
-			borderGrid[y][x] = CollapsedBorder{score: score, Style: style, Width: width, Color: color}
+			borderGrid[y][x] = CollapsedBorder{score: score, Style: style, Width: width, Color: color, adjust: adjust}
 		}
 	}
 
@@ -629,6 +635,14 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 					styleCopy.Set("height", String("auto"))
 					cell.Style = styleCopy
 				}
+				// Port: upstream has no -ivy-page-top-space. Word leaves out
+				// the space before the first paragraph of the part of a
+				// split cell at the top of a page, as at the top of the
+				// page. See layoutContext.splitCellTop.
+				cellTop := lc.splitCellTop(cell, cellSkip, pageIsEmpty)
+				if cellTop {
+					lc.columnTopBox = cell
+				}
 				result := blockContainerLayout(lc, cell, bottomSpace, cellSkip, pageIsEmpty,
 					absoluteBoxes, fixedBoxes, nil, nil, nil, false, noMaxLines)
 				cell.Style = originalStyle
@@ -636,6 +650,9 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				if newCell == nil {
 					cell = cell.CopyWithChildren(nil)
 					var cellAbsoluteBoxes, cellFixedBoxes []*Box
+					if cellTop {
+						lc.columnTopBox = cell
+					}
 					cell = blockContainerLayout(lc, cell, bottomSpace, cellSkip, true,
 						&cellAbsoluteBoxes, &cellFixedBoxes, nil, nil, nil, false, noMaxLines).box
 					cellResumeAt = skipStack{0: nil}

@@ -101,10 +101,39 @@ func parse(data []byte) (prog *program, err error) {
 	if !f.HasMath() {
 		return nil, fmt.Errorf("math font without a MATH table: %w", ivy.ErrFormat)
 	}
+	if f.Describe().Family == "Latin Modern Math" {
+		subscriptsOfTeX(f)
+	}
 	// The driver draws with a face of its own. Without it, it draws the
 	// outlines that the box gives.
 	draw, _ := font.Load(data, 0)
 	return &program{font: f, draw: draw}, nil
+}
+
+// The shifts of a subscript of pdfTeX with Computer Modern, in thousandths
+// of an em of the size of the nucleus.
+const (
+	// texSub1 is sub1, \fontdimen16 of cmsy10: the shift of a subscript
+	// without a superscript.
+	texSub1 = 150
+	// texSubDrop is sub_drop, \fontdimen19 of cmsy7, at the size of the
+	// nucleus of the text style: 0.5pt at 10pt.
+	texSubDrop = 50
+)
+
+// subscriptsOfTeX gives Latin Modern Math the shifts of a subscript of
+// pdfTeX. Latin Modern Math gives SubscriptShiftDown the value of sub2 of
+// cmsy10, 0.247em, which TeX takes only when a superscript is also there.
+// TeX takes sub1, 0.15em, for a subscript alone, so K_n of pdfLaTeX has its
+// n 1pt higher. The table MATH has one shift for both, and texmath takes it
+// for both. A subscript with a superscript still goes down to 0.247em or
+// more by the gap of SubSuperscriptGapMin. Latin Modern Math also gives
+// SubscriptBaselineDropMin 0.2em, where TeX drops a subscript 0.5pt below
+// the depth of a nucleus that is not one character, such as \hat y.
+func subscriptsOfTeX(f *gofont.Font) {
+	rec := &f.MATH.MathConstants.Records
+	rec[gofont.SubscriptShiftDown-gofont.MathLeading].Value = texSub1
+	rec[gofont.SubscriptBaselineDropMin-gofont.MathLeading].Value = texSubDrop
 }
 
 // RenderSVGMetrics lays out tex in the text style at the size, and returns
@@ -126,7 +155,7 @@ func (r *Renderer) render(tex string, size int, style texmath.Style) (string, Me
 	if len(r.boxes) >= maxBoxes {
 		return "", Metrics{}, fmt.Errorf("math: too many formulas: %w", ivy.ErrLimit)
 	}
-	box, err := texmath.LayoutTeX(basePrimes(tex), r.face, float64(size), style,
+	box, err := texmath.LayoutTeX(displayCells(mathDots(basePrimes(tex))), r.face, float64(size), style,
 		texmath.WithMaxDepth(maxDepth),
 		texmath.WithMaxNodes(maxNodes),
 		texmath.WithMaxExpansions(maxExpansions),
@@ -200,6 +229,231 @@ func basePrimes(tex string) string {
 		}
 	}
 	return b.String()
+}
+
+// The dots of plain TeX: \ldots is \mathinner{\ldotp\ldotp\ldotp} and \cdots
+// is \mathinner{\cdotp\cdotp\cdotp}, where \ldotp and \cdotp are of the
+// class Punct. The class Punct puts a thin space after each dot in the text
+// and the display styles.
+const (
+	lowDots    = `\mathinner{\mathpunct{.}\mathpunct{.}\mathpunct{.}}`
+	centerDots = `\mathinner{\mathpunct{\cdot}\mathpunct{\cdot}\mathpunct{\cdot}}`
+)
+
+// dotCommands gives the dots that each command of dots of amsmath sets. An
+// empty value is \dots, which looks at what follows it.
+var dotCommands = map[string]string{
+	"dots": "", "ldots": lowDots, "dotsc": lowDots, "dotso": lowDots, "mathellipsis": lowDots,
+	"cdots": centerDots, "dotsb": centerDots, "dotsm": centerDots, "dotsi": centerDots,
+}
+
+// binaryCommands are the commands of a binary operator, a relation, or a
+// large operator that amsmath marks with \DOTSB or \DOTSI. \dots before one
+// of them sets the dots at the center, as \dotsb.
+var binaryCommands = map[string]bool{
+	"cdot": true, "times": true, "pm": true, "mp": true, "div": true, "ast": true,
+	"oplus": true, "ominus": true, "otimes": true, "odot": true, "circ": true,
+	"cup": true, "cap": true, "vee": true, "wedge": true, "setminus": true,
+	"le": true, "leq": true, "ge": true, "geq": true, "ne": true, "neq": true,
+	"equiv": true, "sim": true, "simeq": true, "approx": true, "cong": true,
+	"subset": true, "subseteq": true, "supset": true, "supseteq": true,
+	"to": true, "rightarrow": true, "leftarrow": true, "Rightarrow": true,
+	"Leftarrow": true, "iff": true, "implies": true, "mapsto": true,
+	"sum": true, "prod": true, "coprod": true, "bigcup": true, "bigcap": true,
+	"bigoplus": true, "bigotimes": true, "int": true, "iint": true, "oint": true,
+	"lor": true, "land": true, "in": true,
+}
+
+// mathDots returns tex with each command of dots as the dots of TeX. The
+// glyphs U+2026 and U+22EF that texmath sets for \ldots and \cdots are
+// narrower than the three dots and two thin spaces of TeX: 8.4pt and 7.8pt
+// where pdfLaTeX sets 11.7pt. \dots takes the dots at the center before a
+// binary operator or a relation, and the low dots elsewhere, as amsmath
+// does. The arguments of a command of text stay.
+func mathDots(tex string) string {
+	if !strings.Contains(tex, "dots") && !strings.Contains(tex, "mathellipsis") {
+		return tex
+	}
+	var b strings.Builder
+	b.Grow(len(tex) + 64)
+	for i := 0; i < len(tex); {
+		if tex[i] != '\\' {
+			b.WriteByte(tex[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(tex) && isLetter(tex[j]) {
+			j++
+		}
+		if j == i+1 && j < len(tex) {
+			j++
+		}
+		name := tex[i+1 : j]
+		dots, ok := dotCommands[name]
+		switch {
+		case ok:
+			if dots == "" {
+				dots = lowDots
+				if binaryFollows(tex[j:]) {
+					dots = centerDots
+				}
+			}
+			b.WriteString(dots)
+			i = j
+		case textCommands[name]:
+			for j < len(tex) && tex[j] == ' ' {
+				j++
+			}
+			end := groupEnd(tex, j)
+			b.WriteString(tex[i:end])
+			i = end
+		default:
+			b.WriteString(tex[i:j])
+			i = j
+		}
+	}
+	return b.String()
+}
+
+// binaryFollows reports whether tex starts, after its spaces, with a binary
+// operator, a relation, or a command of binaryCommands.
+func binaryFollows(tex string) bool {
+	tex = strings.TrimLeft(tex, " \t\n")
+	if tex == "" {
+		return false
+	}
+	switch tex[0] {
+	case '+', '-', '=', '<', '>', '*':
+		return true
+	case '\\':
+		j := 1
+		for j < len(tex) && isLetter(tex[j]) {
+			j++
+		}
+		return binaryCommands[tex[1:j]]
+	}
+	return false
+}
+
+// displayEnvs are the environments of amsmath whose cells are in the
+// display style: the templates of aligned, alignedat, split and gathered
+// start each cell with \displaystyle.
+var displayEnvs = map[string]bool{
+	"aligned": true, "alignedat": true, "split": true, "gathered": true,
+}
+
+// displayCells returns tex with \displaystyle at the start of each cell of
+// the environments of displayEnvs. texmath sets their cells in the text
+// style, so an integral or a fraction in a split was small, where amsmath
+// sets it at the size of a display. A cell of an environment inside them,
+// such as a matrix, keeps its style.
+func displayCells(tex string) string {
+	if !strings.Contains(tex, `\begin`) {
+		return tex
+	}
+	// cells holds, for each open environment and group, whether its cells
+	// are in the display style.
+	var cells []bool
+	in := func() bool { return len(cells) > 0 && cells[len(cells)-1] }
+	var b strings.Builder
+	b.Grow(len(tex) + 64)
+	for i := 0; i < len(tex); {
+		switch c := tex[i]; c {
+		case '{':
+			cells = append(cells, false)
+			b.WriteByte(c)
+			i++
+		case '}':
+			if len(cells) > 0 {
+				cells = cells[:len(cells)-1]
+			}
+			b.WriteByte(c)
+			i++
+		case '&':
+			b.WriteByte(c)
+			i++
+			if in() {
+				b.WriteString(`\displaystyle `)
+			}
+		case '\\':
+			j := i + 1
+			for j < len(tex) && isLetter(tex[j]) {
+				j++
+			}
+			if j == i+1 && j < len(tex) {
+				j++
+			}
+			name := tex[i+1 : j]
+			switch {
+			case name == "begin" || name == "end":
+				end := groupEnd(tex, j)
+				env := strings.TrimSuffix(strings.Trim(tex[j:end], "{}"), "*")
+				b.WriteString(tex[i:end])
+				i = end
+				if name == "end" {
+					if len(cells) > 0 {
+						cells = cells[:len(cells)-1]
+					}
+					continue
+				}
+				cells = append(cells, displayEnvs[env])
+				if !displayEnvs[env] {
+					continue
+				}
+				// the arguments of alignedat and the position of aligned
+				for i < len(tex) && (tex[i] == '{' || tex[i] == '[') {
+					end := groupEnd(tex, i)
+					if tex[i] == '[' {
+						end = strings.IndexByte(tex[i:], ']') + i + 1
+						if end <= i {
+							end = len(tex)
+						}
+					}
+					b.WriteString(tex[i:end])
+					i = end
+				}
+				b.WriteString(`\displaystyle `)
+			case name == `\` && in():
+				b.WriteString(tex[i:j])
+				i = j
+				if i < len(tex) && tex[i] == '*' {
+					b.WriteByte('*')
+					i++
+				}
+				if k := skipSpaces(tex, i); k < len(tex) && tex[k] == '[' {
+					if end := strings.IndexByte(tex[k:], ']'); end >= 0 {
+						b.WriteString(tex[i : k+end+1])
+						i = k + end + 1
+					}
+				}
+				if !strings.HasPrefix(tex[skipSpaces(tex, i):], `\end`) {
+					b.WriteString(`\displaystyle `)
+				}
+			case textCommands[name]:
+				k := skipSpaces(tex, j)
+				end := groupEnd(tex, k)
+				b.WriteString(tex[i:end])
+				i = end
+			default:
+				b.WriteString(tex[i:j])
+				i = j
+			}
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// skipSpaces returns the index of the first byte of tex at or after i that
+// is not a space.
+func skipSpaces(tex string, i int) int {
+	for i < len(tex) && (tex[i] == ' ' || tex[i] == '\t' || tex[i] == '\n') {
+		i++
+	}
+	return i
 }
 
 // primeScripts replaces a superscript that holds only primes with the

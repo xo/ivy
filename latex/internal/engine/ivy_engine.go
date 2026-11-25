@@ -36,6 +36,13 @@ type ivyState struct {
 	// style of the page numbers there.
 	inDocument bool
 	startStyle byte
+	// faces are the faces of the families, the series and the shapes, by
+	// fontAxes, which the font switches combine (ivy_fonts.go).
+	faces map[fontAxes]fontFace
+	// widowAt is the place in the vertical list of the widow penalty of the
+	// last paragraph part, or -1, and linesEnd is the length of the list
+	// after its last line (ivy_pagebreak.go).
+	widowAt, linesEnd int
 }
 
 // stopped reports whether the context of the run is done. The step counter
@@ -60,6 +67,9 @@ func (s *ivyState) stopped() bool {
 // regular face, and a nil Math takes STIX Two Math of okage.
 type Faces struct {
 	Regular, Bold, Italic, Mono, Sans, Math []byte
+	// SansBold, SansItalic and SansBoldItalic are the other shapes of the
+	// family of Sans. A nil shape takes Sans.
+	SansBold, SansItalic, SansBoldItalic []byte
 }
 
 // RunOptions are the options of a run of ivy.
@@ -150,11 +160,17 @@ func Compile(ctx context.Context, src []byte, ro RunOptions) (doc *Doc, err erro
 			return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
 		}
 		e.loadIvyPrims()
+		if err := e.bindFaces(ro.Faces); err != nil {
+			return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
+		}
 		if err := e.LoadFormat(ivyPlain); err != nil {
 			return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
 		}
 		if latex {
 			if err := e.LoadFormat(ivyLaTeX); err != nil {
+				return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
+			}
+			if err := e.LoadFormat(ivyMath); err != nil {
 				return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
 			}
 		}

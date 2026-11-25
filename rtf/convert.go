@@ -287,6 +287,10 @@ type converter struct {
 	// docFont is the default font, and codePage the code page of the file.
 	docFont  int
 	codePage string
+	// htmlSpacing is set by \htmautsp: Word then puts the larger of the
+	// spacing after a paragraph and the spacing before the next one
+	// between them, where it else adds the two.
+	htmlSpacing bool
 
 	stack []*state
 	// skipped counts the groups past the limit of depth, which the

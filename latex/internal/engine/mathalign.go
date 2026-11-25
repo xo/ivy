@@ -105,13 +105,14 @@ func (e *Engine) doAlignEnv(name string, numbered bool, colAlign alignColumn) {
 
 	var rowBoxes []*boxNode
 	for _, br := range built {
+		// ivy: each number is in \normalfont (eqNumberHbox, ivy_math.go).
 		var numBox *boxNode
 		switch {
 		case br.tag != "": // a \tag replaces the number and consumes none
 			if br.tagStar {
-				numBox = e.textToHbox(br.tag)
+				numBox = e.eqNumberHbox(br.tag)
 			} else {
-				numBox = e.textToHbox("(" + br.tag + ")")
+				numBox = e.eqNumberHbox("(" + br.tag + ")")
 			}
 			for _, k := range br.labels {
 				e.setLabel(k, br.tag)
@@ -119,7 +120,7 @@ func (e *Engine) doAlignEnv(name string, numbered bool, colAlign alignColumn) {
 			}
 		case numbered && !br.nonumber:
 			n := e.stepEquationCounter()
-			numBox = e.textToHbox("(" + n + ")")
+			numBox = e.eqNumberHbox("(" + n + ")")
 			for _, k := range br.labels {
 				e.setLabel(k, n)
 				e.recordRefMeta(k)
@@ -130,6 +131,12 @@ func (e *Engine) doAlignEnv(name string, numbered bool, colAlign alignColumn) {
 				e.setLabel(k, e.currentLabel())
 				e.recordRefMeta(k)
 			}
+		}
+		// ivy: a row of gather is centered on the line beside its number, as
+		// a display of one line (ivy_math.go). Its number is in \normalfont.
+		if colAlign == nil && len(br.cells) > 0 {
+			rowBoxes = append(rowBoxes, e.displayRow(br.cells[0], br.cells[0].width, numBox))
+			continue
 		}
 		var row []node
 		if colAlign != nil {
@@ -212,7 +219,8 @@ func (e *Engine) doMultline(name string, numbered bool) {
 			row = append(row, e.hfil(), m, e.hfil())
 		}
 		if i == last && number != "" {
-			row = append(row, e.hfil(), e.textToHbox("("+number+")"))
+			// ivy: the number is in \normalfont (ivy_math.go).
+			row = append(row, e.hfil(), e.eqNumberHbox("("+number+")"))
 		}
 		rowBoxes = append(rowBoxes, hpackSP(row, packTo, e.hsize))
 	}

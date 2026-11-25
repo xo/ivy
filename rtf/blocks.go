@@ -262,11 +262,14 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 		s.set("text-indent", pt(p.first))
 	}
 	boxed := p.shading > 0 || p.borderTop || p.borderBottom || p.borderLeft || p.borderRight
-	// The spacing before is a padding, which does not collapse with the
-	// margin of the spacing after. The spacing after is a margin, which the
-	// bottom of a page cuts, as in Word.
+	// With \htmautsp, the spacing before is a margin, which collapses with
+	// the margin of the spacing after, as Word puts the larger of the two.
+	// Else it is a padding, which does not collapse, as Word adds the two.
+	// A paragraph with a border or a shading keeps a margin, which its
+	// border and its shading do not hold. The spacing after is a margin,
+	// which the bottom of a page cuts, as in Word.
 	if p.before > 0 {
-		s.set(map[bool]string{true: "margin-top", false: "padding-top"}[boxed], pt(p.before))
+		s.set(map[bool]string{true: "margin-top", false: "padding-top"}[boxed || c.htmlSpacing], pt(p.before))
 	}
 	if p.after > 0 {
 		s.set("margin-bottom", pt(p.after))

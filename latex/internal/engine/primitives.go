@@ -2914,6 +2914,7 @@ func (e *Engine) shiftAndPlace(shift int, vertical bool) {
 // call survives as exactly one. See go-tex/engine#385.
 func (e *Engine) lastSkip() glueSpec {
 	list := *e.currentList()
+	list = list[:lastVisible(list)] // ivy: see ivy_pagebreak.go
 	if len(list) == 0 {
 		return glueSpec{}
 	}

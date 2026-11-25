@@ -470,6 +470,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 			s.set("-ivy-float-overlap", "avoid")
 		}
 	case wrap == "wrapSquare" || wrap == "wrapTight" || wrap == "wrapThrough":
+		c.floatSeq = c.paraSeq
 		if x+w/2 > colWidth/2 {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
@@ -732,7 +733,7 @@ func washout(d roxmltree.Node) float64 {
 // an image of v:imagedata or the text of v:textbox.
 func (c *converter) pict(n roxmltree.Node) {
 	for e := range n.Children() {
-		if e.IsElement() && c.vmlBox(e) {
+		if e.IsElement() && (c.horizontalRule(e) || c.vmlBox(e)) {
 			return
 		}
 	}

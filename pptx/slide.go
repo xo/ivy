@@ -189,6 +189,7 @@ func (s *slide) tree(pics *partPictures, master bool) *drawingml.Tree {
 	}
 	if !master {
 		t.Inherit = s.inherit
+		t.TextStyle = s.slideTextStyle
 	}
 	return t
 }
@@ -292,6 +293,24 @@ func (s *slide) textStyle(ph *drawingml.Placeholder) *drawingml.ListStyle {
 		}
 	}
 	s.styles[kind] = &st
+	return &st
+}
+
+// slideTextStyle returns the list style of the text of a placeholder of a
+// slide, or of a shape of a slide that is not a placeholder. PowerPoint
+// gives such a shape, a text box or a table, the default text style of the
+// presentation, without the other style of the master, which is for the
+// shapes of the master and of the layouts.
+func (s *slide) slideTextStyle(ph *drawingml.Placeholder) *drawingml.ListStyle {
+	if ph != nil || !s.p.hasDefaults {
+		return s.textStyle(ph)
+	}
+	if st, ok := s.styles["slide"]; ok {
+		return st
+	}
+	var st drawingml.ListStyle
+	st.Over(s.colors.ParseListStyle(s.p.defaults))
+	s.styles["slide"] = &st
 	return &st
 }
 

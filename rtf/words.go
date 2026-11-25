@@ -698,6 +698,8 @@ func (c *converter) sectionWord(t token) bool {
 		c.codePage = "macintosh"
 	case "deff":
 		c.docFont = t.param
+	case "htmautsp":
+		c.htmlSpacing = true
 	default:
 		return false
 	}

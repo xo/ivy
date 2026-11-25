@@ -32,7 +32,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D10 | [The formats share four layers](D010-the-formats-share-four-layers.md) | Decided |
 | D11 | [The document API is a small document with capabilities](D011-the-document-api-is-a-small-document-with-capabilities.md) | Decided |
 | D12 | [Encrypted files take a password, and DRM is decoded where it is possible](D012-encrypted-files-take-a-password-and-drm-is-decoded-where-it-is-possible.md) | Decided |
-| D13 | [The test module holds the oracles, and runs by hand](D013-the-test-module-holds-the-oracles-and-runs-by-hand.md) | Decided |
+| D13 | [The test module holds the oracles, and runs by hand](D013-the-test-module-holds-the-oracles-and-runs-by-hand.md) | Decided. Amended by D69 |
 | D14 | [ivy reads PDF as a port of hayro and moxcms](D014-ivy-reads-pdf-as-a-port-of-hayro-and-moxcms.md) | Decided. Amended by D16. Amended by D20 |
 | D15 | [The layout is a port of WeasyPrint on the parsers of okage](D015-the-layout-is-a-port-of-weasyprint-on-the-parsers-of-okage.md) | Decided |
 | D16 | [The port of hayro uses Go, and ports a subset of moxcms](D016-the-port-of-hayro-uses-go-and-ports-a-subset-of-moxcms.md) | Decided. Amends D14. Amended by D17. Amended by D20. Amended by D61 |
@@ -53,7 +53,7 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D31 | [pdf can render another page box](D031-pdf-can-render-another-page-box.md) | Decided |
 | D32 | [A program chooses the paper of a document without one](D032-a-program-chooses-the-paper-of-a-document-without-one.md) | Decided. Amended by D33 |
 | D33 | [An ebook takes the paper of the configuration](D033-an-ebook-takes-the-paper-of-the-configuration.md) | Decided. Amends D32 |
-| D34 | [A text file joins the lines of a paragraph](D034-a-text-file-joins-the-lines-of-a-paragraph.md) | Decided. Amended by D67 |
+| D34 | [A text file joins the lines of a paragraph](D034-a-text-file-joins-the-lines-of-a-paragraph.md) | Decided. Amended by D67. Amended by D68 |
 | D35 | [ivy.Info has the publisher and the identifier](D035-ivy-info-has-the-publisher-and-the-identifier.md) | Decided |
 | D36 | [csv has an option for its separator, and does not guess dates](D036-csv-has-an-option-for-its-separator-and-does-not-guess-dates.md) | Decided |
 | D37 | [The text and the outline of a document wait for one capability](D037-the-text-and-the-outline-of-a-document-wait-for-one-capability.md) | Decided |
@@ -87,3 +87,9 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D65 | [A program gives LaTeX its TeX files and its folder](D065-a-program-gives-latex-its-tex-files-and-its-folder.md) | Decided |
 | D66 | [A program gives LaTeX the job name of a document](D066-a-program-gives-latex-the-job-name-of-a-document.md) | Decided |
 | D67 | [A rule line of a text file stands alone](D067-a-rule-line-of-a-text-file-stands-alone.md) | Decided. Amends D34 |
+| D68 | [Chinese and Japanese text keeps its lines](D068-chinese-and-japanese-text-keeps-its-lines.md) | Decided. Amends D34 |
+| D69 | [The review shows one or two oracles for each kind](D069-the-review-shows-one-or-two-oracles-for-each-kind.md) | Decided. Amends D13. Amended by D70 |
+| D70 | [markdown-it in Chrome is the reference of Markdown](D070-markdown-it-in-chrome-is-the-reference-of-markdown.md) | Decided. Amends D69 |
+| D71 | [The layout puts the baseline of a slide where PowerPoint does](D071-the-layout-puts-the-baseline-of-a-slide-where-powerpoint-does.md) | Decided |
+| D72 | [The module fonts holds Latin Modern Sans](D072-the-module-fonts-holds-latin-modern-sans.md) | Decided |
+| D73 | [A program gives markdown its highlighter of code](D073-a-program-gives-markdown-its-highlighter-of-code.md) | Decided |

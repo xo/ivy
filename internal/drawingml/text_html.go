@@ -76,6 +76,17 @@ func (tb *TextBody) Box(theme *Theme, w, h float64) (TextBox, bool) {
 	}
 	page := max(ph*overflowLines, ph+720)
 	row := ph
+	if vert := b.Vert.Or("horz"); vert == "horz" || vert == "" {
+		// The insets can be taller than the box. PowerPoint then puts
+		// the middle or the bottom of the text where the insets put it,
+		// above the bottom of the box, and the text goes past the top.
+		switch short := h - t - bt - ih; b.Anchor.Or("t") {
+		case "ctr":
+			m = m.PreTranslate(0, float32(short/2))
+		case "b":
+			m = m.PreTranslate(0, float32(short))
+		}
+	}
 	switch b.Anchor.Or("t") {
 	case "ctr":
 		// the text that overflows a box goes past its top and its bottom
@@ -110,9 +121,9 @@ func (tb *TextBody) html(theme *Theme, w, h, page float64) string {
 html, body { margin: 0; padding: 0 }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed; width: 100%% }
 td { padding: 0; overflow-wrap: break-word }
-p { margin: 0; white-space: %s; overflow-wrap: break-word; hyphens: none%s }
+p { margin: 0; white-space: %s; overflow-wrap: break-word; hyphens: none%s%s }
 span.b { display: inline-block; text-indent: 0; white-space: pre; line-height: 0 }
-</style></head><body>`, num(w), num(page), whiteSpace, kerning(tb.NoKerning))
+</style></head><body>`, num(w), num(page), whiteSpace, kerning(tb.NoKerning), winBaseline(tb.WinBaseline))
 	align := "top"
 	switch b.Anchor.Or("t") {
 	case "ctr":
@@ -142,6 +153,26 @@ func kerning(off bool) string {
 	return ""
 }
 
+// scaledSize returns the size of a text of the size size at the font scale
+// of the autofit of its body. PowerPoint rounds a size that it scales to a
+// whole point: a text of 44 points at the scale of 90 percent is 40 points
+// high, and not 39.6.
+func scaledSize(size, scale float64) float64 {
+	if scale == 1 {
+		return size
+	}
+	return max(math.Round(size*scale), 1)
+}
+
+// winBaseline returns the declaration of CSS of the elements p that puts
+// the baseline of a line where PowerPoint puts it, or nothing (D71).
+func winBaseline(on bool) string {
+	if on {
+		return "; -ivy-line-baseline: win"
+	}
+	return ""
+}
+
 // writeParagraph writes a paragraph as an element p. The space before the
 // first paragraph of a body and the space after its last one are left
 // out, as PowerPoint does: they do not move the text of a box that centers
@@ -155,7 +186,7 @@ func writeParagraph(sb *strings.Builder, p *Paragraph, theme *Theme, scale, redu
 			break
 		}
 	}
-	size := run.Size.Or(defaultSize) * scale
+	size := scaledSize(run.Size.Or(defaultSize), scale)
 	sb.WriteString(`<p style="`)
 	fmt.Fprintf(sb, "font-size:%spt;font-family:%s;", num(size), fontFamily(run.Latin.Or(""), theme))
 	if v := s.MarL.Or(0); v != 0 {
@@ -252,7 +283,7 @@ func (tb *TextBody) lineHeights() float64 {
 			// an empty paragraph takes the size of its end
 			size = p.End.Size.Or(defaultSize)
 		}
-		size *= scale
+		size = scaledSize(size, scale)
 		line := size * lineFactor
 		if ls := p.Style.LineSpacing; ls.OK && ls.V.Points {
 			line = ls.V.Pt * scale
@@ -308,10 +339,10 @@ func writeBullet(sb *strings.Builder, p *Paragraph, first *RunStyle, theme *Them
 	default:
 		return
 	}
-	size := first.Size.Or(defaultSize) * scale
+	size := scaledSize(first.Size.Or(defaultSize), scale)
 	if bs := s.BulletSize.V; s.BulletSize.OK && bs != nil {
 		if bs.Points {
-			size = bs.Pt * scale
+			size = scaledSize(bs.Pt, scale)
 		} else {
 			size *= bs.Pct
 		}
@@ -339,13 +370,14 @@ func writeBullet(sb *strings.Builder, p *Paragraph, first *RunStyle, theme *Them
 
 // writeRunStyle writes the declarations of CSS of the style of a run.
 func writeRunStyle(sb *strings.Builder, s *RunStyle, theme *Theme, scale float64) {
-	size := s.Size.Or(defaultSize) * scale
+	size := scaledSize(s.Size.Or(defaultSize), scale)
+	kern := s.Kern.Or(0) > 0 && size >= s.Kern.Or(0)
 	if b := s.Baseline.Or(0); b != 0 {
 		fmt.Fprintf(sb, "vertical-align:%spt;", num(b*size))
 		size *= 2.0 / 3
 	}
 	fmt.Fprintf(sb, "font-size:%spt;", num(size))
-	if k := s.Kern.Or(0); k > 0 && s.Size.Or(defaultSize)*scale >= k {
+	if kern {
 		sb.WriteString("font-kerning:normal;")
 	}
 	font := s.Latin.Or("")

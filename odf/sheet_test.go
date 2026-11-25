@@ -120,7 +120,7 @@ func TestSheetHTML(t *testing.T) {
 		`<td class="s2 c">a <span style="font-family:&#34;Liberation Sans&#34;, sans-serif;font-size:10pt;font-style:italic;color:#ff0000;">red</span> word</td>`,
 		`<td class="n c">TRUE</td><td class="n c">0.5</td>`,
 		"td.s1{font-family:\"Liberation Sans\", sans-serif;font-size:14pt;font-weight:bold;background-color:#ffcc00;border-top:0.5pt solid #000000;",
-		"border:0.5pt solid #c8c8c8",
+		"border:0.5pt solid #cccccc;-ivy-stroke-adjust:pixels;",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, doc)
@@ -336,7 +336,7 @@ func TestSheetChart(t *testing.T) {
 	d := openSheet(t, fixture.ODS(book), ivy.Config{})
 	doc := sheetDocs(t, d)[0]
 	for _, want := range []string{
-		`<img style="position:absolute;left:0pt;top:0pt;width:200pt;height:150pt" src="ivy-object:chart1" alt="">`,
+		`<img style="position:absolute;left:-4pt;top:-4pt;width:264pt;height:21.8pt" src="ivy-object:chart1~1~1" alt="">`,
 		`<div class="ph" style="left:0pt;top:0pt;width:100pt;height:50pt">Chart</div>`,
 	} {
 		if !strings.Contains(doc, want) {
@@ -482,7 +482,7 @@ func TestSheetShapes(t *testing.T) {
 	}
 	d := openSheet(t, fixture.ODS(book), ivy.Config{})
 	doc := sheetDocs(t, d)[0]
-	for _, want := range []string{`src="ivy-object:shape1"`, `src="ivy-object:shape2"`} {
+	for _, want := range []string{`src="ivy-object:shape1~`, `src="ivy-object:shape2~`} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("expected %q in the sheet:\n%s", want, doc)
 		}

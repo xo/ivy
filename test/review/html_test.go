@@ -54,24 +54,33 @@ func TestWriteHTML(t *testing.T) {
 			// of another size, and a known fault of LibreOffice
 			Entry: Entry{Name: "vsdx/c.vsdx", Kind: "vsdx", URL: "repo:vsdx/testdata/c.vsdx"},
 			ID:    "003-vsdx__c.vsdx", Status: StatusOK, Pages: 1, RefPages: 1, Worst: 1.25, IvyPDFWorst: -1,
-			Reference: "LibreOffice", RefNames: []string{"Microsoft Office · MuPDF", "LibreOffice · MuPDF"},
-			WorstBy:     map[string]float64{"msoffice": 1.25, "soffice": 7},
-			Externals:   []ExternalRef{{ID: "msoffice", Name: "Microsoft Office", File: "msoffice/vsdx/c.vsdx.pdf", Pages: 1}},
-			SizeDiffers: 1,
+			Reference: "LibreOffice", RefNames: []string{"Microsoft Office - MuPDF", "Microsoft Office - Chrome", "LibreOffice - MuPDF"},
+			WorstBy:         map[string]float64{"msoffice": 1.25, "soffice": 7},
+			WorstByRenderer: map[string]float64{"msoffice/mupdf": 1.25, "msoffice/chrome": 2.5, "soffice/mupdf": 7},
+			Externals:       []ExternalRef{{ID: "msoffice", Name: "Microsoft Office", File: "msoffice/vsdx/c.vsdx.pdf", Pages: 1}},
+			SizeDiffers:     1,
 			Rows: []*PageRow{{
 				Page: 1, RefsDiff: 7, Disagrees: true, Primary: "msoffice", SizeDiffers: true,
 				Ivy: &Cell{Name: "ivy", Image: "d/003/p1-ivy.png", Thumb: "d/003/p1-ivy.jpg", Size: image.Pt(816, 1056), Status: StatusOK},
 				Refs: []*Cell{{
-					Name: "MuPDF", Ref: "msoffice", RefName: "Microsoft Office", Image: "d/003/p1-msoffice-mupdf.png",
+					Name: "MuPDF", Ref: "msoffice", RefName: "Microsoft Office", Renderer: "mupdf", Image: "d/003/p1-msoffice-mupdf.png",
 					Thumb: "d/003/p1-msoffice-mupdf.jpg", Size: image.Pt(1056, 816),
 					Metric: &Metric{Mean: 2, Blurred: 1.25, Size: image.Pt(1056, 816), IvySize: image.Pt(816, 1056)},
 				}, {
-					Name: "MuPDF", Ref: "soffice", RefName: "LibreOffice", Image: "d/003/p1-mupdf.png",
+					Name: "Chrome", Ref: "msoffice", RefName: "Microsoft Office", Renderer: "chrome", Image: "d/003/p1-msoffice-chrome.png",
+					Thumb: "d/003/p1-msoffice-chrome.jpg", Size: image.Pt(1056, 816),
+					Metric: &Metric{Mean: 3, Blurred: 2.5, Size: image.Pt(1056, 816), IvySize: image.Pt(816, 1056)},
+				}, {
+					Name: "MuPDF", Ref: "soffice", Renderer: "mupdf", RefName: "LibreOffice", Image: "d/003/p1-mupdf.png",
 					Thumb: "d/003/p1-mupdf.jpg", Size: image.Pt(1056, 816), Fault: "LibreOffice draws square corners.",
 					Metric: &Metric{Mean: 9, Blurred: 7, Size: image.Pt(1056, 816), IvySize: image.Pt(816, 1056)},
 				}},
 			}},
+		}, {
+			Entry: Entry{Name: "doc/d.doc", Kind: "doc", URL: "repo:msdoc/testdata/d.doc"},
+			ID:    "004-doc__d.doc", Status: StatusError, Error: "opening: the file is not a document", Pages: -1, RefPages: -1, Worst: -1, IvyPDFWorst: -1,
 		}},
+		// a file that ivy did not open counts as a failure of its tab
 		Kinds: []KindSummary{{Kind: "docx", Documents: 1, Pages: 1}, {Kind: "vsdx", Documents: 1, Pages: 1, SizeDiffers: 1}},
 	}
 	var buf bytes.Buffer
@@ -103,8 +112,22 @@ func TestWriteHTML(t *testing.T) {
 		`<p class="meta">worst by reference: Microsoft Office <span class="good">1.25</span> · LibreOffice <span class="bad">7.00</span> · Microsoft Office: 1 pages, msoffice/vsdx/c.vsdx.pdf</p>`,
 		`<span class="warnbadge">references disagree (7.00)</span> <span class="m">primary: Microsoft Office</span> <span class="bad">the size differs from Microsoft Office</span>`,
 		`<figure class="ivy sizediff"><figcaption>ivy</figcaption>`,
-		`<figure class="ref"><figcaption>Microsoft Office · MuPDF</figcaption>`,
-		`<figure class="ref fault"><figcaption>LibreOffice · MuPDF</figcaption>`,
+		`<figure class="ref"><figcaption>Microsoft Office - MuPDF</figcaption>`,
+		`<figure class="ref"><figcaption>Microsoft Office - Chrome</figcaption>`,
+		`<figure class="ref fault"><figcaption>LibreOffice - MuPDF</figcaption>`,
+		`<p class="meta">worst by column: Microsoft Office - MuPDF <span class="good">1.25</span> · Microsoft Office - Chrome <span class="fair">2.50</span> · LibreOffice - MuPDF <span class="bad">7.00</span></p>`,
+		// the tabs: All first, then each group of kinds with documents, with
+		// the count of the documents and of the failures
+		`<nav class="tabs" role="tablist" aria-label="the kinds of the documents" hidden>
+<button type="button" role="tab" data-tab="all" aria-selected="true">All <span class="n">4, 1 failed</span></button>
+<button type="button" role="tab" data-tab="pdf" aria-controls="tab-pdf" aria-selected="false">PDF <span class="n">1</span></button>
+<button type="button" role="tab" data-tab="word" aria-controls="tab-word" aria-selected="false">Word <span class="n">2, 1 failed</span></button>
+<button type="button" role="tab" data-tab="office" aria-controls="tab-office" aria-selected="false">Other Office <span class="n">1</span></button>
+</nav>`,
+		`<section class="tab" id="tab-word" data-tab="word" role="tabpanel">
+<h2 class="tabhead">Word</h2>
+<p class="muted">2 documents · <span class="bad">1 failed</span> · mean worst <span class="fair">4.50</span> over 1 documents</p>
+<table class="sum">`,
 		`<div class="fnote">known fault of the reference, not counted: LibreOffice draws square corners.</div>`,
 		`<tr><td>vsdx</td><td>1</td><td>1</td><td class="bad">1</td></tr>`,
 		`<p class="err">ivy PDF: page 2: rendering: a font is missing</p>`,
@@ -123,6 +146,27 @@ func TestWriteHTML(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("expected the html to hold:\n%s", want)
 		}
+	}
+	// each tab holds the sections of its documents
+	for id, docs := range map[string][]string{"pdf": {"001-pdf__a_b_.pdf"}, "word": {"002-docx__b.docx", "004-doc__d.doc"}, "office": {"003-vsdx__c.vsdx"}} {
+		start := strings.Index(out, `<section class="tab" id="tab-`+id+`"`)
+		if start < 0 {
+			t.Errorf("expected the tab %s", id)
+			continue
+		}
+		end := strings.Index(out[start+1:], `<section class="tab" `)
+		if end < 0 {
+			end = len(out) - start - 1
+		}
+		tab := out[start : start+1+end]
+		for _, d := range docs {
+			if !strings.Contains(tab, `<section class="doc" id="`+d+`"`) || !strings.Contains(tab, `<a href="#`+d+`">`) {
+				t.Errorf("expected the tab %s to hold the row and the section of %s", id, d)
+			}
+		}
+	}
+	if strings.Count(out, `<section class="tab" `) != 3 || strings.Contains(out, `data-tab="excel"`) {
+		t.Error("expected 3 tabs, and no tab without documents")
 	}
 	if strings.Count(out, `<figure class="ref ivypdf">`) != 1 {
 		t.Error("expected one cell of ivy PDF, for the docx file only")

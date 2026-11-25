@@ -34,7 +34,13 @@ type external struct {
 	kinds []string
 	// primary are the kinds for which the reference comes before the
 	// reference of the route: the worst number of a document uses it first.
+	// Without -refs all, a document of another kind does not show the
+	// reference (D69).
 	primary []string
+	// keepRoute keeps the route of the kind as the secondary oracle of a
+	// document that has the file of the reference. Without it, such a
+	// document shows the reference alone, unless -refs all is given (D69).
+	keepRoute bool
 	// renderers draw the pages of the file.
 	renderers []pageRenderer
 	// dpi is the resolution of the images of a reference of PNG files. The
@@ -87,18 +93,19 @@ var externals = []external{
 		// primary reference of them
 		kinds:     append([]string{"odt", "ott", "ods", "ots", "odp", "otp", "csv"}, officeKinds...),
 		primary:   officeKinds,
+		keepRoute: true,
 		renderers: []pageRenderer{mupdfRenderer, splashRenderer},
 	},
 	{
 		// WPF draws each page, the engine of the XPS viewer of Windows
 		id: "winxps", name: "Windows XPS", dir: "windows/xps", ext: ".png", paged: true,
-		kinds: []string{"xps", "oxps"}, primary: []string{"xps", "oxps"},
+		kinds: []string{"xps", "oxps"}, primary: []string{"xps", "oxps"}, keepRoute: true,
 		renderers: []pageRenderer{{id: "wpf", name: "WPF", render: pagePNGRenderer.render}},
 		dpi:       96,
 	},
 	{
 		id: "gdiplus", name: "GDI+", dir: "windows/gdiplus", ext: ".png",
-		kinds: []string{"emf", "wmf", "emz", "wmz"}, primary: []string{"emf", "wmf", "emz", "wmz"},
+		kinds: []string{"emf", "wmf", "emz", "wmz"}, primary: []string{"emf", "wmf", "emz", "wmz"}, keepRoute: true,
 		renderers: []pageRenderer{{id: "gdiplus", name: "GDI+", render: pngRenderer.render}},
 		dpi:       96,
 	},

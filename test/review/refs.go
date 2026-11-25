@@ -58,6 +58,14 @@ type refEnv struct {
 	unoOnce sync.Once
 	uno     unoPython
 	unoErr  error
+
+	// all draws every reference, as the flag -refs all of render does, and
+	// not only the primary and the secondary oracle of a kind (D69).
+	all bool
+	// chrome is the Chrome process of the run.
+	chrome chromeBrowser
+	// pageSrv serves the page of markdown-it to Chrome (D70).
+	pageSrv pageServer
 }
 
 // toolError is an error of a reference program: the program failed, did
@@ -236,7 +244,8 @@ var routeKinds = map[*route][]string{
 		"vsdx", "vsdm", "vstx", "vstm", "vsd", "vst", "vss",
 		"pub", "pages", "key", "numbers",
 	},
-	calibreRoute:    {"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "md", "markdown", "txt", "text"},
+	calibreRoute:    {"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "txt", "text"},
+	markdownItRoute: {"md", "markdown"},
 	weasyprintRoute: {"html", "htm", "xhtml"},
 	pdflatexRoute:   texKinds,
 	xpsRoute:        {"xps", "oxps"},
@@ -245,6 +254,14 @@ var routeKinds = map[*route][]string{
 	djvuRoute:       {"djvu", "djv"},
 	magickRoute:     {"psd", "psb", "ora", "raw", "cr2", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "pef", "srw", "raf"},
 	rasterRoute:     {"kra", "cbz", "cbt"},
+}
+
+// extraRoutes maps a kind to the routes that only -refs all draws, after
+// the route of the kind. calibre was the reference of Markdown before
+// markdown-it in Chrome (D70).
+var extraRoutes = map[string][]*route{
+	"md":       {calibreRoute},
+	"markdown": {calibreRoute},
 }
 
 // routeFor returns the route of kind.
@@ -379,7 +396,7 @@ func (e *refEnv) toolsKey(names []string) (string, error) {
 
 // versionArgs are the arguments that make each program print its version.
 var versionArgs = map[string][]string{
-	"mutool": {"-v"}, "pdftoppm": {"-v"}, "pdftocairo": {"-v"}, "pdfinfo": {"-v"},
+	"mutool": {"-v"}, "pdftoppm": {"-v"}, chromeProgram: {"--version"}, "pdftocairo": {"-v"}, "pdfinfo": {"-v"},
 	"gs": {"--version"}, "soffice": {"--version"}, "ebook-convert": {"--version"}, "weasyprint": {"--version"},
 	"inkscape": {"--version"}, "magick": {"-version"}, "xpstopng": {"--version"},
 	"djvused": {"--help"}, "pdflatex": {"--version"},

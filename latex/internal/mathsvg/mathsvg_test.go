@@ -135,3 +135,100 @@ func TestBasePrimes(t *testing.T) {
 		}
 	}
 }
+
+func TestSubscriptsOfTeX(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "fonts", "lm", "latinmodern-math.otf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pdfLaTeX shifts the n of K_n down by sub1, 1.5pt, and the i of
+	// \hat x_i too. It shifts the subscript of x_i^2 down by 2.6pt.
+	tests := []struct {
+		tex  string
+		text string
+		want float64
+	}{
+		{`K_n`, "𝑛", 1.5},
+		{`\hat x_i`, "𝑖", 1.5},
+		{`x_i^2`, "𝑖", 2.6},
+	}
+	for i, test := range tests {
+		if _, _, err := r.RenderSVGMetrics(test.tex, 10); err != nil {
+			t.Fatal(err)
+		}
+		box, _ := r.Box(i)
+		var got float64
+		for _, it := range box.Items {
+			if it.Text == test.text {
+				got = it.Y
+			}
+		}
+		if got < test.want-0.05 || got > test.want+0.05 {
+			t.Errorf("%s: expected the subscript %.2fpt down, got: %.3f", test.tex, test.want, got)
+		}
+	}
+}
+
+func TestMathDots(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in, want string
+	}{
+		{`1,\dots,n`, `1,` + lowDots + `,n`},
+		{`a+\dots+b`, `a+` + centerDots + `+b`},
+		{`a\dots \le b`, `a` + centerDots + ` \le b`},
+		{`x_1\cdots x_n`, `x_1` + centerDots + ` x_n`},
+		{`\ldots\dotsc\dotsb`, lowDots + lowDots + centerDots},
+		{`\text{a\dots} \dotso`, `\text{a\dots} ` + lowDots},
+		{`\dotsx`, `\dotsx`},
+		{`x`, `x`},
+	}
+	for _, test := range tests {
+		if got := mathDots(test.in); got != test.want {
+			t.Errorf("mathDots(%q): expected %q, got %q", test.in, test.want, got)
+		}
+	}
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "fonts", "lm", "latinmodern-math.otf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pdfLaTeX sets \ldots 11.67pt wide at 10pt: three dots and two thin
+	// spaces.
+	_, m, err := r.RenderSVGMetrics(`\ldots`, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Width < 11 || m.Width > 12.5 {
+		t.Errorf("expected the dots 11.67pt wide, got: %.3f", m.Width)
+	}
+}
+
+func TestDisplayCells(t *testing.T) {
+	t.Parallel()
+	const ds = `\displaystyle `
+	tests := []struct {
+		in, want string
+	}{
+		{`a=b`, `a=b`},
+		{`\begin{split}a&=b\\&=c\end{split}`, `\begin{split}` + ds + `a&` + ds + `=b\\` + ds + `&` + ds + `=c\end{split}`},
+		{`\begin{aligned}[t]a\\[2pt]b\\\end{aligned}`, `\begin{aligned}[t]` + ds + `a\\[2pt]` + ds + `b\\\end{aligned}`},
+		{`\begin{alignedat}{2}a&b\end{alignedat}`, `\begin{alignedat}{2}` + ds + `a&` + ds + `b\end{alignedat}`},
+		{`\begin{gathered}\begin{matrix}a&b\end{matrix}\\c\end{gathered}`, `\begin{gathered}` + ds + `\begin{matrix}a&b\end{matrix}\\` + ds + `c\end{gathered}`},
+		{`\begin{pmatrix}a&b\end{pmatrix}`, `\begin{pmatrix}a&b\end{pmatrix}`},
+		{`\begin{split}\text{a&b}&{x&y}\end{split}`, `\begin{split}` + ds + `\text{a&b}&` + ds + `{x&y}\end{split}`},
+	}
+	for _, test := range tests {
+		if got := displayCells(test.in); got != test.want {
+			t.Errorf("displayCells(%q):\nexpected %q\ngot      %q", test.in, test.want, got)
+		}
+	}
+}

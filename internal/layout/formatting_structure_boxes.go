@@ -1528,7 +1528,17 @@ func (b *Box) processTextWhitespace(followingCollapsibleSpace bool) bool {
 		// Port: upstream removes the spaces around the line feeds, replaces
 		// the line feeds with spaces and collapses the spaces, each in a
 		// pass of its own. collapseSpaces does the three in one pass.
-		text = collapseSpaces(text, true)
+		//
+		// Port: a line feed between two characters of Chinese or
+		// Japanese goes, as CSS Text 3 says. With white-space normal, a
+		// line feed that ideographic spaces follow stays, so that a
+		// paragraph of Chinese or Japanese text that starts with them
+		// starts a new line (D68).
+		if isStr(whiteSpace, "normal") {
+			text = collapseKeepingIdeographicBreaks(removeWideSegmentBreaks(text, true))
+		} else {
+			text = collapseSpaces(removeWideSegmentBreaks(text, false), true)
+		}
 	case spaceCollapse:
 		// \r characters were removed/converted earlier.
 		text = collapseSpaces(trimLineFeedBlanks(text), false)

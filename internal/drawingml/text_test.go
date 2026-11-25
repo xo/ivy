@@ -182,10 +182,17 @@ func TestTextBody(t *testing.T) {
 		`&#34;Calibri Light&#34;, sans-serif`,
 		`min-width:27pt`,
 		`line-height:1.08`,
+		// a body of DrawingML puts its baselines where PowerPoint does
+		`-ivy-line-baseline: win`,
 	} {
 		if !strings.Contains(box.HTML, want) {
 			t.Errorf("expected the document to hold %q:\n%s", want, box.HTML)
 		}
+	}
+	// a body of another format keeps the baselines of CSS
+	tb.WinBaseline = false
+	if box, _ := tb.Box(testTheme, 300, 200); strings.Contains(box.HTML, "-ivy-line-baseline") {
+		t.Errorf("expected no -ivy-line-baseline:\n%s", box.HTML)
 	}
 	if box.Width != 300-defaultInsetX {
 		t.Errorf("expected a page of %g points across, got %g", 300-defaultInsetX, box.Width)
@@ -244,5 +251,24 @@ func TestSceneText(t *testing.T) {
 	l.Replay(display.NewOkage(replay, okage.IdentityTransform()))
 	if !slices.Equal(replay.Data(), pix.Data()) {
 		t.Error("the replay of the commands differs from the render")
+	}
+}
+
+// TestScaledSize checks that a size at the font scale of an autofit is a
+// whole point, as PowerPoint draws it.
+func TestScaledSize(t *testing.T) {
+	for _, tt := range []struct {
+		size, scale, want float64
+	}{
+		{44, 0.9, 40},
+		{46, 0.775, 36},
+		{47, 0.775, 36},
+		{26, 0.775, 20},
+		{10.5, 1, 10.5},
+		{1, 0.1, 1},
+	} {
+		if got := scaledSize(tt.size, tt.scale); got != tt.want {
+			t.Errorf("scaledSize(%g, %g) = %g, want %g", tt.size, tt.scale, got, tt.want)
+		}
 	}
 }

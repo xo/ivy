@@ -19,8 +19,9 @@
 //     text of a line, and the extra space of a multiple line spacing below
 //     it, see leadingShift (D56).
 //   - -ivy-page-top-space leaves out the space before the first block of
-//     a page or of a column after a break that is not forced, see
-//     layoutContext.discardsSpaceBefore (D56).
+//     a page, of a column or of the part of a split table cell after a
+//     break that is not forced, see layoutContext.discardsSpaceBefore
+//     (D56).
 //   - -ivy-float-position places a float of the flow of the page at a
 //     vertical position from the top of the page or of the page area, see
 //     layout_page_float.go (D60).
@@ -29,6 +30,12 @@
 //   - -ivy-wrap-flow puts the text on both sides of a float, or on one
 //     side of it, as a word processor wraps the text around a picture,
 //     see layout_wrap_flow.go (D63).
+//   - -ivy-stroke-adjust puts the collapsed borders of a table cell on
+//     whole pixels, as a spreadsheet draws its grid, see
+//     drawCollapsedBorders.
+//   - -ivy-line-baseline puts the baseline of a line where PowerPoint
+//     puts it, from the Windows metrics of the font, see baselineShift
+//     (D71).
 
 package layout
 
@@ -51,6 +58,8 @@ var ivyProperties = map[string]bool{
 	"float-position": true,
 	"float-overlap":  true,
 	"wrap-flow":      true,
+	"stroke-adjust":  true,
+	"line-baseline":  true,
 }
 
 // validateMarginBoxFit validates -ivy-margin-box-fit: 'none' or 'grow'.
@@ -136,6 +145,14 @@ func validateLineMultiple(tokens []tinycss2.Node, _ string) (Value, error) {
 	}
 	return nil, nil
 }
+
+// validateLineBaseline validates -ivy-line-baseline: 'normal' or 'win'.
+// With 'win', the baseline of a line is at the share of the height of the
+// line that the Windows ascent of the font takes of the Windows ascent and
+// descent, as in PowerPoint (D71). The property is inherited.
+var validateLineBaseline = singleKeyword(func(keyword string) bool {
+	return keyword == "normal" || keyword == "win"
+})
 
 // validatePageTopSpace validates -ivy-page-top-space: 'keep' or 'discard'.
 // With 'discard', a block of the flow of the page that starts a page after
@@ -252,3 +269,14 @@ func computeWrapFlow(style *Style, name string, value Value) Value {
 	}
 	return value
 }
+
+// validateStrokeAdjust validates -ivy-stroke-adjust: 'none' or 'pixels'.
+// With 'pixels', a collapsed border that a box gives to the grid of its
+// table is drawn with the stroke adjustment of PDF: on a device of pixels,
+// it is a whole number of pixels wide, at least 1, and its edges fall on
+// the borders of the pixels. A thin line then covers one row or one column
+// of pixels, and does not spread over two light ones. The property is not
+// inherited.
+var validateStrokeAdjust = singleKeyword(func(keyword string) bool {
+	return keyword == "none" || keyword == "pixels"
+})

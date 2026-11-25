@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/xo/okage"
+	"github.com/xo/okage/filter"
 
 	"github.com/xo/ivy/internal/display"
 )
@@ -119,9 +120,12 @@ func (s silhouette) mask(f maskFrame, dx, dy, grow, sigma float64) *image.Alpha 
 			}
 		}
 	}
-	alpha := &image.Alpha{Pix: m.DataMut(), Stride: f.w, Rect: image.Rect(0, 0, f.w, f.h)}
-	boxBlur(alpha, sigma*f.res)
-	return alpha
+	if px := sigma * f.res; px > 0.25 {
+		// the box blur of resvg, five box blurs in each direction, close
+		// to a Gaussian blur of the standard deviation px in pixels
+		filter.BlurMask(m, px, px, filter.WithBoxBlur())
+	}
+	return &image.Alpha{Pix: m.DataMut(), Stride: f.w, Rect: image.Rect(0, 0, f.w, f.h)}
 }
 
 // blurredShadow fills the shadow of the paths with the color col, blurred
@@ -143,7 +147,7 @@ func blurredShadow(dev display.Device, paths []*okage.Path, stroke []bool, st ok
 	if !ok {
 		return false
 	}
-	// three box blurs make a blur close to a Gaussian blur, whose standard
+	// the box blur makes a blur close to a Gaussian blur, whose standard
 	// deviation is half the radius
 	alpha := s.mask(f, 0, 0, 0, blur/2)
 	if alpha == nil {
@@ -151,58 +155,4 @@ func blurredShadow(dev display.Device, paths []*okage.Path, stroke []bool, st ok
 	}
 	dev.FillMask(alpha, f.toUser(), display.ImageOptions{Opacity: 1, Smooth: true}, okage.SolidColor(col.Okage()))
 	return true
-}
-
-// boxBlur blurs img in place with three box blurs in each direction, which
-// give a blur close to a Gaussian blur of the standard deviation sigma, in
-// pixels.
-func boxBlur(img *image.Alpha, sigma float64) {
-	if !(sigma > 0.25) {
-		return
-	}
-	// the width of each box of three, from the standard deviation
-	r := max(int(math.Round(math.Sqrt(4*sigma*sigma+1)-1)/2), 1)
-	w, h := img.Rect.Dx(), img.Rect.Dy()
-	line := make([]int, max(w, h))
-	out := make([]int, max(w, h))
-	for range 3 {
-		for y := range h {
-			for x := range w {
-				line[x] = int(img.Pix[y*img.Stride+x])
-			}
-			boxLine(line[:w], out[:w], r)
-			for x := range w {
-				img.Pix[y*img.Stride+x] = uint8(out[x])
-			}
-		}
-		for x := range w {
-			for y := range h {
-				line[y] = int(img.Pix[y*img.Stride+x])
-			}
-			boxLine(line[:h], out[:h], r)
-			for y := range h {
-				img.Pix[y*img.Stride+x] = uint8(out[y])
-			}
-		}
-	}
-}
-
-// boxLine sets each value of out to the mean of the values of in within r
-// of it, with 0 outside in.
-func boxLine(in, out []int, r int) {
-	n := len(in)
-	d := 2*r + 1
-	sum := 0
-	for i := 0; i <= r && i < n; i++ {
-		sum += in[i]
-	}
-	for i := range n {
-		out[i] = (sum + d/2) / d
-		if j := i + r + 1; j < n {
-			sum += in[j]
-		}
-		if j := i - r; j >= 0 {
-			sum -= in[j]
-		}
-	}
 }

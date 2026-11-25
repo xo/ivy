@@ -1754,5 +1754,7 @@ func (e *Engine) placeMath(m mathNode, display bool) {
 	if !e.inPar {
 		e.beginParagraph(false)
 	}
-	e.parList = append(e.parList, m)
+	// ivy: the formula breaks between lines after a relation or a binary
+	// operation, as in TeX (ivy_mathbreak.go).
+	e.parList = append(e.parList, e.inlineMathPieces(m)...)
 }

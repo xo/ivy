@@ -31,3 +31,23 @@ func TestTextWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestArialTextWidth(t *testing.T) {
+	tests := []struct {
+		s    string
+		size float64
+		exp  float64
+	}{
+		// the digits of Arial are 1139 units wide
+		{"0123456789", 10, 10 * 1139 * 10 / 2048.0},
+		{"Hello", 10, (1479 + 1139 + 455 + 455 + 1139) * 10 / 2048.0},
+		{"é", 10, 1139 * 10 / 2048.0},
+		{"漢", 10, 10},
+		{"", 10, 0},
+	}
+	for _, test := range tests {
+		if got := ArialTextWidth(test.s, test.size); math.Abs(got-test.exp) > 1e-9 {
+			t.Errorf("ArialTextWidth(%q, %g): expected %g, got: %g", test.s, test.size, test.exp, got)
+		}
+	}
+}

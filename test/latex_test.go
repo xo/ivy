@@ -58,10 +58,9 @@ func texTree(t *testing.T) fstest.MapFS {
 // formula in another way, and by the hinting of the fonts. With the
 // variable IVY_LATEX_OUT, the test writes both pages to that folder.
 //
-// On 2026-11-21 the mean differences are 2.82 for article.tex, 0.87 for
-// math.tex and 0.82 for boxes.tex. In article.tex, the engine leaves the
-// space of an empty \date and puts the table at the margin, where pdfLaTeX
-// indents it.
+// On 2026-11-25 the mean differences are 1.88 for article.tex, 0.87 for
+// math.tex and 0.82 for boxes.tex. In article.tex, the engine puts the
+// table at the margin, where pdfLaTeX indents it.
 func TestLaTeX(t *testing.T) {
 	tree := texTree(t)
 	cfg := ivy.Config{Fonts: os.DirFS(filepath.Join("..", "fonts")), TeX: tree}

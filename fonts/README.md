@@ -33,7 +33,7 @@ cfg := ivy.Config{Fonts: fonts.FS()}
 | Carlito | Calibri | `carlito/` |
 | Caladea | Cambria | `caladea/` |
 | Droid Sans Fallback | a CJK font that a document does not embed | `droid/` |
-| Latin Modern Roman, Latin Modern Mono and Latin Modern Math | Computer Modern, the fonts of TeX | `lm/` |
+| Latin Modern Roman, Latin Modern Sans, Latin Modern Mono and Latin Modern Math | Computer Modern, the fonts of TeX | `lm/` |
 
 A format that lays out text uses a font of `Config.Fonts` when a document
 names it. It also uses it when a document names the font of Office that it
@@ -100,6 +100,12 @@ Fallback has the regular style only.
    optical sizes that the package `latex` uses, Latin Modern Math, the
    license, the two manifests and the two files of notices. The manifests
    list each file of the works, and the folder holds a part of them.
+6. The 12 files of Latin Modern Sans 2.004 come from the folder
+   `fonts/opentype/public/lm` of TeX Live 2026 (D72). They are the files
+   of the medium, the oblique and the bold extended shapes that
+   `tulmss.fd` names. The file `lmroman10-regular.otf` of that folder has
+   the same SHA-256 as the file of item 5, so both items give files of the
+   same release. The manifest of item 5 lists the 12 files.
 
 The URL of each file of Carlito is
 `https://raw.githubusercontent.com/googlefonts/carlito/a46ae30787d4a0c9817afd4056c0042fbcfbafd6/fonts/ttf/<file>`.
@@ -159,9 +165,21 @@ blob of `DroidSansFallback.ttf` is
 | `lm/lmroman9-bold.otf` | Latin Modern Roman | 2.004 | 113040 | `f72feac9ea12eb858d8093d6c0ee710a6c25f59b61278c88ec41c0a680838415` |
 | `lm/lmroman9-italic.otf` | Latin Modern Roman | 2.004 | 118380 | `2106cffcdc9f9cb411d7c3441e34d77a168b998a58b40e727ab5b815437d1975` |
 | `lm/lmroman9-regular.otf` | Latin Modern Roman | 2.004 | 112680 | `8ab7b017fc67ea0e30cbf9e7ebd940010442ea67b40cf65f87d73f3ca11b0e6f` |
+| `lm/lmsans10-bold.otf` | Latin Modern Sans | 2.004 | 107448 | `a597b710326c1a8a2c7238d808e5d38711638a72a32383478db4829d63afd687` |
+| `lm/lmsans10-boldoblique.otf` | Latin Modern Sans | 2.004 | 114984 | `e45673d84754a94f2f053bd4c15950b4b320144fbb622c630a26fd7b68cfabc5` |
+| `lm/lmsans10-oblique.otf` | Latin Modern Sans | 2.004 | 101412 | `1b38b36efc21f9d3f34edf6a13f9d71f59c41f824e790f5d3ee5ba5b4936f377` |
+| `lm/lmsans10-regular.otf` | Latin Modern Sans | 2.004 | 95128 | `d431b786b9b603662718e79cfe9b441f47a8b0b3e854dde89d5acb3ed7cfd682` |
+| `lm/lmsans12-oblique.otf` | Latin Modern Sans | 2.004 | 102056 | `1f138e6203f7092f9a01f6193ed97d971b5045b99969f3a62c7e43a7faabc1c0` |
+| `lm/lmsans12-regular.otf` | Latin Modern Sans | 2.004 | 95160 | `f87ebdea035a96e8787e2c663cfcc78ce73205d37800eafe7948278e2cc7666a` |
+| `lm/lmsans17-oblique.otf` | Latin Modern Sans | 2.004 | 100500 | `0f6a4450c5fc9afd3650f24ad9003684fff3252691bbf2a33be94b383db8a77c` |
+| `lm/lmsans17-regular.otf` | Latin Modern Sans | 2.004 | 94828 | `f6c395a436e4fa7e88bbf1445e64b9c78ce4effba3668b13cc433077fc71a984` |
+| `lm/lmsans8-oblique.otf` | Latin Modern Sans | 2.004 | 100084 | `7f4227513bfd47b7077bedd125caa4c0a223a2cdad17a1470145cdea83353c88` |
+| `lm/lmsans8-regular.otf` | Latin Modern Sans | 2.004 | 94256 | `04f0d25ca474494cb707e752170f6c22cdcb8ae2b5fb80872143e18d5cc463f8` |
+| `lm/lmsans9-oblique.otf` | Latin Modern Sans | 2.004 | 101068 | `ac0535d7d4a8eb1b531c5faeb9060a4b9bac397d72cf54191ef53eea6f66b617` |
+| `lm/lmsans9-regular.otf` | Latin Modern Sans | 2.004 | 94552 | `80ef596460b7b402621780f7cd73a348efedc4cd2c6deca37da58f07ee61b85d` |
 
-The fonts hold 14130556 bytes in all, about 14.1 MB. Droid Sans Fallback
-holds 3.5 MB of them, and Latin Modern 3.3 MB. `fonts_test.go` makes sure
+The fonts hold 15332032 bytes in all, about 15.3 MB. Droid Sans Fallback
+holds 3.5 MB of them, and Latin Modern 4.5 MB. `fonts_test.go` makes sure
 that each file has this SHA-256 and this family, and that Droid Sans
 Fallback draws a character of each CJK collection.
 

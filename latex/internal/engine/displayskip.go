@@ -97,6 +97,11 @@ func (e *Engine) placeDisplay(boxes []*boxNode) {
 	if !e.alignDisplay && useShortDisplaySkips(e.lastLinePreDisplaySize(), displayLeftEdge(boxes[0])) {
 		above, below = "abovedisplayshortskip", "belowdisplayshortskip"
 	}
+	// ivy: TeX puts \predisplaypenalty above the skip and changes the widow
+	// penalty of the lines before to \displaywidowpenalty (tex.web §890 and
+	// §1203), so a page does not break right before a display.
+	e.displayWidow()
+	e.mvl = append(e.mvl, penaltyNode{penalty: e.namedInt("predisplaypenalty")})
 	e.mvl = append(e.mvl, glueNode{spec: e.namedSkip(above)})
 	if e.alignDisplay {
 		// See placeAlignmentDisplay: an alignment carries its own first-row glue.
@@ -121,11 +126,20 @@ func (e *Engine) placeDisplay(boxes []*boxNode) {
 		}
 		if !first {
 			e.baselineskip = savedSkip + e.jotSkip()
+			// ivy: the rows of a display break as \interdisplaylinepenalty says,
+			// 10000 with amsmath.
+			if p := e.namedInt("interdisplaylinepenalty"); p != 0 {
+				e.mvl = append(e.mvl, penaltyNode{penalty: p})
+			}
 		}
 		e.appendToPage(b)
 		first = false
 	}
 	e.baselineskip = savedSkip
+	// ivy: and \postdisplaypenalty below the display (tex.web §1205).
+	if p := e.namedInt("postdisplaypenalty"); p != 0 {
+		e.mvl = append(e.mvl, penaltyNode{penalty: p})
+	}
 	// \belowdisplayskip goes below the display; the next paragraph's first line
 	// then follows it through the ordinary interline path, prev_depth being the
 	// depth of the last display box (tex.web:22614-22615, then resume_after_display

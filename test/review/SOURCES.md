@@ -253,3 +253,43 @@ maintainers made.
 The manifest holds no file of the kinds azw4, ora, kra and cbz. No source with
 a clear license was easy to find for them. It holds one CHM file and one AZW3
 file, the last from this repository.
+
+## The page of markdown-it
+
+`markdownit.tsv` lists the files of the page that renders a Markdown file
+with markdown-it in Chrome, the reference of Markdown (D70). It has the
+columns of `corpus.tsv`. `review fetch` downloads each file into the
+folder `markdownit` of the cache, and checks its size and its SHA-256. The
+review then runs the page without the network. The files stay in the test
+module (D13), and nothing of them goes into ivy.
+
+The list holds 303 files from jsDelivr, about 42 MB. Each URL names an
+exact version. The name of a file is its path on jsDelivr, so that the
+imports of a module find the other modules on the server of the review.
+
+| Package | Version | License | What the page uses |
+| --- | --- | --- | --- |
+| markdown-it | 15.0.3 | MIT | the parser of Markdown, with its modules linkify-it, mdurl, punycode.js, uc.micro (MIT) and entities (BSD-2-Clause) |
+| markdown-it-github-alerts | 1.0.1 | MIT | the alerts of GitHub, such as `> [!NOTE]` |
+| markdown-it-task-lists | 2.1.1 | ISC | the task lists |
+| markdown-it-footnote | 4.0.0 | MIT | the footnotes |
+| markdown-it-emoji | 3.1.0 | MIT | the emoji, such as `:smile:` |
+| @vscode/markdown-it-katex | 1.1.2 | MIT | the math of `$` and `$$`, as the preview of VS Code draws it |
+| katex | 0.16.22 | MIT | the math, with `katex.min.css` and its 20 WOFF2 fonts. It is the version of `^0.16.4` that jsDelivr gives @vscode/markdown-it-katex |
+| shiki | 4.6.0 | MIT | the colors of code, with the packages @shikijs of the same version, the theme `github-light-default`, the grammars of 242 languages, and the modules that they import, each under MIT |
+| github-markdown-css | 5.9.0 | MIT | the style sheet of GitHub, `github-markdown-light.css` |
+
+The license column of each row is the field `license` of the
+`package.json` of its package.
+
+A module of the form `/npm/<package>@<version>/+esm` is a bundle that
+jsDelivr builds from the files of npm. jsDelivr keeps the bundle of an exact
+version, but it can build it again with a new version of its bundler. Then
+`fetch` reports another SHA-256, and the list must change.
+
+The list came from a walk of the modules. The walk starts at the modules
+that the page imports and at the style sheet of GitHub. It follows each
+path `/npm/...` in each module, both the static and the dynamic imports. It
+keeps the theme `github-light-default` alone of the themes of Shiki. Then it
+adds `katex.min.css` of the version of katex, and each font that the style
+sheet names. A walk of the same versions gives the same list.

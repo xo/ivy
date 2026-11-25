@@ -1,13 +1,14 @@
 // Package csv opens files of values separated by commas, semicolons, tabs
 // or vertical bars: .csv, .tsv and .tab.
 //
-// A document puts the rows into one table on pages, as a sheet of Excel
-// prints them, with the package sheet and the layout of D10. The table has
-// light gridlines, because a file of values has no style that separates its
-// cells. A field that holds a number is aligned to the right, and the other
-// fields to the left. Each column is as wide as its longest field in
-// Calibri, from 48 to 300 points, and a longer field breaks into lines. A
-// row is as high as Excel prints a row of 15 points.
+// A document puts the rows into one table on pages, as LibreOffice prints
+// a CSV file that it opens, with the package sheet and the layout of D10.
+// The table has light gridlines, because a file of values has no style that
+// separates its cells. The text is in Liberation Sans of 10 points. A field
+// that holds a number is aligned to the right, and the other fields to the
+// left. Each column is as wide as its longest field, up to 300 points, and
+// a longer field breaks into lines. A row is as high as LibreOffice prints
+// a row of the default height, 12.784 points.
 //
 // The package finds the separator in the first records: the one that
 // gives the same number of fields, more than one, to the most records.
@@ -328,12 +329,21 @@ func (d *Document) source(ctx context.Context) (src layout.Source, err error) {
 	return d.workbook().Source(ctx, sheet.Options{Limits: d.lim, Logger: d.cfg.Logger, Paper: d.cfg.Paper})
 }
 
-// The sizes of the columns, in points: the size of the font, Calibri of 11
-// points, and the bounds of a column. The padding holds the padding of the
-// cell on both sides and a little room.
+// The font and the height of a row, as LibreOffice opens a CSV file: in
+// Liberation Sans of 10 points, in rows of 256 twips. LibreOffice prints
+// such a row 4.51 mm high, 12.784 points.
 const (
-	fontSize     = 11
-	minColWidth  = 48
+	fontFamily = "Liberation Sans"
+	fontSize   = 10
+	rowHeight  = 451 * 72 / 2540.0
+)
+
+// The sizes of the columns, in points: the width of a column without text,
+// and the widest column. The padding holds the padding of the cell on both
+// sides and a little room, as LibreOffice adds to the optimal width of a
+// column.
+const (
+	defColWidth  = 48
 	maxColWidth  = 300
 	colPadding   = 6
 	maxSizedCols = 4096
@@ -341,11 +351,12 @@ const (
 
 // workbook returns the sheet of the records.
 func (d *Document) workbook() *sheet.Workbook {
-	wb := &sheet.Workbook{Styles: []sheet.Style{sheet.DefaultStyle, sheet.DefaultStyle}}
+	def := sheet.Style{Font: sheet.Font{Family: fontFamily, Size: fontSize}}
+	wb := &sheet.Workbook{Styles: []sheet.Style{def, def}}
 	wb.Styles[1].Wrap = true
 	sh := &sheet.Sheet{
-		DefaultColWidth:  minColWidth,
-		DefaultRowHeight: sheet.NewExcelRows(nil, sheet.DefaultStyle.Font).Default(),
+		DefaultColWidth:  defColWidth,
+		DefaultRowHeight: rowHeight,
 		Gridlines:        true,
 		Page:             sheet.DefaultPage,
 	}
@@ -381,7 +392,11 @@ func (d *Document) workbook() *sheet.Workbook {
 	}
 	wrap := make(map[int]bool)
 	for c, w := range widths {
-		sh.Cols = append(sh.Cols, sheet.Col{Min: c, Max: c, Width: min(maxColWidth, max(minColWidth, w))})
+		if w <= colPadding {
+			// a column without text keeps the default width
+			w = defColWidth
+		}
+		sh.Cols = append(sh.Cols, sheet.Col{Min: c, Max: c, Width: min(maxColWidth, w)})
 		if w > maxColWidth {
 			// a long field breaks into lines
 			wrap[c] = true
@@ -406,11 +421,11 @@ func (d *Document) workbook() *sheet.Workbook {
 // textWidth returns the width in points of the widest line of s.
 func textWidth(s string) float64 {
 	if !strings.ContainsAny(s, "\r\n") {
-		return sheet.TextWidth(s, fontSize)
+		return sheet.ArialTextWidth(s, fontSize)
 	}
 	width := 0.0
 	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r", "\n"), "\n") {
-		width = max(width, sheet.TextWidth(line, fontSize))
+		width = max(width, sheet.ArialTextWidth(line, fontSize))
 	}
 	return width
 }

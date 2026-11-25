@@ -267,6 +267,29 @@ func (d *OkageDevice) ClipPath(p *okage.Path, rule okage.FillRule) {
 	d.state.clip = clip
 }
 
+// ClipAdjusted satisfies the ClipAdjuster interface. Under a transform
+// that turns or skews, it clips to r as ClipPath does.
+func (d *OkageDevice) ClipAdjusted(r okage.Rect) {
+	t := d.state.t
+	if t.HasSkew() {
+		d.ClipPath(okage.PathFromRect(r), okage.FillRuleWinding)
+		return
+	}
+	pts := []okage.Point{{X: r.Left(), Y: r.Top()}, {X: r.Right(), Y: r.Bottom()}}
+	t.MapPoints(pts)
+	x0, x1 := math.Round(float64(min(pts[0].X, pts[1].X))), math.Round(float64(max(pts[0].X, pts[1].X)))
+	y0, y1 := math.Round(float64(min(pts[0].Y, pts[1].Y))), math.Round(float64(max(pts[0].Y, pts[1].Y)))
+	dr, ok := okage.RectFromLTRB(float32(x0), float32(y0), float32(x1), float32(y1))
+	if !ok {
+		// the rectangle covers no whole pixel
+		d.state.bounds = image.Rectangle{}
+		return
+	}
+	d.state.t = okage.IdentityTransform()
+	d.ClipPath(okage.PathFromRect(dr), okage.FillRuleWinding)
+	d.state.t = t
+}
+
 // pathBounds returns the pixels that a fill of p can cover under the
 // transform of the state, with a margin of a pixel for the antialiasing. An
 // empty path covers no pixel.

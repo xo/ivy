@@ -165,6 +165,28 @@ func StrokeAdjusted(d Device, p *okage.Path, stroke okage.Stroke, shader okage.S
 	d.StrokePath(p, stroke, shader)
 }
 
+// ClipAdjuster is a device that can clip to a rectangle on the grid of the
+// pixels. An OkageDevice and a List are clip adjusters.
+type ClipAdjuster interface {
+	// ClipAdjusted clips to r, as ClipPath does with the path of r, with each
+	// edge of r moved to the nearest edge of the pixels, so that the clip
+	// covers whole pixels. Two clips that meet at an edge then share no
+	// pixel that each covers in part, and no light seam shows between what
+	// they draw.
+	ClipAdjusted(r okage.Rect)
+}
+
+// ClipAdjusted clips d to r on the grid of the pixels. It calls
+// ClipAdjusted of d when d is a ClipAdjuster, and ClipPath of d with the
+// path of r otherwise, as a writer of PDF does.
+func ClipAdjusted(d Device, r okage.Rect) {
+	if ca, ok := d.(ClipAdjuster); ok {
+		ca.ClipAdjusted(r)
+		return
+	}
+	d.ClipPath(okage.PathFromRect(r), okage.FillRuleWinding)
+}
+
 // Linker is a device that takes the links and the anchors of a page (D58).
 // The marks of a page carry them, so a device that draws pixels, such as an
 // OkageDevice, does not implement it. A List records them.
@@ -408,6 +430,12 @@ func (l *List) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage.S
 // ClipPath satisfies the Device interface.
 func (l *List) ClipPath(p *okage.Path, rule okage.FillRule) {
 	l.record(func() string { return fmt.Sprintf("clip %v %v", bounds(p), rule) }, func(d Device) { d.ClipPath(p, rule) })
+}
+
+// ClipAdjusted satisfies the ClipAdjuster interface. The replay calls
+// ClipAdjusted of this package with the device of the replay.
+func (l *List) ClipAdjusted(r okage.Rect) {
+	l.record(func() string { return fmt.Sprintf("clip adjusted %v", r) }, func(d Device) { ClipAdjusted(d, r) })
 }
 
 // DrawImage satisfies the Device interface.

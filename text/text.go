@@ -13,8 +13,9 @@
 // such as a book of Project Gutenberg (D34). A line that starts with white
 // space, such as a space, a tab or an ideographic space, starts a new line,
 // so that a table, code, a poem with an indent and a paragraph with an
-// indent keep their lines. A TXTZ file keeps each break of a line. The
-// style sheet keeps each run of spaces.
+// indent keep their lines. A text file in Chinese or Japanese, and a TXTZ
+// file, keep each break of a line, as calibre does (D68). The style sheet
+// keeps each run of spaces.
 //
 // The text is UTF-8 or UTF-16 with a byte order mark, or UTF-8 without one.
 // Text that is not valid UTF-8 is read as windows-1252. Markdown is the
@@ -272,11 +273,15 @@ func depth(name string) int {
 
 // convert converts the text data into a document of HTML, within the limit
 // of memory. An empty lang takes the language that the text shows. If join
-// is set, the lines of a paragraph join, as toHTML says.
+// is set, the lines of a paragraph join, as toHTML says, unless the text is
+// in Chinese or Japanese, which keeps its lines, as calibre does (D68).
 func (d *Document) convert(data []byte, title, lang string, join bool) ([]byte, error) {
 	text := ebook.Text(data)
 	if lang == "" {
 		lang = ebook.TextLanguage(text)
+	}
+	if join && wideText(text) {
+		join = false
 	}
 	doc := toHTML(text, title, lang, join)
 	if int64(len(doc)) > d.lim.MaxMemory {
@@ -370,6 +375,35 @@ func ruleLine(line string) bool {
 		n++
 	}
 	return n >= 4
+}
+
+// wideText reports whether text is in Chinese or Japanese: whether more
+// than half of its lines that are not blank are wide lines. A line is wide
+// when more than half of its characters that are not white space are wide
+// (D68).
+func wideText(text string) bool {
+	lines, wideLines := 0, 0
+	for line := range strings.Lines(text) {
+		chars, wideChars := 0, 0
+		for _, r := range line {
+			switch {
+			case unicode.IsSpace(r):
+			case wide(r):
+				chars++
+				wideChars++
+			default:
+				chars++
+			}
+		}
+		if chars == 0 {
+			continue
+		}
+		lines++
+		if 2*wideChars > chars {
+			wideLines++
+		}
+	}
+	return 2*wideLines > lines
 }
 
 // startsWithSpace reports whether line starts with white space, such as a

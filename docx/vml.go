@@ -1,6 +1,7 @@
 package docx
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/xo/okage/roxmltree"
@@ -13,11 +14,47 @@ import (
 // another type, as its rectangle.
 var vmlShapes = map[string]bool{"rect": true, "roundrect": true, "oval": true, "shape": true}
 
+// horizontalRule writes a horizontal line of Word, a VML shape with o:hr,
+// as a box on the baseline of its line, and reports whether shape is one.
+// o:hrpct gives its width in tenths of a percent of the column, and 0 or
+// no value with no width in the style is the whole column. The alignment
+// of the paragraph places a line that is narrower than the column, and
+// o:hralign is not read.
+func (c *converter) horizontalRule(shape roxmltree.Node) bool {
+	if !shape.IsElement() || ooxml.Attr(shape, "hr") != "t" {
+		return false
+	}
+	st := vmlStyle(shape)
+	h := vmlLength(st["height"])
+	if h <= 0 {
+		h = 1.5
+	}
+	width := "100%"
+	pct := number(ooxml.Attr(shape, "hrpct"), 0)
+	switch w := vmlLength(st["width"]); {
+	case pct > 0:
+		width = num(min(pct/10, 100)) + "%"
+	case w > 0 && ooxml.Attr(shape, "hrpct") != "":
+		width = pt(min(w, maxDrawingSize))
+	}
+	color := vmlColor(ooxml.Attr(shape, "fillcolor"))
+	if color == "" {
+		color = "#a0a0a0"
+	}
+	var s css
+	s.set("display", "inline-block")
+	s.set("width", width)
+	s.set("height", pt(min(h, maxDrawingSize)))
+	s.set("background-color", color)
+	c.w.WriteString(`<span style="` + attrText(s.String()) + `"></span>`)
+	return true
+}
+
 // vmlBox writes a VML shape of the body whose position is absolute, such
-// as a text box or a filled rectangle, as a box with its fill, its line
-// and its text. Text that wraps around the shape flows around a float, as
-// for a drawing of DrawingML, except on a page of columns. It returns false for a shape that it does
-// not draw, such as a picture.
+// as a text box, a filled rectangle or a picture, as a box with its fill
+// or its picture, its line and its text. Text that wraps around the shape
+// flows around a float, as for a drawing of DrawingML, except on a page of
+// columns. It returns false for a shape that it does not draw.
 func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	if !shape.IsElement() || !vmlShapes[shape.TagName().Name()] || c.margin != "" {
 		return false
@@ -29,13 +66,21 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	}
 	var txbx roxmltree.Node
 	hasText := false
+	src, opacity := "", 1.0
 	for e := range shape.Children() {
 		if !e.IsElement() {
 			continue
 		}
 		switch e.TagName().Name() {
 		case "imagedata":
-			return false
+			r, ok := c.relationship(ooxml.Attr(e, "id"))
+			if !ok || r.External {
+				return false
+			}
+			if src, ok = c.file(r.Target); !ok {
+				return false
+			}
+			opacity = washout(e)
 		case "textbox":
 			if t, ok := child(e, "txbxContent"); ok {
 				txbx, hasText = t, true
@@ -43,7 +88,15 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		}
 	}
 	fill, stroke := vmlFill(shape), vmlStroke(shape)
-	if !hasText && fill == "" && stroke == "" {
+	if src != "" {
+		// A picture covers its fill. Its shape type has no line, so it has
+		// a line only when the shape asks for one.
+		fill = ""
+		if _, ok := child(shape, "stroke"); !ok && ooxml.Attr(shape, "stroked") == "" && ooxml.Attr(shape, "strokecolor") == "" {
+			stroke = ""
+		}
+	}
+	if !hasText && src == "" && fill == "" && stroke == "" {
 		return false
 	}
 	sec := c.sections[c.section]
@@ -84,6 +137,7 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	var s css
 	switch wrap {
 	case "square", "tight", "through":
+		c.floatSeq = c.paraSeq
 		if x+w/2 > colWidth/2 {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
@@ -182,6 +236,16 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		}
 	}
 	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
+	if src != "" {
+		var is css
+		is.set("display", "block")
+		is.set("width", "100%")
+		is.set("height", "100%")
+		if opacity < 1 {
+			is.set("opacity", strconv.FormatFloat(opacity, 'f', 3, 64))
+		}
+		c.w.WriteString(`<img src="` + attrText(src) + `" alt="" style="` + attrText(is.String()) + `"/>`)
+	}
 	if hasText {
 		c.nestedBlocks(txbx, c.part, c.w)
 	}

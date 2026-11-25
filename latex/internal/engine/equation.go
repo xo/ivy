@@ -48,12 +48,9 @@ func (e *Engine) doEquationBody() {
 	}
 
 	e.endParagraph()
-	fil := glueNode{spec: glueSpec{stretch: unity, stretchOrder: 1}}
-	row := []node{fil, m, fil}
-	if box := e.eqNumberBox(meta, number); box != nil {
-		row = append(row, box)
-	}
-	e.placeDisplay([]*boxNode{hpackSP(row, packTo, e.hsize)})
+	// ivy: the display is centered on the line as TeX centers it beside its
+	// number, or the number goes below it (ivy_math.go).
+	e.placeEquation(m, m.width, e.eqNumberBox(meta, number))
 	// collectMathUntilEnd read this environment's own \end, so \end — and the
 	// \gotex@endenv that closes the group \begin opened — never runs. Close it here,
 	// AFTER the labels are recorded: \end closes the group only once \endequation
@@ -78,25 +75,23 @@ func (e *Engine) doEquationStar(name string) {
 		}
 	}
 	e.endParagraph()
-	fil := glueNode{spec: glueSpec{stretch: unity, stretchOrder: 1}}
-	row := []node{fil, m, fil}
-	if box := e.eqNumberBox(meta, ""); box != nil { // only a \tag prints for a starred env
-		row = append(row, box)
-	}
-	e.placeDisplay([]*boxNode{hpackSP(row, packTo, e.hsize)})
+	// ivy: centered as in doEquationBody. Only a \tag prints for a starred env.
+	e.placeEquation(m, m.width, e.eqNumberBox(meta, ""))
 	e.endEnvGroup() // see doEquationBody
 }
 
 // eqNumberBox builds the number box for a display line: the \tag (parenthesised
 // unless starred), else the automatic "(N)" when numbered, else nothing.
+//
+// ivy: the number is in \normalfont (eqNumberHbox, ivy_math.go).
 func (e *Engine) eqNumberBox(meta eqMeta, autoNum string) *boxNode {
 	switch {
 	case meta.tag != "" && meta.tagStar:
-		return e.textToHbox(meta.tag)
+		return e.eqNumberHbox(meta.tag)
 	case meta.tag != "":
-		return e.textToHbox("(" + meta.tag + ")")
+		return e.eqNumberHbox("(" + meta.tag + ")")
 	case meta.numbered:
-		return e.textToHbox("(" + autoNum + ")")
+		return e.eqNumberHbox("(" + autoNum + ")")
 	}
 	return nil
 }

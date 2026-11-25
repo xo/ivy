@@ -37,6 +37,8 @@ upstream and keeps them:
 | `ivy_hyperlink.go` | `hyperlink_internal.go` without the method of the PDF driver |
 | `ivy_lmoptical.go`, `ivy_lmfonts.go` | the tables of the optical sizes of Latin Modern, and the files of Latin Modern and of TeX that a program gives |
 | `ivy_pdf.go` | `RenderPDF`, which returns an error |
+| `ivy_math.go` | the styles of the theorems of amsthm, the number of an equation in `\normalfont`, and a display centered beside its number as TeX centers it |
+| `ivy_mathbreak.go` | the breaks of a formula of the text after a relation or a binary operation, as TeX breaks it |
 
 ## The changes
 

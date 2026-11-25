@@ -80,8 +80,8 @@ A bare number, such as D3, names a decision of this repository, in
 `docs/decisions/`. A decision of another repository names that repository,
 such as dbmeta D110 or okage D16. An open question has a number, and it is at
 the end of `docs/PLAN.md` until the maintainers answer it. The numbers do not
-repeat. The next decision has the number 68, and the next question is
-question 30.
+repeat. The next decision has the number 74, and the next question is
+question 31.
 
 ## Hard rules
 
@@ -202,7 +202,7 @@ On 2026-11-25 the repository holds these files:
 | `internal/fontdb/` | the font database of a program, from `ivy.Config.Fonts`, the Go fonts and the fonts of the system, which the layout, the metafiles and the charts share (D23, D24) |
 | `internal/chart/` | the charts of DrawingML, of Office 2016 (cx:chartSpace) and of OpenDocument: ivy lays them out and draws them onto the display list as Office and LibreOffice do, with the scales of the axes of Excel and the fonts of fontdb (D27) |
 | `internal/offcrypto/`, `odf/internal/odfcrypt/` | the encryption of MS-OFFCRYPTO (Agile, Standard, RC4 CryptoAPI and RC4), and the encryption of OpenDocument (D12, D24) |
-| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24), Droid Sans Fallback for the characters of Chinese, Japanese and Korean in `fonts/droid`, under the Apache License 2.0, and Latin Modern for LaTeX in `fonts/lm`, which `fonts.TeX` gives apart from `fonts.FS`, under the GUST Font License (D62, D65) |
+| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24), Droid Sans Fallback for the characters of Chinese, Japanese and Korean in `fonts/droid`, under the Apache License 2.0, and Latin Modern Roman and Sans for LaTeX in `fonts/lm`, which `fonts.TeX` gives apart from `fonts.FS`, under the GUST Font License (D62, D65, D72) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17). `internal/moxcms/assets` holds the default CMYK profile, which `pdf`, `internal/jpeg2000` and `icc` share (D61) |
 | `icc/` | the public package of color management for iv: an image converted to sRGB with an ICC profile, with the default CMYK profile, or with CICP code points, over `internal/moxcms` (D61) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10. The layout also reads EMF and WMF, and draws the objects of a format, such as the charts |
@@ -230,7 +230,7 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-On 2026-11-24 the `go.mod` of ivy requires okage v0.20.1 and magic v0.9.1.
+On 2026-11-25 the `go.mod` of ivy requires okage v0.22.0 and magic v0.9.1.
 If a change needs a commit of okage or magic that is pushed and not tagged,
 require it as a pseudo-version. When okage and magic tag that commit,
 require the tag. A change that needs a commit of okage or magic that is not

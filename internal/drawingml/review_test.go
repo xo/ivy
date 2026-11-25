@@ -117,6 +117,26 @@ func TestBoxOverflow(t *testing.T) {
 	}
 }
 
+// TestBoxInsetsTallerThanBox checks that the middle of the text of a box
+// whose insets are taller than the box is where the insets put it, above
+// the bottom of the box, as on the slide of poi/pptx/with-japanese.pptx.
+func TestBoxInsetsTallerThanBox(t *testing.T) {
+	c := &Colors{Theme: testTheme}
+	var list ListStyle
+	bodyPr := `<a:bodyPr anchor="ctr" tIns="914400" bIns="914400"/>`
+	body := parse(t, `<a:txBody>`+bodyPr+`<a:p><a:r><a:t>text</a:t></a:r></a:p></a:txBody>`)
+	tb := c.ParseTextBody(body, &list, nil, ParseBodyStyle(parse(t, bodyPr)), Fields{})
+	box, ok := tb.Box(testTheme, 200, 10)
+	if !ok {
+		t.Fatal("expected a box")
+	}
+	// the text area is 72 + (10 - 144) / 2 = 5 points below the top of
+	// the box, the middle of the box, and the page is centered there
+	if got := float64(box.Transform.TY) + box.Height/2; math.Abs(got-5) > 0.01 {
+		t.Errorf("expected the middle of the text at 5, got %g", got)
+	}
+}
+
 // encodePNG returns img as a PNG file.
 func encodePNG(t *testing.T, img image.Image) []byte {
 	t.Helper()
@@ -203,6 +223,38 @@ func TestTableVertical(t *testing.T) {
 	// the layout gives the row the height of the whole cell
 	if !strings.Contains(doc, `<tr><td style="vertical-align:top;padding:3.6pt 7.2pt 3.6pt 7.2pt;height:32.8pt`) {
 		t.Errorf("expected the height of the row on its cell:\n%s", doc)
+	}
+}
+
+// TestTableBorders checks the borders of the cells of a table, which
+// PowerPoint draws on the lines of the grid: the padding of a cell is its
+// inset without half of its border, an inset narrower than half of the
+// border gives the rest to a negative margin of the text, and the table
+// moves by half of its outer borders.
+func TestTableBorders(t *testing.T) {
+	c := &Colors{Theme: testTheme}
+	var list ListStyle
+	text := c.ParseTextBody(parse(t, `<a:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="1000"/><a:t>a</a:t></a:r></a:p></a:txBody>`),
+		&list, nil, BodyStyle{}, Fields{})
+	line := DefaultLine()
+	line.Width, line.Paint = 2, Solid(RGBA{0, 0, 0, 1})
+	tab := &Table{
+		Cols: []float64{100},
+		Rows: []TableRow{{Height: 20, Cells: []TableCell{{
+			ColSpan: 1, RowSpan: 1, Insets: [4]float64{7.2, 0, 7.2, 3.6}, Anchor: "t", Text: text,
+			Borders: [4]*Line{&line, &line, &line, &line},
+		}}}},
+	}
+	doc, _, _ := tab.html(100, 20, testTheme)
+	for _, want := range []string{
+		`margin-left:-1pt;margin-top:-1pt`,
+		`padding:0pt 6.2pt 2.6pt 6.2pt`,
+		`<div style="margin:-1pt 0pt 0pt 0pt">`,
+		`-ivy-line-baseline: win`,
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("expected the document to hold %q:\n%s", want, doc)
+		}
 	}
 }
 

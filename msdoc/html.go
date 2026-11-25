@@ -993,7 +993,10 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 	case wr == 1:
 		style = append(style, "display: block", "margin-left: "+num(max(x, 0))+"pt")
 		if f.by == 2 && y > 0 {
-			style = append(style, "margin-top: "+num(y)+"pt")
+			// Word measures the distance from the top of the paragraph,
+			// below the space after the paragraph before it. A padding
+			// does not collapse with that space, as a margin does.
+			style = append(style, "padding-top: "+num(y)+"pt")
 		}
 	case wr == 3:
 		style = append(style, "position: absolute", "left: "+num(x)+"pt")

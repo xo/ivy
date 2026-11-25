@@ -1083,6 +1083,14 @@ func replacedMinContentWidth(box *Box, outer bool) float64 {
 	} else if w, ok := nonPercentLength(widthValue); ok {
 		// Port: upstream asserts that the unit is px.
 		width = w
+		// Port: a replaced box with a percentage max-width can shrink to
+		// nothing, as css-sizing-3 says for a compressible replaced
+		// element and as browsers do. Upstream does it only when the width
+		// is auto. An image of a README with the attribute width and a
+		// max-width of 100% then fits in the cell of a table.
+		if _, ok := percentValue(box.Style.Get("max_width")); ok {
+			width = 0
+		}
 	} else {
 		// See https://drafts.csswg.org/css-sizing/#intrinsic-contribution
 		width = 0

@@ -97,6 +97,7 @@ func (e *Engine) layoutSegment(hlist []node) {
 	// inside breakSegment where the rejected attempts of earlier passes would be
 	// counted too. See badbox.go.
 	e.noteBadLines(list, lines, lineWidth)
+	e.markLines() // ivy: see ivy_pagebreak.go
 	for i, ln := range lines {
 		// ⛔⛔ THE PARAGRAPH'S FIRST LINE IS NEVER PRUNED — and "the paragraph's", not
 		// "this fragment's". go-typeset/linebreak v1.2.1 stopped discarding a
@@ -165,7 +166,12 @@ func (e *Engine) layoutSegment(hlist []node) {
 				e.contribute(n)
 			}
 		}
+		// ivy: the penalty between two lines, after the adjustments, as
+		// tex.web §880 and §890 order them (ivy_pagebreak.go).
+		_, broken := list[min(ln.End, len(list)-1)].(discNode)
+		e.linePenalty(i, len(lines), broken && ln.End < len(list))
 	}
+	e.endLines() // ivy: see ivy_pagebreak.go
 	e.normalParagraph()
 }
 

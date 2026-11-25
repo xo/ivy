@@ -22,7 +22,8 @@
 // fetch downloads each file that is not in the cache, into the folder
 // files of the cache, and checks its size and its sha256. It tries a failed
 // download once more, goes on with the other files, and lists the failures
-// at its end.
+// at its end. It also downloads the files of the page of markdown-it, the
+// reference of Markdown, into the folder markdownit of the cache (D70).
 //
 // render opens each document with the package of ivy for its kind, and
 // renders the first pages and the last page. It renders the same pages
@@ -79,7 +80,7 @@ Usage:
 	review render -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 		[-kind LIST] [-pages N] [-dpi N] [-j N] [-timeout DUR] [-retry]
 		[-papers LIST] [-system-fonts=BOOL] [-font-dirs LIST] [-faults FILE]
-		[-tex TREE]
+		[-tex TREE] [-refs primary|all]
 	review bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP]
 		[-kind LIST]
 
@@ -127,7 +128,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "fetch":
 		fs.Usage = func() {
-			_, _ = fmt.Fprint(fs.Output(), "Usage: review fetch [-cache DIR] [-manifest FILE] [-j N]\n\nDownloads the missing files of the corpus into the cache.\n\n")
+			_, _ = fmt.Fprint(fs.Output(), "Usage: review fetch [-cache DIR] [-manifest FILE] [-j N]\n\n"+
+				"Downloads the missing files of the corpus, and of the page of markdown-it, into the cache.\n\n")
 			fs.PrintDefaults()
 		}
 		if err := fs.Parse(args[1:]); err != nil {
@@ -137,9 +139,8 @@ func run(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return review.Fetch(ctx, entries, review.FetchOptions{
-			Cache: *cache, Repo: repo, Jobs: *jobs, Log: os.Stdout,
-		})
+		fopts := review.FetchOptions{Cache: *cache, Repo: repo, Jobs: *jobs, Log: os.Stdout}
+		return errors.Join(review.Fetch(ctx, entries, fopts), review.FetchMarkdownIt(ctx, fopts))
 	case "render":
 		out := fs.String("out", "", "the `folder` of the report, which must be new, empty or an earlier report (required)")
 		pages := fs.Int("pages", 3, "render the first `N` pages and the last page; 0 renders each page")
@@ -154,6 +155,8 @@ func run(ctx context.Context, args []string) error {
 			"a comma-separated `list` of font folders more for ivy and for the references; the default is the font folders of the account")
 		tex := fs.String("tex", review.TeXBase, "the `tree` of TeX files of a TeX document: base, the standard classes as kpsewhich finds them; "+
 			"dist, the whole TeX distribution; or none (D65)")
+		refs := fs.String("refs", review.RefsPrimary, "the `references`: primary, the primary oracle of each kind and at most one secondary oracle; "+
+			"or all, every conversion drawn by MuPDF, Poppler Splash, Poppler Cairo and Chrome (D69)")
 		faults := fs.String("faults", filepath.Join(repo, "test", "review", "reference-faults.tsv"),
 			"the `file` of the known faults of the references")
 		fs.Usage = func() {
@@ -169,7 +172,7 @@ func run(ctx context.Context, args []string) error {
 		}
 		opts := review.RenderOptions{
 			Repo: repo, Cache: *cache, Out: *out, Pages: *pages, DPI: *dpi, Jobs: *jobs,
-			Timeout: *timeout, Retry: *retry, Log: os.Stdout, SystemFonts: *systemFonts,
+			Timeout: *timeout, Retry: *retry, Log: os.Stdout, SystemFonts: *systemFonts, Refs: *refs,
 		}
 		var err error
 		if opts.Match, opts.Kinds, err = selection(); err != nil {

@@ -146,10 +146,13 @@ func (e *Engine) doNewtheorem() {
 	// \<env>: \begin{env}. Open a group (so \it reverts at \end), globally step the
 	// counter (global to survive the group), freeze the number as \@currentlabel,
 	// then hand {Heading}{number} to \@begintheorem (which reads the optional note).
+	// ivy: no \medskip. The theorem keeps the style of the last \theoremstyle,
+	// and the style gives the skip above it (ivy_math.go).
 	body := []tok{
-		csTok("par"), csTok("medskip"), csTok("begingroup"),
+		csTok("par"), csTok("begingroup"),
 	}
 	body = append(body, thmTypeToks(env)...)
+	body = append(body, e.thmStyleToks()...)
 	body = append(body, []tok{
 		csTok("global"), csTok("advance"), csTok(ctr), chTok(' ', catSpace),
 		chTok('b', catLetter), chTok('y', catLetter), chTok('1', catOther), csTok("relax"),
@@ -175,10 +178,13 @@ func (e *Engine) doNewtheorem() {
 // same grouping as a numbered theorem, with no counter, no \the<env>, and an empty
 // number handed to \@begintheorem — which is what amsthm's starred form produces.
 func (e *Engine) defineUnnumberedTheorem(env string, head []tok) {
+	// ivy: no \medskip. The theorem keeps the style of the last \theoremstyle,
+	// and the style gives the skip above it (ivy_math.go).
 	body := []tok{
-		csTok("par"), csTok("medskip"), csTok("begingroup"),
+		csTok("par"), csTok("begingroup"),
 	}
 	body = append(body, thmTypeToks(env)...)
+	body = append(body, e.thmStyleToks()...)
 	body = append(body, []tok{
 		csTok("@beginthmnonum"), chTok('{', catBegin),
 	}...)

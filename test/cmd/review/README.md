@@ -11,7 +11,8 @@ can run outside programs.
 Run the commands from the folder `test` of the repository. The command
 finds the root of the repository from the current folder.
 
-1. Download the files of the corpus into the cache:
+1. Download the files of the corpus, and the files of the page of
+   markdown-it, into the cache:
 
    ```sh
    go run ./cmd/review fetch
@@ -49,6 +50,9 @@ uv pip install --python review/cache/weasyprint/bin/python weasyprint==70.0
 `fetch [-cache DIR] [-manifest FILE] [-j N]` downloads each file that is not
 in the cache, and checks its size and its sha256. It tries a failed download
 once more, goes on with the other files, and lists the failures at the end.
+It also downloads the files of `test/review/markdownit.tsv`, the page of
+the reference of Markdown, into the folder `markdownit` of the cache. See
+"markdown-it".
 
 `bundle -out DIR [-cache DIR] [-manifest FILE] [-match REGEXP] [-kind LIST]`
 copies the files of the documents into the folder `DIR`, each at its name
@@ -77,6 +81,7 @@ that is not in the cache, and names it.
 | `-font-dirs LIST` | the font folders of the account | the font folders more for ivy and for the references, separated by commas. An empty list gives none |
 | `-faults FILE` | `test/review/reference-faults.tsv` | the known faults of the references. See "Faults of a reference" |
 | `-tex TREE` | `base` | the tree of TeX files that ivy gives a TeX document: `base`, `dist` or `none`. See "TeX documents" |
+| `-refs CHOICE` | `primary` | the references: `primary`, the primary oracle and at most one secondary oracle of each kind, or `all`, every reference. See "The oracles of a kind" |
 
 ## The manifest
 
@@ -101,16 +106,19 @@ An empty line and a line that starts with `#` are skipped.
 ## The references
 
 ivy renders each document again on each run. The references convert some
-kinds to PDF first, then draw each page:
+kinds to PDF first, then draw each page. This table gives every reference,
+as `-refs all` shows them. "The oracles of a kind" below says which ones
+the report shows by default.
 
 | Kinds | Conversion | Pages | ivy PDF |
 | --- | --- | --- | --- |
-| pdf, ai | none | MuPDF, Poppler Splash, Poppler Cairo | no |
-| Office, OpenDocument, rtf, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
-| csv, tsv, tab | LibreOffice to PDF through UNO, on the page of ivy | MuPDF, Poppler Splash, Poppler Cairo | yes |
-| html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
-| tex, latex, ltx | pdfLaTeX, or pdfTeX for plain TeX, to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
-| epub, mobi, azw3, azw4, fb2, chm, md, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo | yes |
+| pdf, ai | none | MuPDF, Poppler Splash, Poppler Cairo, Chrome | no |
+| Office, OpenDocument, rtf, Visio, Publisher, iWork | LibreOffice to PDF | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
+| csv, tsv, tab | LibreOffice to PDF through UNO, on the page of ivy | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
+| html, htm, xhtml | WeasyPrint to PDF | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
+| tex, latex, ltx | pdfLaTeX, or pdfTeX for plain TeX, to PDF | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
+| epub, mobi, azw3, azw4, fb2, chm, txt | calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
+| md, markdown | markdown-it in Chrome to PDF, then calibre to PDF | MuPDF, Poppler Splash, Poppler Cairo, Chrome | yes |
 | xps, oxps | none | libgxps (`xpstopng`) | no |
 | ps, eps | Ghostscript draws each page | Ghostscript | no |
 | emf, wmf | none | Inkscape | no |
@@ -121,9 +129,159 @@ kinds to PDF first, then draw each page:
 Some kinds also have an external reference, which a program outside this
 machine makes, such as Microsoft Office. See "External references".
 
+### The oracles of a kind
+
+By default, `render` shows only the oracles of D69 for each document:
+`ivy`, `ivy PDF` when the kind has that column, the primary oracle of the
+kind, and at most one secondary oracle.
+
+| Kinds | Primary oracle | Secondary oracle |
+| --- | --- | --- |
+| Word, Excel, PowerPoint, Visio, Publisher and RTF | Microsoft Office, when its PDF file is in the cache | LibreOffice. It is the primary oracle when the file has no PDF file of Office |
+| OpenDocument, csv, tsv and tab | LibreOffice | none |
+| Pages, Keynote and Numbers | Apple iWork, when its PDF file is in the cache | none. LibreOffice is the primary oracle when the file has no PDF file of iWork |
+| pdf and ai | the PDF file itself | none |
+| HTML | WeasyPrint | none |
+| ebooks and text | calibre | none |
+| Markdown | markdown-it in Chrome (D70) | none. calibre comes after it with `-refs all` |
+| TeX | pdfLaTeX or pdfTeX | none |
+| xps and oxps | Windows XPS, when its images are in the cache | libgxps. It is the primary oracle when the file has no images of Windows XPS |
+| emf, wmf, emz and wmz | GDI+, when its image is in the cache | Inkscape. It is the primary oracle when the file has no image of GDI+ |
+| ps and eps | Ghostscript | none |
+| djvu | DjVuLibre | none |
+| psd, ora and camera raw | ImageMagick | none |
+
+MuPDF and Chrome draw the PDF file of the primary oracle. MuPDF alone draws
+the PDF file of the secondary oracle. D69 keeps Chrome next to MuPDF until
+the maintainers compare the two renderers. A PDF file of the kind `pdf` is
+its own primary oracle, so MuPDF and Chrome draw the file itself. A row of
+the MediaBox shows MuPDF alone.
+
+`-refs all` shows every reference of the table above: each conversion,
+each external reference, and each PDF file drawn by MuPDF, Poppler Splash,
+Poppler Cairo and Chrome. The rows of the MediaBox then show MuPDF, Poppler
+Splash and Poppler Cairo. The cache keeps the pages of every reference, so
+a run with `-refs all` after a default run draws only the pages that are
+not in the cache. The same holds the other way.
+
+A column of a reference names the conversion, then the renderer, such as
+"Microsoft Office - MuPDF" or "LibreOffice - Chrome". A reference without a
+conversion, such as a file of the kind `pdf`, or a reference whose
+renderer has the name of the conversion, such as GDI+, shows the renderer
+alone. A row shows ivy, ivy PDF, then the columns of the primary oracle,
+then the columns of the secondary oracle.
+
+### Chrome
+
+Chrome draws a page of a PDF file with PDFium, its PDF engine, as a person
+sees the file in the browser. The command starts one Chrome process for a
+run, at the first page that Chrome draws, and ends it at the end of the
+run. It looks for `google-chrome-stable`, `google-chrome`, `chromium` or
+`chromium-browser` on the PATH, in this order. It drives Chrome with the
+DevTools protocol, through the package `github.com/chromedp/chromedp` (D69).
+
+Chrome runs in its own headless mode, `--headless=new`. This mode shows a
+PDF file in the viewer of Chrome. The old headless shell of Chrome does not
+show a PDF file, and downloads it instead. So the command needs no virtual
+display such as Xvfb, and no pdf.js.
+
+For each page, the command opens a new tab. The tab gets the size of the
+page, from `pdfinfo`, with a margin of 40 CSS pixels, and a scale of the
+device of DPI/96. Then the tab opens the file with `#toolbar=0&zoom=100`.
+At the zoom 100%, a point is 4/3 CSS pixels, so a point is DPI/72 pixels,
+as with MuPDF. The tab gets its size before it opens the file, because the
+viewer does not draw the page again when the size of the tab changes. The
+command waits until the element `pdf-viewer` of the viewer has the pages of
+the file, shows the page with `goToPage`, and asks the viewer for the place
+of the page on the screen with `getPageScreenRect`, until the place stays
+the same. The viewer can place a page at half a CSS pixel. The picture then
+starts at the whole device pixel before that place, where Chrome draws the
+page. It takes pictures of that part of the screen
+every 0.2 seconds, until four pictures in a row are the same, because the
+viewer draws a page in steps. The viewer shows its gray background in place
+of a page that it did not draw yet, and a heavy page can take seconds
+before its first step. So a picture of the gray background alone does not
+count, for up to 20 seconds. The picture holds the page alone, without the
+toolbar, the gray background or the shadow of the page.
+
+Chrome rounds the size of a page to whole CSS pixels, and MuPDF rounds it
+up to whole pixels. So the command gives the picture the size of the page
+of MuPDF, from the CropBox and the rotation that `pdfinfo` gives. It drops
+the pixels at the edges of the picture of Chrome, which can mix the page
+with its shadow, and repeats the pixels next to them up to the size of
+MuPDF. The pixels of a page differ from the pixels of MuPDF by less than 3
+after the blur, as the test `TestChrome` makes sure.
+
+If the viewer asks for a password, the command gives it the password of the
+note of the manifest. The PDF file of a conversion has no password.
+
+Chrome runs with the environment of the other programs, with the
+configuration of fontconfig of "The fonts", and with `TMPDIR` in a new
+folder of the temporary folder of the system. Chrome makes a socket in
+`TMPDIR`, and the path of a socket must be short. The cache key of a page
+of Chrome holds the tag `pdfium4` and the key of the program of Chrome.
+
+### markdown-it
+
+The reference of a Markdown file is markdown-it in Chrome (D70). It looks
+as GitHub draws the file, on the pages of ivy. A page of HTML holds
+markdown-it 15 with these plugins: the alerts of GitHub, the task lists,
+the footnotes, the emoji, and @vscode/markdown-it-katex for the math. Shiki
+gives the colors of code with the theme `github-light-default`, and KaTeX
+draws the math. The style sheet is `github-markdown-light.css` of
+github-markdown-css. `test/review/SOURCES.md` gives the versions and the
+licenses.
+
+`fetch` downloads the files of the page once, as the files of the corpus,
+from the list `test/review/markdownit.tsv`. `render` makes sure that each
+file is in the cache, with its size and its sha256, and then runs the page
+without the network. If a file is not in the cache, each Markdown file has
+no reference, and the error says to run `fetch`.
+
+The command starts a server of HTTP on `127.0.0.1` for the run. It serves
+the files of the list at their paths on jsDelivr, so that the imports of a
+module find the other modules. It serves the page of each Markdown file at
+`/page/ID/`, and the files of the folder of the Markdown file under that
+path, but no file out of that folder. So a relative image of the file comes
+from its folder. A rule of Content Security Policy in the page lets it load
+files of the server alone.
+
+The page holds the text of the file as a string of JSON. Its script does
+these steps:
+
+1. It removes the front matter of YAML at the start of the text, as the
+   preview of VS Code and ivy do.
+2. It reads the language of each block of code, and Shiki loads the
+   grammar of each one. A block of an unknown language has no colors. A
+   block of the language `math` is display math, as on GitHub.
+3. markdown-it converts the text to HTML, with the HTML of the file. The
+   page puts the HTML into `<article class="markdown-body">`.
+4. An image of another site becomes its alternate text, as in ivy.
+5. The page waits until each image is decoded and each font is loaded,
+   and then sets `window.ivyState` to `done`. An error sets it to the
+   error.
+
+The command opens the page in a tab of the Chrome process of the run, and
+asks for `window.ivyState` every 0.1 seconds. When the page is done, the
+command prints it with `Page.printToPDF`, with `preferCSSPageSize` and the
+backgrounds. The first style sheet of the page is `ebook.PaperStyleFor` of
+the paper, which the package `markdown` of ivy gives its HTML too: the
+size of `@page`, and margins of 0.75 inch. The body has no margin. A line
+of a block of code wraps, as in ivy, because a page of paper cannot scroll
+as a block on GitHub does. Chrome draws with the fonts that fontconfig
+gives it, as in "The fonts". The style sheet of GitHub names Segoe UI for
+the text and Consolas for code before Liberation and the generic families.
+So the reference draws with them when a person copies the fonts of Windows
+into `~/.fonts`, as on the machine of the review on 2026-11-25.
+
+MuPDF and Chrome then draw the pages of the PDF file, as for the other
+references of PDF. The name of the conversion in the cache holds a hash of
+the style sheet of the paper, of the page and of `markdownit.tsv`, so a
+change of one of them converts the files again.
+
 ivy PDF is a column of the report that is not a reference. If LibreOffice,
-WeasyPrint or calibre converts a document to PDF, the package `pdf` of ivy
-renders that PDF file too, at the same resolution. The command compares
+WeasyPrint, calibre or markdown-it converts a document to PDF, the package
+`pdf` of ivy renders that PDF file too, at the same resolution. The command compares
 each page with the page of MuPDF. The difference shows the gaps of the PDF
 renderer of ivy. A PDF file has no column ivy PDF, because the column
 `ivy` already renders the file with the package `pdf`. ivy renders the
@@ -148,6 +306,7 @@ magick 'file[0]' -colorspace sRGB -background white -alpha remove -alpha off png
 ```
 
 The options of `ebook-convert` give calibre the page and the font of ivy.
+calibre converts a Markdown file only with `-refs all`.
 An ebook takes margins of 0.6 inch at the top and the bottom and 0.5 inch
 at the sides, and a serif font of 11 points. Its default page is 6 by 9
 inches. A Markdown or CHM file takes margins of 0.75 inch and a font of 12
@@ -189,8 +348,8 @@ A page of PDF has a MediaBox and a CropBox. The CropBox is the part of the
 page that a viewer shows, and ivy renders it (D31). MuPDF renders the
 CropBox by default. Poppler renders the MediaBox by default, so
 `pdftoppm` and `pdftocairo` get `-cropbox`. Then each reference of a PDF
-file, and of the PDF file of LibreOffice, calibre and WeasyPrint, shows
-the CropBox, as ivy does.
+file, and of the PDF file of LibreOffice, calibre, WeasyPrint and
+markdown-it, shows the CropBox, as ivy does.
 
 Each program runs with `HOME` in a temporary folder of the cache, and with
 the configuration of fontconfig of "The fonts". Each worker has its own
@@ -228,11 +387,12 @@ the margin. Poppler shows them.
 
 ## The fonts
 
-LibreOffice, calibre and WeasyPrint draw with the fonts that fontconfig
-gives them. Microsoft Office draws with the fonts of Windows. So ivy gets
-the fonts of the system too: the command gives ivy `SystemFonts: true` of
-`ivy.Config`. `-system-fonts=false` turns it off. ivy then has the fonts of
-the folder `fonts` of the repository and the Go fonts only (D23).
+LibreOffice, calibre, WeasyPrint and markdown-it in Chrome draw with the
+fonts that fontconfig gives them. Microsoft Office draws with the fonts of
+Windows. So ivy gets the fonts of the system too: the command gives ivy
+`SystemFonts: true` of `ivy.Config`. `-system-fonts=false` turns it off.
+ivy then has the fonts of the folder `fonts` of the repository and the Go
+fonts only (D23).
 
 ivy and the references see the same font folders:
 
@@ -272,8 +432,8 @@ with the same face.
 A text file, a Markdown file, an HTML file, a CSV file and an ebook give no
 paper (D32). ivy puts them on the paper of `Config.Paper`. The command
 renders each such document once on each paper of `-papers`, and gives the
-reference program the same paper. The kinds are those of calibre and of
-WeasyPrint, and csv, tsv and tab.
+reference program the same paper. The kinds are those of calibre, of
+markdown-it and of WeasyPrint, and csv, tsv and tab.
 
 `-papers` is a list of letter, legal, a4 and a5, each with `-landscape` or
 not, separated by commas. The paper `default` gives ivy the zero
@@ -292,6 +452,7 @@ The references get the paper in this way:
 | --- | --- |
 | calibre | `--custom-size WxH --unit point`, with the margins of the kind |
 | WeasyPrint | the size of `@page` in the style sheet of `ebook.PaperStyleFor` |
+| markdown-it | the size of `@page` in the style sheet of `ebook.PaperStyleFor` |
 | LibreOffice, for csv, tsv and tab | the page style of each sheet, set by `unopdf.py` |
 
 `pdfinfo` gives the sizes of the PDF files of the cache. calibre rounds a
@@ -363,10 +524,10 @@ with `.p<N>` before the extension, and N from 1:
 
 | Reference | id | Folder of the cache | File | Kinds | Pages |
 | --- | --- | --- | --- | --- | --- |
-| Microsoft Office | `msoffice` | `msoffice/` | `<name>.pdf` | Word, Excel, PowerPoint, Visio, Publisher, RTF, OpenDocument, csv | MuPDF, Poppler Splash |
+| Microsoft Office | `msoffice` | `msoffice/` | `<name>.pdf` | Word, Excel, PowerPoint, Visio, Publisher, RTF, OpenDocument, csv | MuPDF and Chrome, or with `-refs all` MuPDF, Poppler Splash, Poppler Cairo and Chrome |
 | Windows XPS | `winxps` | `windows/xps/` | `<name>.p<N>.png` | xps, oxps | the images themselves |
 | GDI+ | `gdiplus` | `windows/gdiplus/` | `<name>.png` | emf, wmf, emz, wmz | the image itself |
-| Apple iWork | `iwork` | `iwork/` | `<name>.pdf` | pages, key, numbers | MuPDF |
+| Apple iWork | `iwork` | `iwork/` | `<name>.pdf` | pages, key, numbers | MuPDF and Chrome, or with `-refs all` MuPDF, Poppler Splash, Poppler Cairo and Chrome |
 
 For example, the PDF file of Microsoft Office of `poi/docx/drawing.docx`
 is `test/review/cache/msoffice/poi/docx/drawing.docx.pdf`, and the image of
@@ -383,11 +544,13 @@ An external reference is the primary reference of some kinds: Microsoft
 Office of the files of Word, Excel, PowerPoint, Visio and Publisher, and of
 RTF, Windows XPS of XPS, GDI+ of the metafiles, and Apple iWork of Pages,
 Keynote and Numbers. On each page, `worst` uses the first reference that
-has a metric, the primary one first. The column "By reference" of the
+has a metric, the primary one first, drawn by its first renderer that is
+not Chrome. That is MuPDF for a PDF file. The column "By reference" of the
 table, the header of the document and the key `worst_by_reference` of
 `report.json` still give the worst against each reference, such as
 LibreOffice. For OpenDocument and csv, LibreOffice stays the primary
-reference, and Microsoft Office comes after it.
+reference. Microsoft Office comes after it with `-refs all`, and the
+default run does not show it.
 
 A program outside this machine makes its file on its own paper. So a
 document on a paper of `-papers` gets an external reference only on US
@@ -530,7 +693,7 @@ A reference can be wrong on a page, and ivy right. The file
 separated by tabs: the name of the document in the manifest, or that name
 with the paper, the page from 1 or `*` for each page, the id of the
 reference or `*` for each one, and a note. The ids are `soffice`,
-`msoffice`, `calibre`, `weasyprint`, `pdflatex`, `pdf`, `xps`, `winxps`,
+`msoffice`, `calibre`, `markdownit`, `weasyprint`, `pdflatex`, `pdf`, `xps`, `winxps`,
 `gs`, `inkscape`, `gdiplus`, `djvu`, `magick` and `iwork`. A line that starts
 with `#` is a comment.
 
@@ -596,6 +759,8 @@ has no reference.
 The cache holds these folders:
 
 - `files/` holds the files that `fetch` downloads.
+- `markdownit/files/` holds the files of the page of markdown-it that
+  `fetch` downloads, at their paths on jsDelivr.
 - `refs/<hash>/` holds the conversions and the pages of the references of a
   file. The hash is the start of the sha256 of the file. Each name holds a
   key of the program, which changes when the program changes, and the
@@ -645,17 +810,34 @@ The folder of `-out` holds these files:
   ivy PDF from MuPDF, `p1-ivypdf-diff.png`. The images of a row of the
   MediaBox start with `p1-media-`, such as `p1-media-mupdf.png`.
 
-The top of the report has a table of the documents, from the worst. A click
-on a heading sorts the table, and the fields above it filter the documents
-by kind, by status and by name. Under the table, each document has a
-section: its header, the errors and the log of ivy, and a row for each page.
-A row holds the image of ivy, the image of ivy PDF if the kind has that
-column, and the images of the references, in this order: ivy, ivy PDF,
-the primary external references, MuPDF, Poppler Splash, Poppler Cairo, and
-the other external references. When a document has more than one
-reference, the caption of a cell names the reference too, such as
-"Microsoft Office · MuPDF", and the header of a row names its primary
-reference. The box "show the differences", or the button of a row, shows
+The top of the report gives the run: the counts of the statuses, the
+programs, the time and the kinds. Under it, a tab for each group of kinds
+holds the documents of the group: PDF, Word, Excel, PowerPoint,
+OpenDocument, Other Office (Visio, Publisher, iWork, RTF and CSV), Page
+descriptions (XPS, PostScript, EPS, the metafiles and DjVu), Ebooks and
+text, HTML, LaTeX, Images, and Other for a kind of no group. The tab "All"
+comes first and shows every group. A tab without documents is not there.
+Each tab gives the number of its documents, and the number of the
+documents that ivy did not render, such as "Word 28, 2 failed". The status
+of such a document is not `ok` and not `partial`. The hash of the URL keeps
+the tab, such as `#tab=word`, so that a reload or a link opens the same
+tab. Without JavaScript, the report shows every group, one after the
+other.
+
+Each group starts with its name and a summary: the number of its
+documents, of the failures, and the mean `worst` of its documents that
+have one. Then comes a table of its documents, from the worst. A click on
+a heading sorts the table, and the fields above the tabs filter the
+documents by kind, by status and by name. Under the table, each document
+has a section: its header, the errors and the log of ivy, and a row for
+each page. A row holds the image of ivy, the image of ivy PDF if the kind
+has that column, and the images of the references, in this order: ivy, ivy
+PDF, the primary oracle, and the secondary oracle. With `-refs all`, the
+other references come after them. The caption of a cell names the column of
+the reference, such as "Microsoft Office - MuPDF", and the header of a row
+names its primary reference. The header of a document gives the worst
+against each column, as "worst by column", when it has more than one
+column. The box "show the differences", or the button of a row, shows
 the map of the difference in place of each reference and of ivy PDF: red
 where the pages differ, darker where they differ more.
 
@@ -696,8 +878,15 @@ These are the numbers under each image of a reference:
   differs by more than 2 percent.
 
 `worst` in the table is, for each page, the blurred difference from the
-closest cell of the primary reference, and the largest of these over the
-pages. A row says "references disagree" when two cells of the references
+cell of the primary reference drawn by its first renderer that is not
+Chrome, and the largest of these over the pages. For a PDF file, that
+renderer is MuPDF. Before D69, `worst` took the closest of the cells of
+MuPDF, Poppler Splash and Poppler Cairo of the primary reference. So a new
+number is never smaller than the old one. On 2026-11-25, on the kinds pdf
+and docx, 64 of 78 documents changed by less than 0.5. A PDF file that
+MuPDF draws in another way than Poppler changed more, such as
+`repo/pdf/pattern-shading-type6-2.pdf`, from 0.59 to 29.93, and
+`pdfjs/pdf/forms.pdf`, from 1.93 to 11.57. A row says "references disagree" when two cells of the references
 differ by more than 4 after the blur, such as Microsoft Office and
 LibreOffice. On such a page, the references themselves do not agree.
 
@@ -734,12 +923,16 @@ and the sizes:
 | `kinds[]` | for each kind: `kind`, `documents`, `pages` and `size_differs`, the pages of another size |
 | `documents[].paper` | the paper of a document without a paper. Its `name` also ends with the paper |
 | `documents[].external_references[]` | each external reference of the document: `id`, `name`, `file` in the cache, `pages`, and `error` |
-| `documents[].worst_by_reference` | the worst against each reference, by its id, such as `{"msoffice": 1.2, "soffice": 3.4}` |
+| `refs` | `primary` or `all`, the choice of `-refs` |
+| `documents[].worst_by_reference` | the worst against each reference, by its id, such as `{"msoffice": 1.2, "soffice": 3.4}`. It comes from the first renderer that is not Chrome |
+| `documents[].worst_by_renderer` | the worst against each column, by the id of the reference and the id of the renderer, such as `{"msoffice/mupdf": 1.2, "msoffice/chrome": 1.5}` |
+| `documents[].primary_reference`, `documents[].primary_renderer` | the ids of the primary oracle of the document and of the renderer that `worst` uses, such as `msoffice` and `mupdf`. A page where the primary oracle has no metric uses the next reference, as `rows[].primary_reference` says |
 | `documents[].size_differs_pages` | the number of pages of another size |
-| `documents[].rows[].primary_reference` | the id of the reference that `worst` uses on the page |
+| `documents[].rows[].primary_reference`, `documents[].rows[].primary_renderer` | the ids of the reference and of the renderer that `worst` uses on the page |
 | `documents[].rows[].size_differs` | `true` for a page of another size |
 | `documents[].rows[].references[].reference` | the id of the reference of the cell, such as `soffice` |
-| `documents[].rows[].references[].reference_name` | the name of the reference of the cell, when the document has more than one reference |
+| `documents[].rows[].references[].reference_name` | the name of the conversion of the reference of the cell, such as `LibreOffice`. It is not there for a file of the kind `pdf` |
+| `documents[].rows[].references[].renderer` | the id of the renderer of the cell, such as `mupdf` or `chrome` |
 | `documents[].rows[].references[].fault` | the note of a known fault of the reference on the page |
 
 `report.json` holds these keys for the rows of the MediaBox:

@@ -162,6 +162,16 @@ func TestRowMetrics(t *testing.T) {
 	if m.refsDiff <= disagreeBlurred || m.sizeDiffers {
 		t.Errorf("expected the references to disagree, and the same size, got: %+v", m)
 	}
+	// a cell of Chrome closer to ivy does not count for the worst, but for
+	// the worst of its column
+	chrome := cell("msoffice", ivyImg, "")
+	chrome.Renderer = chromeRenderer.id
+	row.Refs = append([]*Cell{chrome}, row.Refs...)
+	m = rowMetrics(row, []image.Image{ivyImg, office, lo}, groups)
+	if m.best != row.Refs[1].Metric.Blurred || m.byRenderer["msoffice/chrome"] != 0 || m.byRenderer["msoffice/"] != m.best {
+		t.Errorf("expected the worst of MuPDF, and Chrome by its column, got: %+v", m)
+	}
+	row.Refs = row.Refs[1:]
 	// a fault of Office leaves LibreOffice as the primary reference, and
 	// out of the disagreement
 	row.Refs[0].Fault = "a fault"

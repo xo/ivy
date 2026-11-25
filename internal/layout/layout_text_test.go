@@ -845,6 +845,60 @@ func inlineCheckWhiteSpace(t *testing.T, width int, space string, texts ...strin
 	}
 }
 
+// TestIdeographicBreak checks that a line feed that ideographic spaces
+// follow starts a new line with white-space normal, and that other line
+// feeds of Chinese text collapse (D68).
+func TestIdeographicBreak(t *testing.T) {
+	body := inlineBody(t, `
+      <style>body { font-size: 10px; width: 1000px }</style>
+      <body><span>`+"\n"+`　　此開卷第一回也，作者
+自云。 `+"\n"+`  　　此回中凡用“夢”</span>`)
+	if len(body.Children) != 2 {
+		t.Fatalf("%d lines, want 2", len(body.Children))
+	}
+	inlineText(t, only(t, only(t, body.Children[0])), "　　此開卷第一回也，作者自云。")
+	inlineText(t, only(t, only(t, body.Children[1])), "　　此回中凡用“夢”")
+}
+
+func TestCollapseKeepingIdeographicBreaks(t *testing.T) {
+	for _, tt := range []struct {
+		text, want string
+	}{
+		{"a\n b", "a b"},
+		{"a \n　b", "a\n　b"},
+		{"a\n\t\n 　b\nc", "a\n　b c"},
+		{"\n　a\n　b", " 　a\n　b"},
+		{"a　b\nc", "a　b c"},
+		{"", ""},
+	} {
+		if got := collapseKeepingIdeographicBreaks(tt.text); got != tt.want {
+			t.Errorf("%q: expected %q, got %q", tt.text, tt.want, got)
+		}
+	}
+}
+
+func TestRemoveWideSegmentBreaks(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		keep bool
+		want string
+	}{
+		{"作者\n自云", false, "作者自云"},
+		{"作者 \t\n  自云", false, "作者自云"},
+		{"作者\nCat", false, "作者\nCat"},
+		{"A\n自云", false, "A\n自云"},
+		{"가나\n다라", false, "가나\n다라"},
+		{"事務\n　　可巧", true, "事務\n　　可巧"},
+		{"事務\n　　可巧", false, "事務　　可巧"},
+		{"甲\n乙\n丙", false, "甲乙丙"},
+		{"甲\n\n乙", false, "甲\n\n乙"},
+	} {
+		if got := removeWideSegmentBreaks(tt.text, tt.keep); got != tt.want {
+			t.Errorf("%q, %t: expected %q, got %q", tt.text, tt.keep, tt.want, got)
+		}
+	}
+}
+
 func TestWhiteSpace1(t *testing.T) {
 	inlineCheckWhiteSpace(t, 1, "normal", "This", "+", "is", "text")
 }

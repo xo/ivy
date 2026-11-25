@@ -261,10 +261,22 @@ func FuzzOpen(f *testing.F) {
 	defer layout.SetGalleyOptions(layout.GalleyOptions{OneBlock: true, MaxParts: 4, Wait: true, Early: true})()
 	f.Add([]byte(sample))
 	f.Add([]byte("> > - [ ] *a* **b** ~~c~~ [^1]\n\n[^1]: x\n\n|a|b|\n|-|-|\n|1|2|\n"))
+	f.Add([]byte("<div align=\"center\"><img src=\"img/logo.png\" width=\"260\" align=\"right\"></div>\n\n" +
+		"<details><summary>a <kbd>b</kbd></summary>c<sup>d</sup></details>\n\n" +
+		"<table><tr><td align=\"center\"><picture><source srcset=\"x\"><img src=\"img/logo.png\"></picture></td></tr></table>\n"))
+	f.Add([]byte("> [!NOTE]\n> a\n\n```go\nfunc main() {}\n```\n\n```raw\n<b>x</b><span style=\"color: red\">y\n```\n"))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 4 << 20, MaxPixels: 1 << 20, MaxObjects: 10000, MaxDepth: 16}}
 	files := dir()
+	// the highlighter gives the code of the language raw as HTML, and puts
+	// the code of the other languages in a span
+	h := func(lang, code string) (string, bool) {
+		if lang == "raw" {
+			return code, true
+		}
+		return `<span style="color: red">` + escape(code) + `</span>`, true
+	}
 	f.Fuzz(func(t *testing.T, buf []byte) {
-		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), WithDir(files))
+		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg), WithDir(files), WithHighlighter(h))
 		if err != nil {
 			return
 		}

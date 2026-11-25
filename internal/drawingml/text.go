@@ -268,6 +268,10 @@ type TextBody struct {
 	// PowerPoint draws its slides, except the runs that RunStyle.Kern
 	// kerns.
 	NoKerning bool
+	// WinBaseline puts the baseline of each line where PowerPoint puts it,
+	// from the Windows ascent and descent of its font, and not where CSS
+	// puts it (D71).
+	WinBaseline bool
 }
 
 // Number counts the numbers of the paragraphs with automatic bullets, for
@@ -573,7 +577,7 @@ func ParseBodyStyle(n roxmltree.Node) BodyStyle {
 // list style of n goes over both, and the styles of the paragraphs and the
 // runs come from them.
 func (c *Colors) ParseTextBody(n roxmltree.Node, list *ListStyle, run *RunStyle, body BodyStyle, fields Fields) *TextBody {
-	tb := &TextBody{Body: body, NoKerning: true}
+	tb := &TextBody{Body: body, NoKerning: true, WinBaseline: true}
 	styles := *list
 	if run != nil {
 		for i := range styles {

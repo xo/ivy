@@ -72,6 +72,11 @@ type converter struct {
 	defaultTab float64
 	// evenOdd is set when the pages have even and odd headers.
 	evenOdd bool
+	// addSpacing is set by w:doNotUseHTMLParagraphAutoSpacing of the
+	// compatibility settings: Word then adds the spacing after a paragraph
+	// and the spacing before the next one, where it else puts the larger
+	// of the two.
+	addSpacing bool
 	// themeLang is the East Asian language that selects the East Asian
 	// fonts of the theme: the w:eastAsia of w:themeFontLang, or else of the
 	// w:lang of the default run properties.
@@ -132,6 +137,13 @@ type converter struct {
 	para string
 	// paraSeq counts the paragraphs.
 	paraSeq int
+	// compatMode is the compatibility mode of the settings: 15 for Word
+	// 2013 and later, or 0 when the file gives none.
+	compatMode int
+	// floatSeq is paraSeq after the last float that the text wraps
+	// around, or 0. A break that clears the floats soon after it moves
+	// the mark of its paragraph below the float, see runContent.
+	floatSeq int
 	// nested counts the notes and the text boxes that the conversion is
 	// in. A page break there is a line break.
 	nested int
@@ -303,6 +315,21 @@ func (c *converter) settings(root roxmltree.Node) {
 			c.evenOdd = v == "" || v == "1" || v == "true" || v == "on"
 		case "themeFontLang":
 			c.themeLang = ooxml.Attr(n, "eastAsia")
+		case "compat":
+			for e := range n.Children() {
+				if !e.IsElement() {
+					continue
+				}
+				switch e.TagName().Name() {
+				case "doNotUseHTMLParagraphAutoSpacing":
+					v := ooxml.Attr(e, "val")
+					c.addSpacing = v == "" || v == "1" || v == "true" || v == "on"
+				case "compatSetting":
+					if ooxml.Attr(e, "name") == "compatibilityMode" {
+						c.compatMode, _ = strconv.Atoi(ooxml.Attr(e, "val"))
+					}
+				}
+			}
 		}
 	}
 }

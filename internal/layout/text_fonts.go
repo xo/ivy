@@ -96,6 +96,9 @@ type FontConfiguration struct {
 	// colorFonts tells for each font whether it has the table COLR or the
 	// table SVG, which hold color glyphs.
 	colorFonts map[svg.FontID]bool
+	// winRatios holds for each font the share of its Windows ascent in its
+	// Windows ascent and descent, or 0, for -ivy-line-baseline (D71).
+	winRatios map[svg.FontID]float64
 	// colorGlyphs holds the color glyphs that the drawing drew, and nil for
 	// a glyph that has none, by colorGlyphKey. It holds at most
 	// maxColorGlyphs glyphs.

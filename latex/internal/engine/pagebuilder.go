@@ -241,9 +241,9 @@ func (e *Engine) paginateSingleList(list []node, pageOffset int) []*boxNode {
 	// shrink to a page TeX had not begun yet. Both sites have to agree about where the
 	// page starts, so the skip is done here, on the index the slice is taken from, and
 	// not inside findPageBreak where only one of the two would see it.
-	for start := skipDiscardable(list, 0); start < len(list); {
+	for start := pageTop(list, 0); start < len(list); { // ivy: pageTop, see ivy_pagebreak.go
 		end := e.findPageBreak(list, start)
-		page := trimTrailingGlue(list[start:end])
+		page := withLastFil(list[start:end], trimTrailingGlue(list[start:end])) // ivy: see ivy_pagebreak.go
 		switch {
 		case pageIsUnshippable(page):
 			for _, n := range page {
@@ -271,7 +271,8 @@ func (e *Engine) paginateSingleList(list []node, pageOffset int) []*boxNode {
 		// restart inside that run. Advancing by the full run (not end+1) is what
 		// keeps this loop linear: a long trailing discardable run would otherwise
 		// be rescanned on every one-node step, making pagination O(n²).
-		next := skipDiscardable(list, end)
+		// ivy: pageTop, see ivy_pagebreak.go
+		next := pageTop(list, end)
 		if next <= start { // safety: always make progress
 			next = start + 1
 		}
@@ -447,7 +448,20 @@ func (e *Engine) findPageBreak(list []node, start int) int {
 				least, best = c, i
 			}
 		}
-		page.add(list[i], maxDepth)
+		if fn, ok := list[i].(footnoteNode); ok {
+			// ivy: an insertion takes its height and depth from the goal of the
+			// page and leaves page_depth alone (tex.web §1009), and the first one
+			// gives the page the stretch and the shrink of \skip\footins
+			// (ivy_pagebreak.go).
+			page.total += fn.body.height + fn.body.depth
+			if !sawFootnote {
+				g := e.footinsGlue()
+				page.stretch[0] += g.stretch
+				page.shrink += g.shrink
+			}
+		} else {
+			page.add(list[i], maxDepth)
+		}
 		// \skip\footins is what the FIRST footnote of a page costs beyond its own
 		// height, and it is charged once for the page (tex.web:19638: page_goal is
 		// reduced by width(skip n) inside "Create a page insertion node", which runs

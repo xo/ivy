@@ -145,6 +145,13 @@ func displayLeftEdge(b *boxNode) int {
 	if b == nil {
 		return 0
 	}
+	// ivy: a display that displayRow packs starts with the kern of its left
+	// edge (ivy_math.go).
+	if len(b.list) > 0 {
+		if k, ok := b.list[0].(kernNode); ok {
+			return k.width
+		}
+	}
 	slack := b.width - naturalContentWidth(b)
 	if slack <= 0 {
 		return 0

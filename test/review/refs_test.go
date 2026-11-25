@@ -185,3 +185,78 @@ func TestRenderPassword(t *testing.T) {
 		t.Errorf("expected an empty folder tmp in the cache, got: %v %v", names, err)
 	}
 }
+
+// TestRefGroups checks the references of a document without and with
+// -refs all (D69): the primary oracle with MuPDF and Chrome, at most one
+// secondary oracle with MuPDF, and the route alone without the file of
+// the primary external reference.
+func TestRefGroups(t *testing.T) {
+	if _, err := exec.LookPath("pdfinfo"); err != nil {
+		t.Fatalf("oracle pdfinfo is not installed: %v", err)
+	}
+	repo, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdf := filepath.Join(repo, "internal", "hayro", "interpret", "testdata", "clip_path_nested.pdf")
+	cache := t.TempDir()
+	for _, x := range externals {
+		if x.id != "msoffice" && x.id != "iwork" {
+			continue
+		}
+		for _, name := range []string{"a.docx", "a.odt", "a.pages"} {
+			path := x.file(cache, Entry{Name: name})
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := linkOrCopy(pdf, path); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	columns := func(groups []*refGroup) string {
+		var out []string
+		for _, g := range groups {
+			for _, pr := range g.renderers {
+				out = append(out, g.id+"/"+pr.id)
+			}
+		}
+		return strings.Join(out, " ")
+	}
+	tests := []struct {
+		name, kind string
+		all        bool
+		want       string
+	}{
+		{"a.docx", "docx", false, "msoffice/mupdf msoffice/chrome soffice/mupdf"},
+		{"b.docx", "docx", false, "soffice/mupdf soffice/chrome"},
+		{"a.odt", "odt", false, "soffice/mupdf soffice/chrome"},
+		{"a.odt", "odt", true, "soffice/mupdf soffice/splash soffice/cairo soffice/chrome msoffice/mupdf msoffice/splash msoffice/cairo msoffice/chrome"},
+		{"a.pages", "pages", false, "iwork/mupdf iwork/chrome"},
+		{"b.pages", "pages", false, "soffice/mupdf soffice/chrome"},
+		{"a.pages", "pages", true, "iwork/mupdf iwork/splash iwork/cairo iwork/chrome soffice/mupdf soffice/splash soffice/cairo soffice/chrome"},
+		{"a.pdf", "pdf", false, "pdf/mupdf pdf/chrome"},
+		{"a.xps", "xps", false, "xps/xpstopng"},
+		{"a.md", "md", false, "markdownit/mupdf markdownit/chrome"},
+		{"a.md", "md", true, "markdownit/mupdf markdownit/splash markdownit/cairo markdownit/chrome calibre/mupdf calibre/splash calibre/cairo calibre/chrome"},
+	}
+	for _, tt := range tests {
+		env := &refEnv{cache: cache, dpi: 96, all: tt.all, keys: map[string]string{}}
+		j := &refJob{refEnv: env, kind: tt.kind, hash: strings.Repeat("ab", 32), tmp: t.TempDir()}
+		r := routeFor(tt.kind)
+		route := &refGroup{id: r.id, name: r.name, job: j, pages: -1, renderers: r.renderers}
+		d := &DocReport{Entry: Entry{Name: tt.name, Kind: tt.kind}}
+		var extra []*refGroup
+		if tt.all {
+			for _, x := range extraRoutes[tt.kind] {
+				extra = append(extra, &refGroup{id: x.id, name: x.name, job: j, pages: -1, renderers: x.renderers})
+			}
+		}
+		if got := columns(refGroups(t.Context(), d, j, route, extra, nil)); got != tt.want {
+			t.Errorf("%s, all %t: expected %q, got: %q", tt.name, tt.all, tt.want, got)
+		}
+		if len(d.RefNames) != len(strings.Fields(tt.want)) {
+			t.Errorf("%s, all %t: expected a name for each column, got: %q", tt.name, tt.all, d.RefNames)
+		}
+	}
+}

@@ -69,6 +69,24 @@ func TestAutospacing(t *testing.T) {
 	}
 }
 
+// TestParagraphSpacing checks that the spacing before a paragraph is a
+// margin, which collapses with the spacing after the paragraph before, as
+// Word puts the larger of the two, and a padding, which adds to it, with
+// w:doNotUseHTMLParagraphAutoSpacing.
+func TestParagraphSpacing(t *testing.T) {
+	p := `<w:p><w:pPr><w:spacing w:before="480" w:after="480"/></w:pPr><w:r><w:t>Text</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(p+p))
+	if !strings.Contains(html, `margin-top: 24pt`) || strings.Contains(html, `padding-top: 24pt`) {
+		t.Errorf("expected the spacing before as a margin that collapses:\n%s", html)
+	}
+	settings := fixture.WordPart{ID: "rId9", Type: "settings", Name: "word/settings.xml",
+		Data: fixture.WordXML("w:settings", `<w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat>`)}
+	html, _ = convertHTML(t, fixture.DOCX(p+p, settings))
+	if !strings.Contains(html, `padding-top: 24pt`) {
+		t.Errorf("expected the spacing before as a padding that adds:\n%s", html)
+	}
+}
+
 // TestSectionEndBreak checks that an empty paragraph that ends a section
 // does not break the page before it, so that the next section starts the
 // next page, and no page is blank.
@@ -442,15 +460,23 @@ func TestVMLShapeColumn(t *testing.T) {
 
 // TestBreakBeforeMark checks that a break of a line at the end of a
 // paragraph gives the mark of the paragraph a line of its own, as in Word,
-// and that a break that clears the floats does not (the cells of
-// poi/docx/landscape-letter.docx and aspose/docx/rendering.docx).
+// and that a break that clears a float just before it does not
+// (aspose/docx/rendering.docx). A break that clears no float is a break of
+// a line (page 2 of poi/docx/drawing.docx).
 func TestBreakBeforeMark(t *testing.T) {
-	body := `<w:p><w:r><w:t>Text</w:t><w:br/><w:br/></w:r></w:p><w:p><w:r><w:br w:type="textWrapping" w:clear="all"/></w:r></w:p>`
+	clearing := `<w:p><w:r><w:br w:type="textWrapping" w:clear="all"/></w:r></w:p>`
+	body := `<w:p><w:r><w:t>Text</w:t><w:br/><w:br/></w:r></w:p>` + clearing
 	html, _ := convertHTML(t, fixture.DOCX(body))
 	if !strings.Contains(html, "Text</span><br/><br/><br/></p>") && !strings.Contains(html, "Text<br/><br/><br/></p>") {
 		t.Errorf("expected a third break for the mark of the paragraph:\n%s", html)
 	}
+	if strings.Contains(html, `<br class="clear"/>`) || !strings.Contains(html, `"><br/><br/></p>`) {
+		t.Errorf("expected a line for the mark after a break that clears no float:\n%s", html)
+	}
+	float := `<w:tbl><w:tblPr><w:tblpPr w:vertAnchor="text" w:tblpX="2880" w:tblpY="1"/></w:tblPr>` +
+		`<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>`
+	html, _ = convertHTML(t, fixture.DOCX(float+`<w:p/>`+clearing))
 	if !strings.Contains(html, `<br class="clear"/></p>`) {
-		t.Errorf("expected no break after a break that clears the floats:\n%s", html)
+		t.Errorf("expected no break after a break that clears a float:\n%s", html)
 	}
 }

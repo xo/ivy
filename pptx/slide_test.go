@@ -301,6 +301,41 @@ func TestTextDisplayList(t *testing.T) {
 	}
 }
 
+// TestSlideTextStyle checks that a text box of a slide takes the default
+// text style of the presentation, without the other style of the master,
+// as PowerPoint draws it, and that a text box of the master takes the
+// other style of the master.
+func TestSlideTextStyle(t *testing.T) {
+	text := `<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Text</a:t></a:r></a:p></p:txBody>`
+	geom := `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`
+	box := strings.Replace(shape(2, xfrm(50, 50, 300, 100, "")+geom, text), "<p:cNvSpPr/>", `<p:cNvSpPr txBox="1"/>`, 1)
+	master := strings.Replace(shape(9, xfrm(50, 300, 300, 100, "")+geom, strings.Replace(text, "Text", "Master", 1)), "<p:cNvSpPr/>", `<p:cNvSpPr txBox="1"/>`, 1)
+	f := &fixture.PPTX{
+		DefaultTextStyle: `<a:lvl1pPr><a:defRPr sz="1200"><a:latin typeface="+mn-lt"/></a:defRPr></a:lvl1pPr>`,
+		MasterShapes:     master,
+		Slides:           []fixture.PPTXSlide{{Shapes: box}},
+	}
+	d, err := Open(t.Context(), bytes.NewReader(f.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.Page(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l display.List
+	if err := p.(*page).scene.Draw(t.Context(), &l, okage.IdentityTransform()); err != nil {
+		t.Fatal(err)
+	}
+	// the four letters of Text at 12 points, 16 pixels, and the six
+	// letters of Master at the 18 points of the other style, 24 pixels
+	for _, want := range []string{"glyphs 4 16", "glyphs 6 24"} {
+		if !strings.Contains(l.String(), want) {
+			t.Errorf("expected %q, got:\n%s", want, l.String())
+		}
+	}
+}
+
 func TestDescribe(t *testing.T) {
 	d, err := Open(t.Context(), bytes.NewReader((&fixture.PPTX{}).Bytes()))
 	if err != nil {

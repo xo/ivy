@@ -182,11 +182,17 @@ var contentNames = map[string]bool{
 	"fldSimple": true, "noBreakHyphen": true, "oMath": true,
 }
 
-// empty reports whether the paragraph p shows nothing but its mark.
+// empty reports whether the paragraph p shows nothing but its mark. The
+// properties of p do not count, so a w:tab of its w:tabs is no content.
 func empty(p roxmltree.Node) bool {
-	for d := range p.Descendants() {
-		if d.IsElement() && contentNames[d.TagName().Name()] {
-			return false
+	for e := range p.Children() {
+		if !e.IsElement() || e.TagName().Name() == "pPr" {
+			continue
+		}
+		for d := range e.Descendants() {
+			if d.IsElement() && contentNames[d.TagName().Name()] {
+				return false
+			}
 		}
 	}
 	return true
@@ -487,12 +493,15 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 	if indent != 0 {
 		s.set("text-indent", pt(indent))
 	}
-	// Word adds the spacing after a paragraph and the spacing before the
-	// next one. The spacing before is a padding, which does not collapse
-	// with the margin of the spacing after. The spacing after is a margin,
-	// which the bottom of a page cuts, as in Word.
+	// Between two paragraphs, Word puts the larger of the spacing after
+	// the first one and the spacing before the second one, as the margins
+	// of CSS collapse. With addSpacing, Word adds the two, and the spacing
+	// before is a padding, which does not collapse with the margin of the
+	// spacing after. A paragraph with a border or a shading keeps a margin,
+	// which its border and its shading do not hold. The spacing after is a
+	// margin, which the bottom of a page cuts, as in Word.
 	if before > 0 {
-		s.set(pick(boxed || autoBefore, "margin-top", "padding-top"), pt(before))
+		s.set(pick(boxed || autoBefore || !c.addSpacing, "margin-top", "padding-top"), pt(before))
 	}
 	if after > 0 {
 		s.set("margin-bottom", pt(after))
@@ -728,7 +737,7 @@ func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props) {
 	default:
 		if hanging > 0 {
 			s.set("display", "inline-block")
-			s.set("min-width", pt(hanging))
+			s.set("min-width", pt(markerTab(ppr)-(ppr.num("ind.left", 0)/20-hanging)))
 			s.set("text-indent", "0")
 		} else {
 			suffix = "\t"
@@ -744,6 +753,33 @@ func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props) {
 	c.w.WriteString(`<span style="` + attrText(style) + `">`)
 	escape(c.w, text+suffix, false)
 	c.w.WriteString("</span>")
+}
+
+// markerTab returns the place in points where the text after the number of
+// a paragraph with the properties ppr and a hanging indent starts: the
+// first tab stop between the start of the number and the left indent, else
+// the left indent, as in Word.
+func markerTab(ppr props) float64 {
+	left := ppr.num("ind.left", 0) / 20
+	start := left - ppr.num("ind.hanging", 0)/20
+	stop := left
+	for k, v := range ppr {
+		pos, ok := strings.CutPrefix(k, "tab.")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(pos)
+		if err != nil {
+			continue
+		}
+		switch val, _, _ := strings.Cut(v, " "); val {
+		case "left", "start", "num":
+			if x := float64(n) / 20; x > start && x < stop {
+				stop = x
+			}
+		}
+	}
+	return stop
 }
 
 // inlines converts the inline content of n: the runs, the links, the
@@ -858,10 +894,12 @@ func (c *converter) runContent(r roxmltree.Node, p, base props) {
 			case "column":
 				c.pageBreak("column")
 			default:
-				if v := ooxml.Attr(e, "clear"); v != "" && v != "none" {
-					// A break that clears the floats adds no line for
-					// the mark of the paragraph after it, as in Word.
-					// The class tells it from a break that does.
+				if v := ooxml.Attr(e, "clear"); v != "" && v != "none" && c.floatSeq > 0 && c.paraSeq-c.floatSeq <= 3 {
+					// A break that clears a float just before it puts
+					// the mark of its paragraph below the float, and so
+					// adds no line for the mark, as in Word. The class
+					// tells it from a break that does. Without such a
+					// float, the break is a break of a line.
 					c.w.WriteString(`<br class="clear"/>`)
 					continue
 				}

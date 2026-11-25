@@ -104,6 +104,41 @@ func TestQuartile(t *testing.T) {
 	}
 }
 
+func TestBoxAxis(t *testing.T) {
+	// the box goes from below zero to above it, and the axis of the
+	// categories is at the bottom of the plot, as Office draws it, so
+	// that its light line does not cross the box at zero
+	c, err := Parse(exXML("", "boxWhisker", "", []string{"x", "x", "x", "x", "x", "x", "x", "x"}, []float64{-9, -6, -3, 3, 6, 9, 12, 15}),
+		Options{Theme: testTheme(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := render(t, c, 400, 300)
+	red := color.NRGBA{255, 0, 0, 255}
+	x0, y0, x1, y1 := 400, 300, 0, 0
+	for y := range 300 {
+		for x := range 400 {
+			if count(pm, red, x, y, x+1, y+1) == 1 {
+				x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x+1), max(y1, y+1)
+			}
+		}
+	}
+	if x1-x0 < 20 || y1-y0 < 40 {
+		t.Fatalf("expected the box, got (%d, %d)-(%d, %d)", x0, y0, x1, y1)
+	}
+	light := 0
+	for y := y0 + 2; y < y1-2; y++ {
+		for x := x0 + 2; x < x1-2; x++ {
+			if p := at(pm, x, y); p.R > 200 && p.G > 30 {
+				light++
+			}
+		}
+	}
+	if light != 0 {
+		t.Errorf("expected no light pixel in the box (%d, %d)-(%d, %d), got: %d", x0, y0, x1, y1, light)
+	}
+}
+
 func TestChartExFrame(t *testing.T) {
 	for _, layout := range []string{"regionMap"} {
 		c, err := Parse(exXML("Map", layout, "", []string{"a", "b"}, []float64{1, 2}), Options{})

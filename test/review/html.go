@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"image"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -33,19 +34,163 @@ func metricClass(v float64) string {
 }
 
 // refLabel returns the name of the reference with the id id, such as
-// "LibreOffice" for "soffice", or id when it has no name.
+// "LibreOffice" for "soffice", "PDF" for a PDF file that the references
+// draw as it is, or id when it has no name.
 func refLabel(id string) string {
+	if id == pdfRoute.id {
+		return "PDF"
+	}
+	if name := refName(id); name != "" {
+		return name
+	}
+	return id
+}
+
+// refName returns the name of the conversion of the reference with the id
+// id, or an empty string when it has none.
+func refName(id string) string {
 	for _, x := range externals {
 		if x.id == id {
 			return x.name
 		}
 	}
 	for r := range routeKinds {
-		if r.id == id && r.name != "" {
+		if r.id == id {
 			return r.name
 		}
 	}
+	return ""
+}
+
+// rendererName returns the name of the page renderer with the id id, such
+// as "MuPDF" for "mupdf", or id when it is not known.
+func rendererName(id string) string {
+	all := slices.Concat(pdfRenderers, []pageRenderer{chromeRenderer})
+	for _, x := range externals {
+		all = append(all, x.renderers...)
+	}
+	for r := range routeKinds {
+		all = append(all, r.renderers...)
+	}
+	for _, pr := range all {
+		if pr.id == id {
+			return pr.name
+		}
+	}
 	return id
+}
+
+// worstByColumn returns the worst numbers of d against each column of a
+// reference, in the order of the columns.
+func worstByColumn(d *DocReport) []refWorst {
+	var out []refWorst
+	seen := map[string]bool{}
+	add := func(key string) {
+		v, ok := d.WorstByRenderer[key]
+		if !ok || seen[key] {
+			return
+		}
+		seen[key] = true
+		ref, renderer, _ := strings.Cut(key, "/")
+		out = append(out, refWorst{ID: key, Name: refColumn(refName(ref), rendererName(renderer)), Worst: v})
+	}
+	for _, r := range d.Rows {
+		for _, c := range r.Refs {
+			add(c.Ref + "/" + c.Renderer)
+		}
+	}
+	keys := make([]string, 0, len(d.WorstByRenderer))
+	for k := range d.WorstByRenderer {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		add(k)
+	}
+	return out
+}
+
+// kindTab is a tab of the report: a group of kinds.
+type kindTab struct {
+	id, name string
+	kinds    []string
+}
+
+// kindTabs are the tabs of the report, in their order. A kind that no tab
+// names goes into the tab "Other".
+var kindTabs = []kindTab{
+	{"pdf", "PDF", []string{"pdf", "ai"}},
+	{"word", "Word", []string{"docx", "dotx", "docm", "dotm", "doc", "dot"}},
+	{"excel", "Excel", []string{"xlsx", "xltx", "xlsm", "xltm", "xls", "xlt"}},
+	{"powerpoint", "PowerPoint", []string{"pptx", "potx", "ppsx", "pptm", "ppsm", "ppt", "pps", "pot"}},
+	{"opendocument", "OpenDocument", []string{"odt", "ott", "odm", "ods", "ots", "odp", "otp", "odg", "otg", "fodt", "fods", "fodp", "fodg"}},
+	{"office", "Other Office", []string{"vsdx", "vsdm", "vstx", "vstm", "vsd", "vst", "vss", "pub", "pages", "key", "numbers", "rtf", "csv", "tsv", "tab"}},
+	{"pagedesc", "Page descriptions", []string{"xps", "oxps", "ps", "eps", "epsi", "epsf", "ept", "emf", "wmf", "emz", "wmz", "djvu", "djv"}},
+	{"ebook", "Ebooks and text", []string{"epub", "kepub", "mobi", "prc", "azw", "azw3", "azw4", "fb2", "fbz", "htmlz", "txtz", "chm", "md", "markdown", "txt", "text"}},
+	{"html", "HTML", []string{"html", "htm", "xhtml"}},
+	{"latex", "LaTeX", texKinds},
+	{"image", "Images", []string{"psd", "psb", "ora", "kra", "raw", "cr2", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "pef", "srw", "raf", "cbz", "cbt"}},
+}
+
+// docTab is a tab of the report with its documents.
+type docTab struct {
+	ID, Name string
+	Docs     []*DocReport
+	// Failed counts the documents that ivy did not render, see failed.
+	Failed int
+	// Mean is the mean Worst of the documents with a metric, Measured of
+	// them, or -1 when none has one.
+	Mean     float64
+	Measured int
+}
+
+// docTabs returns the tabs of the report that hold documents, with the
+// documents of each one in the order of docs.
+func docTabs(docs []*DocReport) []docTab {
+	tabs := make([]docTab, len(kindTabs)+1)
+	for i, k := range kindTabs {
+		tabs[i] = docTab{ID: k.id, Name: k.name}
+	}
+	tabs[len(kindTabs)] = docTab{ID: "other", Name: "Other"}
+	for _, d := range docs {
+		i := slices.IndexFunc(kindTabs, func(k kindTab) bool { return contains(k.kinds, d.Kind) })
+		if i < 0 {
+			i = len(kindTabs)
+		}
+		tabs[i].Docs = append(tabs[i].Docs, d)
+	}
+	out := tabs[:0]
+	for _, t := range tabs {
+		if len(t.Docs) == 0 {
+			continue
+		}
+		t.Failed = failed(t.Docs)
+		sum := 0.0
+		for _, d := range t.Docs {
+			if d.Worst >= 0 {
+				sum += d.Worst
+				t.Measured++
+			}
+		}
+		t.Mean = -1
+		if t.Measured > 0 {
+			t.Mean = sum / float64(t.Measured)
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+// failed counts the documents of docs that ivy did not render: each status
+// but ok and partial.
+func failed(docs []*DocReport) int {
+	n := 0
+	for _, d := range docs {
+		if d.Status != StatusOK && d.Status != StatusPartial {
+			n++
+		}
+	}
+	return n
 }
 
 // refWorst is the worst number of a document against one reference.
@@ -143,16 +288,56 @@ var pageTemplate = template.Must(template.New("page").Funcs(template.FuncMap{
 		}
 		return out
 	},
-	"hasPrefix": strings.HasPrefix,
-	"worstBy":   worstBy,
-	"refLabel":  refLabel,
+	"hasPrefix":     strings.HasPrefix,
+	"worstBy":       worstBy,
+	"refLabel":      refLabel,
+	"refColumn":     refColumn,
+	"tabs":          docTabs,
+	"failed":        failed,
+	"worstByColumn": worstByColumn,
 	"multi": func(d *DocReport) bool {
 		return len(d.WorstBy) > 1 || len(d.Externals) > 0
 	},
 }).Parse(pageHTML))
 
 // pageHTML is the template of index.html.
-const pageHTML = `{{define "dims"}}{{if .X}} width="{{.X}}" height="{{.Y}}"{{end}}{{end}}<!doctype html>
+const pageHTML = `{{define "doc"}}
+<section class="doc" id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}">
+<h2>{{.Name}} <span class="badge {{.Status}}">{{.Status}}</span></h2>
+<p class="meta">{{.Kind}}{{if .Source}} · {{.Source}}{{end}}{{if .License}} · {{.License}}{{end}} · {{if hasPrefix .URL "https://"}}<a href="{{.URL}}">{{.URL}}</a>{{else}}{{.URL}}{{end}}{{if .Note}} · {{.Note}}{{end}}</p>
+<p class="meta">ivy: {{if .Preview}}a preview{{else}}{{pages .Pages}} pages{{end}}, open {{msf .OpenMS}}, render {{msf .RenderMS}} · reference{{if .Reference}} through {{.Reference}}{{end}}: {{pages .RefPages}} pages · total {{msf .TotalMS}}{{if ge .IvyPDFWorst 0.0}} · ivy PDF vs MuPDF <span class="{{mclass .IvyPDFWorst}}">{{f2 .IvyPDFWorst}}</span>{{end}}{{if .Disagree}} · <span class="warnbadge">the references disagree on {{.Disagree}} pages</span>{{end}}{{with .MediaBoxWorst}} · MediaBox: worst <span class="{{mclass .}}">{{f2 .}}</span>{{end}}{{if .SizeDiffers}} · <span class="bad">{{.SizeDiffers}} pages of another size</span>{{end}}</p>
+{{if .Paper}}<p class="meta">paper: {{.Paper.Name}}{{if .Paper.Width}}, {{.Paper.Width}} × {{.Paper.Height}} pt{{end}}</p>{{end}}
+{{if multi .}}<p class="meta">worst by reference: {{range $j, $w := worstBy .}}{{if $j}} · {{end}}{{$w.Name}} <span class="{{mclass $w.Worst}}">{{f2 $w.Worst}}</span>{{end}}{{range .Externals}} · {{.Name}}: {{pages .Pages}} pages, {{.File}}{{end}}</p>{{end}}
+{{with worstByColumn .}}{{if gt (len .) 1}}<p class="meta">worst by column: {{range $j, $w := .}}{{if $j}} · {{end}}{{$w.Name}} <span class="{{mclass $w.Worst}}">{{f2 $w.Worst}}</span>{{end}}</p>{{end}}{{end}}
+{{range .Externals}}{{if .Error}}<p class="err">{{.Name}}: {{first .Error}}</p>{{end}}{{end}}
+{{if .Error}}<p class="err">ivy: {{first .Error}}</p>{{if long .Error}}<details><summary>the whole error</summary><pre>{{.Error}}</pre></details>{{end}}{{end}}
+{{if .RefError}}<p class="err">reference: {{first .RefError}}</p>{{if long .RefError}}<details><summary>the whole error</summary><pre>{{.RefError}}</pre></details>{{end}}{{end}}
+{{if .IvyPDFError}}<p class="err">ivy PDF: {{first .IvyPDFError}}</p>{{if long .IvyPDFError}}<details><summary>the whole error</summary><pre>{{.IvyPDFError}}</pre></details>{{end}}{{end}}
+{{if .Log}}<details{{if le (len .Log) 4}} open{{end}}><summary>{{len .Log}} messages of the log of ivy</summary><pre>{{range .Log}}{{.}}
+{{end}}</pre></details>{{end}}
+{{if .IvyPDFLog}}<details><summary>{{len .IvyPDFLog}} messages of the log of ivy PDF</summary><pre>{{range .IvyPDFLog}}{{.}}
+{{end}}</pre></details>{{end}}
+{{$cols := cols .}}{{$d := .}}{{range .Rows}}{{$row := .}}
+<div class="row" style="--cols:{{$cols}}">
+<div class="rowhead">Page {{.Page}}{{if eq .Box "media"}}, MediaBox{{if ge .RefsDiff 0.0}} <span class="m">the references differ by {{f2 .RefsDiff}}</span>{{end}}{{end}}{{if .Disagrees}} <span class="warnbadge">references disagree ({{f2 .RefsDiff}})</span>{{end}}{{if and .Primary (multi $d)}} <span class="m">primary: {{refLabel .Primary}}</span>{{end}}{{if .SizeDiffers}} <span class="bad">the size differs from {{refLabel .Primary}}</span>{{end}}{{if .Refs}} <button type="button" class="rowdiff">differences</button>{{end}}</div>
+{{with .Ivy}}<figure class="ivy{{if $row.SizeDiffers}} sizediff{{end}}"><figcaption>{{.Name}}</figcaption>
+{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy"></a>{{end}}
+<div class="m">{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
+{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
+{{with .IvyPDF}}<figure class="ref ivypdf"><figcaption>{{.Name}}</figcaption>
+{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy PDF"></a>{{end}}
+{{if .DiffThumb}}<a class="diff" href="{{.Diff}}"><img loading="lazy" src="{{.DiffThumb}}"{{template "dims" .Size}} alt="difference of ivy PDF from MuPDF"></a>{{end}}
+<div class="m">{{with .Metric}}<span class="{{mclass .Blurred}}">vs MuPDF: blurred {{f2 .Blurred}}</span> · mean {{f2 .Mean}}{{if .Scaled}} · <span class="{{if .SizeOff}}bad{{else}}fair{{end}}">ivy PDF {{size .IvySize}} scaled</span>{{end}} · {{end}}{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
+{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
+{{range .Refs}}<figure class="ref{{if .Fault}} fault{{end}}"><figcaption>{{refColumn .RefName .Name}}</figcaption>
+{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of {{.Name}}"></a>{{end}}
+{{if .DiffThumb}}<a class="diff" href="{{.Diff}}"><img loading="lazy" src="{{.DiffThumb}}"{{template "dims" .Size}} alt="difference from {{.Name}}"></a>{{end}}
+<div class="m">{{with .Metric}}<span class="{{mclass .Blurred}}">blurred {{f2 .Blurred}}</span> · mean {{f2 .Mean}}{{if .Scaled}} · <span class="{{if .SizeOff}}bad{{else}}fair{{end}}">ivy {{size .IvySize}} scaled</span>{{end}} · {{end}}{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}</div>
+{{if .Fault}}<div class="fnote">known fault of the reference, not counted: {{.Fault}}</div>{{end}}
+{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
+</div>{{end}}
+</section>
+{{end}}{{define "dims"}}{{if .X}} width="{{.X}}" height="{{.Y}}"{{end}}{{end}}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -203,6 +388,12 @@ table.kinds{border-collapse:collapse;margin:6px 0 12px;font-size:13px}
 .kinds th,.kinds td{padding:2px 10px;border-bottom:1px solid var(--line);text-align:right}
 .kinds th:first-child,.kinds td:first-child{text-align:left}
 .hidden{display:none}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
+.tabs[hidden]{display:none}
+.tabs button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+.tabs button[aria-selected=true]{border-color:var(--link);box-shadow:inset 0 -2px 0 var(--link)}
+.tabs .n{color:var(--muted);font-size:12px}
+h2.tabhead{font-size:18px;margin:18px 0 2px}
 section.doc figure a{cursor:zoom-in}
 .gal{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;background:rgba(10,12,16,.94);color:#e6edf3}
 .gal.hidden{display:none}
@@ -236,8 +427,8 @@ section.doc figure a{cursor:zoom-in}
 {{range .Notes}}<p class="err">{{.}}</p>{{end}}
 <details><summary>Programs</summary><pre>{{range .Programs}}{{.Name}}: {{.Version}}
 {{end}}</pre></details>
-<p class="muted">Worst: for each page, the blurred difference of ivy from its closest reference, and the largest of these over the pages. Blurred: the mean difference of the grey levels after a blur of 5 by 5 pixels, from 0 to 255. Mean: the mean difference of the channels. Under 2 is green, under 5 is amber. ivy PDF vs MuPDF: when the references convert a document to PDF, ivy renders that PDF file too, as the column ivy PDF. The number is the largest blurred difference of that column from MuPDF over the pages. It shows the gaps of the PDF renderer of ivy. It is not a reference, so Worst and Refs disagree leave it out. MediaBox: if the MediaBox of a page of a PDF file differs from its CropBox, the page has a second row that shows the MediaBox. The other rows show the CropBox. Worst and Refs disagree leave the rows of the MediaBox out, and the header of the document gives their worst.</p>
-<p class="muted">Primary reference: a file of Microsoft Office is compared with Microsoft Office first, when its PDF file is in the cache, an XPS file with Windows XPS, a metafile with GDI+, and an iWork file with Apple iWork. Worst uses the primary reference of each page. By reference gives the worst against each reference. Fault: a cell with a dashed border is a known fault of the reference, from reference-faults.tsv, and no number counts it. Size: a page of ivy whose size differs by more than one pixel from the page of the primary reference has a red border. Paper: a document whose file gives no paper renders on each paper of -papers, with the paper in its name (D32).</p>
+<p class="muted">Worst: for each page, the blurred difference of ivy from its primary reference, and the largest of these over the pages. Blurred: the mean difference of the grey levels after a blur of 5 by 5 pixels, from 0 to 255. Mean: the mean difference of the channels. Under 2 is green, under 5 is amber. ivy PDF vs MuPDF: when the references convert a document to PDF, ivy renders that PDF file too, as the column ivy PDF. The number is the largest blurred difference of that column from MuPDF over the pages. It shows the gaps of the PDF renderer of ivy. It is not a reference, so Worst and Refs disagree leave it out. MediaBox: if the MediaBox of a page of a PDF file differs from its CropBox, the page has a second row that shows the MediaBox. The other rows show the CropBox. Worst and Refs disagree leave the rows of the MediaBox out, and the header of the document gives their worst.</p>
+<p class="muted">References: {{if eq .Refs "all"}}every reference, with each PDF file drawn by MuPDF, Poppler Splash, Poppler Cairo and Chrome (-refs all){{else}}the primary oracle of each kind, with its PDF file drawn by MuPDF and Chrome, and at most one secondary oracle, with its PDF file drawn by MuPDF (D69){{end}}. A column names the conversion, then the renderer, such as Microsoft Office - MuPDF. Primary reference: a file of Microsoft Office is compared with Microsoft Office first, when its PDF file is in the cache, an XPS file with Windows XPS, a metafile with GDI+, and an iWork file with Apple iWork. Worst uses the primary reference of each page, drawn by MuPDF for a PDF file. Chrome does not count for Worst. By reference gives the worst against each reference, and worst by column the worst against each column. Fault: a cell with a dashed border is a known fault of the reference, from reference-faults.tsv, and no number counts it. Size: a page of ivy whose size differs by more than one pixel from the page of the primary reference has a red border. Paper: a document whose file gives no paper renders on each paper of -papers, with the paper in its name (D32).</p>
 {{if .Papers}}<p class="muted">Papers: {{range $i, $p := .Papers}}{{if $i}}, {{end}}{{$p.Name}}{{end}}. Fonts of the system: {{if .SystemFonts}}yes{{else}}no{{end}}{{range .FontDirs}} · {{.}}{{end}}.</p>{{end}}
 <table class="kinds"><thead><tr><th>Kind</th><th>Documents</th><th>Pages</th><th>Pages of another size</th></tr></thead><tbody>
 {{range .Kinds}}<tr><td>{{.Kind}}</td><td>{{.Documents}}</td><td>{{.Pages}}</td><td{{if .SizeDiffers}} class="bad"{{end}}>{{.SizeDiffers}}</td></tr>
@@ -249,50 +440,23 @@ section.doc figure a{cursor:zoom-in}
 <label><input id="showdiff" type="checkbox"> show the differences</label>
 <span id="shown" class="muted"></span>
 </div>
-<table class="sum" id="sum">
+{{$tabs := tabs .Docs}}<nav class="tabs" role="tablist" aria-label="the kinds of the documents" hidden>
+<button type="button" role="tab" data-tab="all" aria-selected="true">All <span class="n">{{len .Docs}}{{with failed .Docs}}, {{.}} failed{{end}}</span></button>
+{{range $tabs}}<button type="button" role="tab" data-tab="{{.ID}}" aria-controls="tab-{{.ID}}" aria-selected="false">{{.Name}} <span class="n">{{len .Docs}}{{if .Failed}}, {{.Failed}} failed{{end}}</span></button>
+{{end}}</nav>
+{{range $tabs}}<section class="tab" id="tab-{{.ID}}" data-tab="{{.ID}}" role="tabpanel">
+<h2 class="tabhead">{{.Name}}</h2>
+<p class="muted">{{len .Docs}} documents{{if .Failed}} · <span class="bad">{{.Failed}} failed</span>{{end}} · mean worst <span class="{{mclass .Mean}}">{{f2 .Mean}}</span>{{if .Measured}} over {{.Measured}} documents{{end}}</p>
+<table class="sum">
 <thead><tr><th data-k="name">Name</th><th data-k="kind">Kind</th><th data-k="status">Status</th><th data-k="pages" data-num>Pages ivy / ref</th><th data-k="worst" data-num>Worst</th><th data-k="byref">By reference</th><th data-k="sizediff" data-num>Size differs</th><th data-k="ivypdf" data-num>ivy PDF vs MuPDF</th><th data-k="disagree" data-num>Refs disagree</th><th data-k="time" data-num>Time s</th><th data-k="source">Source</th><th data-k="license">License</th></tr></thead>
 <tbody>
 {{range $i, $d := .Docs}}<tr data-id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}" data-pages="{{.Pages}}" data-worst="{{.Worst}}" data-byref="{{range worstBy .}}{{.Name}} {{end}}" data-sizediff="{{.SizeDiffers}}" data-ivypdf="{{.IvyPDFWorst}}" data-disagree="{{.Disagree}}" data-time="{{.TotalMS}}" data-source="{{.Source}}" data-license="{{.License}}" data-order="{{$i}}">
 <td class="name"><a href="#{{.ID}}">{{.Name}}</a></td><td>{{.Kind}}</td><td><span class="badge {{.Status}}">{{.Status}}</span></td><td class="n">{{if .Preview}}preview{{else}}{{pages .Pages}}{{end}} / {{pages .RefPages}}</td><td class="n {{mclass .Worst}}">{{f2 .Worst}}</td><td>{{if multi .}}{{range $j, $w := worstBy .}}{{if $j}} · {{end}}{{$w.Name}} <span class="{{mclass $w.Worst}}">{{f2 $w.Worst}}</span>{{end}}{{end}}</td><td class="n{{if .SizeDiffers}} bad{{end}}">{{if .SizeDiffers}}{{.SizeDiffers}}{{end}}</td><td class="n {{mclass .IvyPDFWorst}}">{{f2 .IvyPDFWorst}}</td><td class="n">{{if .Disagree}}{{.Disagree}}{{end}}</td><td class="n">{{sec .TotalMS}}</td><td>{{.Source}}</td><td>{{.License}}</td></tr>
 {{end}}</tbody>
 </table>
-{{range .Docs}}
-<section class="doc" id="{{.ID}}" data-kind="{{.Kind}}" data-status="{{.Status}}" data-name="{{.Name}}">
-<h2>{{.Name}} <span class="badge {{.Status}}">{{.Status}}</span></h2>
-<p class="meta">{{.Kind}}{{if .Source}} · {{.Source}}{{end}}{{if .License}} · {{.License}}{{end}} · {{if hasPrefix .URL "https://"}}<a href="{{.URL}}">{{.URL}}</a>{{else}}{{.URL}}{{end}}{{if .Note}} · {{.Note}}{{end}}</p>
-<p class="meta">ivy: {{if .Preview}}a preview{{else}}{{pages .Pages}} pages{{end}}, open {{msf .OpenMS}}, render {{msf .RenderMS}} · reference{{if .Reference}} through {{.Reference}}{{end}}: {{pages .RefPages}} pages · total {{msf .TotalMS}}{{if ge .IvyPDFWorst 0.0}} · ivy PDF vs MuPDF <span class="{{mclass .IvyPDFWorst}}">{{f2 .IvyPDFWorst}}</span>{{end}}{{if .Disagree}} · <span class="warnbadge">the references disagree on {{.Disagree}} pages</span>{{end}}{{with .MediaBoxWorst}} · MediaBox: worst <span class="{{mclass .}}">{{f2 .}}</span>{{end}}{{if .SizeDiffers}} · <span class="bad">{{.SizeDiffers}} pages of another size</span>{{end}}</p>
-{{if .Paper}}<p class="meta">paper: {{.Paper.Name}}{{if .Paper.Width}}, {{.Paper.Width}} × {{.Paper.Height}} pt{{end}}</p>{{end}}
-{{if multi .}}<p class="meta">worst by reference: {{range $j, $w := worstBy .}}{{if $j}} · {{end}}{{$w.Name}} <span class="{{mclass $w.Worst}}">{{f2 $w.Worst}}</span>{{end}}{{range .Externals}} · {{.Name}}: {{pages .Pages}} pages, {{.File}}{{end}}</p>{{end}}
-{{range .Externals}}{{if .Error}}<p class="err">{{.Name}}: {{first .Error}}</p>{{end}}{{end}}
-{{if .Error}}<p class="err">ivy: {{first .Error}}</p>{{if long .Error}}<details><summary>the whole error</summary><pre>{{.Error}}</pre></details>{{end}}{{end}}
-{{if .RefError}}<p class="err">reference: {{first .RefError}}</p>{{if long .RefError}}<details><summary>the whole error</summary><pre>{{.RefError}}</pre></details>{{end}}{{end}}
-{{if .IvyPDFError}}<p class="err">ivy PDF: {{first .IvyPDFError}}</p>{{if long .IvyPDFError}}<details><summary>the whole error</summary><pre>{{.IvyPDFError}}</pre></details>{{end}}{{end}}
-{{if .Log}}<details{{if le (len .Log) 4}} open{{end}}><summary>{{len .Log}} messages of the log of ivy</summary><pre>{{range .Log}}{{.}}
-{{end}}</pre></details>{{end}}
-{{if .IvyPDFLog}}<details><summary>{{len .IvyPDFLog}} messages of the log of ivy PDF</summary><pre>{{range .IvyPDFLog}}{{.}}
-{{end}}</pre></details>{{end}}
-{{$cols := cols .}}{{$d := .}}{{range .Rows}}{{$row := .}}
-<div class="row" style="--cols:{{$cols}}">
-<div class="rowhead">Page {{.Page}}{{if eq .Box "media"}}, MediaBox{{if ge .RefsDiff 0.0}} <span class="m">the references differ by {{f2 .RefsDiff}}</span>{{end}}{{end}}{{if .Disagrees}} <span class="warnbadge">references disagree ({{f2 .RefsDiff}})</span>{{end}}{{if and .Primary (multi $d)}} <span class="m">primary: {{refLabel .Primary}}</span>{{end}}{{if .SizeDiffers}} <span class="bad">the size differs from {{refLabel .Primary}}</span>{{end}}{{if .Refs}} <button type="button" class="rowdiff">differences</button>{{end}}</div>
-{{with .Ivy}}<figure class="ivy{{if $row.SizeDiffers}} sizediff{{end}}"><figcaption>{{.Name}}</figcaption>
-{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy"></a>{{end}}
-<div class="m">{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
-{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
-{{with .IvyPDF}}<figure class="ref ivypdf"><figcaption>{{.Name}}</figcaption>
-{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of ivy PDF"></a>{{end}}
-{{if .DiffThumb}}<a class="diff" href="{{.Diff}}"><img loading="lazy" src="{{.DiffThumb}}"{{template "dims" .Size}} alt="difference of ivy PDF from MuPDF"></a>{{end}}
-<div class="m">{{with .Metric}}<span class="{{mclass .Blurred}}">vs MuPDF: blurred {{f2 .Blurred}}</span> · mean {{f2 .Mean}}{{if .Scaled}} · <span class="{{if .SizeOff}}bad{{else}}fair{{end}}">ivy PDF {{size .IvySize}} scaled</span>{{end}} · {{end}}{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}{{if and .Status (ne .Status "ok")}} · <span class="{{.Status}}">{{.Status}}</span>{{end}}</div>
-{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
-{{range .Refs}}<figure class="ref{{if .Fault}} fault{{end}}"><figcaption>{{if .RefName}}{{.RefName}} · {{end}}{{.Name}}</figcaption>
-{{if .Thumb}}<a class="plain" href="{{.Image}}"><img loading="lazy" src="{{.Thumb}}"{{template "dims" .Size}} alt="page of {{.Name}}"></a>{{end}}
-{{if .DiffThumb}}<a class="diff" href="{{.Diff}}"><img loading="lazy" src="{{.DiffThumb}}"{{template "dims" .Size}} alt="difference from {{.Name}}"></a>{{end}}
-<div class="m">{{with .Metric}}<span class="{{mclass .Blurred}}">blurred {{f2 .Blurred}}</span> · mean {{f2 .Mean}}{{if .Scaled}} · <span class="{{if .SizeOff}}bad{{else}}fair{{end}}">ivy {{size .IvySize}} scaled</span>{{end}} · {{end}}{{size .Size}}{{if .MS}} · {{msf .MS}}{{end}}</div>
-{{if .Fault}}<div class="fnote">known fault of the reference, not counted: {{.Fault}}</div>{{end}}
-{{if .Error}}<div class="ce">{{first .Error}}</div>{{end}}</figure>{{end}}
-</div>{{end}}
+{{range .Docs}}{{template "doc" .}}{{end}}
 </section>
-{{end}}
-<div id="gal" class="gal hidden" role="dialog" aria-modal="true" aria-label="gallery of the images of a document">
+{{end}}<div id="gal" class="gal hidden" role="dialog" aria-modal="true" aria-label="gallery of the images of a document">
 <div class="galtop">
 <div class="galtitle"><h2 id="galdoc"></h2><div id="galcap" class="galcap"></div></div>
 <div class="galtools"><span id="galpos"></span><label><input id="galdiff" type="checkbox"> differences <kbd>d</kbd></label><a id="galopen" href="#" target="_blank" rel="noopener">open the file</a><button type="button" id="galclose" aria-label="close the gallery">✕</button></div>
@@ -302,31 +466,56 @@ section.doc figure a{cursor:zoom-in}
 </div>
 <script>
 (function(){
-var rows=[].slice.call(document.querySelectorAll('#sum tbody tr'));
+var rows=[].slice.call(document.querySelectorAll('table.sum tbody tr'));
+var tabs=[].slice.call(document.querySelectorAll('[role=tab]')),panes=[].slice.call(document.querySelectorAll('section.tab'));
 var secs={};[].forEach.call(document.querySelectorAll('section.doc'),function(s){secs[s.id]=s});
 var fk=document.getElementById('fkind'),fs=document.getElementById('fstatus'),fn=document.getElementById('fname');
 function filter(){
   var k=fk.value,s=fs.value,n=fn.value.toLowerCase(),shown=0;
   rows.forEach(function(r){
     var ok=(!k||r.dataset.kind===k)&&(!s||r.dataset.status===s)&&(!n||r.dataset.name.toLowerCase().indexOf(n)>=0);
-    r.classList.toggle('hidden',!ok);secs[r.dataset.id].classList.toggle('hidden',!ok);if(ok)shown++;
+    r.classList.toggle('hidden',!ok);secs[r.dataset.id].classList.toggle('hidden',!ok);
+    if(ok&&!r.closest('section.tab').classList.contains('hidden'))shown++;
   });
   document.getElementById('shown').textContent=shown+' of '+rows.length+' documents';
 }
 [fk,fs].forEach(function(e){e.addEventListener('change',filter)});fn.addEventListener('input',filter);
-var dir={};
-[].forEach.call(document.querySelectorAll('#sum th'),function(th){
-  th.addEventListener('click',function(){
-    var k=th.dataset.k,num=th.hasAttribute('data-num');dir[k]=dir[k]===undefined?(num?-1:1):-dir[k];
-    var tb=document.querySelector('#sum tbody');
-    rows.sort(function(a,b){
-      var x=a.dataset[k],y=b.dataset[k];
-      if(num){x=parseFloat(x);y=parseFloat(y)}
-      return (x<y?-1:x>y?1:0)*dir[k]||a.dataset.order-b.dataset.order;
+// A click on a heading sorts the table of the heading.
+[].forEach.call(document.querySelectorAll('table.sum'),function(table){
+  var dir={},tb=table.querySelector('tbody'),trs=[].slice.call(tb.rows);
+  [].forEach.call(table.querySelectorAll('th'),function(th){
+    th.addEventListener('click',function(){
+      var k=th.dataset.k,num=th.hasAttribute('data-num');dir[k]=dir[k]===undefined?(num?-1:1):-dir[k];
+      trs.sort(function(a,b){
+        var x=a.dataset[k],y=b.dataset[k];
+        if(num){x=parseFloat(x);y=parseFloat(y)}
+        return (x<y?-1:x>y?1:0)*dir[k]||a.dataset.order-b.dataset.order;
+      });
+      trs.forEach(function(r){tb.appendChild(r)});
     });
-    rows.forEach(function(r){tb.appendChild(r)});
   });
 });
+// The tabs show the documents of one group of kinds, or all of them. The
+// hash of the URL keeps the tab, such as #tab=word, so that a reload or a
+// link opens it. The hash names no element, so the browser does not scroll.
+// Without the script, the nav stays hidden and every group shows.
+function showTab(id,keep){
+  if(id!=='all'&&!panes.some(function(p){return p.dataset.tab===id}))id='all';
+  tabs.forEach(function(b){b.setAttribute('aria-selected',b.dataset.tab===id?'true':'false')});
+  panes.forEach(function(p){p.classList.toggle('hidden',id!=='all'&&p.dataset.tab!==id)});
+  if(!keep&&location.hash!=='#tab='+id)history.replaceState(null,'','#tab='+id);
+  filter();
+}
+tabs.forEach(function(b){b.addEventListener('click',function(){showTab(b.dataset.tab)})});
+if(tabs.length)tabs[0].parentNode.hidden=false;
+(function(){
+  var h=decodeURIComponent(location.hash.slice(1));
+  if(h.indexOf('tab=')===0){showTab(h.slice(4));window.scrollTo(0,0);return}
+  // a link to a document opens the tab of the document
+  var el=h&&document.getElementById(h),pane=el&&el.closest&&el.closest('section.tab');
+  showTab(pane?pane.dataset.tab:'all',true);
+  if(pane)el.scrollIntoView();
+})();
 document.getElementById('showdiff').addEventListener('change',function(e){document.body.classList.toggle('showdiff',e.target.checked)});
 [].forEach.call(document.querySelectorAll('button.rowdiff'),function(b){
   b.addEventListener('click',function(){b.closest('.row').classList.toggle('showdiff')});
@@ -405,7 +594,6 @@ gal.addEventListener('touchend',function(e){
   if(tx===null)return;var dx=e.changedTouches[0].clientX-tx;tx=null;
   if(Math.abs(dx)>50)step(dx<0?1:-1);
 });
-filter();
 })();
 </script>
 </body>

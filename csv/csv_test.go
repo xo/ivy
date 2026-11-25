@@ -162,11 +162,14 @@ func TestHTML(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`<col style="width:48pt"><col style="width:100.11pt"><col style="width:300pt">`,
+		// the widths of Liberation Sans, without a minimum
+		`<col style="width:32.67pt"><col style="width:99.93pt"><col style="width:300pt">`,
 		`<td class="c">Name</td><td class="c">Amount in US dollars</td><td class="s1 c">Note</td>`,
 		`<td class="c">alpha</td><td class="n c">1,234.50</td>`,
 		`<td class="n c">-2</td><td class="s1 c">long long`,
-		"border:0.5pt solid #c8c8c8",
+		`font-family:"Liberation Sans", sans-serif;font-size:10pt;`,
+		"tr{break-inside:avoid;height:12.78pt}",
+		"border:0.5pt solid #cccccc;-ivy-stroke-adjust:pixels;",
 	} {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("expected %q in the table:\n%s", want, doc)
@@ -174,6 +177,23 @@ func TestHTML(t *testing.T) {
 	}
 	if strings.Contains(string(doc), "@top-left") {
 		t.Error("expected no header without a name")
+	}
+}
+
+func TestEmptyColumn(t *testing.T) {
+	d := open(t, []byte("a,,1\nb,,22\n"), ivy.Config{})
+	src, err := d.source(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := fs.ReadFile(src.FS, src.Documents[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a column without text keeps the default width, and a narrow
+	// column is narrower
+	if want := `<col style="width:11.56pt"><col style="width:48pt"><col style="width:17.12pt">`; !strings.Contains(string(doc), want) {
+		t.Errorf("expected %q in the table:\n%s", want, doc)
 	}
 }
 
@@ -189,9 +209,9 @@ func TestPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 45 rows of 15 points fit the 684 points of a letter page
-	if n != 5 {
-		t.Errorf("expected 5 pages, got: %d", n)
+	// 53 rows of 12.784 points fit the 684 points of a letter page
+	if n != 4 {
+		t.Errorf("expected 4 pages, got: %d", n)
 	}
 	page, err := d.Page(t.Context(), 0)
 	if err != nil {
@@ -207,7 +227,7 @@ func TestPages(t *testing.T) {
 	if !inked(img, image.Rect(50, 54, 100, 70)) {
 		t.Error("expected the text of the first row")
 	}
-	if _, err := d.Page(t.Context(), 5); !errors.Is(err, ivy.ErrPageRange) {
+	if _, err := d.Page(t.Context(), 4); !errors.Is(err, ivy.ErrPageRange) {
 		t.Errorf("expected ErrPageRange, got: %v", err)
 	}
 }

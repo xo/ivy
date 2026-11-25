@@ -34,7 +34,10 @@ func latinModern(t *testing.T) Faces {
 		files[name] = data
 	}
 	lm := RegisterLatinModern(files)
-	return Faces{Regular: lm.Regular, Bold: lm.Bold, Italic: lm.Italic, Mono: lm.Mono, Math: lm.Math}
+	return Faces{
+		Regular: lm.Regular, Bold: lm.Bold, Italic: lm.Italic, Mono: lm.Mono, Math: lm.Math,
+		Sans: lm.Sans, SansBold: lm.SansBold, SansItalic: lm.SansItalic, SansBoldItalic: lm.SansBoldItalic,
+	}
 }
 
 // ivyCompile runs src with the faces.

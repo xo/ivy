@@ -19,6 +19,9 @@ type PPTX struct {
 	// TableStyles is the content of ppt/tableStyles.xml, or empty for an
 	// empty list.
 	TableStyles string
+	// DefaultTextStyle is the content of p:defaultTextStyle of the
+	// presentation, or empty for a level of 18 points in the minor font.
+	DefaultTextStyle string
 	// Slides are the slides, in order.
 	Slides []PPTXSlide
 	// Media are the files of ppt/media. Each slide has the relationship
@@ -179,11 +182,15 @@ func (p *PPTX) Bytes() []byte {
 	}
 	types.WriteString(`</Types>`)
 	presRels.WriteString(rels(presList...))
+	defaultTextStyle := p.DefaultTextStyle
+	if defaultTextStyle == "" {
+		defaultTextStyle = `<a:lvl1pPr><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/></a:defRPr></a:lvl1pPr>`
+	}
 	pres := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:presentation ` + pptxNS + `><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
 <p:sldIdLst>` + ids.String() + `</p:sldIdLst>` +
 		fmt.Sprintf(`<p:sldSz cx="%d" cy="%d"/><p:notesSz cx="6858000" cy="9144000"/>`, w, h) +
-		`<p:defaultTextStyle><a:lvl1pPr><a:defRPr sz="1800"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/></a:defRPr></a:lvl1pPr></p:defaultTextStyle></p:presentation>`
+		`<p:defaultTextStyle>` + defaultTextStyle + `</p:defaultTextStyle></p:presentation>`
 	tableStyles := p.TableStyles
 	if tableStyles == "" {
 		tableStyles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

@@ -348,6 +348,8 @@ func init() {
 	property("float-position", validateFloatPosition)
 	property("float-overlap", validateFloatOverlap)
 	property("wrap-flow", validateWrapFlow)
+	property("stroke-adjust", validateStrokeAdjust)
+	property("line-baseline", validateLineBaseline)
 	property("hyphens", validateHyphens, optUnstable)
 	property("hyphenate-character", validateHyphenateCharacter, optUnstable)
 	property("hyphenate-limit-zone", validateHyphenateLimitZone, optUnstable)

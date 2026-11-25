@@ -31,18 +31,59 @@ var calibriWidths = [0x180 - 0x20]uint16{
 	1314, 1076, 1314, 1076, 1822, 1464, 998, 927, 998, 959, 809, 959, 809, 959, 809, 497,
 }
 
+// arialWidths are the advances of the characters of Arial from U+0020 to
+// U+017F, in units of 1/2048 of the size of the font, as calibriWidths.
+// Liberation Sans, which has the metrics of Arial, gives them.
+var arialWidths = [0x180 - 0x20]uint16{
+	569, 569, 727, 1139, 1139, 1821, 1366, 391, 682, 682, 797, 1196, 569, 682, 569, 569,
+	1139, 1139, 1139, 1139, 1139, 1139, 1139, 1139, 1139, 1139, 569, 569, 1196, 1196, 1196, 1139,
+	2079, 1366, 1366, 1479, 1479, 1366, 1251, 1593, 1479, 569, 1024, 1366, 1139, 1706, 1479, 1593,
+	1366, 1593, 1479, 1366, 1251, 1479, 1366, 1933, 1366, 1366, 1251, 569, 569, 569, 961, 1139,
+	682, 1139, 1139, 1024, 1139, 1139, 569, 1139, 1139, 455, 455, 1024, 455, 1706, 1139, 1139,
+	1139, 1139, 682, 1024, 569, 1139, 1024, 1479, 1024, 1024, 1024, 684, 532, 684, 1196, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	569, 682, 1139, 1139, 1139, 1139, 532, 1139, 682, 1509, 758, 1139, 1196, 0, 1509, 1131,
+	819, 1124, 682, 682, 682, 1180, 1100, 682, 682, 682, 748, 1139, 1708, 1708, 1708, 1251,
+	1366, 1366, 1366, 1366, 1366, 1366, 2048, 1479, 1366, 1366, 1366, 1366, 569, 569, 569, 569,
+	1479, 1479, 1593, 1593, 1593, 1593, 1593, 1196, 1593, 1479, 1479, 1479, 1479, 1366, 1366, 1251,
+	1139, 1139, 1139, 1139, 1139, 1139, 1821, 1024, 1139, 1139, 1139, 1139, 569, 569, 569, 569,
+	1139, 1139, 1139, 1139, 1139, 1139, 1139, 1124, 1251, 1139, 1139, 1139, 1139, 1024, 1139, 1024,
+	1366, 1139, 1366, 1139, 1366, 1139, 1479, 1024, 1479, 1024, 1479, 1024, 1479, 1024, 1479, 1259,
+	1479, 1139, 1366, 1139, 1366, 1139, 1366, 1139, 1366, 1139, 1366, 1139, 1593, 1139, 1593, 1139,
+	1593, 1139, 1593, 1139, 1479, 1139, 1479, 1139, 569, 569, 569, 569, 569, 569, 569, 455,
+	569, 569, 1505, 909, 1024, 455, 1366, 1024, 1024, 1139, 455, 1139, 455, 1139, 597, 1139,
+	684, 1139, 455, 1479, 1139, 1479, 1139, 1479, 1139, 1237, 1481, 1139, 1593, 1139, 1593, 1139,
+	1593, 1139, 2048, 1933, 1479, 682, 1479, 682, 1479, 682, 1366, 1024, 1366, 1024, 1366, 1024,
+	1366, 1024, 1251, 569, 1251, 768, 1251, 569, 1479, 1139, 1479, 1139, 1479, 1139, 1479, 1139,
+	1479, 1139, 1479, 1139, 1933, 1479, 1366, 1024, 1366, 1251, 1024, 1251, 1024, 1251, 1024, 455,
+}
+
 // TextWidth returns the width in points of the text s in Calibri of the
 // size size, the default font of Excel, without kerning. A character past
 // the table of Calibri takes 0.5 of the size, a combining mark 0, and a
 // wide character of East Asia the whole size. A format that does not lay
-// out its text, such as csv for the widths of its columns, measures text
-// with it.
+// out its text measures text with it.
 func TextWidth(s string, size float64) float64 {
+	return textWidth(&calibriWidths, s, size)
+}
+
+// ArialTextWidth returns the width in points of the text s in Arial or
+// Liberation Sans of the size size, as TextWidth does for Calibri. A
+// format that does not lay out its text, such as csv for the widths of its
+// columns, measures text with it.
+func ArialTextWidth(s string, size float64) float64 {
+	return textWidth(&arialWidths, s, size)
+}
+
+// textWidth returns the width in points of the text s of the size size,
+// with the advances of widths from U+0020 to U+017F.
+func textWidth(widths *[0x180 - 0x20]uint16, s string, size float64) float64 {
 	units := 0
 	for _, r := range s {
 		switch {
 		case r >= 0x20 && r < 0x180:
-			units += int(calibriWidths[r-0x20])
+			units += int(widths[r-0x20])
 		case r >= 0x300 && r <= 0x36f, r == 0x200b, r == 0xfeff:
 			// combining marks and characters without a width
 		case fontdb.IsCJK(r) && (r < 0xff61 || r > 0xffdc):

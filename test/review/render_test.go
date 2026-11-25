@@ -13,13 +13,14 @@ import (
 )
 
 // TestRender renders four small files of the repository with ivy and with
-// their references: a PDF file with MuPDF and Poppler, a Word file with
-// LibreOffice to PDF and then MuPDF and Poppler, an XPS file with libgxps,
-// and a Photoshop file with ImageMagick. ivy renders the PDF file of
-// LibreOffice too, as the column ivy PDF. As each test of the test module,
-// it fails when a program is missing, and names it (D13).
+// their primary references (D69): a PDF file with MuPDF and Chrome, a Word
+// file with LibreOffice to PDF and then MuPDF and Chrome, an XPS file with
+// libgxps, and a Photoshop file with ImageMagick. ivy renders the PDF file
+// of LibreOffice too, as the column ivy PDF. Then it renders the PDF file
+// with every reference. As each test of the test module, it fails when a
+// program is missing, and names it (D13).
 func TestRender(t *testing.T) {
-	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", "xpstopng", "magick", "fc-list", "soffice"} {
+	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", "xpstopng", "magick", "fc-list", "soffice", chromeProgram} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatalf("oracle %s is not installed: %v", name, err)
 		}
@@ -53,8 +54,8 @@ func TestRender(t *testing.T) {
 		t.Fatalf("expected %d documents, got: %d", len(entries), len(rep.Docs))
 	}
 	refs := map[string][]string{
-		"pdf/clip.pdf":     {"MuPDF", "Poppler Splash", "Poppler Cairo"},
-		"docx/sample.docx": {"MuPDF", "Poppler Splash", "Poppler Cairo"},
+		"pdf/clip.pdf":     {"MuPDF", "Chrome"},
+		"docx/sample.docx": {"MuPDF", "Chrome"},
 		"xps/example.xps":  {"libgxps"},
 		"psd/rgb8bit.psd":  {"ImageMagick"},
 	}
@@ -74,6 +75,11 @@ func TestRender(t *testing.T) {
 			continue
 		}
 		row := d.Rows[0]
+		if d.PrimaryRef != row.Primary || row.PrimaryRenderer != primaryRenderer(routeFor(d.Kind).renderers) ||
+			d.PrimaryRenderer != row.PrimaryRenderer || d.Worst != d.WorstBy[d.PrimaryRef] {
+			t.Errorf("%s: expected the worst of the primary renderer of the primary reference, got: %s %s %s %s %.2f %v",
+				d.Name, d.PrimaryRef, d.PrimaryRenderer, row.Primary, row.PrimaryRenderer, d.Worst, d.WorstBy)
+		}
 		for _, p := range []string{row.Ivy.Image, row.Ivy.Thumb} {
 			if _, err := os.Stat(filepath.Join(out, p)); err != nil {
 				t.Errorf("%s: expected the image of ivy: %v", d.Name, err)
@@ -117,6 +123,22 @@ func TestRender(t *testing.T) {
 	if len(rep.Docs) != 1 || rep.Docs[0].Status != StatusOK {
 		t.Errorf("expected the psd file again, got: %+v", rep.Docs)
 	}
+
+	// every reference of the PDF file
+	opts.Kinds, opts.Refs = []string{"pdf"}, RefsAll
+	rep, err = Render(t.Context(), entries[:1], opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"MuPDF", "Poppler Splash", "Poppler Cairo", "Chrome"}
+	if d := rep.Docs[0]; rep.Refs != RefsAll || strings.Join(d.RefNames, "|") != strings.Join(want, "|") || len(d.WorstByRenderer) != 4 {
+		t.Errorf("expected the references %q, got: %s %q %v", want, rep.Refs, d.RefNames, d.WorstByRenderer)
+	}
+	opts.Refs = "some"
+	if _, err := Render(t.Context(), entries[:1], opts); err == nil {
+		t.Error("expected an error for unknown references")
+	}
+	opts.Refs = ""
 
 	// a folder of other files is refused
 	other := t.TempDir()
@@ -194,9 +216,10 @@ func boxPDF() []byte {
 // TestRenderMediaBox renders a PDF file whose MediaBox is larger than its
 // CropBox. The row of the page shows the CropBox with each reference. A
 // second row shows the MediaBox, where Poppler and ivy draw the mark outside
-// the CropBox (D31).
+// the CropBox (D31). The test draws every reference, because the rows of the
+// MediaBox show MuPDF alone by default (D69).
 func TestRenderMediaBox(t *testing.T) {
-	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo"} {
+	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", chromeProgram} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatalf("oracle %s is not installed: %v", name, err)
 		}
@@ -216,7 +239,7 @@ func TestRenderMediaBox(t *testing.T) {
 	}
 	out := filepath.Join(t.TempDir(), "out")
 	rep, err := Render(t.Context(), []Entry{e}, RenderOptions{
-		Repo: repo, Cache: cache, Out: out, Pages: 1, DPI: 72, Jobs: 1, Timeout: time.Minute,
+		Repo: repo, Cache: cache, Out: out, Pages: 1, DPI: 72, Jobs: 1, Timeout: time.Minute, Refs: RefsAll,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +307,7 @@ func TestRenderMediaBox(t *testing.T) {
 // is the primary reference, and the fault leaves LibreOffice out of the
 // numbers.
 func TestRenderPapersAndOffice(t *testing.T) {
-	for _, name := range []string{"mutool", "pdftoppm", "pdftocairo", "pdfinfo", "fc-list", "soffice"} {
+	for _, name := range []string{"mutool", "pdfinfo", "fc-list", "soffice", chromeProgram} {
 		if _, err := exec.LookPath(name); err != nil {
 			t.Fatalf("oracle %s is not installed: %v", name, err)
 		}
@@ -370,13 +393,12 @@ func TestRenderPapersAndOffice(t *testing.T) {
 	if len(d.Externals) != 1 || d.Externals[0].ID != "msoffice" || d.Externals[0].Pages < 1 {
 		t.Fatalf("expected the reference of Microsoft Office, got: %+v", d.Externals)
 	}
-	wantNames := []string{"Microsoft Office · MuPDF", "Microsoft Office · Poppler Splash",
-		"LibreOffice · MuPDF", "LibreOffice · Poppler Splash", "LibreOffice · Poppler Cairo"}
+	wantNames := []string{"Microsoft Office - MuPDF", "Microsoft Office - Chrome", "LibreOffice - MuPDF"}
 	if strings.Join(d.RefNames, "|") != strings.Join(wantNames, "|") {
 		t.Errorf("expected the references %q, got: %q", wantNames, d.RefNames)
 	}
 	row := d.Rows[0]
-	if row.Primary != "msoffice" || d.Worst != d.WorstBy["msoffice"] || len(d.WorstBy) != 1 {
+	if row.Primary != "msoffice" || d.PrimaryRef != "msoffice" || d.Worst != d.WorstBy["msoffice"] || len(d.WorstBy) != 1 {
 		t.Errorf("expected Office as the primary reference, and LibreOffice out of the numbers, got: %s %.2f %v",
 			row.Primary, d.Worst, d.WorstBy)
 	}

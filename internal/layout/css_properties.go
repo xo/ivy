@@ -303,6 +303,8 @@ var InitialValues = map[string]Value{
 	"float_position": String("auto"),
 	"float_overlap":  String("allow"),
 	"wrap_flow":      String("auto"),
+	"stroke_adjust":  String("none"),
+	"line_baseline":  String("normal"),
 }
 
 // knownProperties is KNOWN_PROPERTIES in weasyprint/css/properties.py: the
@@ -355,6 +357,7 @@ var Inherited = map[string]bool{
 	"image_resolution":        true,
 	"lang":                    true,
 	"letter_spacing":          true,
+	"line_baseline":           true,
 	"line_height":             true,
 	"line_multiple":           true,
 	"line_numbers":            true,

@@ -119,6 +119,8 @@ func TestText(t *testing.T) {
 		{"no language", []byte("text"), "<html>"},
 		{"japanese", []byte("吾輩は猫である。"), `<html lang="ja">`},
 		{"gutenberg", []byte("The Project Gutenberg eBook of 紅樓夢\n\nLanguage: Chinese\n\n*** START OF THE PROJECT GUTENBERG EBOOK ***\n\n此開卷第一回也"), `<html lang="zh-Hant">`},
+		{"chinese keeps its lines", []byte("　　此開卷第一回也．作者自云：因曾歷過一番\n夢幻之后，故將真事隱去．\n　　此回中凡用“夢”"), "<p>　　此開卷第一回也．作者自云：因曾歷過一番\n夢幻之后，故將真事隱去．\n　　此回中凡用“夢”</p>"},
+		{"english joins its lines", []byte("A line that\nwraps."), "<p>A line that wraps.</p>"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d, err := Open(t.Context(), bytes.NewReader(tt.buf))
@@ -127,6 +129,28 @@ func TestText(t *testing.T) {
 			}
 			if got := document(t, d); !strings.Contains(got, tt.want) {
 				t.Errorf("expected %q in %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestWideText(t *testing.T) {
+	for _, tt := range []struct {
+		name, text string
+		want       bool
+	}{
+		{"chinese", "此開卷第一回也\n作者自云\n", true},
+		{"japanese", "吾輩は猫である。\n名前はまだ無い。", true},
+		{"english", "A line that\nwraps.", false},
+		{"korean", "가나\n다라", false},
+		{"chinese with an english header", "The Project Gutenberg eBook\nTitle: 紅樓夢\n\n此開卷第一回也\n作者自云\n因曾歷過一番", true},
+		{"english with a chinese title", "The Project Gutenberg eBook\nTitle: 紅樓夢\nAuthor: Xueqin Cao\nLanguage: Chinese", false},
+		{"mixed line", "吾輩はCat である", true},
+		{"empty", "\n  \n", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := wideText(tt.text); got != tt.want {
+				t.Errorf("expected %t, got %t", tt.want, got)
 			}
 		})
 	}

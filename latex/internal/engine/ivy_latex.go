@@ -5,12 +5,26 @@
 
 package engine
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // ivyPlain is the format of the macros of ivy for plain TeX and LaTeX.
 //
 // \TeX is the logo of plain.tex, with the E lowered by half an ex.
-const ivyPlain = `\def\TeX{T\kern-.1667em\lower.5ex\hbox{E}\kern-.125emX}
+const ivyPlain = `\def\newpage{\par\vfil\penalty-10000 }
+\def\clearpage{\gotex@clearpagestrut\par\vfil\penalty-10000 \prevdepth\z@}
+\def\gotex@ivyfnstrut{\vrule width\z@ height\footnotesep depth\z@\relax\ignorespaces}
+\def\gotex@ivyfinalstrut{\unskip\ifhmode\nobreak\fi\vrule width\z@ height\z@ depth\dp\strutbox\relax}
+\def\gotex@ivyheadings{\@clubpenalty\clubpenalty
+  \def\@nobreakfalse{\global\let\if@nobreak\iffalse}%
+  \def\@nobreaktrue{\global\let\if@nobreak\iftrue}%
+  \let\gotex@ivyafterheading\@afterheading
+  \def\@afterheading{\gotex@ivyafterheading\@nobreaktrue
+    \everypar{\if@nobreak\@nobreakfalse\clubpenalty\@M
+      \else\clubpenalty\@clubpenalty\everypar{}\fi}}}
+\def\TeX{T\kern-.1667em\lower.5ex\hbox{E}\kern-.125emX}
 `
 
 // ivyLaTeX is the format of the macros of ivy.
@@ -22,13 +36,70 @@ const ivyPlain = `\def\TeX{T\kern-.1667em\lower.5ex\hbox{E}\kern-.125emX}
 //
 // The \list of the engine is a bare trivlist that drops its margins, so the
 // three environments were set at the full width of the text. After the class
-// loads, ivy sets them as \list does: \@listi gives \leftmargin, \parsep and
-// \topsep, the second argument of \list changes them, and the margins go to
-// \leftskip and \rightskip. A \\ of verse ends the line as \@centercr does,
-// with no \parskip.
+// loads, ivy sets them, itemize and enumerate as \list does: \@listdepth
+// counts the lists, \@listi, \@listii and the others give \leftmargin,
+// \parsep, \topsep and \itemsep of each depth, the second argument of \list
+// changes them, and the margins go to \leftskip and \rightskip. The space
+// above a list is \topsep, with \partopsep when the list starts a paragraph,
+// and the \parskip of the text around it. Inside the list, \parskip is
+// \parsep, and \itemsep goes between two items, as \@item does. The
+// penalties \@beginparpenalty, \@itempenalty and \@endparpenalty are in
+// their places. The engine gave every depth the values of the first one,
+// and no \parsep to the paragraphs of an item. A \\ of verse ends the line
+// as \@centercr does, with no \parskip.
+//
+// \@afterheading sets \@nobreaktrue, and the first paragraph after a heading
+// has \clubpenalty 10000, as in latex.ltx. A heading right after a heading
+// then adds no space of its own. \@nobreaktrue and \@nobreakfalse are
+// global, as in latex.ltx.
+//
+// \newpage and \clearpage end the page with \vfil, as in latex.ltx. The
+// page builder keeps it (ivy_pagebreak.go), so the footnotes of the page
+// stand at its bottom, and the \vfil shares the space of a title page.
+// \clearpage sets \prevdepth to 0, as its \vbox{} does in latex.ltx.
+//
+// \gotex@ivyfnstrut and \gotex@ivyfinalstrut are the struts of
+// \@footnotetext around the text of a footnote: \rule\z@\footnotesep and
+// \@finalstrut\strutbox.
 //
 // \LaTeX is the logo of latex.ltx: an A in the size of a script, the size
-// that \sf@size names, raised to the top of the T.
+// that \sf@size names, raised to the top of the T. latex.ltx puts the A in
+// a \vbox. ivy raises an \hbox: under \centering, as in a caption, the
+// engine set the \vbox to the width of the line.
+//
+// \TeX, \LaTeX, \LaTeXe, \em, \emph, \dots and \textsuperscript are robust,
+// as in latex.ltx. A \section or a \caption writes its title to the
+// contents with its macros expanded, and the contents set it again from
+// the text. The logos broke there: "Configuring \LaTeX" came out as
+// "Configuring L@T@@ivysfsizeA" in the contents of cfgguide.tex.
+//
+// \em selects the upright shape in an italic or a slanted font, and the
+// italic shape in any other font, as \em of latex.ltx does with
+// \fontdimen1. The engine gives \fontdimen1 as 0, so \gotex@ivyem asks
+// which face is in use.
+//
+// \dots, \ldots and \textellipsis set three periods, each with a kern of
+// \fontdimen3 after it, as \textellipsis of latex.ltx does. The engine set
+// three periods without the kerns. In math, the source of the formula
+// keeps \ldots and \dots, and the macros do not run.
+//
+// \@textsuperscript sets its argument in the size of a script, raised by
+// the shift of a superscript of TeX (\fontdimen14 of the font of the
+// symbols at the size of the text), as latex.ltx does in math. The engine
+// set it at the size of the text on the baseline, so the mark of a
+// footnote in its note was large and low. \textsuperscript uses it, as in
+// latex.ltx, in place of a formula.
+//
+// \@makefntext is the one of article.cls, report.cls and book.cls: the mark
+// at the right of a box of 1.8 em, and the text after it. A class defines
+// its own, and then the class wins. Without it, as in a class that ivy does
+// not have, such as ltxguide, the engine set the mark on a line of its own
+// above the note.
+//
+// \section[short]{title}, \subsection[short]{title} and
+// \caption[short]{title} write the short title to the contents and to the
+// lists of figures and tables, as LaTeX does. The engine took "[" for the
+// title, or wrote the long title.
 //
 // \setcounter{page} and \pagenumbering put the number and the style of the
 // page on the vertical list, where the page builder finds them. The engine
@@ -64,31 +135,86 @@ const ivyLaTeX = `\catcode64=11
 \def\endenumerate{\gotex@ivyendenumerate\@endpetrue}
 \let\gotex@ivyenddescription\enddescription
 \def\enddescription{\gotex@ivyenddescription\@endpetrue}
-\def\gotex@ivylist#1{\rightmargin\z@ \listparindent\z@ \itemindent\z@
-  \csname @listi\endcsname
+\newcount\@listdepth
+\newskip\gotex@ivyouterparskip
+\def\gotex@ivylist#1{\ifnum\@listdepth>5 \else\global\advance\@listdepth\@ne\fi
+  \rightmargin\z@ \listparindent\z@ \itemindent\z@
+  \csname @list\romannumeral\the\@listdepth\endcsname
   \ifdim\leftmargin=\z@ \leftmargin2.5em\fi
   #1\relax
-  \gotex@listtopspace\begingroup\@listfirsttrue
+  \@topsepadd\topsep
+  \ifvmode\advance\@topsepadd\partopsep\else\unskip\par\fi
+  \gotex@ivyouterparskip\parskip
+  \if@nobreak\else
+    \addpenalty\@beginparpenalty
+    \@tempskipa\@topsepadd \advance\@tempskipa\parskip
+    \addvspace\@tempskipa
+  \fi
+  \begingroup\@listfirsttrue
   \advance\leftskip\leftmargin \advance\rightskip\rightmargin
   \parindent\listparindent \parskip\parsep}
-\def\gotex@ivyendlist{\par\endgroup\addvspace\@topsepadd\@endpetrue}
-\def\gotex@ivyquote{\gotex@ivylist{\rightmargin\leftmargin}}
+\def\gotex@ivyitemspace{\parskip\parsep
+  \if@listfirst\@listfirstfalse\addvspace{-\parskip}%
+  \else\addpenalty\@itempenalty\addvspace\itemsep\fi}
+\def\gotex@ivyendlist{\gotex@ivyclose{}}
+\def\gotex@ivyclose#1{\par
+  \ifdim\lastskip>\z@ \@tempskipa\lastskip \vskip-\lastskip
+    \advance\@tempskipa\parskip \advance\@tempskipa-\gotex@ivyouterparskip
+    \vskip\@tempskipa\fi
+  #1\endgroup\global\advance\@listdepth\m@ne
+  \addpenalty\@endparpenalty\addvspace\@topsepadd\@endpetrue}
+\def\gotex@ivyitemize{\gotex@ivylist{}\advance\c@itemdepth\@ne
+  \ifcase\c@itemdepth\or\gotex@ivybullet\labelitemi\or\gotex@ivybullet\labelitemii
+  \or\gotex@ivybullet\labelitemiii\else\gotex@ivybullet\labelitemiv\fi
+  \@enumitemopt{itemize}}
+\def\gotex@ivybullet#1{\def\item{\par\gotex@ivyitemspace
+  \@ifnextbracket{\@itemopt}{\@bulletitem#1}}}
+\def\gotex@ivyenumerate{\gotex@ivylist{}\advance\c@enumdepth\@ne
+  \ifcase\c@enumdepth\or\gotex@ivynumber\c@enumi\theenumi\labelenumi
+  \or\gotex@ivynumber\c@enumii\theenumii\labelenumii
+  \or\gotex@ivynumber\c@enumiii\theenumiii\labelenumiii
+  \else\gotex@ivynumber\c@enumiv\theenumiv\labelenumiv\fi
+  \@enumitemopt{enumerate}}
+\def\gotex@ivynumber#1#2#3{#1=0\relax\def\item{\par\gotex@ivyitemspace
+  \@ifnextbracket{\@itemopt}{\@listitem#1#2#3}}}
+\def\gotex@ivyendenumerate{\gotex@ivyclose\@enumitemrec}
+\def\gotex@ivyquote{\gotex@ivylist{\rightmargin\leftmargin}\gotex@ivyitemspace}
 \def\gotex@ivyquotation{\gotex@ivylist{\listparindent1.5em\itemindent\listparindent
-  \rightmargin\leftmargin \parsep\z@ \@plus\p@}}
+  \rightmargin\leftmargin \parsep\z@ \@plus\p@}\gotex@ivyitemspace}
 \def\gotex@ivyverse{\let\\\gotex@ivyversecr
   \gotex@ivylist{\itemsep\z@ \itemindent-1.5em\listparindent\itemindent
-    \rightmargin\leftmargin \advance\leftmargin1.5em}}
+    \rightmargin\leftmargin \advance\leftmargin1.5em}\gotex@ivyitemspace}
 \def\gotex@ivyversecr{\ifhmode\unskip\fi\par
   \@ifstar{\nobreak\gotex@ivyxversecr}\gotex@ivyxversecr}
 \def\gotex@ivyxversecr{\vskip-\parskip\@ifnextchar[\gotex@ivyiversecr\ignorespaces}
 \def\gotex@ivyiversecr[#1]{\vskip#1\relax\ignorespaces}
-\def\gotex@ivylists{%
+\def\gotex@ivylists{\gotex@ivyheadings
+  \let\itemize\gotex@ivyitemize \let\enditemize\gotex@ivyendlist
+  \let\enumerate\gotex@ivyenumerate \let\endenumerate\gotex@ivyendenumerate
   \let\quote\gotex@ivyquote \let\endquote\gotex@ivyendlist
   \let\quotation\gotex@ivyquotation \let\endquotation\gotex@ivyendlist
   \let\verse\gotex@ivyverse \let\endverse\gotex@ivyendlist}
-\def\TeX{T\kern-.1667em\lower.5ex\hbox{E}\kern-.125emX\spacefactor1000 }
-\def\LaTeX{L\kern-.36em{\setbox\z@\hbox{T}\vbox to\ht\z@{\hbox{\gotex@ivysfsize A}\vss}}\kern-.15em\TeX}
-\def\LaTeXe{\mbox{\LaTeX\kern.15em2$_{\textstyle\varepsilon}$}}
+\protected\def\TeX{T\kern-.1667em\lower.5ex\hbox{E}\kern-.125emX\spacefactor1000 }
+\protected\def\LaTeX{L\kern-.36em{\setbox\z@\hbox{T}\setbox\tw@\hbox{\gotex@ivysfsize A}%
+  \dimen@\ht\z@\advance\dimen@-\ht\tw@\raise\dimen@\box\tw@}\kern-.15em\TeX}
+\protected\def\LaTeXe{\mbox{\LaTeX\kern.15em2$_{\textstyle\varepsilon}$}}
+\protected\def\em{\gotex@ivyem}
+\protected\def\emph#1{{\em #1}}
+\protected\def\textellipsis{.\kern\fontdimen3\font.\kern\fontdimen3\font.\kern\fontdimen3\font}
+\protected\def\dots{\ifmmode...\else\textellipsis\fi}
+\let\ldots\dots
+\def\@textsuperscript#1{{\leavevmode\gotex@ivysupraise\hbox{\gotex@ivysfsize#1}}}
+\protected\def\textsuperscript#1{\@textsuperscript{#1}}
+\long\def\@makefntext#1{\parindent 1em\noindent\hb@xt@1.8em{\hss\@makefnmark}#1}
+\let\gotex@ivyshort\relax
+\let\gotex@ivytocentry\@tocentry
+\def\@tocentry#1#2#3#4{\gotex@ivytocentry{#1}{#2}{#3}{\ifx\gotex@ivyshort\relax#4\else\gotex@ivyshort\fi}}
+\def\@gxsecopt#1#2#3#4#5[#6]#7{\gdef\gotex@ivyshort{#6}#5{#1}{#2}{#3}{#4}{#7}\global\let\gotex@ivyshort\relax}
+\def\gotex@ivyopt#1{\expandafter\let\csname gotex@ivy#1\expandafter\endcsname\csname #1\endcsname
+  \expandafter\def\csname #1\endcsname{\@ifnextchar[{\csname gotex@ivy#1opt\endcsname}{\csname gotex@ivy#1\endcsname}}%
+  \expandafter\def\csname gotex@ivy#1opt\endcsname[##1]##2{\gdef\gotex@ivyshort{##1}%
+    \csname gotex@ivy#1\endcsname{##2}\global\let\gotex@ivyshort\relax}}
+\gotex@ivyopt{@nsection}\gotex@ivyopt{@nsubsection}\gotex@ivyopt{gotex@caption@plain}
 \let\gotex@ivysetcounter\setcounter
 \def\setcounter#1#2{\gotex@ivysetcounter{#1}{#2}\gotex@ivypagecounter{#1}{#2}}
 \let\gotex@ivypagenumbering\pagenumbering
@@ -233,7 +359,7 @@ func (e *Engine) logicalPageRefs() {
 	var carry []node
 	list := e.mvl
 	num, style := 0, e.startStyle()
-	for start := 0; start < len(list); {
+	for start := pageTop(list, 0); start < len(list); {
 		end := e.findPageBreak(list, start)
 		// a page that ships nothing gives its nodes to the next page, as in
 		// paginateSingleList
@@ -245,7 +371,7 @@ func (e *Engine) logicalPageRefs() {
 			carry = carry[:0]
 			nums = append(nums, num)
 		}
-		next := skipDiscardable(list, end)
+		next := pageTop(list, end)
 		if end > next-1 {
 			next = end + 1
 		}
@@ -350,4 +476,93 @@ func (e *Engine) loadIvyPrims() {
 		}
 		e.selectFont(sf.atSize(sfSize(f.sizePt())))
 	})
+	// \gotex@ivyem selects the shape of \em: the upright shape in an italic
+	// or a slanted face, and the italic shape in any other face.
+	e.prim("gotex@ivyem", func(e *Engine) {
+		name := "itshape"
+		if e.slanted(e.curFont) {
+			name = "upshape"
+		}
+		e.back(csTok(name))
+	})
+	// \gotex@ivysupraise puts \raise and the shift of a superscript at the
+	// size of the current font on the input.
+	e.prim("gotex@ivysupraise", func(e *Engine) {
+		size := 10.0
+		if e.curFont != nil {
+			size = e.curFont.sizePt()
+		}
+		e.push(append([]tok{csTok("raise")}, stringToToks(strconv.Itoa(ptToSP(supShift(size)))+"sp")...))
+	})
+}
+
+// ivyFootnoteMark puts the mark of a footnote in the text through the
+// \@makefnmark of the class, with \@thefnmark as the mark, as
+// \@footnotemark of latex.ltx does. It reports false when \@makefnmark is
+// not a macro. The engine set the digits at the size of the text, raised
+// by 0.4 em, where article.cls sets them at the size of a script.
+func (e *Engine) ivyFootnoteMark(mark string) bool {
+	if m := e.eq["@makefnmark"]; m == nil || m.kind != mMacro {
+		return false
+	}
+	ts := make([]tok, 0, len(mark)+7)
+	ts = append(ts, chTok('{', catBegin), csTok("def"), csTok("@thefnmark"), chTok('{', catBegin))
+	ts = append(ts, stringToToks(mark)...)
+	ts = append(ts, chTok('}', catEnd), csTok("@makefnmark"), chTok('}', catEnd))
+	e.push(ts)
+	return true
+}
+
+// slanted reports whether f is a face of the italic or the slanted shape:
+// the face of \it or \sl, at any size.
+func (e *Engine) slanted(f fontFace) bool {
+	if f == nil {
+		return false
+	}
+	if e.ivy.faces != nil && e.axesOf(f).italic {
+		return true
+	}
+	for _, name := range []string{"it", "sl"} {
+		if m := e.eq[name]; m != nil && m.kind == mFont && sameShape(m.font, f) {
+			return true
+		}
+	}
+	return false
+}
+
+// sameShape reports whether a and b are faces of one shape at any size.
+// The faces of Latin Modern share the table of their optical sizes, and
+// another face shares its program.
+func sameShape(a, b fontFace) bool {
+	oa, ok := a.(*OpenTypeFont)
+	ob, ok2 := b.(*OpenTypeFont)
+	if !ok || !ok2 {
+		return a == b
+	}
+	if len(oa.optical) > 0 && len(ob.optical) > 0 {
+		return &oa.optical[0] == &ob.optical[0]
+	}
+	return oa.f == ob.f
+}
+
+// supShifts are the shifts of a superscript in the text style, \fontdimen14
+// of cmsy5 to cmsy10, as pdfLaTeX gives them, by the size of the text. A
+// size of more than 10 points takes cmsy10 at the size, as fontmath.ltx
+// does.
+var supShifts = [][2]float64{
+	{5, 2.01776}, {6, 2.5178}, {7, 3.01779}, {8, 2.82333}, {9, 3.82329}, {10, 3.62892},
+}
+
+// supShift returns the shift of a superscript, in points, for the text at
+// the size pt.
+func supShift(pt float64) float64 {
+	for i := len(supShifts) - 1; i >= 0; i-- {
+		if s := supShifts[i]; pt >= s[0]-0.01 {
+			if i == len(supShifts)-1 {
+				return s[1] * pt / s[0]
+			}
+			return s[1]
+		}
+	}
+	return supShifts[0][1] * pt / supShifts[0][0]
 }

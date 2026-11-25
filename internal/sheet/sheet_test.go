@@ -81,6 +81,33 @@ func TestSourceHTML(t *testing.T) {
 	}
 }
 
+// TestPrintFromA1 checks that a sheet without a print area prints from its
+// cell A1, so that its empty first rows and columns take their place, as
+// Excel prints the pivot tables of poi/xlsx/chart-sheet.xlsx.
+func TestPrintFromA1(t *testing.T) {
+	sh := &Sheet{Name: "Pivot", DefaultColWidth: 48, DefaultRowHeight: 15, Page: DefaultPage,
+		Rows: []Row{{Index: 2, Cells: []Cell{{Col: 1, Text: "Year"}}}}}
+	src, err := (&Workbook{Sheets: []*Sheet{sh}, Excel: true}).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := document(t, src, 0)
+	if want := `<tbody><tr><td colspan="2"></td></tr><tr><td colspan="2"></td></tr><tr><td></td><td>Year</td></tr>`; !strings.Contains(doc, want) {
+		t.Errorf("expected the two empty rows and the empty column before the cell:\n%s", doc)
+	}
+	if strings.Count(doc, "<col ") != 2 {
+		t.Errorf("expected the columns A and B:\n%s", doc)
+	}
+	// a workbook of another program prints its used range
+	src, err = (&Workbook{Sheets: []*Sheet{sh}}).Source(t.Context(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc := document(t, src, 0); !strings.Contains(doc, `<tbody><tr><td>Year</td></tr>`) {
+		t.Errorf("expected only the used range:\n%s", doc)
+	}
+}
+
 func TestMergedRows(t *testing.T) {
 	// 60 cells of 3 rows of 15 points each, merged across the band: the
 	// rows in which no cell ends keep their heights in the layout. 2700

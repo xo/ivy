@@ -34,7 +34,7 @@
 // of a PDF file that does not embed its font.
 //
 // The fonts are in their own module, so that a program that does not import
-// it does not hold them. They make a program larger by about 14.1 MB.
+// it does not hold them. They make a program larger by about 15.3 MB.
 package fonts
 
 import (
@@ -70,8 +70,8 @@ func FS() fs.FS {
 }
 
 // TeX returns the fonts of TeX, in the folder lm: the OpenType files of
-// Latin Modern Roman and Latin Modern Mono at their optical sizes, and Latin
-// Modern Math. The license is in GUST-FONT-LICENSE.txt, the notices of the
+// Latin Modern Roman, Latin Modern Sans and Latin Modern Mono at their
+// optical sizes, and Latin Modern Math. The license is in GUST-FONT-LICENSE.txt, the notices of the
 // authors are in README-Latin-Modern.txt and README-Latin-Modern-Math.txt,
 // and the manifests are in MANIFEST-Latin-Modern.txt and
 // MANIFEST-Latin-Modern-Math.txt. A program gives them to the format latex

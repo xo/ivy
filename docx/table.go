@@ -23,7 +23,11 @@ type tableCell struct {
 
 // tableRow is a row of a table, w:tr.
 type tableRow struct {
-	tr     props
+	tr props
+	// ex holds the table properties of w:tblPrEx, which the row has in
+	// place of those of the table, such as its borders and its cell
+	// margins.
+	ex     props
 	cells  []*tableCell
 	header bool
 }
@@ -158,6 +162,13 @@ func (c *converter) table(t roxmltree.Node) {
 	} else {
 		c.w.WriteString("</tbody></table>")
 	}
+	if pr, ok := child(t, "tblPr"); ok {
+		if _, ok := child(pr, "tblpPr"); ok {
+			// Word floats the table, also at a position from its
+			// paragraph, where ivy keeps it in the flow.
+			c.floatSeq = c.paraSeq
+		}
+	}
 }
 
 // alignTable sets the alignment of a table of the properties tp in its
@@ -170,11 +181,17 @@ func (c *converter) alignTable(s *css, tp props) {
 	case "right", "end":
 		s.set("margin-left", "auto")
 	default:
-		// The text of the first cell lines up with the text around the
-		// table, so the table starts a cell margin to the left.
-		ind := tp.num("tblInd", 0)/20 - tp.num("mar.left", 108)/20
+		// Before Word 2013, the text of the first cell lines up with the
+		// text around the table, so the table starts a cell margin to
+		// the left. Word 2013 and later put the edge of the table at its
+		// indent.
+		outdent := 0.0
+		if c.compatMode < 15 {
+			outdent = tp.num("mar.left", 108) / 20
+		}
+		ind := tp.num("tblInd", 0)/20 - outdent
 		if tp["tblInd.type"] != "dxa" && tp["tblInd.type"] != "" {
-			ind = -tp.num("mar.left", 108) / 20
+			ind = -outdent
 		}
 		if ind != 0 {
 			s.set("margin-left", pt(ind))
@@ -243,8 +260,11 @@ func (c *converter) readRows(t roxmltree.Node, grid *[]float64) []*tableRow {
 		if len(rows) >= c.lim.MaxObjects {
 			break
 		}
-		row := &tableRow{tr: props{}}
+		row := &tableRow{tr: props{}, ex: props{}}
 		col := 0
+		if ex, ok := child(tr, "tblPrEx"); ok {
+			row.ex = parseTblPr(ex)
+		}
 		if pr, ok := child(tr, "trPr"); ok {
 			for e := range pr.Children() {
 				if !e.IsElement() {
@@ -388,6 +408,8 @@ func conditions(tp props, rows []*tableRow, r, col, span, cols int) []string {
 // row converts row r of a table.
 func (c *converter) row(st *style, tp props, rows []*tableRow, r, cols int) {
 	row := rows[r]
+	// The exceptions of the row replace the properties of the table.
+	tp = tp.over(row.ex)
 	var s css
 	if h := number(row.tr["height"], 0) / 20; h > 0 {
 		s.set("height", pt(h))

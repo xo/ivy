@@ -56,6 +56,10 @@ type Workbook struct {
 	// Objects are the pictures that the format draws itself, such as the
 	// charts, by name. An image whose Object is set shows one.
 	Objects map[string]layout.Object
+	// Excel is set for a workbook of Excel. Its sheets print as Excel
+	// prints them: a sheet without a print area from its cell A1, and the
+	// text of a footer a little above the footer margin.
+	Excel bool
 }
 
 // Sheet is one sheet. The indexes of the rows and the columns count from 0.

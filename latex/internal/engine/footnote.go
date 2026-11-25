@@ -157,6 +157,7 @@ func (e *Engine) queueFootnoteText(mark string, text []tok) {
 	// and \@makefnmark carries no punctuation. Measured against tectonic on a paper
 	// with a \thanks and a body note: `∗ Affiliation` and `1 Note ordinaire.` there,
 	// `1. Affiliation` and `2. Note ordinaire.` here.
+	text = e.footnoteStruts(text) // ivy: see ivy_pagebreak.go
 	e.pendingFootnotes = append(e.pendingFootnotes, e.typesetGroupToVbox(e.footnoteTextBody(mark, text)))
 }
 
@@ -214,6 +215,11 @@ func (e *Engine) emitFootnoteMark(mark string) {
 	}
 	if !e.inPar {
 		e.beginParagraph(true)
+	}
+	// ivy: the mark is \@makefnmark of the class, as in latex.ltx, and not
+	// the digits at the size of the text (ivyFootnoteMark).
+	if e.ivyFootnoteMark(mark) {
+		return
 	}
 	e.parList = append(e.parList, e.footnoteMarker(mark))
 }
@@ -444,16 +450,17 @@ func (e *Engine) assemblePageTopskip(page []node, pageNum int, addTopskip bool) 
 		// there.
 		vlist = append(vlist, glueNode{spec: glueSpec{width: e.footinsSkip()}})
 		vlist = append(vlist, e.footnoteRuleNodes()...)
-		for i, b := range notes {
-			if i > 0 {
-				vlist = append(vlist, glueNode{spec: glueSpec{width: 3 * unity}})
-			}
+		// ivy: the notes follow each other with no glue between them, as
+		// in \footins. The strut of \footnotesep at the head of each note and
+		// the strut at its end space them (ivy_pagebreak.go).
+		for _, b := range notes {
 			vlist = append(vlist, b)
 		}
 	}
 	// \@textbottom closes the text block, after the footnotes, exactly where
 	// \@make@normalcolbox puts it (ltoutput.dtx:2128-2146).
 	if g, ok := e.textBottom(); ok {
+		vlist = e.backOutDepth(vlist) // ivy: see ivy_pagebreak.go
 		vlist = append(vlist, g)
 	}
 	// ⛔ THE MARKS ARE PUBLISHED BEFORE ANYTHING DRAWS A HEAD, and this is the one
@@ -490,12 +497,12 @@ func (e *Engine) assemblePageTopskip(page []node, pageNum int, addTopskip bool) 
 	// silence, it is not a warning. vpackSP must stay as quiet here as it is for "plain".
 	if style == "empty" {
 		if e.vsize > 0 {
-			return vpackSP(vlist, packTo, e.vsize)
+			return e.withHeadBand(vpackSP(vlist, packTo, e.vsize)) // ivy: see ivy_pagebreak.go
 		}
 		// No \vsize is not "pack to zero": with no page goal there is nothing to pack
 		// to, and natural height is the only answer that does not invent one. The same
 		// fallback guards the "plain" branch below.
-		return vpackSP(vlist, packNatural, 0)
+		return e.withHeadBand(vpackSP(vlist, packNatural, 0))
 	}
 	e.curPageNum = pageNum // so \thepage in a header/footer field is this page
 

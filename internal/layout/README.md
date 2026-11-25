@@ -673,7 +673,7 @@ import the module of the fonts.
 
 ## The properties of ivy
 
-`css_ivy.go` is not a port. It adds eleven properties for the formats of
+`css_ivy.go` is not a port. It adds thirteen properties for the formats of
 the word processors, such as `docx` and `odf`. Upstream does not have them. A
 style sheet names each one with the prefix `-ivy-`, such as
 `-ivy-tab-stops`, and the validation ignores the name without the prefix.
@@ -814,6 +814,16 @@ style sheet names each one with the prefix `-ivy-`, such as
     the left and to the right. `start`, `end` and `maximum` put the text on
     one side (D63). The property is not inherited, and a table gives it to
     its wrapper. See `layout_wrap_flow.go`.
+12. `-ivy-stroke-adjust` is `none`, the initial value, or `pixels`. With
+    `pixels`, a collapsed border of the table of the box is drawn on whole
+    pixels, at least one pixel wide, as a viewer draws the hairlines of a
+    grid. `csv` gives it to the gridlines of a sheet. The property is not
+    inherited.
+13. `-ivy-line-baseline` is `normal`, the initial value, or `win`. With
+    `win`, the baseline of a line is at the height of the line times
+    usWinAscent over the sum of usWinAscent and usWinDescent of the font,
+    as PowerPoint puts it (D71). The text bodies of DrawingML,
+    `msppt` and `msxls` give it.
 
 ## The hooks for the later stages
 
@@ -1113,6 +1123,15 @@ Each guard is marked with `Port:` in the code.
     element is. `internal/formula` lays it out with `texmath` of okage. An
     element with `display="block"` is a centered line of its own. Upstream
     draws the text of its children.
+42. A line feed between two characters of Chinese or Japanese goes, with
+    the spaces and the tabs around it, as CSS Text 3 says. With
+    `white-space: normal`, a line feed that one or more ideographic spaces
+    follow stays, so that the line breaks there (D68). Upstream turns each
+    line feed into a space.
+43. A replaced box with a fixed width and a `max-width` in percent has a
+    min-content width of 0, as CSS Sizing 3 and the browsers say, so that
+    a table of images fits its page. Upstream does this only for a width
+    of `auto`.
 
 ## What the port leaves out
 

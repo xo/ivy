@@ -14,6 +14,22 @@ import (
 	"github.com/xo/ivy/internal/fontdb"
 )
 
+// TestTextRect checks that the text of an ellipse is in the rectangle
+// inside it, as PowerPoint puts it on page 41 of
+// poi/ppt/custom-geometry.ppt, and that a rectangle has the whole box.
+func TestTextRect(t *testing.T) {
+	for _, c := range []struct {
+		typ  int
+		want float64
+	}{{SptEllipse, 100 - 100*math.Sqrt2/2}, {SptRectangle, 0}} {
+		sh := &Shape{Type: c.typ}
+		r := (&Style{}).TextRect(sh, Chain{&sh.Props}, 200, 100)
+		if math.Abs(float64(r.X())-c.want) > 0.05 || math.Abs(float64(r.Width())-(200-2*c.want)) > 0.1 {
+			t.Errorf("type %d: expected the text from %g, got %v", c.typ, c.want, r)
+		}
+	}
+}
+
 // near reports whether a and b differ by less than 0.01.
 func near(a, b float64) bool {
 	return math.Abs(a-b) < 0.01

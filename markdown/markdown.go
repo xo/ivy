@@ -4,8 +4,19 @@
 // for the layout of ivy (D10, D21). It reads CommonMark with the copy of
 // goldmark in internal/goldmark (D7), and the extensions of GitHub for
 // tables, strikethrough, links without brackets and task lists. It also
-// reads footnotes and definition lists. HTML in the text stays in the
-// document. The layout puts the document on pages of US Letter, and Page
+// reads footnotes, definition lists and the alerts of GitHub, such as
+// "> [!NOTE]". The package draws the document as GitHub draws a README
+// (D70): its style sheet follows the light theme of
+// github-markdown-css. HTML in the text stays in the document: the layout reads attributes such
+// as align and width, and the style sheet gives the details, kbd and img
+// elements the styles of GitHub.
+//
+// ivy holds no highlighter of code. A program gives one with
+// WithHighlighter, and the package then colors each fenced code block in a
+// language that the highlighter knows. Without it, the code has one color
+// (D73).
+//
+// The layout puts the document on pages of US Letter, and Page
 // lays it out only as far as the page that a program asks for. The document
 // takes the East Asian language that the letters of the text show, so that
 // the layout takes the fonts of that language for the CJK characters.
@@ -14,13 +25,17 @@
 // gives no folder, so a program gives it with WithDir (D22). Without it, or
 // for an image that the package cannot read, the package puts the alternate
 // text of the image in its place. An image with a URL of the scheme data
-// stays in the document.
+// stays in the document. The package also reads the file of each img
+// element of the HTML of the text from the folder. ivy reads nothing from
+// the network, so a remote image, such as a badge, shows its alternate
+// text.
 package markdown
 
 import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"strings"
@@ -31,6 +46,7 @@ import (
 	"github.com/xo/ivy/internal/goldmark/ast"
 	"github.com/xo/ivy/internal/goldmark/extension"
 	"github.com/xo/ivy/internal/goldmark/parser"
+	"github.com/xo/ivy/internal/goldmark/renderer"
 	"github.com/xo/ivy/internal/goldmark/renderer/html"
 	"github.com/xo/ivy/internal/layout"
 )
@@ -49,8 +65,9 @@ var Format = ivy.Format{
 type Option func(*options)
 
 type options struct {
-	cfg ivy.Config
-	dir fs.FS
+	cfg       ivy.Config
+	dir       fs.FS
+	highlight Highlighter
 }
 
 // WithConfig sets the configuration that every format shares.
@@ -61,7 +78,8 @@ func WithConfig(cfg ivy.Config) Option {
 }
 
 // WithDir gives the folder of the Markdown file. The document reads its
-// images from it, within the limits of the configuration. A link out of the
+// images and the images of its img elements from it, within the limits of
+// the configuration. A link out of the
 // folder, an absolute path and a URL with a scheme are not read. Without a
 // folder, the document shows the alternate text of each image (D22).
 func WithDir(dir fs.FS) Option {
@@ -79,7 +97,9 @@ type Document struct {
 	// paper is the paper of the configuration, or zero (D32).
 	paper ivy.Paper
 	dir   fs.FS
-	text  []byte
+	// highlighter colors the fenced code blocks, or is nil.
+	highlighter Highlighter
+	text        []byte
 	// lang is the language of the text, or empty.
 	lang  string
 	title string
@@ -129,7 +149,7 @@ func Open(ctx context.Context, src ivy.Source, opts ...Option) (d *Document, err
 		return nil, fmt.Errorf("markdown with a nul byte: %w", ivy.ErrFormat)
 	}
 	text = text[frontMatter(text):]
-	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, dir: o.dir, text: text}
+	d = &Document{lim: lim, log: o.cfg.Log(), fonts: ebook.FontsOf(o.cfg), paper: o.cfg.Paper, dir: o.dir, highlighter: o.highlight, text: text}
 	d.lang = ebook.TextLanguage(string(text[:min(len(text), maxLangScan)]))
 	doc := parse(text)
 	if err := checkTree(doc, lim); err != nil {
@@ -197,12 +217,29 @@ func parse(text []byte) ast.Node {
 			extension.NewDefinitionListParser(),
 		),
 	)
-	return p.Parse(text)
+	doc := p.Parse(text)
+	alerts(doc, text)
+	return doc
 }
 
-// render renders the tree of the text as HTML.
-func render(doc ast.Node, text []byte) (string, error) {
+// render renders the tree of the text as HTML. colored holds the HTML of
+// the code of each fenced code block that a Highlighter colors.
+func render(doc ast.Node, text []byte, colored map[*ast.CodeBlock]string) (string, error) {
 	r := html.New(
+		html.WithNodeRendererDecorators(map[ast.NodeKind]html.NodeRendererDecorator{
+			ast.KindCodeBlock: func(next html.NodeRenderer) html.NodeRenderer {
+				return html.NodeRendererFunc(func(w io.Writer, src []byte, n ast.Node, entering bool, rc renderer.Context) (ast.WalkStatus, error) {
+					s, ok := colored[n.(*ast.CodeBlock)]
+					if !ok {
+						return next.Render(w, src, n, entering, rc)
+					}
+					if entering {
+						_, _ = io.WriteString(w, renderCode(n.(*ast.CodeBlock), s, src))
+					}
+					return ast.WalkContinue, nil
+				})
+			},
+		}),
 		html.WithUnsafe(),
 		html.WithExtensions(
 			extension.NewGFMHTMLRenderer(),

@@ -1,6 +1,6 @@
 # D13. The test module holds the oracles, and runs by hand
 
-Status: Decided.
+Status: Decided. Amended by D69.
 
 The folder `test/` is a Go module of its own, as in okage D22. It is the only
 place that can use cgo or run an outside program. It holds:

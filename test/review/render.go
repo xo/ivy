@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -71,7 +72,23 @@ type RenderOptions struct {
 	// for none (D65). TeXMode names it in the report.
 	TeX     fs.FS
 	TeXMode string
+	// Refs chooses the references: RefsPrimary, the primary and the
+	// secondary oracle of each kind, or RefsAll, every reference (D69). An
+	// empty Refs is RefsPrimary.
+	Refs string
 }
+
+// The choices of RenderOptions.Refs.
+const (
+	// RefsPrimary shows the primary oracle of each kind, drawn by MuPDF and
+	// by Chrome when it is a PDF file, and at most one secondary oracle,
+	// drawn by MuPDF (D69).
+	RefsPrimary = "primary"
+	// RefsAll shows every reference: each conversion, each external
+	// reference, and each PDF file drawn by MuPDF, Poppler Splash, Poppler
+	// Cairo and Chrome.
+	RefsAll = "all"
+)
 
 // Report holds the results of a run, as report.json holds them.
 type Report struct {
@@ -93,6 +110,8 @@ type Report struct {
 	TeX string `json:"tex,omitempty"`
 	// Kinds sums the documents of each kind.
 	Kinds []KindSummary `json:"kinds"`
+	// Refs is RefsPrimary or RefsAll (D69).
+	Refs string `json:"refs"`
 }
 
 // KindSummary sums the documents of one kind.
@@ -183,8 +202,19 @@ type DocReport struct {
 	// Microsoft Office.
 	Externals []ExternalRef `json:"external_references,omitempty"`
 	// WorstBy is Worst for each reference by its id, such as "soffice" and
-	// "msoffice". Worst uses the primary reference of each page.
+	// "msoffice". Worst uses the primary reference of each page. The number
+	// of a reference comes from its primary renderer, MuPDF for a PDF file.
 	WorstBy map[string]float64 `json:"worst_by_reference,omitempty"`
+	// WorstByRenderer is Worst for each column of a reference, by the id of
+	// the reference and the id of the renderer, such as "msoffice/mupdf" and
+	// "msoffice/chrome".
+	WorstByRenderer map[string]float64 `json:"worst_by_renderer,omitempty"`
+	// PrimaryRef is the id of the primary oracle of the document, the first
+	// reference of its rows, and PrimaryRenderer is the id of the renderer
+	// that Worst uses, such as "mupdf" (D69). A page where the primary
+	// oracle has no metric uses the next reference, as PageRow.Primary says.
+	PrimaryRef      string `json:"primary_reference,omitempty"`
+	PrimaryRenderer string `json:"primary_renderer,omitempty"`
 	// SizeDiffers counts the pages whose size differs from the page of the
 	// primary reference by more than one pixel.
 	SizeDiffers int        `json:"size_differs_pages"`
@@ -213,6 +243,9 @@ type PageRow struct {
 	// first reference with a metric, Microsoft Office before LibreOffice
 	// for a file of Office.
 	Primary string `json:"primary_reference,omitempty"`
+	// PrimaryRenderer is the id of the renderer of the primary reference
+	// that Worst uses on the page, such as "mupdf".
+	PrimaryRenderer string `json:"primary_renderer,omitempty"`
 	// SizeDiffers reports a page of ivy whose size differs from the page of
 	// the primary reference by more than one pixel.
 	SizeDiffers bool `json:"size_differs,omitempty"`
@@ -236,14 +269,16 @@ type Cell struct {
 	Error     string      `json:"error,omitempty"`
 	Metric    *Metric     `json:"metric,omitempty"`
 	// Ref is the id of the reference of the cell, such as "soffice", and
-	// RefName its name, when the document has more than one reference.
+	// RefName its name, such as "LibreOffice". RefName is empty for a PDF
+	// file that the references draw as it is.
 	Ref     string `json:"reference,omitempty"`
 	RefName string `json:"reference_name,omitempty"`
+	// Renderer is the id of the page renderer of a cell of a reference, such
+	// as "mupdf" or "chrome".
+	Renderer string `json:"renderer,omitempty"`
 	// Fault is the note of a known fault of the reference on the page. The
 	// cell then counts for no number of the document.
 	Fault string `json:"fault,omitempty"`
-	// renderer is the id of the page renderer of a cell of a reference.
-	renderer string
 }
 
 // ms returns d in milliseconds.
@@ -270,6 +305,13 @@ func Render(ctx context.Context, entries []Entry, opts RenderOptions) (*Report, 
 	if opts.Timeout <= 0 {
 		opts.Timeout = 5 * time.Minute
 	}
+	switch opts.Refs {
+	case "":
+		opts.Refs = RefsPrimary
+	case RefsPrimary, RefsAll:
+	default:
+		return nil, fmt.Errorf("unknown references %q: expected %s or %s", opts.Refs, RefsPrimary, RefsAll)
+	}
 	cache, err := filepath.Abs(opts.Cache)
 	if err != nil {
 		return nil, fmt.Errorf("finding the cache: %w", err)
@@ -293,10 +335,12 @@ func Render(ctx context.Context, entries []Entry, opts RenderOptions) (*Report, 
 	if err != nil {
 		return nil, err
 	}
+	defer env.closeChrome()
+	defer env.pageSrv.close()
 	rep := &Report{
 		Created: start.UTC(), DPI: opts.DPI, Pages: opts.Pages, Timeout: opts.Timeout.String(),
 		Notes: notes, Counts: map[string]int{}, Papers: opts.Papers, SystemFonts: opts.SystemFonts,
-		FontDirs: opts.FontDirs, TeX: opts.TeXMode,
+		FontDirs: opts.FontDirs, TeX: opts.TeXMode, Refs: opts.Refs,
 	}
 	var mu sync.Mutex
 	done := 0
@@ -519,7 +563,8 @@ func toolEnv(ctx context.Context, opts RenderOptions, home string) (*refEnv, []s
 		return nil, nil, fmt.Errorf("writing unopdf.py: %w", err)
 	}
 	e := &refEnv{cache: opts.Cache, dpi: opts.DPI, retry: opts.Retry, unoScript: script, env: env,
-		fonts: hex.EncodeToString(sum[:4]), keys: map[string]string{}, versions: map[string]string{}}
+		fonts: hex.EncodeToString(sum[:4]), keys: map[string]string{}, versions: map[string]string{},
+		all: opts.Refs == RefsAll}
 	var notes []string
 	out, err := runTool(ctx, env, "", "fc-list", ":", "family")
 	if err != nil {
@@ -675,7 +720,14 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 	default:
 		routeGroup.pages = d.RefPages
 	}
-	groups := refGroups(refCtx, d, job, routeGroup, jb.paper)
+	var extra []*refGroup
+	if job.all {
+		extra = extraGroups(refCtx, d, job, path, e)
+	}
+	groups := refGroups(refCtx, d, job, routeGroup, extra, jb.paper)
+	if len(groups) != 0 {
+		d.PrimaryRef, d.PrimaryRenderer = groups[0].id, primaryRenderer(groups[0].renderers)
+	}
 
 	// the time of the references does not count for ivy
 	cancelIvy()
@@ -766,16 +818,16 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 		refImgs := refCells(refCtx, groups, row, n, ivyImg, prefix, rel, opts.Faults, names)
 
 		// ivy PDF compared with MuPDF of the route, which is not a reference
-		for k, c := range row.Refs {
-			if pdfImg != nil && c.Ref == r.id && c.renderer == mupdfRenderer.id && refImgs[k] != nil {
-				compareCell(row.IvyPDF, pdfImg, refImgs[k], prefix+"-ivypdf-diff", rel)
+		if pdfImg != nil {
+			if ref := routeMuPDF(refCtx, routeGroup, row, refImgs, n); ref != nil {
+				compareCell(row.IvyPDF, pdfImg, ref, prefix+"-ivypdf-diff", rel)
 				d.IvyPDFWorst = max(d.IvyPDFWorst, row.IvyPDF.Metric.Blurred)
 			}
 		}
 
 		// the references compared with ivy and with each other
 		m := rowMetrics(row, refImgs, groups)
-		row.RefsDiff, row.Primary, row.SizeDiffers = m.refsDiff, m.primary, m.sizeDiffers
+		row.RefsDiff, row.Primary, row.PrimaryRenderer, row.SizeDiffers = m.refsDiff, m.primary, m.primaryRenderer, m.sizeDiffers
 		row.Disagrees = row.RefsDiff > disagreeBlurred
 		if row.Disagrees {
 			d.Disagree++
@@ -792,6 +844,14 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 				d.WorstBy[id] = v
 			}
 		}
+		for id, v := range m.byRenderer {
+			if d.WorstByRenderer == nil {
+				d.WorstByRenderer = map[string]float64{}
+			}
+			if old, ok := d.WorstByRenderer[id]; !ok || v > old {
+				d.WorstByRenderer[id] = v
+			}
+		}
 
 		// the MediaBox of a PDF file, if it differs from the CropBox
 		if r.mediaBox && routeGroup.skip == "" && (routeGroup.pages < 0 || n < routeGroup.pages) {
@@ -805,19 +865,55 @@ func renderDoc(ctx context.Context, jb docJob, i, slot int, env *refEnv, home st
 	return d
 }
 
+// extraGroups returns the groups of the extra routes of the kind of the
+// document d, for -refs all (D70). A route that fails gives a group with
+// the error in each cell.
+func extraGroups(ctx context.Context, d *DocReport, job *refJob, path string, e Entry) []*refGroup {
+	groups := make([]*refGroup, 0, len(extraRoutes[job.kind]))
+	for _, r := range extraRoutes[job.kind] {
+		g := &refGroup{id: r.id, name: r.name, job: job, pages: -1, renderers: r.renderers, native: r.native}
+		in, err := linkInput(job.tmp, path, e)
+		if err == nil {
+			g.prep, err = job.prepare(ctx, r, in)
+		}
+		switch {
+		case err != nil:
+			g.skip = "no reference: " + err.Error()
+			d.Log = append(d.Log, r.name+": "+err.Error())
+		default:
+			g.pages = g.prep.pages
+		}
+		groups = append(groups, g)
+	}
+	return groups
+}
+
 // refGroups returns the references of the document d in their order: the
 // external references that are primary for the kind, then the route, then
-// the other external references. It sets the names of the references of
+// the extra routes of extra, then the other external references. It sets the names of the references of
 // d. An external reference that a program made on its own paper joins only
 // a document on the default paper or on US Letter.
-func refGroups(ctx context.Context, d *DocReport, job *refJob, route *refGroup, paper *Paper) []*refGroup {
+//
+// Without -refs all, the document gets its primary oracle and at most one
+// secondary oracle (D69). An external reference that is primary for the
+// kind and has a file is the primary oracle, and the route is the
+// secondary oracle, unless the external reference leaves the route out,
+// as Apple iWork does. Without such a file, the route is the primary
+// oracle. The primary oracle draws a PDF file with MuPDF and Chrome, and
+// the secondary oracle draws it with MuPDF.
+func refGroups(ctx context.Context, d *DocReport, job *refJob, route *refGroup, extra []*refGroup, paper *Paper) []*refGroup {
 	var first, last []*refGroup
+	keepRoute := true
 	// the files of the external references take the name of the manifest,
 	// without the paper
 	e := d.Entry
 	if isLetter(paper) {
 		for _, x := range externals {
 			if !contains(x.kinds, job.kind) {
+				continue
+			}
+			primary := contains(x.primary, job.kind)
+			if !primary && !job.all {
 				continue
 			}
 			g, err := job.prepareExternal(ctx, x, e)
@@ -836,29 +932,100 @@ func refGroups(ctx context.Context, d *DocReport, job *refJob, route *refGroup, 
 				g.skip = "no reference: " + err.Error()
 			}
 			d.Externals = append(d.Externals, info)
-			if contains(x.primary, job.kind) {
-				first = append(first, g)
-			} else {
+			if !primary {
 				last = append(last, g)
+				continue
+			}
+			first = append(first, g)
+			if g.skip == "" && !x.keepRoute {
+				keepRoute = false
 			}
 		}
 	}
-	var groups []*refGroup
-	if len(route.renderers) != 0 {
+	groups := first
+	if len(route.renderers) != 0 && (keepRoute || job.all) {
 		groups = append(groups, route)
 	}
-	groups = append(first, groups...)
-	groups = append(groups, last...)
-	for _, g := range groups {
+	if job.all {
+		groups = append(groups, extra...)
+		groups = append(groups, last...)
+	} else if len(groups) > 2 {
+		groups = groups[:2]
+	}
+	for i, g := range groups {
+		g.renderers = pickRenderers(g.renderers, job.all, i == 0)
 		for _, pr := range g.renderers {
-			name := pr.name
-			if len(groups) > 1 && g.name != "" {
-				name = g.name + " · " + pr.name
-			}
-			d.RefNames = append(d.RefNames, name)
+			d.RefNames = append(d.RefNames, refColumn(g.name, pr.name))
 		}
 	}
 	return groups
+}
+
+// pickRenderers returns the page renderers of a reference whose renderers
+// are rs. For a PDF file, -refs all gives MuPDF, Poppler Splash, Poppler
+// Cairo and Chrome. Without it, the primary oracle gets MuPDF and Chrome,
+// and the secondary oracle gets MuPDF (D69). The renderers of another file
+// do not change.
+func pickRenderers(rs []pageRenderer, all, primary bool) []pageRenderer {
+	if !slices.ContainsFunc(rs, func(pr pageRenderer) bool { return pr.id == mupdfRenderer.id }) {
+		return rs
+	}
+	out := []pageRenderer{mupdfRenderer}
+	if all {
+		out = slices.Clone(pdfRenderers)
+	}
+	if all || primary {
+		out = append(out, chromeRenderer)
+	}
+	return out
+}
+
+// primaryRenderer returns the id of the renderer of a reference that Worst
+// uses: the first one that is not Chrome, because the maintainers compare
+// Chrome with MuPDF before it can count (D69).
+func primaryRenderer(rs []pageRenderer) string {
+	for _, pr := range rs {
+		if pr.id != chromeRenderer.id {
+			return pr.id
+		}
+	}
+	return ""
+}
+
+// refColumn returns the name of a column of a reference: the name of the
+// conversion, then the name of the renderer, such as "Microsoft Office -
+// MuPDF". It is the name of the renderer alone when the reference has no
+// conversion, or when the two names are the same, such as for GDI+.
+func refColumn(ref, renderer string) string {
+	if ref == "" || ref == renderer {
+		return renderer
+	}
+	return ref + " - " + renderer
+}
+
+// routeMuPDF returns the page n, from 0, of the PDF file of route drawn by
+// MuPDF, which ivy PDF is compared with. It takes the image of the cell of
+// row, whose images are refImgs, or draws the page when the row does not
+// show the route, such as for an iWork file with the PDF file of Apple. It
+// returns nil when the route has no such page.
+func routeMuPDF(ctx context.Context, route *refGroup, row *PageRow, refImgs []image.Image, n int) image.Image {
+	for k, c := range row.Refs {
+		if c.Ref == route.id && c.Renderer == mupdfRenderer.id {
+			return refImgs[k]
+		}
+	}
+	if route.prep == nil || route.skip != "" || (route.pages >= 0 && n >= route.pages) {
+		return nil
+	}
+	png, err := route.job.renderPage(ctx, route.prep, mupdfRenderer, route.native, n+1)
+	if err != nil {
+		return nil
+	}
+	img, err := readImage(png)
+	if err != nil {
+		return nil
+	}
+	return img
 }
 
 // refCells renders page n, from 0, with each page renderer of each group
@@ -875,10 +1042,7 @@ func refCells(ctx context.Context, groups []*refGroup, row *PageRow, n int, ivyI
 			skip = "the reference has no such page"
 		}
 		for _, pr := range g.renderers {
-			c := &Cell{Name: pr.name, Ref: g.id, renderer: pr.id}
-			if len(groups) > 1 {
-				c.RefName = g.name
-			}
+			c := &Cell{Name: pr.name, Ref: g.id, RefName: g.name, Renderer: pr.id}
 			c.Fault = faultNote(faults, names, n+1, g.id)
 			row.Refs = append(row.Refs, c)
 			refImgs = append(refImgs, nil)
@@ -927,12 +1091,15 @@ type rowMetric struct {
 	// best is the smallest blurred difference of ivy from a cell of the
 	// primary reference, or -1.
 	best float64
-	// by is the smallest blurred difference of ivy from a cell of each
-	// reference, by its id.
+	// by is the blurred difference of ivy from the cell of the primary
+	// renderer of each reference, by the id of the reference.
 	by map[string]float64
+	// byRenderer is the blurred difference of ivy from each cell, by the id
+	// of the reference and the id of the renderer, such as "pdf/chrome".
+	byRenderer map[string]float64
 	// primary is the id of the primary reference of the row: the first
-	// group with a metric.
-	primary string
+	// group with a metric. primaryRenderer is the id of its renderer.
+	primary, primaryRenderer string
 	// sizeDiffers reports a page of ivy whose size differs from the page of
 	// the primary reference by more than one pixel.
 	sizeDiffers bool
@@ -942,7 +1109,7 @@ type rowMetric struct {
 // the images refImgs, of the references groups. A cell with a fault counts
 // for none of them.
 func rowMetrics(row *PageRow, refImgs []image.Image, groups []*refGroup) rowMetric {
-	m := rowMetric{refsDiff: -1, best: -1, by: map[string]float64{}}
+	m := rowMetric{refsDiff: -1, best: -1, by: map[string]float64{}, byRenderer: map[string]float64{}}
 	for a := range refImgs {
 		for b := a + 1; b < len(refImgs); b++ {
 			if refImgs[a] == nil || refImgs[b] == nil || row.Refs[a].Fault != "" || row.Refs[b].Fault != "" {
@@ -952,17 +1119,21 @@ func rowMetrics(row *PageRow, refImgs []image.Image, groups []*refGroup) rowMetr
 			m.refsDiff = max(m.refsDiff, cm.Blurred)
 		}
 	}
+	// the metric of a reference is the metric of its first renderer with a
+	// metric that is not Chrome
+	renderer := map[string]string{}
 	for _, c := range row.Refs {
 		if c.Metric == nil || c.Fault != "" {
 			continue
 		}
-		if v, ok := m.by[c.Ref]; !ok || c.Metric.Blurred < v {
-			m.by[c.Ref] = c.Metric.Blurred
+		m.byRenderer[c.Ref+"/"+c.Renderer] = c.Metric.Blurred
+		if _, ok := m.by[c.Ref]; !ok && c.Renderer != chromeRenderer.id {
+			m.by[c.Ref], renderer[c.Ref] = c.Metric.Blurred, c.Renderer
 		}
 	}
 	for _, g := range groups {
 		if v, ok := m.by[g.id]; ok {
-			m.primary, m.best = g.id, v
+			m.primary, m.primaryRenderer, m.best = g.id, renderer[g.id], v
 			break
 		}
 	}
@@ -970,7 +1141,7 @@ func rowMetrics(row *PageRow, refImgs []image.Image, groups []*refGroup) rowMetr
 		return m
 	}
 	for _, c := range row.Refs {
-		if c.Ref == m.primary && c.Fault == "" && c.Image != "" {
+		if c.Ref == m.primary && c.Renderer == m.primaryRenderer && c.Fault == "" && c.Image != "" {
 			m.sizeDiffers = sizeDiffers(row.Ivy.Size, c.Size)
 			break
 		}
@@ -1027,7 +1198,11 @@ func mediaRow(ivyCtx, refCtx context.Context, d *DocReport, route *refGroup, pat
 			row.Ivy.Error = werr.Error()
 		}
 	}
-	g := &refGroup{id: route.id, name: route.name, job: route.job, prep: route.prep, pages: -1, renderers: mediaRenderers}
+	renderers := []pageRenderer{mupdfMediaRenderer}
+	if route.job.all {
+		renderers = mediaRenderers
+	}
+	g := &refGroup{id: route.id, name: route.name, job: route.job, prep: route.prep, pages: -1, renderers: renderers}
 	refImgs := refCells(refCtx, []*refGroup{g}, row, n, ivyImg, prefix, rel, opts.Faults, names)
 	m := rowMetrics(row, refImgs, []*refGroup{g})
 	row.RefsDiff = m.refsDiff
@@ -1202,7 +1377,7 @@ func hashFile(path string) (string, int64, error) {
 // linkInput makes a symbolic link to the file path in the folder tmp, with
 // the extension of the kind, because some programs read the extension.
 func linkInput(tmp, path string, e Entry) (string, error) {
-	if e.Kind == "html" || e.Kind == "md" || contains(texKinds, e.Kind) {
+	if e.Kind == "html" || e.Kind == "md" || e.Kind == "markdown" || contains(texKinds, e.Kind) {
 		// A document that links to other files must stay in its folder.
 		abs, err := filepath.Abs(path)
 		if err != nil {

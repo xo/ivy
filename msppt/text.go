@@ -246,7 +246,7 @@ func (b *builder) textBody(t *text, c odraw.Chain, props9 []pf9) *drawingml.Text
 	if len(units) == 0 {
 		return nil
 	}
-	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c), NoKerning: true}
+	tb := &drawingml.TextBody{Body: odraw.BodyStyle(c), NoKerning: true, WinBaseline: true}
 	n := len(units)
 	if t.styleLen > 0 {
 		n = t.styleLen

@@ -90,11 +90,11 @@ func ParsePapers(list string) ([]Paper, error) {
 var csvKinds = []string{"csv", "tsv", "tab"}
 
 // paperless reports whether the files of kind give no paper, so that the
-// review renders them on each paper of -papers (D32): the kinds of calibre
-// and of WeasyPrint, and the CSV files.
+// review renders them on each paper of -papers (D32): the kinds of calibre,
+// of markdown-it and of WeasyPrint, and the CSV files.
 func paperless(kind string) bool {
 	r := routeFor(kind)
-	return r == calibreRoute || r == weasyprintRoute || contains(csvKinds, kind)
+	return r == calibreRoute || r == markdownItRoute || r == weasyprintRoute || contains(csvKinds, kind)
 }
 
 // isLetter reports whether p is the paper "default" or US Letter in

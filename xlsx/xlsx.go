@@ -206,7 +206,7 @@ func (d *Document) workbook(ctx context.Context) (*sheet.Workbook, error) {
 	if err := b.readStrings(); err != nil {
 		return nil, err
 	}
-	wb := &sheet.Workbook{Styles: b.styles.cells, Files: b.files}
+	wb := &sheet.Workbook{Styles: b.styles.cells, Files: b.files, Excel: true}
 	log := d.cfg.Log()
 	for i, ref := range refs {
 		if ref.state == "hidden" || ref.state == "veryHidden" || ref.part == "" {

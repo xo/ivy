@@ -522,3 +522,24 @@ func TestBoxCopy(t *testing.T) {
 		t.Errorf("expected the default attributes not to change")
 	}
 }
+
+// TestCompressibleImage lays out a table of three images with a width of
+// 60px and a max-width of 100% on a page of 100px. The images shrink, so
+// that the table fits on the page, as in a browser. Upstream makes the
+// table wider than the page.
+func TestCompressibleImage(t *testing.T) {
+	_, table := tableRender(t, `
+      <style>
+        @page { size: 100px 1000px; margin: 0 }
+        body { margin: 0 }
+        img { width: 60px; max-width: 100% }
+      </style>
+      <table style="border-spacing: 0"><tr>
+        <td style="padding: 0"><img src=pattern.png></td>
+        <td style="padding: 0"><img src=pattern.png></td>
+        <td style="padding: 0"><img src=pattern.png></td>
+      </tr></table>`)
+	if table.Width > 100 {
+		t.Errorf("expected a table at most 100px wide, got: %g", table.Width)
+	}
+}

@@ -70,12 +70,32 @@ var (
 	}
 )
 
+// The tables of tulmss.fd for Latin Modern Sans (D72): the medium and the
+// oblique shapes at five optical sizes, and the bold extended shapes at
+// one. The italic shape is the oblique shape, and the bold series and the
+// semibold condensed series take the bold extended series.
+var (
+	lmSansSpec = []opticalSpec{
+		{8.5, "lmsans8-regular"}, {9.5, "lmsans9-regular"}, {11, "lmsans10-regular"},
+		{15.5, "lmsans12-regular"}, {0, "lmsans17-regular"},
+	}
+	lmSansObliqueSpec = []opticalSpec{
+		{8.5, "lmsans8-oblique"}, {9.5, "lmsans9-oblique"}, {11, "lmsans10-oblique"},
+		{15.5, "lmsans12-oblique"}, {0, "lmsans17-oblique"},
+	}
+	lmSansBoldSpec        = []opticalSpec{{0, "lmsans10-bold"}}
+	lmSansBoldObliqueSpec = []opticalSpec{{0, "lmsans10-boldoblique"}}
+)
+
 // LatinModernFiles are the names of the files of Latin Modern that the
 // engine uses, without the extension .otf. The math font is
 // latinmodern-math.
 func LatinModernFiles() []string {
 	var names []string
-	for _, spec := range [][]opticalSpec{lmRegularSpec, lmBoldSpec, lmItalicSpec, lmMonoSpec} {
+	for _, spec := range [][]opticalSpec{
+		lmRegularSpec, lmBoldSpec, lmItalicSpec, lmMonoSpec,
+		lmSansSpec, lmSansObliqueSpec, lmSansBoldSpec, lmSansBoldObliqueSpec,
+	} {
 		for _, s := range spec {
 			names = append(names, s.name)
 		}
@@ -111,6 +131,10 @@ func intern(data []byte) []byte {
 // such file.
 type LatinModernFaces struct {
 	Regular, Bold, Italic, Mono, Math []byte
+	// Sans, SansBold, SansItalic and SansBoldItalic are Latin Modern Sans:
+	// the medium, the bold extended, the oblique and the bold extended
+	// oblique shapes.
+	Sans, SansBold, SansItalic, SansBoldItalic []byte
 }
 
 // RegisterLatinModern interns the files of Latin Modern, by their names
@@ -148,6 +172,11 @@ func RegisterLatinModern(files map[string][]byte) LatinModernFaces {
 		Bold:    reg(lmBoldSpec),
 		Italic:  reg(lmItalicSpec),
 		Mono:    reg(lmMonoSpec),
+
+		Sans:           reg(lmSansSpec),
+		SansBold:       reg(lmSansBoldSpec),
+		SansItalic:     reg(lmSansObliqueSpec),
+		SansBoldItalic: reg(lmSansBoldObliqueSpec),
 	}
 	if m := files["latinmodern-math"]; len(m) > 0 {
 		faces.Math = intern(m)

@@ -204,9 +204,13 @@ const LaTeX2eClassLead = `
   \@tempskipa#4\relax
   \@afterindenttrue
   \ifdim\@tempskipa<\z@ \@tempskipa-\@tempskipa \@afterindentfalse\fi
-  \addpenalty\@secpenalty
-  \vskip\@tempskipa
+  \if@nobreak\everypar{}\else\addpenalty\@secpenalty\addvspace\@tempskipa\fi
   \@ifstar{\@gxsec{#1}{#2}{#6}{#5}\@gxstar}{\@gxsec{#1}{#2}{#6}{#5}\@gxnum}}
+% ivy: \addvspace, as ltsect.dtx:331 has it, and not \vskip. A \section after
+% \maketitle, which ends with \vskip 1.5em, or after a list or a display, took
+% the sum of the two skips where LaTeX takes the larger one. Right after a
+% heading, \@afterheading (ivy_latex.go) sets \@nobreaktrue, and the next
+% heading adds no space and no penalty, as in LaTeX (D62).
 \def\@gxsec#1#2#3#4#5{\@ifnextchar[{\@gxsecopt{#1}{#2}{#3}{#4}{#5}}{\@gxsecplain{#1}{#2}{#3}{#4}{#5}}}
 \def\@gxsecopt#1#2#3#4#5[#6]#7{#5{#1}{#2}{#3}{#4}{#7}}
 \def\@gxsecplain#1#2#3#4#5#6{#5{#1}{#2}{#3}{#4}{#6}}

@@ -11,6 +11,7 @@ import (
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
 	"github.com/xo/ivy/internal/fixture"
+	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/odraw"
 )
 
@@ -185,9 +186,16 @@ func TestDrawings(t *testing.T) {
 	}
 	// the text box, the red rectangle, the group and the metafile draw as
 	// objects, and the PNG picture as an image; the comment and the shape
-	// that does not print do not draw
-	if len(src.Objects) != 4 {
-		t.Errorf("expected 4 objects, got: %d", len(src.Objects))
+	// that does not print do not draw. The source also holds the slices of
+	// the objects in the rows, whose names hold a tilde.
+	objects := map[string]layout.Object{}
+	for name, o := range src.Objects {
+		if !strings.Contains(name, "~") {
+			objects[name] = o
+		}
+	}
+	if len(objects) != 4 {
+		t.Errorf("expected 4 objects, got: %d", len(objects))
 	}
 	docs := sheets(t, d)
 	// the columns of 50.47 points and the rows of 12.36 points, the
@@ -204,7 +212,7 @@ func TestDrawings(t *testing.T) {
 		t.Errorf("expected no frame for the comment:\n%s", docs[0])
 	}
 	var text *drawingml.Figure
-	for _, o := range src.Objects {
+	for _, o := range objects {
 		for _, f := range o.(*shapeObject).figures {
 			if f.Text != nil {
 				text = f

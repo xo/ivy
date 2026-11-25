@@ -7,8 +7,8 @@
 //     text of a line, and the extra space of a multiple line spacing below
 //     it, see leadingShift.
 //   - -ivy-page-top-space leaves out the space before the first block of a
-//     page or of a column after a break that is not forced, see
-//     layoutContext.discardsSpaceBefore.
+//     page, of a column or of the part of a split table cell after a break
+//     that is not forced, see layoutContext.discardsSpaceBefore.
 
 package layout
 
@@ -184,6 +184,18 @@ func strutTextHeight(style *Style) float64 {
 func (lc *layoutContext) discardsSpaceBefore(box *Box, pageIsEmpty, inFlow bool) bool {
 	return (lc.columnTopBox == box || inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak) &&
 		isStr(box.Style.Get("page_top_space"), "discard")
+}
+
+// splitCellTop reports whether the first in-flow child of the table cell
+// cell, which resumes at skip, loses the space before it by
+// -ivy-page-top-space: the property is 'discard', and the cell goes on
+// from the page before at the top of a page that starts after a break that
+// is not forced. Word leaves out the space before the first paragraph of
+// such a part of a cell, as at the top of the page. A row that starts on
+// the page keeps the space before the paragraphs of its cells.
+func (lc *layoutContext) splitCellTop(cell *Box, skip skipStack, pageIsEmpty bool) bool {
+	return len(skip) > 0 && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak &&
+		isStr(cell.Style.Get("page_top_space"), "discard")
 }
 
 // startColumn sets the column box column as the box whose first in-flow

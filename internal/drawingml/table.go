@@ -424,10 +424,11 @@ func (tab *Table) html(w, h float64, theme *Theme) (string, float64, float64) {
 	}
 	pageW := max(tableW, w, 1)
 	page := max(h*overflowLines, h+720)
-	noKerning := false
+	noKerning, win := false, false
 	for _, r := range tab.Rows {
 		for _, c := range r.Cells {
 			noKerning = noKerning || c.Text != nil && c.Text.NoKerning
+			win = win || c.Text != nil && c.Text.WinBaseline
 		}
 	}
 	var sb strings.Builder
@@ -436,9 +437,14 @@ func (tab *Table) html(w, h float64, theme *Theme) (string, float64, float64) {
 html, body { margin: 0; padding: 0 }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed }
 td { overflow-wrap: break-word; padding: 0 }
-p { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; hyphens: none%s }
+p { margin: 0; white-space: pre-wrap; overflow-wrap: break-word; hyphens: none%s%s }
 span.b { display: inline-block; text-indent: 0; white-space: pre; line-height: 0 }
-</style></head><body><table style="width:%spt`, num(pageW), num(page), kerning(noKerning), num(tableW))
+</style></head><body><table style="width:%spt`, num(pageW), num(page), kerning(noKerning), winBaseline(win), num(tableW))
+	// the collapsed borders of CSS put half of the outer borders out of the
+	// grid, and PowerPoint draws the grid at the place of the frame
+	if left, top := outerBorders(tab); left > 0 || top > 0 {
+		fmt.Fprintf(&sb, ";margin-left:%spt;margin-top:%spt", num(-left/2), num(-top/2))
+	}
 	if c := tab.Fill.Mean(); tab.Fill.Visible() && c.A > 0 {
 		sb.WriteString(";background-color:" + c.CSS())
 	}
@@ -501,6 +507,29 @@ span.b { display: inline-block; text-indent: 0; white-space: pre; line-height: 0
 	return sb.String(), pageW, page
 }
 
+// outerBorders returns the width of the widest left border of the cells of
+// the first column, and of the widest top border of the cells of the first
+// row.
+func outerBorders(tab *Table) (left, top float64) {
+	width := func(l *Line) float64 {
+		if l == nil || !l.Visible() {
+			return 0
+		}
+		return max(l.Width, 0.5)
+	}
+	for ri, r := range tab.Rows {
+		if len(r.Cells) > 0 {
+			left = max(left, width(r.Cells[0].Borders[0]))
+		}
+		if ri == 0 {
+			for _, c := range r.Cells {
+				top = max(top, width(c.Borders[1]))
+			}
+		}
+	}
+	return left, top
+}
+
 // rowHeights returns the heights of the rows of a table, for the length of
 // the lines of a vertical text: the height of the row in the file, or the
 // height of the text of its horizontal cells, if it is more. A row grows
@@ -539,7 +568,21 @@ func writeCell(sb *strings.Builder, c *TableCell, w, h, least float64, theme *Th
 	case "b":
 		anchor = "bottom"
 	}
+	// PowerPoint draws a border on the line of the grid, over the inset of
+	// the cell, and the collapsed border of CSS puts half of it in the
+	// cell. So the padding is the inset without half of the border. An
+	// inset that is narrower than half of the border gives the rest to a
+	// negative margin of the text.
 	in := c.Insets
+	var over [4]float64
+	for i, l := range c.Borders {
+		if l != nil && l.Visible() {
+			in[i] -= max(l.Width, 0.5) / 2
+			if in[i] < 0 {
+				over[i], in[i] = -in[i], 0
+			}
+		}
+	}
 	fmt.Fprintf(sb, ` style="vertical-align:%s;padding:%spt %spt %spt %spt`, anchor, num(in[1]), num(in[2]), num(in[3]), num(in[0]))
 	if least > 0 {
 		sb.WriteString(";height:" + num(least) + "pt")
@@ -562,12 +605,19 @@ func writeCell(sb *strings.Builder, c *TableCell, w, h, least float64, theme *Th
 		fmt.Fprintf(sb, ";border-%s:%spt %s %s", side, num(max(l.Width, 0.5)), kind, l.Paint.Mean().CSS())
 	}
 	sb.WriteString(`">`)
+	wrap := over != [4]float64{}
+	if wrap {
+		fmt.Fprintf(sb, `<div style="margin:%spt %spt %spt %spt">`, num(0-over[1]), num(0-over[2]), num(0-over[3]), num(0-over[0]))
+	}
 	if c.Text != nil {
 		if !writeVertical(sb, c, w, h, theme) {
 			for i := range c.Text.Paragraphs {
 				writeParagraph(sb, &c.Text.Paragraphs[i], theme, 1, 0, i == 0, i == len(c.Text.Paragraphs)-1)
 			}
 		}
+	}
+	if wrap {
+		sb.WriteString("</div>")
 	}
 	sb.WriteString("</td>")
 }

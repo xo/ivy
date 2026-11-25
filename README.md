@@ -309,7 +309,7 @@ Sans Fallback, under the Apache License 2.0, which draws the Chinese,
 Japanese and Korean characters that a document does not embed.
 `fonts.TeX()` gives Latin Modern, the fonts of TeX, under the GUST Font
 License, for `Config.TeX` and the package `latex`. The module adds about
-14.1 MB to a program. `Config.SystemFonts` also lets ivy use the fonts of
+15.3 MB to a program. `Config.SystemFonts` also lets ivy use the fonts of
 the system.
 
 ### Convert the colors of an image
