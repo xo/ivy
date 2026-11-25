@@ -187,7 +187,8 @@ func (c *converter) alignTable(s *css, tp props) {
 // position from the margin or from the page, in the body of a section of
 // one column, and reports whether it did (D60). The text wraps around the
 // table. A table at a position from its paragraph stays a block in the
-// flow.
+// flow. A table with w:tblOverlap "never" moves down below the floats of
+// the page that it covers.
 func (c *converter) floatTable(s *css, t roxmltree.Node, tp props, total float64) bool {
 	pr, ok := child(t, "tblPr")
 	if !ok || c.margin != "" {
@@ -217,6 +218,9 @@ func (c *converter) floatTable(s *css, t roxmltree.Node, tp props, total float64
 		dist[i] = min(max(number(attrOf(pp, name), 0)/20, 0), 720)
 	}
 	pageFloatCSS(s, x, w, colWidth, dist, true, position)
+	if e, ok := child(pr, "tblOverlap"); ok && attrOf(e, "val") == "never" {
+		s.set("-ivy-float-overlap", "avoid")
+	}
 	return true
 }
 

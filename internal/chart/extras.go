@@ -759,6 +759,10 @@ func (pl *plane) trendLabel(t trendline, r regression, end [2]float64) {
 	var lines [][]segment
 	if t.eq {
 		if eq := equation(t, r); len(eq) > 0 {
+			if pl.c.look == lookLibre {
+				// LibreOffice writes f(x) = 2x + 1.
+				eq[0].text = "f(x) = "
+			}
 			lines = append(lines, eq)
 		}
 	}

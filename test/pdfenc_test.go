@@ -94,11 +94,11 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 	if err != nil {
 		t.Skipf("file not in the cache: %v", err)
 	}
-	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, filepath.Dir(path))
+	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, path)
 	if err != nil {
 		t.Skipf("ivy does not open the file: %v", err)
 	}
-	defer func() { _ = doc.Close() }()
+	defer doc.Close()
 	pager, ok := doc.(ivy.Pager)
 	if !ok {
 		t.Skip("the document has no pages")
@@ -148,7 +148,7 @@ func encodeCorpus(t *testing.T, format ivy.Format, cfg ivy.Config, path string, 
 	if err != nil {
 		t.Fatalf("opening the written file: %v", err)
 	}
-	defer func() { _ = written.Close() }()
+	defer written.Close()
 	for i, num := range numbers {
 		src, err := pager.Page(ctx, num)
 		if err != nil {
@@ -344,7 +344,7 @@ func mutoolPage(ctx context.Context, path string, n, dpi int) (image.Image, erro
 	if err != nil {
 		return nil, fmt.Errorf("opening the png of mutool: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	img, err := png.Decode(f)
 	if err != nil {
 		return nil, fmt.Errorf("decoding the png of mutool: %w", err)

@@ -518,6 +518,11 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 		// Update line resume_at and position_y
 		line.resumeAt = resumeAt
 		newPositionY := line.PositionY + line.Height
+		if line.extra().rowPart {
+			// Port: upstream has no -ivy-wrap-flow. A later part of a row
+			// ends at the bottom of the row (D63).
+			newPositionY = max(newPositionY, positionY)
+		}
 
 		// Add bottom padding and border to the bottom position of the
 		// box if needed

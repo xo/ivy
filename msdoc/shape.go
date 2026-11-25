@@ -173,7 +173,10 @@ type floating struct {
 	bx, by    int
 	// wr is how the text wraps: 1 above and below, 3 not at all, and the
 	// others around it.
-	wr     int
+	wr int
+	// wrk is the side of the text that wraps around it: 0 both sides, 1
+	// the left side, 2 the right side and 3 the largest side.
+	wrk    int
 	behind bool
 }
 
@@ -260,7 +263,7 @@ func (p *parser) drawnAt(ctx context.Context, cp uint32, header bool) (*drawn, e
 	d := &drawn{
 		floating: floating{
 			left: left, top: top,
-			bx: int(flags >> 1 & 3), by: int(flags >> 3 & 3), wr: int(flags >> 5 & 0xF),
+			bx: int(flags >> 1 & 3), by: int(flags >> 3 & 3), wr: int(flags >> 5 & 0xF), wrk: int(flags >> 9 & 0xF),
 			behind: flags&0x4000 != 0 || c.Flag(odraw.PropGroupBools, behindDocument, useBehindDocument, false),
 		},
 		shape: s,

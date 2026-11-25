@@ -349,6 +349,9 @@ type boxExtra struct {
 	// a parent subtracts it from the bottom of the block when it checks
 	// the bottom of the page. See lineboxLayout.
 	pageOverflow float64
+	// rowPart is set on a line box that is not the first part of its row
+	// next to a float of -ivy-wrap-flow (D63). See iterLineBoxes.
+	rowPart bool
 
 	// Advancements is the advancements of a grid container. Upstream has a
 	// TODO to move it into the context of the rendering.

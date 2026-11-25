@@ -13,7 +13,8 @@
 // before the flow. The flow skips the float when it meets its anchor
 // again. A float that a page placed before its flow stays on that page,
 // also when its anchor goes to the next page. The flow of a later page
-// skips it too.
+// skips it too. A page float with -ivy-float-overlap: avoid moves down
+// below the page floats before it on the page that it covers.
 
 package layout
 
@@ -48,21 +49,29 @@ type pageFloatState struct {
 	placed []pageFloat
 	above  []pageFloat
 	// shapes holds the laid out page floats of the page, which the
-	// ordinary floats do not stay below.
-	shapes map[*Box]bool
+	// ordinary floats do not stay below, and sources the box of the tree
+	// of each of them.
+	shapes  map[*Box]bool
+	sources map[*Box]*Box
+	// order holds the boxes of the tree of the page floats in the order
+	// that the first layout of the page met them, for a second layout of
+	// the page. It is nil in the first layout.
+	order []*Box
 	// layouts counts the layouts of pages, for the tests.
 	layouts int
 }
 
 // startPageFloats starts a layout of a page that places the page floats
-// before before its flow. makePageGrown sets the page and the floats of the
-// pages before.
-func (lc *layoutContext) startPageFloats(before []pageFloat) {
+// before before its flow. order holds the page floats in the order that the
+// first layout of the page met them, or is nil for the first layout.
+// makePageGrown sets the page and the floats of the pages before.
+func (lc *layoutContext) startPageFloats(before []pageFloat, order []*Box) {
 	s := &lc.pageFloats
 	s.flow, s.page = false, nil
 	s.before, s.done = before, nil
 	s.placed, s.above = nil, nil
-	s.shapes = nil
+	s.shapes, s.sources = nil, nil
+	s.order = order
 	s.layouts++
 }
 
@@ -100,7 +109,10 @@ func (lc *layoutContext) flowPageFloat(box, containingBlock *Box, flowY float64,
 		return nil
 	}
 	newBox := pageFloatLayout(lc, box, containingBlock, absoluteBoxes, fixedBoxes)
-	lc.addPageFloatShape(newBox)
+	if isStr(newBox.Style.Get("float_overlap"), "avoid") {
+		lc.avoidPageFloats(box, newBox)
+	}
+	lc.addPageFloatShape(box, newBox)
 	s := &lc.pageFloats
 	f := pageFloat{box: box, containingBlock: containingBlock.Copy(), newBox: newBox}
 	s.placed = putPageFloat(s.placed, f)
@@ -124,20 +136,23 @@ func putPageFloat(floats []pageFloat, f pageFloat) []pageFloat {
 	return append(floats, f)
 }
 
-// addPageFloatShape adds a laid out page float to the excluded shapes of
-// the current formatting context.
-func (lc *layoutContext) addPageFloatShape(newBox *Box) {
+// addPageFloatShape adds the laid out page float newBox of the box box to
+// the excluded shapes of the current formatting context.
+func (lc *layoutContext) addPageFloatShape(box, newBox *Box) {
 	lc.appendExcludedShape(newBox)
 	s := &lc.pageFloats
 	if s.shapes == nil {
-		s.shapes = map[*Box]bool{}
+		s.shapes, s.sources = map[*Box]bool{}, map[*Box]*Box{}
 	}
 	s.shapes[newBox] = true
+	s.sources[newBox] = box
 }
 
 // placePageFloatsBefore lays out the page floats that the page places
 // before its flow, in the formatting context of the root box, and returns
-// them.
+// them. A float with -ivy-float-overlap: avoid keeps the place that the
+// first layout of the page gave it, as the floats before it that it
+// avoided can come later in this layout.
 func (lc *layoutContext) placePageFloatsBefore(absoluteBoxes, fixedBoxes *[]*Box) []*Box {
 	s := &lc.pageFloats
 	boxes := make([]*Box, 0, len(s.before))
@@ -145,7 +160,10 @@ func (lc *layoutContext) placePageFloatsBefore(absoluteBoxes, fixedBoxes *[]*Box
 		lc.spend(1)
 		f.box.PositionY = s.page.ContentBoxY()
 		newBox := pageFloatLayout(lc, f.box, f.containingBlock, absoluteBoxes, fixedBoxes)
-		lc.addPageFloatShape(newBox)
+		if isStr(newBox.Style.Get("float_overlap"), "avoid") {
+			newBox.Translate(0, f.newBox.BorderBoxY()-newBox.BorderBoxY(), false)
+		}
+		lc.addPageFloatShape(f.box, newBox)
 		boxes = append(boxes, newBox)
 	}
 	return boxes
@@ -194,7 +212,7 @@ func (lc *layoutContext) finishPageFloats(root *Box) []*Box {
 // put the float above the top of the area. The float keeps the
 // side of its float value and its margins in its containing block. The
 // layout does not move it for the other floats, so two page floats can
-// cover each other.
+// cover each other, unless its -ivy-float-overlap is 'avoid'.
 func pageFloatLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes, fixedBoxes *[]*Box) *Box {
 	lc.enter()
 	defer lc.leave()
@@ -206,6 +224,51 @@ func pageFloatLayout(lc *layoutContext, box, containingBlock *Box, absoluteBoxes
 	}
 	newBox.Translate(x-newBox.PositionX, y-newBox.MarginTop-newBox.PositionY, false)
 	return newBox
+}
+
+// avoidPageFloats moves the laid out page float newBox of the box box down
+// until its border box covers no border box of the page floats before it
+// on the page, for -ivy-float-overlap: avoid. The floats before it are the
+// floats that the flow met before it. The box moves below each float that
+// it covers, so it moves at most once for each float. It can pass the
+// bottom of its area.
+//
+// LibreOffice 26.8 moves a table with w:tblOverlap 'never' in the same
+// way, also below a table that allows the overlap. Word is not measured.
+func (lc *layoutContext) avoidPageFloats(box, newBox *Box) {
+	list := lc.currentShapes()
+	if list == nil {
+		return
+	}
+	s := &lc.pageFloats
+	// index returns the place of a page float in the order of the first
+	// layout of the page.
+	index := func(b *Box) int {
+		if i := slices.Index(s.order, b); i >= 0 {
+			return i
+		}
+		return len(s.order)
+	}
+	for moved := true; moved; {
+		moved = false
+		for _, other := range list.boxes {
+			src := s.sources[other]
+			if src == nil || src == box || s.order != nil && index(src) >= index(box) || !bordersCross(newBox, other) {
+				continue
+			}
+			lc.spend(1)
+			newBox.Translate(0, other.BorderBoxY()+other.BorderHeight()-newBox.BorderBoxY(), false)
+			moved = true
+		}
+	}
+}
+
+// bordersCross reports whether the border boxes of a and b cover a common
+// area.
+func bordersCross(a, b *Box) bool {
+	const eps = 1e-6
+	return a.BorderBoxX()+eps < b.BorderBoxX()+b.BorderWidth() && b.BorderBoxX()+eps < a.BorderBoxX()+a.BorderWidth() &&
+		a.BorderBoxY()+eps < b.BorderBoxY()+b.BorderHeight() && b.BorderBoxY()+eps < a.BorderBoxY()+a.BorderHeight()
 }
 
 // pageFloatTop returns the top of the border box of the laid out page

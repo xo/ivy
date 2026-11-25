@@ -341,7 +341,7 @@ func (b *builder) addShape(sh *shape, t *odraw.Transform) {
 		return
 	}
 	if tx := b.textOf(sh); tx != nil {
-		f.Text = b.textBody(tx, c)
+		f.Text = b.textBody(tx, c, sh.props9)
 	}
 	b.add(f)
 }

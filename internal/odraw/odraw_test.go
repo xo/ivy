@@ -291,6 +291,26 @@ func TestTransform(t *testing.T) {
 	}
 }
 
+// TestTextFlow checks the direction of the text of txflTextFlow: the
+// vertical flows turn the text a quarter turn, and the flow from the
+// bottom to the top turns it the other way.
+func TestTextFlow(t *testing.T) {
+	for flow, want := range map[uint32]string{
+		TextFlowHorz:  "",
+		TextFlowTtoBA: "vert",
+		TextFlowBtoT:  "vert270",
+		TextFlowTtoBN: "vert",
+		4:             "",
+		TextFlowVertN: "vert",
+	} {
+		var p Props
+		p.Set(PropTextFlow, flow)
+		if got := BodyStyle(Chain{&p}).Vert.V; got != want {
+			t.Errorf("flow %d: expected %q, got %q", flow, want, got)
+		}
+	}
+}
+
 // TestWordArt checks that the text of a WordArt shape draws as the
 // outlines of its glyphs, and that each line fills its share of the box
 // when gtextAlign stretches the lines.

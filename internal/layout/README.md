@@ -673,8 +673,8 @@ import the module of the fonts.
 
 ## The properties of ivy
 
-`css_ivy.go` is not a port. It adds eight properties for the formats of the
-word processors, such as `docx` and `odf`. Upstream does not have them. A
+`css_ivy.go` is not a port. It adds eleven properties for the formats of
+the word processors, such as `docx` and `odf`. Upstream does not have them. A
 style sheet names each one with the prefix `-ivy-`, such as
 `-ivy-tab-stops`, and the validation ignores the name without the prefix.
 
@@ -769,15 +769,18 @@ style sheet names each one with the prefix `-ivy-`, such as
    lines of their sections.
 7. `-ivy-line-multiple` is `none`, the initial value, or a number that is
    not negative: the multiple of a single line that the line height of a
-   word processor is (D56). With a number m above 1, the text of a line
-   stays where it is in a single line of the height `line-height / m`,
+   word processor is (D56). With a number m of 1 or more, the text of a
+   line stays where it is in a single line of the height `line-height / m`,
    with the line gap of that single line above the text, and the rest of
    the line goes below the text. The top of the text is then
    `line-height / m - h` below the top of the line, where h is the height
    of the text, and at least 0. CSS puts half of the leading above the
-   text. The property is inherited. `docx`, `msdoc`, `odf` and `rtf` set
-   it on a paragraph with a multiple line spacing, as Word and LibreOffice
-   put the extra space below the text.
+   text. With m = 1, the whole line gap goes above the text. A number below
+   1, and a line that is not higher than its text, keep the rule of CSS.
+   The property is inherited. `docx`, `msdoc`, `odf` and `rtf` set it on a
+   paragraph with a single or a multiple line spacing, as Word and
+   LibreOffice put the line gap above the text and the extra space below
+   it.
 8. `-ivy-page-top-space` is `keep`, the initial value, or `discard`. With
    `discard`, a block of the flow of the root box that starts a page
    other than the first, after a break that is not forced, has no space
@@ -792,6 +795,25 @@ style sheet names each one with the prefix `-ivy-`, such as
    top of a page after a break that is not forced. A column break keeps
    the space, as a page break does. The property is inherited. `docx`,
    `msdoc`, `odf` and `rtf` turn it on.
+9. `-ivy-float-position` is `auto`, the initial value, or `page` or
+   `margin` and a length, `top`, `center` or `bottom`, in any order, such
+   as `margin 1in`. It places a float of the flow of the page at a vertical
+   position from the top of the page or of the page area, as a word
+   processor places a picture or a table at its position (D60). The length
+   can be negative. The property is not inherited. See
+   `layout_page_float.go`.
+10. `-ivy-float-overlap` is `allow`, the initial value, or `avoid`. With
+    `avoid`, a float of `-ivy-float-position` moves down below the page
+    floats before it that it covers, as LibreOffice moves a table with
+    `w:tblOverlap` never (D60). The property is not inherited.
+11. `-ivy-wrap-flow` is `auto`, the initial value, or `both`, `start`, `end`
+    or `maximum` and an optional length that is not negative, such as
+    `both 9pt`. With `both`, the text goes on both sides of the float, as a
+    word processor wraps the text around a picture in the middle of a
+    column. The length is the distance between the float and the text, to
+    the left and to the right. `start`, `end` and `maximum` put the text on
+    one side (D63). The property is not inherited, and a table gives it to
+    its wrapper. See `layout_wrap_flow.go`.
 
 ## The hooks for the later stages
 
@@ -1087,6 +1109,10 @@ Each guard is marked with `Port:` in the code.
     only the part of the cell that is past the rows before it, as for a
     row of the height `auto`. Upstream compares the whole height of the
     cell with the height of the row, which makes the row too high.
+41. A `math` element of MathML is a replaced box, as an inline `svg`
+    element is. `internal/formula` lays it out with `texmath` of okage. An
+    element with `display="block"` is a centered line of its own. Upstream
+    draws the text of its children.
 
 ## What the port leaves out
 

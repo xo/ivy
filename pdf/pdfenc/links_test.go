@@ -76,7 +76,7 @@ func readMarks(t *testing.T, data []byte) [][]string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = doc.Close() }()
+	defer doc.Close()
 	n, err := doc.PageCount(t.Context())
 	if err != nil {
 		t.Fatal(err)

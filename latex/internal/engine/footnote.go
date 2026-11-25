@@ -415,6 +415,8 @@ func (e *Engine) assemblePage(page []node, pageNum int) *boxNode {
 // differ by 2.60000pt = \baselineskip - \topskip = 13.6 - 11.0, which is the whole
 // of the residual #356 calls "a float is ~2.4pt short".
 func (e *Engine) assemblePageTopskip(page []node, pageNum int, addTopskip bool) *boxNode {
+	defer e.pageWidth()()                 // ivy: the width and the rules of the page (ivy_latex.go)
+	pageNum = e.pageNumber(page, pageNum) // ivy: \setcounter{page} and \pagenumbering
 	var content []node
 	var notes []*boxNode
 	for _, n := range page {

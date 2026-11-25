@@ -1190,7 +1190,7 @@ func hashFile(path string) (string, int64, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("opening the file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
@@ -1253,7 +1253,7 @@ func writeReport(out string, rep *Report) error {
 		return fmt.Errorf("making index.html: %w", err)
 	}
 	if err := WriteHTML(f, rep); err != nil {
-		_ = f.Close()
+		f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {

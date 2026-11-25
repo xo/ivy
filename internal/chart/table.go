@@ -3,14 +3,17 @@ package chart
 import (
 	"image/color"
 	"math"
+	"slices"
 
 	"github.com/xo/okage/roxmltree"
 )
 
-// This file draws the data table of a chart of DrawingML, c:dTable
+// This file draws the data table of a chart, c:dTable of DrawingML
 // (ECMA-376 Part 1, 21.2.2.54): a table below the plot, with a column for
-// each category and a row for each series, in the place of the labels of
-// the axis of categories, as Excel draws it.
+// each category and a row for each series, as Excel draws it. The table
+// takes the place of the labels of an axis of categories along the bottom.
+// Below the bars that go across, it goes below the labels of the values,
+// with the categories from the left in their order.
 
 // dataTable is the data table of a chart.
 type dataTable struct {
@@ -55,9 +58,46 @@ func (p *dmlParser) dataTable(n roxmltree.Node) *dataTable {
 }
 
 // hasTable says whether the plot draws a data table: a chart of
-// categories along a horizontal axis.
+// categories.
 func (pl *plane) hasTable() bool {
-	return pl.c.table != nil && !pl.horizontal && !pl.scatter && pl.n > 0
+	return pl.c.table != nil && !pl.scatter && pl.n > 0
+}
+
+// tableOnCats says whether the data table takes the place of the labels of
+// the axis of categories, which is along the bottom.
+func (pl *plane) tableOnCats() bool {
+	return pl.hasTable() && !pl.horizontal
+}
+
+// tableTop returns the top of the data table: the bottom of the inner box
+// of the plot, or of the labels of the values below it.
+func (pl *plane) tableTop() float64 {
+	c := pl.c
+	if !pl.horizontal || !c.val.shown() || pl.valueEnd() {
+		return pl.in.y1
+	}
+	return pl.in.y1 + c.val.text.size*lineHeight + gapLabel + pl.tickOut(c.val)
+}
+
+// tableEdges returns the bounds of the columns of the categories, from the
+// left.
+func (pl *plane) tableEdges() []float64 {
+	edges := make([]float64, pl.n+1)
+	if pl.horizontal {
+		for i := range edges {
+			edges[i] = pl.in.x0 + float64(i)*pl.in.w()/float64(pl.n)
+		}
+		return edges
+	}
+	for i := range pl.n {
+		mid := pl.catCoord(pl.center(i))
+		edges[i] = mid - pl.slot()/2
+		edges[i+1] = mid + pl.slot()/2
+	}
+	if pl.c.cat.reverse {
+		slices.Reverse(edges)
+	}
+	return edges
 }
 
 // tableSeries returns the series of the rows of the data table, in the
@@ -114,7 +154,8 @@ func (pl *plane) table() {
 	rows := pl.tableSeries()
 	in := pl.in
 	left := in.x0 - pl.tableNames()
-	top, bottom := in.y1, in.y1+float64(len(rows)+1)*rowH
+	top := pl.tableTop()
+	bottom := top + float64(len(rows)+1)*rowH
 	col := gridGray
 	switch {
 	case tb.noLine:
@@ -122,18 +163,7 @@ func (pl *plane) table() {
 	case tb.hasLine:
 		col = tb.line
 	}
-	// The bounds of the columns of the categories.
-	edges := make([]float64, pl.n+1)
-	for i := range pl.n {
-		mid := pl.catCoord(pl.center(i))
-		edges[i] = mid - pl.slot()/2
-		edges[i+1] = mid + pl.slot()/2
-	}
-	if c.cat.reverse {
-		for i, j := 0, len(edges)-1; i < j; i, j = i+1, j-1 {
-			edges[i], edges[j] = edges[j], edges[i]
-		}
-	}
+	edges := pl.tableEdges()
 	x0, x1 := min(edges[0], edges[pl.n]), max(edges[0], edges[pl.n])
 	// The lines.
 	if tb.horz {

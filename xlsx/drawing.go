@@ -343,6 +343,7 @@ func (b *book) chartObject(part string, w, h float64) layout.Object {
 			Fonts:        fontdb.Of(b.cfg),
 			SourceFormat: b.sourceFormat,
 			SourceCells:  b.sourceCells,
+			Style:        func() []byte { return chart.StylePart(b.doc, part, b.lim) },
 			Width:        w,
 			Height:       h,
 		})

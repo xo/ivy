@@ -184,7 +184,7 @@ func TestCellWords(t *testing.T) {
 	for _, want := range []string{
 		"border-top: 1.5pt solid black",
 		"padding-left: 5.4pt; padding-right: 5.4pt",
-		`<p style="font-family: &quot;Arial&quot;, serif; font-size: 10pt; line-height: 1.15"><span style="font-family: &quot;Arial&quot;, serif; font-size: 8pt">small</span>`,
+		`<p style="font-family: &quot;Arial&quot;, serif; font-size: 10pt; line-height: 1.15; -ivy-line-multiple: 1"><span style="font-family: &quot;Arial&quot;, serif; font-size: 8pt">small</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the xhtml:\n%s", want, html)

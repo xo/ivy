@@ -47,6 +47,13 @@ linters:
         - -ST1021
         - -ST1022
   exclusions:
+    rules:
+      # A program closes with `defer f.Close()`. It never wraps the call in
+      # a closure that drops the error, so errcheck does not report an
+      # unchecked Close.
+      - linters:
+          - errcheck
+        text: "Error return value of `.+\\.Close` is not checked"
     paths:
       # The copies of D7 keep the style of their project
       # (docs/UPSTREAM.md).

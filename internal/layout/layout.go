@@ -1040,6 +1040,12 @@ type layoutContext struct {
 	// the page that the page maker makes (D60). Upstream has no such
 	// property.
 	pageFloats pageFloatState
+
+	// lineRow is the row of the next line next to a float of
+	// -ivy-wrap-flow, which iterLineBoxes gives to getNextLinebox, and
+	// nextRow is the row that getNextLinebox gives back when a room is
+	// left after its line (D63). Upstream has no such property.
+	lineRow, nextRow *lineRow
 }
 
 // newLayoutContext is LayoutContext.__init__ in

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/formula"
 )
 
 // boxKindFromDisplay is BOX_TYPE_FROM_DISPLAY in
@@ -108,6 +109,12 @@ type builder struct {
 	// error of a limit.
 	boxes int
 	err   error
+
+	// typesetter lays out the formulas of MathML, and is nil before the
+	// first formula.
+	//
+	// Port: upstream draws no MathML.
+	typesetter *formula.Typesetter
 
 	// slab holds the boxes that allocBox gives.
 	slab slab[Box]

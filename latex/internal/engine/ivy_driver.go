@@ -74,14 +74,46 @@ func (d *Doc) DrawPage(ctx context.Context, dev display.Device, n int, figs Figu
 	dr := d.newDrawer(ctx, dev, n, figs)
 	dr.res = res
 	dr.page(n)
+	dr.marks(n)
 	return dr.err
 }
 
-// Links returns the links and the named destinations of page n.
-//
-// The display list has no link yet. Phase 7c of PLAN.md adds the interface
-// display.Linker, and then the driver gives the links to the device. Until
-// then a program reads them here.
+// marks gives the device the links, the destinations and the entries of
+// the outline of page n, in big points with y down, the user space of the
+// device. A device that is not a display.Linker or a display.Bookmarker
+// takes none.
+func (dr *drawer) marks(n int) {
+	for _, l := range dr.links {
+		if l.URI != "" {
+			display.LinkURI(dr.dev, l.Rect, l.URI)
+		} else {
+			display.LinkAnchor(dr.dev, l.Rect, l.Dest)
+		}
+	}
+	for _, dt := range dr.dests {
+		display.Anchor(dr.dev, dt.Name, dt.X, dt.Y)
+	}
+	if _, ok := dr.dev.(display.Bookmarker); !ok {
+		return
+	}
+	outline := dr.doc.Outline()
+	top := 0
+	for i, o := range outline {
+		if i == 0 || o.Level < top {
+			top = o.Level
+		}
+	}
+	for _, o := range outline {
+		if o.Page == n {
+			// the entry goes to the top of its page: the walk of the page
+			// does not find the heading
+			display.Bookmark(dr.dev, o.Level-top+1, o.Title, 0, 0, true)
+		}
+	}
+}
+
+// Links returns the links and the named destinations of page n. DrawPage
+// also gives them to a device that is a display.Linker.
 func (d *Doc) Links(ctx context.Context, n int) (links []Link, dests []Dest) {
 	defer func() {
 		if recover() != nil {
@@ -101,8 +133,14 @@ type Outline struct {
 	Page  int
 }
 
-// Outline returns the headings of the document, for a bookmark.
+// Outline returns the headings of the document, for a bookmark. DrawPage
+// gives the headings of a page to a device that is a display.Bookmarker.
 func (d *Doc) Outline() []Outline {
+	return d.outline
+}
+
+// makeOutline returns the headings of the document.
+func (d *Doc) makeOutline() []Outline {
 	var out []Outline
 	for _, te := range d.e.tocEntries {
 		if te.kind != "toc" {

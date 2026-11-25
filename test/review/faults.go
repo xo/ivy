@@ -38,7 +38,7 @@ func LoadFaults(path string) ([]Fault, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the faults of the references: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	faults, err := ReadFaults(f)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)

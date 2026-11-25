@@ -15,14 +15,20 @@
 //     lineboxLayout (D52).
 //   - -ivy-line-numbers draws the numbers of the lines of a section in
 //     the margin, see numberLines (D56).
-//   - -ivy-line-multiple puts the extra space of a multiple line spacing
-//     below the text of a line, see leadingShift (D56).
+//   - -ivy-line-multiple puts the line gap of a single line above the
+//     text of a line, and the extra space of a multiple line spacing below
+//     it, see leadingShift (D56).
 //   - -ivy-page-top-space leaves out the space before the first block of
 //     a page or of a column after a break that is not forced, see
 //     layoutContext.discardsSpaceBefore (D56).
 //   - -ivy-float-position places a float of the flow of the page at a
 //     vertical position from the top of the page or of the page area, see
 //     layout_page_float.go (D60).
+//   - -ivy-float-overlap moves such a float down below the floats of the
+//     page that it covers, see layout_page_float.go (D60).
+//   - -ivy-wrap-flow puts the text on both sides of a float, or on one
+//     side of it, as a word processor wraps the text around a picture,
+//     see layout_wrap_flow.go (D63).
 
 package layout
 
@@ -43,6 +49,8 @@ var ivyProperties = map[string]bool{
 	"line-multiple":  true,
 	"page-top-space": true,
 	"float-position": true,
+	"float-overlap":  true,
+	"wrap-flow":      true,
 }
 
 // validateMarginBoxFit validates -ivy-margin-box-fit: 'none' or 'grow'.
@@ -177,8 +185,64 @@ func validateFloatPosition(tokens []tinycss2.Node, _ string) (Value, error) {
 	return Tuple{area, position}, nil
 }
 
+// validateFloatOverlap validates -ivy-float-overlap: 'allow' or 'avoid'.
+// With 'avoid', a page float of -ivy-float-position moves down below the
+// page floats before it that it covers, as LibreOffice moves a table
+// with w:tblOverlap 'never'. The property is not inherited (D60).
+var validateFloatOverlap = singleKeyword(func(keyword string) bool {
+	return keyword == "allow" || keyword == "avoid"
+})
+
 // computeFloatPosition computes -ivy-float-position: a length in pixels.
 func computeFloatPosition(style *Style, name string, value Value) Value {
+	t, ok := value.(Tuple)
+	if !ok || len(t) != 2 {
+		return value
+	}
+	if d, ok := t[1].(Dimension); ok {
+		return Tuple{t[0], Float(toPixels(d, style, name, -1))}
+	}
+	return value
+}
+
+// validateWrapFlow validates -ivy-wrap-flow: 'auto', or 'both', 'start',
+// 'end' or 'maximum' and an optional length that is not negative, in any
+// order, such as 'both 9pt'. The value is a tuple of the keyword and of
+// the length, which is 0 when the value has none. The property is not
+// inherited (D63).
+func validateWrapFlow(tokens []tinycss2.Node, _ string) (Value, error) {
+	if getSingleKeyword(tokens) == "auto" {
+		return String("auto"), nil
+	}
+	if len(tokens) == 0 || len(tokens) > 2 {
+		return nil, nil
+	}
+	var side, distance Value
+	for _, token := range tokens {
+		if keyword := getKeyword(token); in(keyword, "both", "start", "end", "maximum") {
+			if side != nil {
+				return nil, nil
+			}
+			side = String(keyword)
+			continue
+		}
+		length, ok := getLength(token, false, false).(Dimension)
+		if !ok || distance != nil {
+			return nil, nil
+		}
+		distance = length
+	}
+	if side == nil {
+		return nil, nil
+	}
+	if distance == nil {
+		distance = Dimension{Value: 0, Unit: "px"}
+	}
+	return Tuple{side, distance}, nil
+}
+
+// computeWrapFlow computes -ivy-wrap-flow: the length in pixels.
+func computeWrapFlow(style *Style, name string, value Value) Value {
 	t, ok := value.(Tuple)
 	if !ok || len(t) != 2 {
 		return value

@@ -74,7 +74,10 @@ const (
 	recIFmt           = 0x104E
 	recBRAI           = 0x1051
 	recSerFmt         = 0x105D
+	recSerParent      = 0x104A
+	recSerAuxTrend    = 0x104B
 	recBopPop         = 0x1061
+	recDat            = 0x1063
 	recSIIndex        = 0x1065
 	recShapeProps     = 0x08A4
 	recTextProps      = 0x08A5
@@ -176,6 +179,31 @@ type chartSeries struct {
 	// cache holds the values of the records after SIIndex: 1 for the
 	// values, 2 for the categories and 3 for the bubble sizes.
 	cache [4]map[int]chartVal
+	// parent is the number from 1 of the series that a trendline or error
+	// bars belong to, SerParent, or 0 for a series of values. trend is the
+	// trendline of such a series, or nil.
+	parent int
+	trend  *trendFmt
+}
+
+// trendFmt is a record SerAuxTrend: a trendline (MS-XLS 2.4.247).
+type trendFmt struct {
+	// regt is the type: 0 for a polynomial, which is linear of the order
+	// 1, 1 exponential, 2 logarithmic, 3 power and 4 a moving average.
+	// order is the order of the polynomial or the period of the moving
+	// average.
+	regt, order int
+	// intercept is the value of y at x 0, if hasIntercept.
+	intercept    float64
+	hasIntercept bool
+	eq, r2       bool
+	// forward and backward extend the line.
+	forward, backward float64
+}
+
+// datFmt is a record Dat: the data table of a chart (MS-XLS 2.4.72).
+type datFmt struct {
+	horz, vert, outline, keys bool
 }
 
 // chartGroup is a chart group: a record ChartFormat and its type.
@@ -249,6 +277,7 @@ type biffChart struct {
 	defFont *sheet.Font
 	blanks  int
 	visOnly bool
+	table   *datFmt
 }
 
 // chartLookup gives a chart the cells of the sheets of the workbook.
@@ -424,6 +453,20 @@ func readChart(recs []record, w *workbook) *biffChart {
 				}
 			}
 			lastObj = f
+		case recSerParent:
+			if s, ok := t.obj.(*chartSeries); ok && len(b) >= 2 {
+				s.parent = int(le.Uint16(b))
+			}
+		case recSerAuxTrend:
+			if s, ok := t.obj.(*chartSeries); ok && len(b) >= 28 {
+				s.trend = readTrend(b)
+			}
+		case recDat:
+			if len(b) >= 2 && c.table == nil {
+				f := le.Uint16(b)
+				c.table = &datFmt{horz: f&0x01 != 0, vert: f&0x02 != 0, outline: f&0x04 != 0, keys: f&0x08 != 0}
+				lastObj = c.table
+			}
 		case recSerToCrt:
 			if s, ok := t.obj.(*chartSeries); ok && len(b) >= 2 {
 				s.group = int(le.Uint16(b))
@@ -636,6 +679,22 @@ func propsStream(b []byte) (int, string, bool) {
 	return ctx, strings.TrimSpace(xml), true
 }
 
+// readTrend reads a record SerAuxTrend.
+func readTrend(b []byte) *trendFmt {
+	t := &trendFmt{regt: int(b[0]), order: int(b[1]), eq: b[10] != 0, r2: b[11] != 0}
+	// a ChartNumNillable is nil when its two last bytes are 0xFFFF
+	if le.Uint16(b[8:]) != 0xFFFF {
+		t.intercept, t.hasIntercept = f64(b[2:]), true
+	}
+	if v := f64(b[12:]); v > 0 && v < 1e9 {
+		t.forward = v
+	}
+	if v := f64(b[20:]); v > 0 && v < 1e9 {
+		t.backward = v
+	}
+	return t
+}
+
 // readLineFmt reads a record LineFormat.
 func readLineFmt(b []byte) *lineFmt {
 	if len(b) < 10 {
@@ -791,6 +850,10 @@ func (c *biffChart) xml(w *workbook, look *chartLookup) string {
 		if used[p] {
 			x.axes(p)
 		}
+	}
+	if t := c.table; t != nil {
+		b.WriteString(`<c:dTable><c:showHorzBorder val="` + boolStr(t.horz) + `"/><c:showVertBorder val="` + boolStr(t.vert) +
+			`"/><c:showOutline val="` + boolStr(t.outline) + `"/><c:showKeys val="` + boolStr(t.keys) + `"/></c:dTable>`)
 	}
 	if c.hasPlot {
 		b.WriteString(x.spPr(&c.plot, "plot", 0))
@@ -1059,7 +1122,8 @@ func (x *chartXML) group(gi int, g *chartGroup) {
 	b.WriteString(`<c:varyColors val="` + boolStr(g.varied) + `"/>`)
 	var list []*chartSeries
 	for _, s := range x.c.series {
-		if x.groupOf(s) == gi {
+		// a series with a parent is a trendline or error bars
+		if x.groupOf(s) == gi && s.parent == 0 {
 			list = append(list, s)
 		}
 	}
@@ -1187,6 +1251,7 @@ func (x *chartXML) series(si int, s *chartSeries, g *chartGroup) {
 		b.WriteString(sp + "</c:dPt>")
 	}
 	x.dataLabels(slices.Index(x.c.series, s), s)
+	x.trendlines(s)
 	if g.kind == "scatter" {
 		if s.sdtX == 1 && len(cats) > 0 {
 			x.values("c:xVal", cats, true)
@@ -1202,6 +1267,77 @@ func (x *chartXML) series(si int, s *chartSeries, g *chartGroup) {
 		x.values("c:val", vals, true)
 	}
 	b.WriteString("</c:ser>")
+}
+
+// trendKinds are the types of trendlines of DrawingML by regt of
+// SerAuxTrend, after the polynomial.
+var trendKinds = [...]string{"poly", "exp", "log", "power", "movingAvg"}
+
+// trendlines writes the trendlines of the series s: the series with a
+// record SerAuxTrend whose record SerParent names s.
+func (x *chartXML) trendlines(s *chartSeries) {
+	b := &x.b
+	parent := slices.Index(x.c.series, s) + 1
+	n := 0
+	for ti, t := range x.c.series {
+		tr := t.trend
+		if tr == nil || t.parent != parent || tr.regt >= len(trendKinds) || n >= 4 {
+			continue
+		}
+		n++
+		b.WriteString("<c:trendline>")
+		if t.name != "" {
+			b.WriteString("<c:name>" + xmlEscaper.Replace(t.name) + "</c:name>")
+		}
+		b.WriteString(x.trendSpPr(&t.format))
+		kind := trendKinds[tr.regt]
+		switch {
+		case kind == "poly" && tr.order < 2:
+			b.WriteString(`<c:trendlineType val="linear"/>`)
+		case kind == "poly":
+			b.WriteString(`<c:trendlineType val="poly"/><c:order val="` + strconv.Itoa(min(tr.order, 6)) + `"/>`)
+		case kind == "movingAvg":
+			b.WriteString(`<c:trendlineType val="movingAvg"/><c:period val="` + strconv.Itoa(max(tr.order, 2)) + `"/>`)
+		default:
+			b.WriteString(`<c:trendlineType val="` + kind + `"/>`)
+		}
+		if tr.forward > 0 {
+			b.WriteString(`<c:forward val="` + num(tr.forward) + `"/>`)
+		}
+		if tr.backward > 0 {
+			b.WriteString(`<c:backward val="` + num(tr.backward) + `"/>`)
+		}
+		if tr.hasIntercept {
+			b.WriteString(`<c:intercept val="` + num(tr.intercept) + `"/>`)
+		}
+		b.WriteString(`<c:dispRSqr val="` + boolStr(tr.r2) + `"/><c:dispEq val="` + boolStr(tr.eq) + `"/>`)
+		// The label of the equation is a record Text of the trendline.
+		for _, l := range x.c.labels {
+			if l.var1 == ti && l.var2 == 0xFFFF && l.font != nil && (tr.eq || tr.r2) {
+				b.WriteString("<c:trendlineLbl><c:txPr><a:bodyPr/><a:p><a:pPr>")
+				x.runProps("a:defRPr", l.font, false)
+				b.WriteString("</a:pPr></a:p></c:txPr></c:trendlineLbl>")
+				break
+			}
+		}
+		b.WriteString("</c:trendline>")
+	}
+}
+
+// trendSpPr returns the c:spPr of the line of a trendline. Excel 97 draws
+// an automatic trendline as a thin black line.
+func (x *chartXML) trendSpPr(f *chartFmt) string {
+	switch l := f.line; {
+	case f.hasSpPr:
+		return asSpPr(f.spPr, "c:spPr")
+	case x.c.modern:
+		return ""
+	case l == nil || l.auto:
+		return `<c:spPr><a:ln w="9525">` + solid(color.NRGBA{0, 0, 0, 255}) + "</a:ln></c:spPr>"
+	case l.lns == 5:
+		return "<c:spPr><a:ln><a:noFill/></a:ln></c:spPr>"
+	}
+	return "<c:spPr>" + lineXML(f.line) + "</c:spPr>"
 }
 
 // marker writes the marker of a series of a line, a scatter or a radar

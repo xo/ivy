@@ -110,6 +110,9 @@ func Data(b []byte, maxMemory int64) []byte {
 	if h.Inst&1 == 1 {
 		uids = 32
 	}
+	if len(body) < uids {
+		return nil
+	}
 	switch h.Type {
 	case RecBlipEMF, RecBlipWMF:
 		return metafileData(body[uids:], maxMemory)

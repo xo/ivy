@@ -10,7 +10,7 @@ work for okage. They belong in ivy, and okage draws their pages:
 2. PostScript and EPS are the package `ps`. It also opens an older
    Illustrator file, after the PostScript interpreter exists (D1).
 3. A PDF reader needs decoders of images, such as JBIG2 and JPEG 2000, and
-   Type 1 fonts. okage D7 and D9 forbid both in okage. ivy holds them in
+   Type 1 fonts. okage D7 and okage D9 forbid both in okage. ivy holds them in
    `internal/` and in the font layer (D10).
 
 okage `docs/FORMATS.md` gets a note that points to this decision. The

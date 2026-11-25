@@ -161,6 +161,36 @@ func TestDriverLinks(t *testing.T) {
 	if len(dests) != 1 || dests[0].Name != "here" {
 		t.Errorf("expected the destination, got: %+v", dests)
 	}
+	// DrawPage gives them to a device that is a display.Linker
+	list := drawPage(t, doc, 0).String()
+	for _, want := range []string{`"https://example.com"`, `#"here"`, `anchor "here"`} {
+		if !strings.Contains(list, want) {
+			t.Errorf("expected %s in the display list, got:\n%s", want, list)
+		}
+	}
+}
+
+func TestDriverOutline(t *testing.T) {
+	t.Parallel()
+	doc := ivyCompile(t, `\documentclass{article}\begin{document}
+\tableofcontents
+\section{Alpha}Text.\subsection{Beta}Text.\newpage\section{Gamma}Text.
+\end{document}`, goFaces)
+	tests := []struct {
+		page int
+		want []string
+	}{
+		{0, []string{`bookmark 1 "Alpha"`, `bookmark 2 "Beta"`}},
+		{1, []string{`bookmark 1 "Gamma"`}},
+	}
+	for _, test := range tests {
+		list := drawPage(t, doc, test.page).String()
+		for _, want := range test.want {
+			if !strings.Contains(list, want) {
+				t.Errorf("expected %s on page %d, got:\n%s", want, test.page, list)
+			}
+		}
+	}
 }
 
 func TestDriverMath(t *testing.T) {

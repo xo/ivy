@@ -66,7 +66,7 @@ func parseTheme(f *zip.File, lim ivy.Limits) *drawingml.Theme {
 		return nil
 	}
 	buf, err := io.ReadAll(io.LimitReader(rc, maxTheme))
-	_ = rc.Close()
+	rc.Close()
 	if err != nil {
 		return nil
 	}

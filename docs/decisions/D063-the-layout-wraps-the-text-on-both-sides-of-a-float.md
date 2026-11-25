@@ -4,8 +4,8 @@ Status: Decided.
 
 Word and LibreOffice wrap the text on both sides of a picture that is in
 the middle of the column. The layout of WeasyPrint (D15) puts the text on
-one side of a float only. Item 6 of "Found by the visual review" in
-`BACKLOG.md` names this for `msdoc`. Question 26 of `PLAN.md` asked the
+one side of a float only. On 2026-11-21 item 6 of "Found by the visual
+review" in `BACKLOG.md` named this for `msdoc`. Question 26 of `PLAN.md` asked the
 maintainers to choose.
 
 ## The problem
@@ -135,3 +135,20 @@ For one agent with a maintainer, this takes 3 to 5 days.
 On 2026-11-21 the maintainers answered question 26 with choice 2: the layout
 gets the property `-ivy-wrap-flow`, and `msdoc`, `docx`, `odf` and `rtf`
 give it from the side of the text of their shapes.
+
+## The build
+
+The build of 2026-11-25 differs from the proposal in these places:
+
+1. The distance applies to the left and to the right of the float. Above
+   and below it, the lines avoid only the border box. The default distances
+   of Word above and below a picture are 0.
+2. A paragraph that ends beside the float ends at the bottom of its row of
+   lines. The next paragraph starts below that row.
+3. The layout puts no text in a part of a line that is narrower than 0.25
+   inch.
+4. `rtf` does not give the property. It draws the pictures and the text
+   boxes of its shapes inline, so it has no float to give it to.
+5. `odf` places a frame that floats at the edge of the column, because it
+   does not read `svg:x` for a float. So a frame of `odf` gains only the
+   distance.

@@ -76,7 +76,7 @@ func xpstopng(ctx context.Context, dir, path string, n int) (image.Image, error)
 	if err != nil {
 		return nil, fmt.Errorf("opening the png of xpstopng: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	img, err := png.Decode(f)
 	if err != nil {
 		return nil, fmt.Errorf("decoding the png of xpstopng: %w", err)

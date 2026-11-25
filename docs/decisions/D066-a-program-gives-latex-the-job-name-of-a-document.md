@@ -37,3 +37,9 @@ func WithName(name string) Option // package latex
 
 A name that is empty, or that holds a slash, is the same as no name. The
 review gives each TeX document of the corpus the name of its file.
+
+## The build
+
+The option was built on 2026-11-25. The engine now reads the files of the
+job name, such as `report.bbl`, through the resolver of the files of the
+document.

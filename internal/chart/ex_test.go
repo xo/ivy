@@ -291,3 +291,43 @@ func TestFunnelSeries(t *testing.T) {
 		t.Errorf("expected no plot, got: %d", len(c.plots))
 	}
 }
+
+// TestChartExStyle checks that a chart of Office 2016 without cx:spPr takes
+// the fill and the line of its chart area from its style part.
+func TestChartExStyle(t *testing.T) {
+	style := `<cs:chartStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ` +
+		`xmlns:cs="http://schemas.microsoft.com/office/drawing/2012/chartStyle" id="381">` +
+		`<cs:chartArea mods="allowNoFillOverride allowNoLineOverride"><cs:lnRef idx="0"/><cs:fillRef idx="0"/>` +
+		`<cs:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln w="9525"><a:solidFill>` +
+		`<a:srgbClr val="D9D9D9"/></a:solidFill></a:ln></cs:spPr></cs:chartArea></cs:chartStyle>`
+	buf := exXML("Title", "funnel", "", []string{"a", "b"}, []float64{2, 1})
+	white, gray := color.NRGBA{255, 255, 255, 255}, color.NRGBA{0xd9, 0xd9, 0xd9, 255}
+	tests := []struct {
+		name         string
+		buf          []byte
+		style        string
+		fill, border color.NRGBA
+	}{
+		{"style", buf, style, white, gray},
+		{"no style", buf, "", color.NRGBA{}, color.NRGBA{}},
+		{"broken style", buf, "<cs:chartStyle", color.NRGBA{}, color.NRGBA{}},
+		{"own spPr", []byte(strings.Replace(string(buf), `</cx:chart>`,
+			`</cx:chart><cx:spPr><a:noFill/><a:ln><a:noFill/></a:ln></cx:spPr>`, 1)),
+			style, color.NRGBA{}, color.NRGBA{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts := Options{Theme: testTheme(t)}
+			if test.style != "" {
+				opts.Style = func() []byte { return []byte(test.style) }
+			}
+			c, err := Parse(test.buf, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.fill != test.fill || c.border != test.border {
+				t.Errorf("expected the fill %v and the border %v, got %v and %v", test.fill, test.border, c.fill, c.border)
+			}
+		})
+	}
+}

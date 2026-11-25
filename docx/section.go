@@ -361,7 +361,10 @@ func (c *converter) headerFooter(id, margin string) (string, bool) {
 	if c.floats.Len() > 0 {
 		floats = `<div style="position: relative; height: 0">` + c.floats.String() + "</div>"
 	}
-	c.w.WriteString(`<div style="position: running(` + name + `)">`)
+	// The element is a flow root, so that the space before its first
+	// paragraph stays in it. Otherwise a footer that the layout aligns at the
+	// bottom of its box moves down by that space.
+	c.w.WriteString(`<div style="position: running(` + name + `); display: flow-root">`)
 	if margin == "header" {
 		c.w.WriteString(floats)
 	}

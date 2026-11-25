@@ -129,7 +129,7 @@ whether to run `ivy-macos` on another host.
    so. Open the desktop with `incus console ivy-macos --project ivy
    --type=vga`, sign in to the App Store, and run the setup again.
 6. Run `ivy-vm.sh iwork` once while you watch the desktop of the Mac. macOS
-   asks once for each of Pages, Keynote and Numbers whether `ivy-export` may
+   asks once for each of Pages, Keynote and Numbers whether `ivy-export` can
    control it. Click OK.
 
 ## How to make the references

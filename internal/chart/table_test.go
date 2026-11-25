@@ -74,8 +74,9 @@ func TestTrendNumber(t *testing.T) {
 	}
 }
 
-// tableChart returns a column chart of three series with a data table.
-func tableChart(keys string) []byte {
+// tableChart returns a bar chart of three series with a data table, whose
+// bars go up for the direction col, and across for bar.
+func tableChart(keys, dir string) []byte {
 	cats := strCache("A", "Q1", "Q2", "Q3", "Q4")
 	var series strings.Builder
 	for i, s := range []struct{ name, fill string }{{"North", "FF0000"}, {"South", "00C000"}, {"East", "0000FF"}} {
@@ -83,14 +84,14 @@ func tableChart(keys string) []byte {
 	}
 	table := fmt.Sprintf(`<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/>`+
 		`<c:showOutline val="1"/><c:showKeys val="%s"/></c:dTable>`, keys)
-	return chartXML("", `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>`+series.String()+
+	return chartXML("", `<c:barChart><c:barDir val="`+dir+`"/><c:grouping val="clustered"/>`+series.String()+
 		axisRefs+`</c:barChart>`+table, categoryAxes, "")
 }
 
 func TestDataTable(t *testing.T) {
 	for _, keys := range []string{"0", "1"} {
 		t.Run("keys "+keys, func(t *testing.T) {
-			c, err := Parse(tableChart(keys), Options{})
+			c, err := Parse(tableChart(keys, "col"), Options{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,6 +119,38 @@ func TestDataTable(t *testing.T) {
 				t.Errorf("expected the keys %s, got %d red pixels in the names", keys, red)
 			}
 		})
+	}
+}
+
+// TestDataTableAcross checks that the data table of bars that go across
+// goes below the labels of the values, and that the labels of the
+// categories stay at the left of the plot.
+func TestDataTableAcross(t *testing.T) {
+	c, err := Parse(tableChart("1", "bar"), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pm := render(t, c, 400, 300)
+	cv := &canvas{c: c, t: newTexter(c.fontDatabase(), c.font), w: 400, h: 300}
+	pl := &plane{cv: cv, c: c, cats: c.categories(), horizontal: true}
+	pl.n = len(pl.cats)
+	if !pl.hasTable() || pl.tableOnCats() {
+		t.Fatal("expected the plot to draw the table below the labels of the values")
+	}
+	h := int(pl.tableHeight())
+	if n := ink(pm, 0, 300-h-pad, 400, 300-pad); n < 400 {
+		t.Errorf("expected the table at the bottom, got %d pixels of ink", n)
+	}
+	if n := count(pm, color.NRGBA{255, 0, 0, 255}, 0, 300-h-pad, 60, 300-pad); n <= 4 {
+		t.Errorf("expected the keys in the names, got %d red pixels", n)
+	}
+	// The labels of the categories, Q1 to Q4, left of the bars, and the
+	// labels of the values above the table.
+	if n := ink(pm, pad, 30, pad+int(pl.tableNames()), 300-h-40); n < 60 {
+		t.Errorf("expected the labels of the categories, got %d pixels of ink", n)
+	}
+	if n := ink(pm, 100, 300-h-pad-16, 380, 300-h-pad); n < 30 {
+		t.Errorf("expected the labels of the values above the table, got %d pixels of ink", n)
 	}
 }
 

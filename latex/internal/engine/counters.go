@@ -206,6 +206,9 @@ func (e *Engine) readBraceInt() int {
 	if !ok || !(t.cat == catBegin && !t.cs_) {
 		if ok {
 			e.back(t)
+			if e.unbracedInt(t) { // ivy: \setcounter{page}\@ne (ivy_latex.go)
+				return e.scanInt()
+			}
 		}
 		return 0
 	}

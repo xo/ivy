@@ -166,6 +166,10 @@ type document struct {
 	lang string
 	// hf is the date, the slide number and the footer of the slides.
 	hf headersFooters
+	// bulletPics are the files of the pictures of the picture bullets,
+	// from the extension of PowerPoint 2000, or nil for a picture that the
+	// package does not read.
+	bulletPics [][]byte
 }
 
 // readDocument reads the DocumentContainer of s.
@@ -182,6 +186,7 @@ func readDocument(s *stream) (*document, bool) {
 		}
 	}
 	d.hf = readHeadersFooters(body)
+	d.bulletPics = readBulletPictures(body, s.lim)
 	for h, b := range children(body) {
 		switch {
 		case h.Type == rtSlideListWithText && h.Inst == 0:

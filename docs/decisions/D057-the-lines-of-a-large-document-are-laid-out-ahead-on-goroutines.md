@@ -173,7 +173,8 @@ The shaping is about three quarters of the time of a line, in a profile of
 starts and on its width. To shape ahead, a goroutine must break the lines
 first, and that is option 5. The layout can also shape a whole paragraph
 once and reuse the glyphs for each line. That needs the glyphs that are
-safe to break, item 2 of "Work for okage" in `BACKLOG.md`. Option 3 is not
+safe to break, which item 2 of "Work for okage" in `BACKLOG.md` asked
+for on 2026-11-19. Option 3 is not
 recommended alone.
 
 ### 4. A cache of the lines on one goroutine

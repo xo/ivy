@@ -238,8 +238,10 @@ func (b *builder) bullet(p *pf) (string, string) {
 }
 
 // textBody converts a text with its style, in a shape with the properties
-// c. The text of a slide number takes the number of the slide.
-func (b *builder) textBody(t *text, c odraw.Chain) *drawingml.TextBody {
+// c. The text of a slide number takes the number of the slide. props9 are
+// the picture bullets and the automatic numbers of the paragraphs, which
+// the first run of a paragraph selects.
+func (b *builder) textBody(t *text, c odraw.Chain, props9 []pf9) *drawingml.TextBody {
 	units := t.units
 	if len(units) == 0 {
 		return nil
@@ -289,6 +291,17 @@ func (b *builder) textBody(t *text, c odraw.Chain) *drawingml.TextBody {
 		}
 		p.over(&own)
 		para := drawingml.Paragraph{Level: max(0, min(level, masterLevels-1)), Style: b.paraStyle(&p, &ls.cf)}
+		if p.hasBullet.ok && p.hasBullet.v && len(props9) > 0 {
+			k := 0
+			if r, _ := runAt(chars, charEnds, start); r != nil && r.cf.pp9rt.ok {
+				k = r.cf.pp9rt.v
+			}
+			if k < len(props9) {
+				if bu, ok := b.bullet9(&props9[k]); ok {
+					para.Style.Bullet.Set(bu)
+				}
+			}
+		}
 		for i := start; i < end; {
 			var cc cf
 			runEnd := end
@@ -377,6 +390,7 @@ func (b *builder) textBody(t *text, c odraw.Chain) *drawingml.TextBody {
 		tb.Paragraphs = append(tb.Paragraphs, para)
 		start = end + 1
 	}
+	tb.Number()
 	return tb
 }
 

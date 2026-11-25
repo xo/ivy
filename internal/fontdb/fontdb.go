@@ -305,11 +305,11 @@ func (f *files) Open(name string) (fs.File, error) {
 	}
 	info, err := file.Stat()
 	if err != nil {
-		_ = file.Close()
+		file.Close()
 		return nil, fmt.Errorf("reading font file %s: %w", name, err)
 	}
 	if info.Size() > f.lim.MaxMemory {
-		_ = file.Close()
+		file.Close()
 		return nil, fmt.Errorf("font file %s of %d bytes: %w", name, info.Size(), ivy.ErrLimit)
 	}
 	return file, nil
@@ -381,7 +381,7 @@ func (f *files) loadWebFont(p string) {
 		f.log.Warn("fontdb: font file left out", "path", p, "err", err)
 		return
 	}
-	defer func() { _ = file.Close() }()
+	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, f.lim.MaxMemory+1))
 	switch {
 	case err != nil:

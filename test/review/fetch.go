@@ -120,7 +120,7 @@ func checkFile(path string, e Entry) error {
 	if err != nil {
 		return fmt.Errorf("opening the file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	h := sha256.New()
 	n, err := io.Copy(h, f)
 	if err != nil {
@@ -156,7 +156,7 @@ func download(ctx context.Context, client *http.Client, e Entry, dst string) err
 	if err != nil {
 		return fmt.Errorf("getting %s: %w", e.URL, err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("getting %s: %s", e.URL, resp.Status)
 	}

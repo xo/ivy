@@ -128,6 +128,30 @@ func TestFloatPositionValidation(t *testing.T) {
 	})
 }
 
+func TestFloatOverlapValidation(t *testing.T) {
+	for _, tt := range []struct {
+		value, want string
+	}{
+		{"allow", "allow"},
+		{"avoid", "avoid"},
+		// The values that are not valid keep the initial value.
+		{"never", "allow"},
+		{"avoid avoid", "allow"},
+	} {
+		page := renderPages(t, `<style>@page { size: 100px } div { -ivy-float-overlap: `+tt.value+` }</style><div></div>`)[0]
+		var got Value
+		page.Descendants(func(d *Box) bool {
+			if d.ElementTag == "div" {
+				got = d.Style.Get("float_overlap")
+			}
+			return got == nil
+		})
+		if !Equal(got, String(tt.want)) {
+			t.Errorf("-ivy-float-overlap: %s = %v, want %s", tt.value, got, tt.want)
+		}
+	}
+}
+
 func TestPageFloatPosition(t *testing.T) {
 	// The anchor of the float is after P1, at y = 70. The page area is
 	// from y = 50 to y = 250, and the page from 0 to 300.
@@ -221,6 +245,49 @@ func TestPageFloat(t *testing.T) {
 			pageFloatDiv("b", "margin 20px", "") + paragraphs(6, 1),
 		"Fa@50,70 Fb@50,70 P1@50,50 P2@150,70 P3@150,90 P4@150,110 P5@50,130 P6@50,150",
 		2,
+	}, {
+		// A float with -ivy-float-overlap: avoid moves down below the
+		// page float before it that it covers, also when that float
+		// allows the overlap. Its margins do not count.
+		"avoid",
+		paragraphs(1, 4) + pageFloatDiv("a", "margin 20px", "") + paragraphs(5, 1) +
+			pageFloatDiv("b", "margin 20px", "-ivy-float-overlap: avoid; margin-top: 10px") + paragraphs(6, 1),
+		"Fa@50,70 Fb@50,130 P1@50,50 P2@150,70 P3@150,90 P4@150,110 P5@150,130 P6@150,150",
+		2,
+	}, {
+		// The float that avoids the others moves below each float that it
+		// covers, in turn.
+		"avoid two",
+		paragraphs(1, 1) + pageFloatDiv("a", "margin 0", "") + pageFloatDiv("b", "margin 70px", "") +
+			pageFloatDiv("c", "margin 20px", "-ivy-float-overlap: avoid") + paragraphs(2, 1),
+		"Fa@50,50 P1@150,50 Fb@50,120 Fc@50,180 P2@150,70",
+		2,
+	}, {
+		// The float that avoids the others is above its anchor, and the
+		// second layout places it before the flow. It keeps the place of
+		// the first layout, below the float that the flow places later.
+		"avoid before the flow",
+		pageFloatDiv("a", "margin 0", "") + paragraphs(1, 4) + pageFloatDiv("b", "margin 0", "-ivy-float-overlap: avoid") +
+			paragraphs(5, 4),
+		"Fb@50,110 Fa@50,50 P1@150,50 P2@150,70 P3@150,90 P4@150,110 P5@150,130 P6@150,150 P7@50,170 P8@50,190",
+		2,
+	}, {
+		// A float avoids only the floats before it. The float after it,
+		// which the second layout places before the flow, does not move
+		// it.
+		"avoid only the floats before",
+		pageFloatDiv("a", "margin 0", "-ivy-float-overlap: avoid") + paragraphs(1, 4) + pageFloatDiv("b", "margin 0", "") +
+			paragraphs(5, 1),
+		"Fb@50,50 Fa@50,50 P1@150,50 P2@150,70 P3@150,90 P4@50,110 P5@50,130",
+		2,
+	}, {
+		// A float at the side of the other float does not cover it, and
+		// does not move.
+		"avoid beside",
+		paragraphs(1, 1) + pageFloatDiv("a", "margin 20px", "") +
+			pageFloatDiv("b", "margin 20px", "-ivy-float-overlap: avoid; float: right") + paragraphs(2, 1),
+		"P1@50,50 Fa@50,70 Fb@150,70 P2@50,130",
+		1,
 	}, {
 		// An ordinary float after a page float that is lower on the page
 		// does not move down to it.

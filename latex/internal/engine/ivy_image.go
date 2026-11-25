@@ -26,6 +26,7 @@ import (
 	_ "image/jpeg" // ivy: the formats of image.DecodeConfig
 	_ "image/png"  // ivy: the formats of image.DecodeConfig
 	"io/fs"
+	"math"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -100,7 +101,7 @@ func (n imageNode) dataURI() string {
 // doIncludegraphics implements \includegraphics[opts]{name}. The image sits on the
 // baseline (height above, no depth); a load failure is a SourceError at this line.
 func (e *Engine) doIncludegraphics() {
-	wReq, hReq, scale := e.scanGraphicsOpts()
+	wReq, hReq, scale, rot := e.scanGraphicsOpts() // ivy: and the key angle
 	name := e.readBraceName()
 	if name == "" {
 		return
@@ -125,24 +126,82 @@ func (e *Engine) doIncludegraphics() {
 			// For a PDF figure loadImage still recovers the page box (iw/ih), so the
 			// placeholder keeps the figure's real aspect instead of a blind square.
 			e.recordFigureDrop(err)
-			e.placeholderImage(wReq, hReq, iw, ih, scale, dpiX, dpiY, name)
+			e.placeholderImage(wReq, hReq, iw, ih, scale, dpiX, dpiY, name, rot) // ivy: turned by the key angle
 			return
 		}
 		e.fail("includegraphics " + name + ": " + err.Error())
 		return
 	}
+	natW, natH := graphicsSize(iw, ih, 0, 0, scale, dpiX, dpiY) // ivy: the size of the turned box
+	wReq, hReq = rot.sizeRequest(natW, natH, wReq, hReq)
 	w, h := graphicsSize(iw, ih, wReq, hReq, scale, dpiX, dpiY)
 	e.startImage()
-	e.parList = append(e.parList, imageNode{
+	e.parList = append(e.parList, rot.turn(imageNode{ // ivy: turned by the key angle
 		data: data, format: format, width: w, height: h, srcLine: e.curSrcLine,
-	})
+	}))
+}
+
+// ivy: graphicsTurn is the key angle of \includegraphics. graphicx reads the
+// keys in their order: a width or a height before the angle sizes the image,
+// and one after the angle sizes the turned box.
+type graphicsTurn struct {
+	// angle is the turn in degrees, counterclockwise.
+	angle float64
+	// first is true when the angle comes before the width and the height.
+	first bool
+}
+
+// matrix returns the map of the turn about the reference point, the left
+// end of the baseline, as \rotatebox turns a box.
+func (g graphicsTurn) matrix() (a, b, c, d float64) {
+	rad := g.angle * math.Pi / 180
+	cos, sin := math.Cos(rad), math.Sin(rad)
+	return cos, sin, -sin, cos
+}
+
+// sizeRequest returns the width and the height that the image takes, for
+// the requests wReq and hReq of the keys. nat is the size of the image
+// without a width and a height. When the angle comes first, the requests
+// size the turned box, so the image takes them scaled by the same factor.
+func (g graphicsTurn) sizeRequest(natW, natH, wReq, hReq int) (int, int) {
+	if g.angle == 0 || !g.first || (wReq <= 0 && hReq <= 0) || natW <= 0 || natH <= 0 {
+		return wReq, hReq
+	}
+	a, b, c, d := g.matrix()
+	tn := newTransform(&boxNode{kind: hbox, width: natW, height: natH}, a, b, c, d, g.angle)
+	sx, sy := 0.0, 0.0
+	if wReq > 0 && tn.boxW > 0 {
+		sx = float64(wReq) / float64(tn.boxW)
+	}
+	if hReq > 0 && tn.boxH > 0 {
+		sy = float64(hReq) / float64(tn.boxH)
+	}
+	switch {
+	case sx > 0 && sy > 0:
+		return int(float64(natW)*sx + 0.5), int(float64(natH)*sy + 0.5)
+	case sx > 0:
+		return int(float64(natW)*sx + 0.5), 0
+	case sy > 0:
+		return 0, int(float64(natH)*sy + 0.5)
+	}
+	return wReq, hReq
+}
+
+// turn returns n turned by the angle, or n when the angle is zero.
+func (g graphicsTurn) turn(n node) node {
+	if g.angle == 0 {
+		return n
+	}
+	inner := hpackSP([]node{n}, packNatural, 0)
+	a, b, c, d := g.matrix()
+	return newTransform(inner, a, b, c, d, g.angle)
 }
 
 // placeholderImage appends a framed empty box standing in for an image that could
 // not be loaded (lenient mode). It sizes the box from the requested width/height
 // (or scale), falling back to a default figure size when none was given, so the
 // page keeps a sensibly-sized gap where the graphic would sit.
-func (e *Engine) placeholderImage(wReq, hReq, iw, ih int, scale, dpiX, dpiY float64, name string) {
+func (e *Engine) placeholderImage(wReq, hReq, iw, ih int, scale, dpiX, dpiY float64, name string, rot graphicsTurn) {
 	// iw/ih carry the figure's intrinsic size when it was recoverable (a PDF page
 	// box); with them, a width-only \includegraphics keeps the figure's true aspect
 	// instead of collapsing to a square.
@@ -196,7 +255,7 @@ func (e *Engine) placeholderImage(wReq, hReq, iw, ih int, scale, dpiX, dpiY floa
 	// baseline. See #366.
 	edge := fboxSep + fboxRule
 	inner := &boxNode{kind: hbox, width: bw, height: bh + edge, depth: -edge}
-	e.parList = append(e.parList, frameNode{inner: inner, sep: fboxSep, rule: fboxRule})
+	e.parList = append(e.parList, rot.turn(frameNode{inner: inner, sep: fboxSep, rule: fboxRule})) // ivy: turned by the key angle
 }
 
 // recordFigureDrop tallies a figure the engine could not load, by REASON.
@@ -526,15 +585,16 @@ func (e *graphicsError) Error() string { return e.msg }
 
 // scanGraphicsOpts parses the optional [width=…,height=…,scale=…] argument.
 // Unknown keys are ignored. Missing bracket → all zero.
-func (e *Engine) scanGraphicsOpts() (w, h int, scale float64) {
+// ivy: and the key angle.
+func (e *Engine) scanGraphicsOpts() (w, h int, scale float64, rot graphicsTurn) {
 	e.skipOptSpace()
 	t, ok := e.getXToken()
 	if !ok {
-		return 0, 0, 0
+		return 0, 0, 0, rot
 	}
 	if t.cs_ || t.ch != '[' {
 		e.back(t)
-		return 0, 0, 0
+		return 0, 0, 0, rot
 	}
 	// Collect the bracket content as a TOKEN list (control sequences KEPT) up to the
 	// closing ']' at brace level 0. Keeping the tokens is what lets a value like
@@ -592,13 +652,19 @@ scan:
 		switch key {
 		case "width":
 			w = evalDimen(val)
-		case "height":
+		case "height", "totalheight": // ivy: totalheight, as height for an image without depth
 			h = evalDimen(val)
 		case "scale":
 			scale, _ = strconv.ParseFloat(strings.TrimSpace(tokensToText(val)), 64)
+		case "angle": // ivy
+			a, err := strconv.ParseFloat(strings.TrimSpace(tokensToText(val)), 64)
+			if err == nil && !math.IsInf(a, 0) && !math.IsNaN(a) {
+				rot.angle = math.Mod(a, 360)
+				rot.first = w == 0 && h == 0
+			}
 		}
 	}
-	return w, h, scale
+	return w, h, scale, rot
 }
 
 // splitTokensAtComma splits a token list on comma tokens at brace level 0.

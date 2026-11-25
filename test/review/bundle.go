@@ -80,13 +80,13 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
 	}
-	defer func() { _ = in.Close() }()
+	defer in.Close()
 	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return fmt.Errorf("making %s: %w", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+		out.Close()
 		return fmt.Errorf("copying %s: %w", src, err)
 	}
 	if err := out.Close(); err != nil {

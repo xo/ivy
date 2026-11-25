@@ -12,6 +12,7 @@ import (
 
 	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/drawingml"
+	"github.com/xo/ivy/internal/formula"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/memfs"
 	"github.com/xo/ivy/internal/ooxml"
@@ -71,6 +72,10 @@ type converter struct {
 	defaultTab float64
 	// evenOdd is set when the pages have even and odd headers.
 	evenOdd bool
+	// themeLang is the East Asian language that selects the East Asian
+	// fonts of the theme: the w:eastAsia of w:themeFontLang, or else of the
+	// w:lang of the default run properties.
+	themeLang string
 
 	// part is the part that the conversion reads, for its relationships.
 	part string
@@ -91,6 +96,9 @@ type converter struct {
 	objects int
 	// charts are the charts that the layout draws, by name.
 	charts map[string]layout.Object
+	// typesetter lays out the equations, and is nil before the first
+	// equation.
+	typesetter *formula.Typesetter
 
 	sections []*section
 	// section is the index of the current section.
@@ -274,6 +282,9 @@ func (c *converter) readParts(main string) {
 	}
 	c.styles = parseStyles(stylesDoc, c.lim.MaxDepth)
 	c.numbering = parseNumbering(numberingDoc)
+	if c.themeLang == "" {
+		c.themeLang = c.styles.rDefault["lang.ea"]
+	}
 }
 
 // settings reads the settings that the conversion uses.
@@ -290,6 +301,8 @@ func (c *converter) settings(root roxmltree.Node) {
 		case "evenAndOddHeaders":
 			v := ooxml.Attr(n, "val")
 			c.evenOdd = v == "" || v == "1" || v == "true" || v == "on"
+		case "themeFontLang":
+			c.themeLang = ooxml.Attr(n, "eastAsia")
 		}
 	}
 }

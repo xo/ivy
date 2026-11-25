@@ -454,7 +454,7 @@ func openPage(t *testing.T, data []byte, n int) ivy.Page {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = doc.Close() })
+	t.Cleanup(func() { doc.Close() })
 	page, err := doc.Page(t.Context(), n)
 	if err != nil {
 		t.Fatal(err)
@@ -621,7 +621,7 @@ func TestMetadata(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = got.Close() }()
+			defer got.Close()
 			in, err := got.Describe(t.Context())
 			if err != nil {
 				t.Fatal(err)

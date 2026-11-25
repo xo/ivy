@@ -86,6 +86,12 @@ type Options struct {
 	// without a cache of its data, so the chart takes its data from the
 	// cells. It is nil for a chart without cells.
 	SourceCells func(ref string) [][]Cell
+	// Style returns the chart style part, cs:chartStyle, that the chart
+	// part links to, or nil. StylePart reads it. Parse calls Style only for
+	// a chart of Office 2016 whose part has no cx:spPr: Word and Excel
+	// then draw the fill and the line of the chart area of the style. It
+	// is nil for a chart without a style part.
+	Style func() []byte
 	// Width and Height are the size of the frame of the chart in points,
 	// or zero. A chart of DrawingML has no size of its own, and the frame
 	// that holds it gives the size.

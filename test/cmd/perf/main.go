@@ -163,7 +163,7 @@ func measure(ctx context.Context, opts options) error {
 		if err != nil {
 			return fmt.Errorf("creating the CPU profile: %w", err)
 		}
-		defer func() { _ = f.Close() }()
+		defer f.Close()
 		if err := pprof.StartCPUProfile(f); err != nil {
 			return fmt.Errorf("starting the CPU profile: %w", err)
 		}
@@ -194,7 +194,7 @@ func measure(ctx context.Context, opts options) error {
 		cfg.Password = e.Password()
 		var best result
 		for i := range opts.count {
-			r := measureOne(ctx, opts, format, cfg, filepath.Dir(path), data)
+			r := measureOne(ctx, opts, format, cfg, path, data)
 			if i == 0 {
 				best = r
 				continue
@@ -219,7 +219,7 @@ func measure(ctx context.Context, opts options) error {
 		if err != nil {
 			return fmt.Errorf("creating the memory profile: %w", err)
 		}
-		defer func() { _ = f.Close() }()
+		defer f.Close()
 		if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
 			return fmt.Errorf("writing the memory profile: %w", err)
 		}
@@ -227,8 +227,9 @@ func measure(ctx context.Context, opts options) error {
 	return nil
 }
 
-// measureOne opens data with format once, and measures it.
-func measureOne(ctx context.Context, opts options, format ivy.Format, cfg ivy.Config, dir string, data []byte) (r result) {
+// measureOne opens data, the file at path, with format once, and measures
+// it.
+func measureOne(ctx context.Context, opts options, format ivy.Format, cfg ivy.Config, path string, data []byte) (r result) {
 	ctx, cancel := context.WithTimeout(ctx, opts.timeout)
 	defer cancel()
 	runtime.GC()
@@ -241,13 +242,13 @@ func measureOne(ctx context.Context, opts options, format ivy.Format, cfg ivy.Co
 		r.bytes = m1.TotalAlloc - m0.TotalAlloc
 		r.allocs = m1.Mallocs - m0.Mallocs
 	}()
-	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, dir)
+	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, path)
 	r.open = time.Since(start)
 	if err != nil {
 		r.err = err
 		return r
 	}
-	defer func() { _ = doc.Close() }()
+	defer doc.Close()
 	h := sha256.New()
 	defer func() {
 		if opts.hash {

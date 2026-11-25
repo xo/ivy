@@ -122,7 +122,7 @@ func inkscape(ctx context.Context, dir, path string) (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the png of inkscape: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	img, err := png.Decode(f)
 	if err != nil {
 		return nil, fmt.Errorf("decoding the png of inkscape: %w", err)

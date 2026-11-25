@@ -60,8 +60,8 @@ func TestGalley(t *testing.T) {
 		cfg := cfg
 		cfg.Password = e.Password()
 		t.Run(e.Name, func(t *testing.T) {
-			want := galleyHashes(t, format, data, cfg, filepath.Dir(path), layout.GalleyOptions{Off: true})
-			got := galleyHashes(t, format, data, cfg, filepath.Dir(path),
+			want := galleyHashes(t, format, data, cfg, path, layout.GalleyOptions{Off: true})
+			got := galleyHashes(t, format, data, cfg, path,
 				layout.GalleyOptions{OneBlock: true, MaxParts: 16, Wait: true, Early: true})
 			if len(got) != len(want) {
 				t.Fatalf("expected %d pages, got: %d", len(want), len(got))
@@ -75,18 +75,19 @@ func TestGalley(t *testing.T) {
 	}
 }
 
-// galleyHashes opens data with format and the galley options o, and
-// returns the hash of the pixels of each page at 72 dots per inch. A
-// document that fails to open or to count its pages gives no hash.
-func galleyHashes(t *testing.T, format ivy.Format, data []byte, cfg ivy.Config, dir string, o layout.GalleyOptions) []string {
+// galleyHashes opens data, the file at path, with format and the galley
+// options o, and returns the hash of the pixels of each page at 72 dots
+// per inch. A document that fails to open or to count its pages gives no
+// hash.
+func galleyHashes(t *testing.T, format ivy.Format, data []byte, cfg ivy.Config, path string, o layout.GalleyOptions) []string {
 	t.Helper()
 	defer layout.SetGalleyOptions(o)()
 	ctx := context.Background()
-	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, dir)
+	doc, err := review.OpenIvy(ctx, format, bytes.NewReader(data), cfg, path)
 	if err != nil {
 		return nil
 	}
-	defer func() { _ = doc.Close() }()
+	defer doc.Close()
 	pager, ok := doc.(ivy.Pager)
 	if !ok {
 		return nil

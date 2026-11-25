@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xo/ivy/internal/fixture"
 )
 
 // TestPageFloatFiles checks the position on the page of the floats of the
@@ -24,6 +26,7 @@ func TestPageFloatFiles(t *testing.T) {
 		{"f-bottom", []string{"-ivy-float-position: margin bottom"}},
 		{"t-bottom", []string{"-ivy-float-position: margin bottom"}},
 		{"t-two", []string{"-ivy-float-position: margin 72pt", "-ivy-float-position: margin 72pt"}},
+		{"t-never", []string{"-ivy-float-position: margin 72pt", "-ivy-float-position: margin 72pt"}},
 		{"t-loop3", []string{"-ivy-float-position: margin 0pt"}},
 		{"t-loop2", []string{"-ivy-float-position: margin 0pt"}},
 		{"t-nofit", []string{"-ivy-float-position: page 684pt"}},
@@ -100,6 +103,44 @@ func TestPageFloatCSS(t *testing.T) {
 			pageFloatCSS(&s, tt.x, tt.w, 468, [4]float64{1, 2, 3, 4}, tt.wrap, "margin 72pt")
 			if got := s.String(); got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFloatOverlap checks that a table with w:tblOverlap "never" and a
+// drawing with allowOverlap off avoid the other page floats, and that the
+// other values and a drawing at its paragraph do not (D60).
+func TestFloatOverlap(t *testing.T) {
+	table := func(overlap string) string {
+		return `<w:tbl><w:tblPr><w:tblpPr w:vertAnchor="margin" w:horzAnchor="margin" w:tblpY="1440"/>` + overlap +
+			`<w:tblW w:w="4320" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="4320"/></w:tblGrid>` +
+			`<w:tr><w:tc><w:p><w:r><w:t>T</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>`
+	}
+	drawing := func(allow, relative string) string {
+		return `<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" allowOverlap="` + allow + `">` +
+			`<wp:positionH relativeFrom="margin"><wp:posOffset>0</wp:posOffset></wp:positionH>` +
+			`<wp:positionV relativeFrom="` + relative + `"><wp:posOffset>914400</wp:posOffset></wp:positionV>` +
+			`<wp:extent cx="2743200" cy="1828800"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Box"/>` +
+			`<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr/><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>` +
+			`</wp:anchor></w:drawing></w:r></w:p>`
+	}
+	for _, tt := range []struct {
+		name, body string
+		want       int
+	}{
+		{"table never", table(`<w:tblOverlap w:val="never"/>`), 1},
+		{"table overlap", table(`<w:tblOverlap w:val="overlap"/>`), 0},
+		{"table", table(``), 0},
+		{"drawing 0", drawing("0", "margin"), 1},
+		{"drawing false", drawing("false", "page"), 1},
+		{"drawing 1", drawing("1", "margin"), 0},
+		{"drawing at its paragraph", drawing("0", "paragraph"), 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, fixture.DOCX(tt.body))
+			if got := strings.Count(html, "-ivy-float-overlap: avoid"); got != tt.want {
+				t.Errorf("got %d floats that avoid the others, want %d:\n%s", got, tt.want, html)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 package drawingml
 
 import (
+	"encoding/base64"
 	"fmt"
 	"html"
 	"math"
@@ -22,6 +23,11 @@ const (
 	defaultInsetY = 3.6
 	// defaultSize is the size of a run without a size.
 	defaultSize = 18.0
+	// pictureBullet is the height of the picture of a bullet, for a
+	// bullet of the size 1. PowerPoint draws the pictures of 15 and of 12
+	// pixels of page 42 of custom-geometry.ppt of the corpus 16 points
+	// high, for a text of 24 points.
+	pictureBullet = 2.0 / 3
 	// lineFactor is the height of a line of single spacing, for a size of
 	// 1. PowerPoint draws a line of 100 percent at about 1.2 times the size
 	// of its text.
@@ -320,6 +326,13 @@ func writeBullet(sb *strings.Builder, p *Paragraph, first *RunStyle, theme *Them
 		color = *bc
 	}
 	width := max(-s.Indent.Or(0), 0)
+	if b.Kind == BulletPicture && len(b.Picture) > 0 {
+		// the picture stands on the baseline, as PowerPoint draws it. The
+		// layout finds the type of the picture from its bytes.
+		fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt"><img src="data:application/octet-stream;base64,%s" style="height:%spt"> </span>`,
+			num(width), num(size), base64.StdEncoding.EncodeToString(b.Picture), num(size*pictureBullet))
+		return
+	}
 	fmt.Fprintf(sb, `<span class="b" style="min-width:%spt;font-size:%spt;font-family:%s;color:%s">%s </span>`,
 		num(width), num(size), fontFamily(font, theme), color.CSS(), html.EscapeString(text))
 }

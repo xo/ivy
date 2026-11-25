@@ -419,6 +419,7 @@ func (s *slide) drawChart(frame roxmltree.Node, pics *partPictures, m okage.Tran
 			Theme:  s.colors.Theme,
 			Config: s.cfg,
 			Fonts:  fontdb.Of(s.cfg),
+			Style:  func() []byte { return chart.StylePart(s.p.d.doc, r.Target, s.p.d.lim) },
 			Width:  w,
 			Height: h,
 		})

@@ -12,6 +12,7 @@ import (
 	"github.com/xo/okage/roxmltree"
 
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/formula"
 	"github.com/xo/ivy/internal/layout"
 	"github.com/xo/ivy/internal/memfs"
 	"github.com/xo/ivy/internal/ooxml"
@@ -81,6 +82,9 @@ type odtConverter struct {
 	objects int
 	// charts are the charts that the layout draws, by name.
 	charts map[string]layout.Object
+	// typesetter lays out the formulas, and is nil before the first
+	// formula.
+	typesetter *formula.Typesetter
 
 	// master is the name of the master page of the current section, and
 	// sections counts the sections.

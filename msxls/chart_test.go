@@ -145,3 +145,52 @@ func TestChartSheet(t *testing.T) {
 		t.Errorf("expected %q in the chart:\n%s", want, xml)
 	}
 }
+
+// TestChartTrendTable checks that a series with SerParent and SerAuxTrend
+// is the trendline of its parent, and not a series of its own, and that
+// the record Dat gives the data table.
+func TestChartTrendTable(t *testing.T) {
+	chart := chartRecords()
+	var b biff
+	// a polynomial of the order 2 with its equation, and a forecast of 1
+	b.record(recChartSeries, u16(1, 1, 0, 0, 1, 0))
+	b.record(recBegin)
+	b.record(recDataFormat, u16(0xFFFF, 0, 1, 0))
+	b.record(recBegin)
+	b.record(recLineFormat, []byte{0, 0x80, 0, 0}, u16(1, 0, 0, 0))
+	b.record(recEnd)
+	b.record(recSerParent, u16(1))
+	b.record(recSerAuxTrend, []byte{0, 2}, []byte{0, 0, 0, 0, 0, 0, 0xFF, 0xFF}, []byte{1, 0}, float(1), float(0))
+	b.record(recEnd)
+	b.record(recDat, u16(0x0F))
+	b.record(recBegin)
+	b.record(recEnd)
+	// the records go before the axis group
+	at := bytes.Index(chart, u16(recAxisParent, 18))
+	chart = append(append(append([]byte{}, chart[:at]...), b.buf...), chart[at:]...)
+	w := &workbook{version: biff8, palette: defaultPalette, formats: map[int]string{}}
+	var recs []record
+	for rec := range records(chart, 0) {
+		if rec.typ != recBOF && rec.typ != recEOF {
+			recs = append(recs, rec)
+		}
+	}
+	c := readChart(recs, w)
+	if len(c.series) != 2 || c.series[1].parent != 1 || c.series[1].trend == nil || c.table == nil {
+		t.Fatalf("expected a series with its trendline and a data table, got: %d series", len(c.series))
+	}
+	xml := c.xml(w, nil)
+	for _, want := range []string{
+		`<c:trendline><c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="008000"/></a:solidFill>` +
+			`<a:prstDash val="dash"/></a:ln></c:spPr><c:trendlineType val="poly"/><c:order val="2"/>` +
+			`<c:forward val="1"/><c:dispRSqr val="0"/><c:dispEq val="1"/></c:trendline>`,
+		`<c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable>`,
+	} {
+		if !strings.Contains(xml, want) {
+			t.Errorf("expected %q in the chart:\n%s", want, xml)
+		}
+	}
+	if n := strings.Count(xml, "<c:ser>"); n != 1 {
+		t.Errorf("expected one series, got %d", n)
+	}
+}

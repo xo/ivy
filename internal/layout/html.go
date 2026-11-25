@@ -219,6 +219,8 @@ func init() {
 		"colgroup":           handleColgroup,
 		"col":                handleCol,
 		"{" + nsSVG + "}svg": handleSVG,
+		// Port: upstream draws no MathML.
+		"{" + nsMathML + "}math": handleMath,
 	}
 }
 

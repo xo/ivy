@@ -121,8 +121,8 @@ const (
 	BulletNone BulletKind = iota
 	BulletChar
 	BulletNumber
-	// BulletPicture is a bullet of a picture, which the package draws as a
-	// round bullet.
+	// BulletPicture is a bullet of a picture. The package draws
+	// Bullet.Picture, or a round bullet when the bullet has no picture.
 	BulletPicture
 )
 
@@ -136,6 +136,9 @@ type Bullet struct {
 	Scheme string
 	// Start is the first number of BulletNumber.
 	Start int
+	// Picture is the file of the picture of BulletPicture, such as a PNG
+	// file or a metafile, or nil.
+	Picture []byte
 }
 
 // BulletSize is the size of a bullet: a fraction of the size of the text, or
@@ -265,6 +268,12 @@ type TextBody struct {
 	// PowerPoint draws its slides, except the runs that RunStyle.Kern
 	// kerns.
 	NoKerning bool
+}
+
+// Number counts the numbers of the paragraphs with automatic bullets, for
+// a body that a format builds itself. Colors.ParseTextBody counts them.
+func (tb *TextBody) Number() {
+	numberParagraphs(tb.Paragraphs)
 }
 
 // Empty reports whether the body holds no text to draw.

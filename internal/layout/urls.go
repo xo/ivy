@@ -269,7 +269,7 @@ func (f *URLFetcher) fetchFile(u string) (*URLFetcherResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrURLFetching, err)
 	}
-	defer func() { _ = file.Close() }()
+	defer file.Close()
 	// Port: the size of a resource is bounded by ivy.Limits.MaxMemory.
 	body, err := readAll(file, f.maxSize())
 	if err != nil {

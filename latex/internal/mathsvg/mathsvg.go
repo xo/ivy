@@ -126,7 +126,7 @@ func (r *Renderer) render(tex string, size int, style texmath.Style) (string, Me
 	if len(r.boxes) >= maxBoxes {
 		return "", Metrics{}, fmt.Errorf("math: too many formulas: %w", ivy.ErrLimit)
 	}
-	box, err := texmath.LayoutTeX(tex, r.face, float64(size), style,
+	box, err := texmath.LayoutTeX(basePrimes(tex), r.face, float64(size), style,
 		texmath.WithMaxDepth(maxDepth),
 		texmath.WithMaxNodes(maxNodes),
 		texmath.WithMaxExpansions(maxExpansions),
@@ -143,6 +143,99 @@ func (r *Renderer) render(tex string, size int, style texmath.Style) (string, Me
 	r.boxes = append(r.boxes, box)
 	m := Metrics{Width: box.Width, Height: box.Height, Depth: box.Depth}
 	return r.svg(box, id), m, nil
+}
+
+// textCommands are the commands whose argument is text, where an
+// apostrophe is a character and not a prime.
+var textCommands = map[string]bool{
+	"text": true, "textrm": true, "textit": true, "textbf": true, "textsf": true,
+	"texttt": true, "textnormal": true, "textup": true, "textsl": true, "mbox": true,
+	"hbox": true, "intertext": true,
+}
+
+// basePrimes returns tex with each prime ' as \prime, the glyph prime at
+// the size of the formula. texmath sets x' as the glyph prime in a
+// superscript, and the glyph of a math font is already high and small, so
+// the prime came out half the size of the prime of pdfLaTeX and too high.
+// The apostrophes of the argument of a command of text stay.
+func basePrimes(tex string) string {
+	// x^\prime and x^{\prime} are x' written out
+	if strings.Contains(tex, `^`) {
+		tex = primeScripts.Replace(tex)
+	}
+	if !strings.Contains(tex, "'") {
+		return tex
+	}
+	var b strings.Builder
+	b.Grow(len(tex) + 16)
+	for i := 0; i < len(tex); {
+		switch c := tex[i]; c {
+		case '\\':
+			j := i + 1
+			for j < len(tex) && isLetter(tex[j]) {
+				j++
+			}
+			if j == i+1 && j < len(tex) {
+				// a control symbol, such as \' or \\
+				j++
+			}
+			name := tex[i+1 : j]
+			b.WriteString(tex[i:j])
+			i = j
+			if textCommands[name] {
+				for i < len(tex) && tex[i] == ' ' {
+					b.WriteByte(tex[i])
+					i++
+				}
+				end := groupEnd(tex, i)
+				b.WriteString(tex[i:end])
+				i = end
+			}
+		case '\'':
+			b.WriteString(`\prime `)
+			i++
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// primeScripts replaces a superscript that holds only primes with the
+// primes.
+var primeScripts = strings.NewReplacer(
+	`^{\prime\prime}`, `\prime\prime `,
+	`^{\prime}`, `\prime `,
+	`^\prime`, `\prime`,
+)
+
+// isLetter reports whether c is a letter of the name of a command.
+func isLetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// groupEnd returns the end of the braced group that starts at i, or i when
+// no group starts there. A group without its closing brace ends with tex.
+func groupEnd(tex string, i int) int {
+	if i >= len(tex) || tex[i] != '{' {
+		return i
+	}
+	depth := 0
+	for j := i; j < len(tex); j++ {
+		switch tex[j] {
+		case '\\':
+			j++
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return j + 1
+			}
+		}
+	}
+	return len(tex)
 }
 
 // Box returns the box of the formula whose SVG names id, and false if the

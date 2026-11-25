@@ -92,8 +92,8 @@ were built. The build differs from the decision in these points:
    files of ivy, `ivy_*.go`, hold their parts that ivy keeps.
 2. The fonts of okage have no helper for the kerning or the ligature of a
    pair, so `latex/internal/opentype` shapes the pair with the shaper of
-   okage, with only that feature on. Item 4 of "Work for okage" in
-   `BACKLOG.md` still asks for the helpers.
+   okage, with only that feature on. "Work for okage" in `BACKLOG.md` still
+   asks for the helpers.
 3. okage released `texmath` (okage D78) before this build, so the copy
    does not keep `go-tex/math`. `latex/internal/mathsvg` gives the API of
    go-tex/math on texmath, and the driver draws the glyphs of a formula as

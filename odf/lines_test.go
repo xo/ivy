@@ -51,3 +51,22 @@ func TestTextLineNumbers(t *testing.T) {
 		t.Error("expected the style sheet to leave out the space before a paragraph at the top of a page")
 	}
 }
+
+// TestTextLineMultiple checks that a single line and a proportional line
+// spacing put the line gap above their text, and that a line of a fixed
+// height does not (D56).
+func TestTextLineMultiple(t *testing.T) {
+	const auto = `<style:style style:name="P1" style:family="paragraph"><style:paragraph-properties fo:line-height="100%"/></style:style>` +
+		`<style:style style:name="P2" style:family="paragraph"><style:paragraph-properties fo:line-height="0.5in"/></style:style>` +
+		`<style:style style:name="P3" style:family="paragraph"><style:paragraph-properties fo:line-height="200%"/></style:style>`
+	body := `<text:p text:style-name="P1">Single</text:p><text:p text:style-name="P2">Fixed</text:p><text:p text:style-name="P3">Double</text:p>`
+	html, _ := odtHTML(t, odtWith(body, auto, nil))
+	for text, want := range map[string]string{"Single": "-ivy-line-multiple: 1;", "Double": "-ivy-line-multiple: 2;"} {
+		if p := odtParagraph(t, html, text); !strings.Contains(p, want) {
+			t.Errorf("expected %q in the paragraph %s, got: %s", want, text, p)
+		}
+	}
+	if p := odtParagraph(t, html, "Fixed"); strings.Contains(p, "-ivy-line-multiple") {
+		t.Errorf("expected no multiple for a line of a fixed height, got: %s", p)
+	}
+}

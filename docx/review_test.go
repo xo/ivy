@@ -237,6 +237,36 @@ func TestHeaderHeight(t *testing.T) {
 	}
 }
 
+// TestFooterSpaceBefore checks that the space before the first paragraph
+// of a footer stays in the footer, so that the footer keeps its distance
+// from the bottom of the paper, as in Word. The running element is a flow
+// root, as in msdoc, rtf and odf.
+func TestFooterSpaceBefore(t *testing.T) {
+	footerBottom := "1440"
+	bottom := func(before string) int {
+		footer := fixture.WordXML("w:ftr", `<w:p><w:pPr><w:spacing w:before="`+before+`" w:after="0"/></w:pPr><w:r><w:t>Footer</w:t></w:r></w:p>`)
+		body := `<w:p><w:r><w:t>Body</w:t></w:r></w:p>` +
+			`<w:sectPr><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="12240" w:h="15840"/>` +
+			`<w:pgMar w:top="1440" w:right="1440" w:bottom="` + footerBottom + `" w:left="1440" w:header="720" w:footer="720"/></w:sectPr>`
+		d, err := Open(t.Context(), bytes.NewReader(fixture.DOCX(body,
+			fixture.WordPart{ID: "rIdF", Type: "footer", Name: "word/footer1.xml", Data: footer})))
+		if err != nil {
+			t.Fatal(err)
+		}
+		box := inkBox(render(t, d, 0), image.Rect(0, 700, 612, 792))
+		if box.Empty() {
+			t.Fatalf("space before %s: expected the footer at the bottom of the page", before)
+		}
+		return box.Max.Y
+	}
+	for _, footerBottom = range []string{"1440", "720", "2880"} {
+		if without, with := bottom("0"), bottom("480"); with != without {
+			t.Errorf("bottom margin %s: expected the footer at the same place with 24 points of space before it, got %d and %d",
+				footerBottom, with, without)
+		}
+	}
+}
+
 // TestDocGridLines checks that the lines of a section with a grid of lines
 // take a whole number of lines of the grid.
 func TestDocGridLines(t *testing.T) {

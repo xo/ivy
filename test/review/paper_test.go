@@ -220,7 +220,7 @@ func TestFontFS(t *testing.T) {
 			t.Error(err)
 			continue
 		}
-		_ = f.Close()
+		f.Close()
 	}
 	if _, err := fsys.Open("../x"); err == nil {
 		t.Error("expected an error for an invalid name")

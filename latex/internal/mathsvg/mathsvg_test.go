@@ -112,3 +112,26 @@ func TestNotMath(t *testing.T) {
 		t.Errorf("expected 1.5, got: %q", got)
 	}
 }
+
+func TestBasePrimes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		in, want string
+	}{
+		{"x", "x"},
+		{"x'", `x\prime `},
+		{"f''(x)", `f\prime \prime (x)`},
+		{`x'^2`, `x\prime ^2`},
+		{`\text{it's} y'`, `\text{it's} y\prime `},
+		{`\mbox {a'{b'}} c'`, `\mbox {a'{b'}} c\prime `},
+		{`\'e`, `\'e`},
+		{`\text{a'`, `\text{a'`},
+		{`x^{\prime} + y^\prime`, `x\prime  + y\prime`},
+		{`x^{\prime\prime}_1`, `x\prime\prime _1`},
+	}
+	for _, test := range tests {
+		if got := basePrimes(test.in); got != test.want {
+			t.Errorf("basePrimes(%q): expected %q, got %q", test.in, test.want, got)
+		}
+	}
+}

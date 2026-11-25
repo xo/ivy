@@ -346,6 +346,8 @@ func init() {
 	property("line-multiple", validateLineMultiple)
 	property("page-top-space", validatePageTopSpace)
 	property("float-position", validateFloatPosition)
+	property("float-overlap", validateFloatOverlap)
+	property("wrap-flow", validateWrapFlow)
 	property("hyphens", validateHyphens, optUnstable)
 	property("hyphenate-character", validateHyphenateCharacter, optUnstable)
 	property("hyphenate-limit-zone", validateHyphenateLimitZone, optUnstable)

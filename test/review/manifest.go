@@ -81,7 +81,7 @@ func LoadManifest(path string) ([]Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the manifest: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	entries, err := ReadManifest(f)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)

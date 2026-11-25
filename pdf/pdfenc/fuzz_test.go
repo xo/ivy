@@ -334,7 +334,7 @@ func FuzzEncode(f *testing.F) {
 		if err != nil {
 			t.Fatalf("opening the written file: %v", err)
 		}
-		defer func() { _ = doc.Close() }()
+		defer doc.Close()
 		n, err := doc.PageCount(t.Context())
 		if err != nil || n != 2 {
 			t.Fatalf("expected 2 pages, got: %d, %v", n, err)

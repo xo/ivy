@@ -230,7 +230,7 @@ func TestTextbox(t *testing.T) {
 	html := b.String()
 	// without a line, the bleed is 1 point, which the padding holds
 	for _, want := range []string{
-		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; -ivy-float-position: margin -1pt; width: 146pt; height: 38pt;`,
+		`<div style="float: left; margin-left: 0pt; margin-right: 9pt; -ivy-float-position: margin -1pt; -ivy-wrap-flow: both 9pt; width: 146pt; height: 38pt;`,
 		`padding: 4.6pt 8.2pt 4.6pt 8.2pt; background: url(ivy-object:shape1) no-repeat; background-size: 100% 100%">`,
 		"Box text</span></p>",
 	} {
@@ -361,11 +361,11 @@ func TestPageFloatShape(t *testing.T) {
 		want string
 	}{
 		{"margin", floating{wr: 2, by: 0, left: 1440, top: 2880}, 144,
-			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: margin 144pt; width: 144pt; height: 20pt"},
+			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: margin 144pt; -ivy-wrap-flow: both 9pt; width: 144pt; height: 20pt"},
 		{"page", floating{wr: 2, by: 1, left: 1440, top: 2880}, 144,
-			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: page 144pt; width: 144pt; height: 20pt"},
+			"float: left; margin-left: 72pt; margin-right: 9pt; -ivy-float-position: page 144pt; -ivy-wrap-flow: both 9pt; width: 144pt; height: 20pt"},
 		{"right", floating{wr: 4, by: 0, left: 5760, top: 0}, 144,
-			"float: right; margin-right: 0pt; margin-left: 9pt; -ivy-float-position: margin 0pt; width: 144pt; height: 20pt"},
+			"float: right; margin-right: 0pt; margin-left: 9pt; -ivy-float-position: margin 0pt; -ivy-wrap-flow: both 9pt; width: 144pt; height: 20pt"},
 		{"top and bottom", floating{wr: 1, by: 0, left: 1440, top: 720}, 144,
 			"float: left; margin-left: 72pt; margin-right: 216pt; -ivy-float-position: margin 36pt; width: 144pt; height: 20pt"},
 		// an object that leaves less than half an inch beside it puts the
@@ -374,7 +374,7 @@ func TestPageFloatShape(t *testing.T) {
 			"float: left; margin-left: 0pt; margin-right: 10pt; -ivy-float-position: page 72pt; width: 422pt; height: 20pt"},
 		// the paragraph and no wrap stay as they are
 		{"paragraph", floating{wr: 2, by: 2, top: 200}, 144,
-			"float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 10pt; width: 144pt; height: 20pt"},
+			"float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 10pt; -ivy-wrap-flow: both 9pt; width: 144pt; height: 20pt"},
 		{"none", floating{wr: 3, by: 0, top: 200}, 144,
 			"position: absolute; left: 0pt; top: 10pt; width: 144pt; height: 20pt"},
 	} {
@@ -383,6 +383,36 @@ func TestPageFloatShape(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestWrapSide checks that the text wraps around an object on the sides of
+// the wrk of its FSPA, 9 points from it, and that the text above and below
+// an object and no wrap give no side (D63).
+func TestWrapSide(t *testing.T) {
+	p := testParser(nil, nil)
+	p.page = letter
+	for _, tt := range []struct {
+		f    floating
+		want string
+	}{
+		{floating{wr: 2, wrk: 0, left: 2880}, "-ivy-wrap-flow: both 9pt"},
+		{floating{wr: 2, wrk: 1, left: 2880}, "-ivy-wrap-flow: start 9pt"},
+		{floating{wr: 4, wrk: 2, left: 2880}, "-ivy-wrap-flow: end 9pt"},
+		{floating{wr: 5, wrk: 3, left: 2880}, "-ivy-wrap-flow: maximum 9pt"},
+		{floating{wr: 1, by: 0, left: 2880}, ""},
+		{floating{wr: 3, left: 2880}, ""},
+	} {
+		style := p.floatStyle(&tt.f, 72, 20)
+		got := ""
+		for _, s := range style {
+			if strings.HasPrefix(s, "-ivy-wrap-flow") {
+				got = s
+			}
+		}
+		if got != tt.want {
+			t.Errorf("wr %d, wrk %d: got %q, want %q in %q", tt.f.wr, tt.f.wrk, got, tt.want, style)
+		}
 	}
 }
 

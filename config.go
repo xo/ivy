@@ -24,8 +24,9 @@ type Config struct {
 	Logger *slog.Logger
 	// Limits bound the work on one document.
 	Limits Limits
-	// Cache shares the fonts and the ICC profiles between documents. A nil
-	// Cache gives each document a cache of its own.
+	// Cache is kept for a cache that documents share. No format reads it
+	// yet: internal/fontdb holds the fonts, and a format that needs a
+	// shared cache asks for one again (D45).
 	Cache *Cache
 	// SystemFonts lets a format that lays out text, such as an ebook, use
 	// the fonts of the system, after the fonts that the document embeds and
@@ -139,12 +140,10 @@ func (lim Limits) WithDefaults() Limits {
 	return lim
 }
 
-// Cache holds the fonts of the system, the fonts that documents embed, and
-// the transforms of ICC profiles, and shares them between documents. It is
-// safe for concurrent use. There is no global cache.
-//
-// The formats of phase 1 hold no fonts and no ICC profiles, so the cache is
-// empty until the fonts of phase 2.
+// Cache is kept for a cache that documents share, such as the fonts and the
+// transforms of ICC profiles. It is safe for concurrent use. There is no
+// global cache. No format reads it yet, because internal/fontdb holds the
+// fonts, and a format that needs a shared cache asks for one again (D45).
 type Cache struct {
 	_ struct{}
 }

@@ -179,7 +179,7 @@ above hold the ones that this survey keeps.
 | MHTML, EML and MSG | DeepSeek | Later. MHTML and EML go into the layout. MSG is a Compound File |
 | OneNote | DeepSeek | No. The format is large and holds no preview |
 | HEIC, AVIF, TIFF, JPEG 2000 and DICOM | GPT-5.6 | No. They are images that libvips and other packages decode |
-| LaTeX | GPT-5.6 | Yes, in phase 8 (D62) |
+| LaTeX | GPT-5.6 | Yes. Phase 8 of `PLAN.md` adds it after this survey (D62) |
 | CAD and GIS formats | GPT-5.6 | No. okage `docs/FORMATS.md` covers DXF and DWG |
 
 ## What okage lacks

@@ -78,7 +78,7 @@ func (a *Archive) Read(f *zip.File) ([]byte, error) {
 		return nil, err
 	}
 	// a read-only entry has nothing to flush, so its close cannot lose data
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	return raster.ReadAll(rc, a.lim.MaxMemory)
 }
 
@@ -89,7 +89,7 @@ func (a *Archive) Config(f *zip.File) (image.Point, error) {
 	if err != nil {
 		return image.Point{}, err
 	}
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	buf, err := io.ReadAll(io.LimitReader(rc, headerLimit))
 	if err != nil {
 		return image.Point{}, fmt.Errorf("reading %s: %w: %w", f.Name, ivy.ErrFormat, err)

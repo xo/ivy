@@ -56,7 +56,7 @@ func readImage(path string) (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening the image: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	var img image.Image
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".ppm", ".pgm", ".pnm":
@@ -165,7 +165,7 @@ func moveFile(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
 	}
-	defer func() { _ = in.Close() }()
+	defer in.Close()
 	out, err := os.CreateTemp(filepath.Dir(dst), ".move-*")
 	if err != nil {
 		return fmt.Errorf("making a temporary file: %w", err)
@@ -198,13 +198,13 @@ func linkOrCopy(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", src, err)
 	}
-	defer func() { _ = in.Close() }()
+	defer in.Close()
 	out, err := os.Create(dst)
 	if err != nil {
 		return fmt.Errorf("making %s: %w", dst, err)
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
+		out.Close()
 		return fmt.Errorf("copying %s: %w", src, err)
 	}
 	if err := out.Close(); err != nil {

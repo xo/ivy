@@ -12,7 +12,11 @@
 // shapes: the preset shapes, the shapes of a custom geometry, the lines,
 // the groups and the pictures, with their fills, their outlines and their
 // shadows. The text of a shape has the fonts, the sizes, the colors and
-// the bullets of its runs and paragraphs, over the styles of the master.
+// the bullets of its runs and paragraphs, over the styles of the master,
+// and its direction. The extension of PowerPoint 2000 of a shape gives the
+// picture bullets and the automatic numbers of its paragraphs. A text that
+// PowerPoint fits to its shape keeps the sizes and the box that PowerPoint
+// writes into the file.
 // The colors come from the color scheme of the slide or of its master. The
 // placeholders of the date, the slide number and the footer of a master
 // show as the HeadersFootersAtom of the slide or of the presentation says,

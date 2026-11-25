@@ -6,8 +6,8 @@ Word places a frame, a table that floats and a shape at a vertical
 position from the top of the page or of the margin. The text wraps around
 it. The layout of WeasyPrint (D15) puts each float at the line of its
 paragraph. So ivy puts such a float in another place than Word.
-Item 8 of "Found by the visual review" in `BACKLOG.md` names this for
-`msdoc`. On 2026-11-19 the maintainers asked for a design that places a
+On 2026-11-19 item 8 of "Found by the visual review" in `BACKLOG.md`
+named this for `msdoc`. On 2026-11-19 the maintainers asked for a design that places a
 float at its position on the page. They asked for a proposal and not for
 code (D3). Question 24 of `PLAN.md` asked the maintainers to choose.
 
@@ -380,8 +380,14 @@ The build of 2026-11-19 differs from the proposal in these places:
    in such a section.
 7. Wrap above and below gets the margin of point 14 in the shapes of
    `msdoc` and `docx`, and not only in the tables and the frames.
-8. The frames of `rtf`, the frames of `odf` that are anchored to the page,
-   `w:tblOverlap` and `allowOverlap` are not built.
+8. The frames of `rtf` and the frames of `odf` that are anchored to the
+   page are not built.
+9. On 2026-11-25 the property `-ivy-float-overlap: avoid` came. It moves a
+   page float down below the page floats before it that it covers. `docx`
+   gives it for `w:tblOverlap` never and for `allowOverlap` 0. A second
+   layout of the page keeps the place that the first layout gave such a
+   float. LibreOffice 26.8 moves such a table in the same way. It does not
+   move such a picture, and ivy moves it, as ECMA-376 says.
 
 The restore of the saved state of a page also no longer keeps the name of
 a running element that the page added. The page lost the rest of a float

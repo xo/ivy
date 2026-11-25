@@ -28,3 +28,19 @@ func (e *Engine) hostTeXFile(name string) ([]byte, string, bool) {
 	}
 	return nil, "", false
 }
+
+// readJobFile reads a file of the run that a document names, such as
+// \jobname.bbl or the .bib of \bibliography. Upstream reads it from the
+// disk with readDocFile. A run of ivy has no disk, so it reads the file
+// with the resolver of the options, which reads the folder of the document
+// first.
+func (e *Engine) readJobFile(name string) ([]byte, error) {
+	data, err := readDocFile(name)
+	if err == nil {
+		return data, nil
+	}
+	if data, _, ok := e.hostTeXFile(name); ok {
+		return data, nil
+	}
+	return nil, err
+}

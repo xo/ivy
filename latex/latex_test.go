@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -143,10 +144,9 @@ func TestPlain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// \hsize of 4in and \vsize of 3in, with a margin of 72 TeX points
-	w, h := p.Size()
-	if w < 400 || w > 450 || h < 300 || h > 400 {
-		t.Errorf("expected a page of about 431x361, got: %gx%g", w, h)
+	// plain TeX takes the paper of pdfTeX, US Letter
+	if w, h := p.Size(); math.Abs(float64(w)-612) > 0.01 || math.Abs(float64(h)-792) > 0.01 {
+		t.Errorf("expected a page of 612x792, got: %gx%g", w, h)
 	}
 	r := draw(t, d, 0)
 	if !strings.Contains(r.text(), "plain") || !strings.Contains(r.String(), "fill [") {
@@ -280,6 +280,67 @@ func TestFigures(t *testing.T) {
 	}
 }
 
+// TestFigureAngle makes sure that the key angle of \includegraphics turns
+// the image: a red image twice as wide as high becomes higher than wide.
+func TestFigureAngle(t *testing.T) {
+	t.Parallel()
+	dir := fstest.MapFS{"fig.png": {Data: fixture.PNG(20, 10, color.NRGBA{255, 0, 0, 255})}}
+	tests := []struct {
+		opts string
+		turn bool
+	}{
+		{"width=2in", false},
+		{"width=2in,angle=90", true},
+		{"angle=90,width=1in", true},
+		{"width=2in,angle=-90", true},
+	}
+	for _, test := range tests {
+		t.Run(test.opts, func(t *testing.T) {
+			t.Parallel()
+			d := open(t, `\documentclass{article}\usepackage{graphicx}\begin{document}
+\includegraphics[`+test.opts+`]{fig.png}
+\end{document}`, WithDir(dir))
+			p, err := d.Page(t.Context(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			img, err := ivy.RenderImage(t.Context(), p, 72, color.White)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := colorBounds(img, color.NRGBA{255, 0, 0, 255})
+			if r.Empty() {
+				t.Fatal("expected the red image on the page")
+			}
+			if turned := r.Dy() > r.Dx(); turned != test.turn {
+				t.Errorf("expected the image turned %t, got a box of %dx%d", test.turn, r.Dx(), r.Dy())
+			}
+		})
+	}
+}
+
+// colorBounds returns the bounds of the pixels of img within 8 of c in each
+// channel.
+func colorBounds(img image.Image, c color.NRGBA) image.Rectangle {
+	var r image.Rectangle
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			cr, cg, cb, _ := img.At(x, y).RGBA()
+			if near8(cr, c.R) && near8(cg, c.G) && near8(cb, c.B) {
+				r = r.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	return r
+}
+
+// near8 reports whether the channel a of a color is within 8 of b.
+func near8(a uint32, b uint8) bool {
+	d := int(a>>8) - int(b)
+	return d >= -8 && d <= 8
+}
+
 // hasColor reports whether img holds a pixel within 8 of c in each channel.
 func hasColor(img image.Image, c color.NRGBA) bool {
 	b := img.Bounds()
@@ -313,6 +374,43 @@ func TestInputDir(t *testing.T) {
 	d := open(t, `\input chapter \bye`, WithDir(dir))
 	if text := draw(t, d, 0).text(); !strings.Contains(text, "chapter") {
 		t.Errorf("expected the text of the file of \\input, got: %q", text)
+	}
+}
+
+// TestWithName makes sure that the job name of WithName gives the document
+// its .bbl file, and that a name with a slash is no name (D66).
+func TestWithName(t *testing.T) {
+	t.Parallel()
+	dir := fstest.MapFS{
+		"paper.bbl": {Data: []byte(`\begin{thebibliography}{1}
+\bibitem{knuth} Donald Knuth. \newblock The TeXbook.
+\end{thebibliography}`)},
+	}
+	const src = `\documentclass{article}\begin{document}
+See \cite{knuth}.
+\bibliography{refs}
+\end{document}`
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"paper", true},
+		{"", false},
+		{"other", false},
+		{"../paper", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			d := open(t, src, WithDir(dir), WithName(test.name))
+			text := draw(t, d, 0).text()
+			if got := strings.Contains(text, "TeXbook"); got != test.want {
+				t.Errorf("expected the bibliography %t, got: %q", test.want, text)
+			}
+			if got := strings.Contains(text, "[1]"); got != test.want {
+				t.Errorf("expected the number of the citation %t, got: %q", test.want, text)
+			}
+		})
 	}
 }
 

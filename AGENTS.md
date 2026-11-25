@@ -12,9 +12,12 @@ A rendering is good enough when a person can review the document with it
 (D5). ivy does not try to render a document exactly as the program that made
 it.
 
-On 2026-11-17 phases 1 to 6 are done: the document API, the previews and
+On 2026-11-25 phases 1 to 7 are done: the document API, the previews and
 pages of the formats of phase 1, the display list, the fonts, XPS, PDF, the
-layout of HTML and CSS, the ebooks, the Office formats, and DjVu. The survey of the formats is in
+layout of HTML and CSS, the ebooks, the Office formats, DjVu and the PDF
+writer. Phases 8a and 8b give LaTeX, and part of phase 8d gives the
+equations of the Office formats, MathML and OpenDocument. The survey of the
+formats is in
 `docs/FORMATS.md`, and the open questions are at the end of `docs/PLAN.md`.
 
 [okage]: https://github.com/xo/okage
@@ -46,7 +49,7 @@ every other agent read the same rules. Edit this file, not `CLAUDE.md`.
 | writing or changing the public API, or naming a type or a function | [docs/API.md](docs/API.md), then D11 |
 | adding a format, or starting work on one | `docs/FORMATS.md`, then "The layout of the packages" in `docs/API.md`, then D6, D10 and D11 |
 | naming a package, or giving a package a module of its own | D6 |
-| working on PDF, EPS or Illustrator | D14, then the decisions that amend it: D16, D17 and D20. Then D18 and D19 |
+| working on PDF, EPS or Illustrator | D14, then the decisions that amend it, D16 and D20, and D17, which amends D16. Then D18 and D19 |
 | working on the PDF writer, `pdf/pdfenc` | D58, then D10 and okage D68 |
 | working on the color management of the package `icc` | D61, then D16 and `internal/moxcms/SUBSET.md` |
 | working on the layout of HTML and CSS | D15, then D7 |
@@ -129,6 +132,12 @@ question 30.
 
     Reading any repository, for example with `gh api`, is allowed.
 
+14. Close a resource with `defer f.Close()`. Do not wrap the call in a
+    closure that drops its error, such as `defer func() { _ = f.Close() }()`,
+    and do not write `_ = f.Close()`. The configuration of golangci-lint
+    lets errcheck accept an unchecked `Close`. A closure is right only when
+    it checks the error, such as in a test.
+
 When the maintainers answer a new question, the answer becomes a decision,
 and a rule that comes from it goes here.
 
@@ -146,7 +155,7 @@ for its documents.
 
 ## Layout
 
-On 2026-11-16 the repository holds these files:
+On 2026-11-25 the repository holds these files:
 
 | Path | What it holds |
 | --- | --- |
@@ -162,6 +171,7 @@ On 2026-11-16 the repository holds these files:
 | `docs/UPSTREAM.md` | the rules for code that ivy copies or ports |
 | `docs/upstream/upstreams.tsv` | the projects that ivy copies or ports, with their commits |
 | `docs/decisions/` | the decisions, one file each, with an index |
+| `docs/gallery/` | the pages of the gallery of `README.md`, which `go run ./cmd/gallery` in the folder `test` draws from the corpus of the review |
 | `.golangci.yml`, `.github/workflows/test.yml` | the linters and CI |
 | `*.go` in the root | the package `ivy`: the document API of D11, and the tests of the documents, the skills and the imports |
 | `odf/`, `docx/`, `xlsx/`, `pptx/`, `iwork/`, `ora/`, `ps/`, `camera/`, `comic/`, `psd/` | the formats of phase 1, each with its tests and its `testdata/`. Phase 5 gives the pages of `odf`, `docx`, `xlsx` and `pptx`: the texts and the sheets through the layout, and the slides and the drawings on the display list |
@@ -192,11 +202,12 @@ On 2026-11-16 the repository holds these files:
 | `internal/fontdb/` | the font database of a program, from `ivy.Config.Fonts`, the Go fonts and the fonts of the system, which the layout, the metafiles and the charts share (D23, D24) |
 | `internal/chart/` | the charts of DrawingML, of Office 2016 (cx:chartSpace) and of OpenDocument: ivy lays them out and draws them onto the display list as Office and LibreOffice do, with the scales of the axes of Excel and the fonts of fontdb (D27) |
 | `internal/offcrypto/`, `odf/internal/odfcrypt/` | the encryption of MS-OFFCRYPTO (Agile, Standard, RC4 CryptoAPI and RC4), and the encryption of OpenDocument (D12, D24) |
-| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24), and Latin Modern for LaTeX in `fonts/lm`, which `fonts.TeX` gives apart from `fonts.FS`, under the GUST Font License (D62, D65) |
+| `fonts/` | the module `github.com/xo/ivy/fonts`: Liberation, Carlito and Caladea, with the metrics of the fonts of Office, under the SIL Open Font License (D24), Droid Sans Fallback for the characters of Chinese, Japanese and Korean in `fonts/droid`, under the Apache License 2.0, and Latin Modern for LaTeX in `fonts/lm`, which `fonts.TeX` gives apart from `fonts.FS`, under the GUST Font License (D62, D65) |
 | `internal/ccitt/`, `internal/jbig2/`, `internal/jpeg2000/`, `internal/moxcms/` | the codecs and the color management of the port of hayro (D16, D17). `internal/moxcms/assets` holds the default CMYK profile, which `pdf`, `internal/jpeg2000` and `icc` share (D61) |
 | `icc/` | the public package of color management for iv: an image converted to sRGB with an ICC profile, with the default CMYK profile, or with CICP code points, over `internal/moxcms` (D61) |
 | `internal/display/`, `internal/font/` | the display list and the fonts of D10. The layout also reads EMF and WMF, and draws the objects of a format, such as the charts |
 | `psd/internal/oovpsd/` | the copy of github.com/oov/psd (D7) |
+| `internal/formula/` | the equations of Office Math, MathML and the formulas of OpenDocument, laid out with `texmath` of okage and drawn as an object of the layout |
 | `internal/raster/`, `internal/zipdoc/`, `internal/ooxml/` | the code that the formats share: raster images and pages, zip archives, Office Open XML |
 | `internal/fixture/` | the files that the tests build in memory |
 | `test/` | the test module, with the oracles (D13) |
@@ -219,7 +230,7 @@ Before you stage a change to a document, make sure of these facts:
 3. A new decision has a row in `docs/decisions/README.md`.
 4. A link to another document of this repository goes to a file that exists.
 
-On 2026-11-21 the `go.mod` of ivy requires okage v0.20.0 and magic v0.9.1.
+On 2026-11-24 the `go.mod` of ivy requires okage v0.20.1 and magic v0.9.1.
 If a change needs a commit of okage or magic that is pushed and not tagged,
 require it as a pseudo-version. When okage and magic tag that commit,
 require the tag. A change that needs a commit of okage or magic that is not

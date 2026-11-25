@@ -263,7 +263,14 @@ func (c *converter) chart(n roxmltree.Node, w, h float64) bool {
 	buf, err := c.d.doc.ReadPart(r.Target)
 	var ch *chart.Chart
 	if err == nil {
-		ch, err = chart.Parse(buf, chart.Options{Theme: c.theme, Config: c.d.cfg, Fonts: fontdb.Of(c.d.cfg), Width: w, Height: h})
+		ch, err = chart.Parse(buf, chart.Options{
+			Theme:  c.theme,
+			Config: c.d.cfg,
+			Fonts:  fontdb.Of(c.d.cfg),
+			Style:  func() []byte { return chart.StylePart(c.d.doc, r.Target, c.lim) },
+			Width:  w,
+			Height: h,
+		})
 	}
 	if err != nil {
 		c.log.Warn("docx: chart left out", "part", r.Target, "err", err)
@@ -400,6 +407,10 @@ func anchorX(anchor, align string, x, w, colWidth float64, sec *section) float64
 // position from the margin or from the page, floats at that position, in a
 // section of one column (D60). A drawing above and below text then has a
 // margin to the right side of the column, so that no line fits beside it.
+// Such a drawing with allowOverlap off moves down below the floats of the
+// page that it covers.
+// The text wraps around a drawing on the sides of its wrapText, so that
+// the text is on both sides of a drawing in the middle of the column (D63).
 func (c *converter) anchorDrawing(n roxmltree.Node) {
 	w, h := extent(n)
 	g, ok := child(n, "graphic")
@@ -407,7 +418,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		return
 	}
 	var ph, pv position
-	wrap := "wrapNone"
+	wrap, wrapText := "wrapNone", ""
 	for e := range n.Children() {
 		if !e.IsElement() {
 			continue
@@ -418,7 +429,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		case "positionV":
 			pv = readPosition(e)
 		case "wrapNone", "wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom":
-			wrap = name
+			wrap, wrapText = name, ooxml.Attr(e, "wrapText")
 		}
 	}
 	sec := c.sections[c.section]
@@ -444,6 +455,8 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	if c.margin == "" && sec.cols <= 1 {
 		position = floatPosition(pv.relative, pv.align, pv.offset)
 	}
+	overlap := ooxml.Attr(n, "allowOverlap")
+	avoid := position != "" && (overlap == "0" || overlap == "false")
 	var s css
 	switch {
 	case wrap == "wrapTopAndBottom" && position != "":
@@ -453,6 +466,9 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		s.set("margin-top", pt(distT))
 		s.set("margin-bottom", pt(distB))
 		s.set("-ivy-float-position", position)
+		if avoid {
+			s.set("-ivy-float-overlap", "avoid")
+		}
 	case wrap == "wrapSquare" || wrap == "wrapTight" || wrap == "wrapThrough":
 		if x+w/2 > colWidth/2 {
 			s.set("float", "right")
@@ -468,9 +484,13 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		case position != "":
 			s.set("margin-top", pt(distT))
 			s.set("-ivy-float-position", position)
+			if avoid {
+				s.set("-ivy-float-overlap", "avoid")
+			}
 		case (pv.relative == "paragraph" || pv.relative == "line") && pv.offset > 0:
 			s.set("margin-top", pt(pv.offset))
 		}
+		s.set("-ivy-wrap-flow", wrapFlow(wrapText)+" "+pt(max(distL, distR)))
 	case wrap == "wrapTopAndBottom":
 		s.set("display", "block")
 		s.set("margin-left", pt(max(x, 0)))
@@ -501,6 +521,21 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
 	c.graphic(g, w, h, docAlt(n))
 	c.w.WriteString("</span>")
+}
+
+// wrapFlow returns the keyword of -ivy-wrap-flow for the side of the text
+// around a drawing: the wrapText of wp:wrapSquare, wp:wrapTight and
+// wp:wrapThrough, or the side of the w10:wrap of a VML shape (D63).
+func wrapFlow(side string) string {
+	switch side {
+	case "left":
+		return "start"
+	case "right":
+		return "end"
+	case "largest":
+		return "maximum"
+	}
+	return "both"
 }
 
 // vmlLength returns a length of the style of a VML shape, such as "72pt"

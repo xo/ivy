@@ -282,7 +282,7 @@ func openIvy(ctx context.Context, path, kind string, cfg ivy.Config) (*ivyDoc, t
 	}
 	st, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
+		f.Close()
 		return nil, 0, fmt.Errorf("reading the size of the file: %w", err)
 	}
 	d := &ivyDoc{file: f, log: newLogCollector()}
@@ -290,11 +290,11 @@ func openIvy(ctx context.Context, path, kind string, cfg ivy.Config) (*ivyDoc, t
 	start := time.Now()
 	doc, err := call(ctx, func() (ivy.Document, error) {
 		src := io.NewSectionReader(f, 0, st.Size())
-		return OpenIvy(ctx, format, src, cfg, filepath.Dir(path))
+		return OpenIvy(ctx, format, src, cfg, path)
 	})
 	if err != nil {
 		if !errors.Is(err, errStuck) {
-			_ = f.Close()
+			f.Close()
 		}
 		return d, time.Since(start), fmt.Errorf("opening with %s: %w", format.Name, err)
 	}
@@ -335,10 +335,10 @@ func (d *ivyDoc) render(ctx context.Context, n int, dpi float32) (image.Image, e
 // close closes the document and its file.
 func (d *ivyDoc) close() {
 	if d.doc != nil {
-		_ = d.doc.Close()
+		d.doc.Close()
 	}
 	if d.file != nil {
-		_ = d.file.Close()
+		d.file.Close()
 	}
 }
 
@@ -353,7 +353,7 @@ func ivyMediaBox(ctx context.Context, path string, cfg ivy.Config, n int, dpi fl
 	}
 	st, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
+		f.Close()
 		return nil, fmt.Errorf("reading the size of the file: %w", err)
 	}
 	img, err := call(ctx, func() (image.Image, error) {
@@ -362,7 +362,7 @@ func ivyMediaBox(ctx context.Context, path string, cfg ivy.Config, n int, dpi fl
 		if err != nil {
 			return nil, fmt.Errorf("opening with pdf: %w", err)
 		}
-		defer func() { _ = doc.Close() }()
+		defer doc.Close()
 		page, err := doc.Page(ctx, n)
 		if err != nil {
 			return nil, fmt.Errorf("getting the page: %w", err)
@@ -375,7 +375,7 @@ func ivyMediaBox(ctx context.Context, path string, cfg ivy.Config, n int, dpi fl
 	})
 	// a stuck call keeps the file, as openIvy does
 	if !errors.Is(err, errStuck) {
-		_ = f.Close()
+		f.Close()
 	}
 	return img, err
 }
@@ -386,18 +386,22 @@ func FormatFor(kind string) (ivy.Format, bool) {
 	return formatFor(kind)
 }
 
-// OpenIvy opens src with format and the configuration cfg, as render does.
-// An HTML or Markdown file reads the files that it links to from the
-// folder dir (D22), and a TeX document reads its figures, its inputs and
-// its bibliography from it (D65). The manifest fetches them as assets.
-func OpenIvy(ctx context.Context, format ivy.Format, src ivy.Source, cfg ivy.Config, dir string) (ivy.Document, error) {
+// OpenIvy opens src, the file at path, with format and the configuration
+// cfg, as render does. An HTML or Markdown file reads the files that it
+// links to from the folder of path (D22), and a TeX document reads its
+// figures, its inputs and its bibliography from it (D65). The manifest
+// fetches them as assets. A TeX document takes the name of the file as its
+// job name, so that it reads its .bbl file (D66).
+func OpenIvy(ctx context.Context, format ivy.Format, src ivy.Source, cfg ivy.Config, path string) (ivy.Document, error) {
+	dir := filepath.Dir(path)
 	switch format.Name {
 	case html.Format.Name:
 		return html.Open(ctx, src, html.WithConfig(cfg), html.WithDir(os.DirFS(dir)))
 	case markdown.Format.Name:
 		return markdown.Open(ctx, src, markdown.WithConfig(cfg), markdown.WithDir(os.DirFS(dir)))
 	case latex.Format.Name:
-		return latex.Open(ctx, src, latex.WithConfig(cfg), latex.WithDir(os.DirFS(dir)))
+		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		return latex.Open(ctx, src, latex.WithConfig(cfg), latex.WithDir(os.DirFS(dir)), latex.WithName(name))
 	}
 	return format.Open(ctx, src, cfg)
 }

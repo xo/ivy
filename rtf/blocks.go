@@ -16,6 +16,7 @@ var lineRatios = map[string]float64{
 	"arial": 1.1499, "liberation sans": 1.1499, "helvetica": 1.1499,
 	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
+	"verdana": 1.2153, "tahoma": 1.207,
 }
 
 // escape writes s to b with the characters of XML escaped. It leaves out
@@ -289,16 +290,16 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	switch {
 	case p.line > 0 && p.lineMultiple:
 		s.set("line-height", num(min(float64(p.line)/240, 10)*ratio))
-		// Word puts the extra space of the lines below their text
-		if p.line > 240 {
-			s.set("-ivy-line-multiple", num(min(float64(p.line)/240, 10)))
-		}
+		// Word puts the line gap of a single line above its text, and
+		// the extra space of the lines below it
+		s.set("-ivy-line-multiple", num(min(float64(p.line)/240, 10)))
 	case p.line > 0 && float64(p.line)/20 > ratio*size:
 		s.set("line-height", pt(p.line))
 	case p.line < 0:
 		s.set("line-height", pt(-p.line))
 	default:
 		s.set("line-height", num(ratio))
+		s.set("-ivy-line-multiple", "1")
 	}
 	switch p.align {
 	case 'c':

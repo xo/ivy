@@ -13,7 +13,8 @@ Before you change anything, read three things:
 Do not decide an open question on your own. Add it to the end of
 `docs/PLAN.md`, and ask a maintainer.
 
-On 2026-11-16 phase 1 is done. The survey of the formats is in
+On 2026-11-25 phases 1 to 7 are done, with phases 8a and 8b and part of
+phase 8d. `docs/PLAN.md` gives the status of each phase. The survey of the formats is in
 [`docs/FORMATS.md`](docs/FORMATS.md), and the design of the API is in
 [`docs/API.md`](docs/API.md).
 

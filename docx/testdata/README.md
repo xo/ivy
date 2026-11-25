@@ -23,6 +23,7 @@ holds the word `Tn` for its row n, and a frame holds the word `Frame`.
 | `float-f-bottom.docx` | the frame, at the bottom of the margin (`w:yAlign`) | after P01 |
 | `float-t-bottom.docx` | the table, at the bottom of the margin (`w:tblpYSpec`) | before P02 |
 | `float-t-two.docx` | two tables at the same place | before P02 and before P05 |
+| `float-t-never.docx` | the tables of `float-t-two.docx`, the second with `w:tblOverlap` "never" | before P02 and before P05 |
 | `float-t-loop3.docx` | a table of 12 rows, at the top of the margin | before P10 |
 | `float-t-loop2.docx` | the same table | before P12 |
 | `float-t-nofit.docx` | a table of 6 rows, 9.5 inches below the top of the page | before P06 |

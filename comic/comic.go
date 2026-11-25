@@ -233,7 +233,7 @@ func (d *Document) Describe(ctx context.Context) (ivy.Info, error) {
 	if err != nil {
 		return ivy.Info{}, err
 	}
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	buf, err := raster.ReadAll(rc, d.lim.MaxMemory)
 	if err != nil {
 		return ivy.Info{}, err
@@ -334,7 +334,7 @@ func (d *Document) config(ctx context.Context, e entry) (image.Point, error) {
 	if err != nil {
 		return image.Point{}, err
 	}
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	buf, err := io.ReadAll(io.LimitReader(rc, headerLimit))
 	if err != nil {
 		return image.Point{}, fmt.Errorf("reading %s: %w: %w", e.name, ivy.ErrFormat, err)
@@ -355,7 +355,7 @@ func (d *Document) decode(ctx context.Context, e entry) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	buf, err := raster.ReadAll(rc, d.lim.MaxMemory)
 	if err != nil {
 		return nil, err

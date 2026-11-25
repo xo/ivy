@@ -63,10 +63,10 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	case "center":
 		x = (colWidth - w) / 2
 	}
-	wrap := ""
+	wrap, side := "", ""
 	for e := range shape.Children() {
 		if e.IsElement() && e.TagName().Name() == "wrap" {
-			wrap = ooxml.Attr(e, "type")
+			wrap, side = ooxml.Attr(e, "type"), ooxml.Attr(e, "side")
 		}
 	}
 	if sec.cols > 1 {
@@ -99,6 +99,7 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		case y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin":
 			s.set("margin-top", pt(y))
 		}
+		s.set("-ivy-wrap-flow", wrapFlow(side)+" 9pt")
 	case "topAndBottom":
 		if position != "" {
 			s.set("float", "left")

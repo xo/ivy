@@ -529,7 +529,7 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 	}
 	// The axis of categories, or of x.
 	var catDepth, catHalf float64
-	if pl.hasTable() {
+	if pl.tableOnCats() {
 		catDepth = pl.catL.depth
 	} else if c.cat.shown() {
 		catDepth = pl.catL.depth + gapLabel + pl.tickOut(c.cat)
@@ -569,6 +569,11 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 		if depth2 > 0 {
 			top = max(top, depth2)
 		}
+		if pl.hasTable() {
+			// The data table goes below the labels of the values.
+			left = max(left, pl.tableNames())
+			bottom += pl.tableHeight()
+		}
 		return left, max(top, 2), right, bottom
 	}
 	left, bottom, top = valDepth, catDepth, max(valHalf, 2)
@@ -595,7 +600,7 @@ func (pl *plane) categoryLabels() catLabels {
 	st := c.cat.text
 	lh := st.size * lineHeight
 	var out catLabels
-	if pl.hasTable() {
+	if pl.tableOnCats() {
 		// the data table holds the names of the categories
 		out.depth = pl.tableHeight()
 		return out
@@ -995,7 +1000,7 @@ func (pl *plane) catAxis(at float64) {
 	if tickCol.A == 0 {
 		tickCol = pl.axisColor(axis{}, false)
 	}
-	if pl.hasTable() {
+	if pl.tableOnCats() {
 		// the lines of the data table take the place of the tick marks
 		return
 	}

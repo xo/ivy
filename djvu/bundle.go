@@ -137,7 +137,7 @@ func (b *bundle) file(c doc.Component, n int) ([]byte, error) {
 		return nil, fmt.Errorf("opening djvu component %q: %w", c.Name, errors.Join(err, ivy.ErrFormat))
 	}
 	// the document only reads the file, so the error of Close does not matter
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("reading djvu component %q: %w", c.Name, errors.Join(err, ivy.ErrFormat))

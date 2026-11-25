@@ -43,16 +43,39 @@ func TestLineNumbers(t *testing.T) {
 }
 
 // TestLineMultiple checks that a paragraph with a multiple line spacing
-// puts the extra space below its text, and that the pages leave out the
-// space before a paragraph at their top (D56).
+// puts the extra space below its text, that a single line puts its line
+// gap above its text, and that the pages leave out the space before a
+// paragraph at their top (D56).
 func TestLineMultiple(t *testing.T) {
 	body := `<w:p><w:pPr><w:spacing w:line="360" w:lineRule="auto"/></w:pPr><w:r><w:t>Spaced</w:t></w:r></w:p>` +
-		`<w:p><w:pPr><w:spacing w:line="360" w:lineRule="exact"/></w:pPr><w:r><w:t>Exact</w:t></w:r></w:p>`
+		`<w:p><w:pPr><w:spacing w:line="360" w:lineRule="exact"/></w:pPr><w:r><w:t>Exact</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:t>Single</w:t></w:r></w:p>` +
+		`<w:p><w:pPr><w:spacing w:line="120" w:lineRule="atLeast"/></w:pPr><w:r><w:t>Small</w:t></w:r></w:p>` +
+		`<w:p><w:pPr><w:spacing w:line="720" w:lineRule="atLeast"/></w:pPr><w:r><w:t>Tall</w:t></w:r></w:p>`
 	html, _ := convertHTML(t, fixture.DOCX(body))
 	if n := strings.Count(html, "-ivy-line-multiple: 1.5"); n != 1 {
 		t.Errorf("expected the multiple 1.5 once, got %d:\n%s", n, html)
 	}
+	if n := strings.Count(html, "-ivy-line-multiple: 1;"); n != 2 {
+		t.Errorf("expected the multiple 1 twice, for the single line and the small line, got %d:\n%s", n, html)
+	}
 	if !strings.Contains(styleSheet, "-ivy-page-top-space: discard") {
 		t.Error("expected the style sheet to leave out the space before a paragraph at the top of a page")
+	}
+}
+
+// TestLineMultipleGrid checks that a single line on a grid of lines keeps
+// its text in the middle of its lines of the grid, as in Word
+// (libreoffice/docx/mixed-orientation.docx).
+func TestLineMultipleGrid(t *testing.T) {
+	body := `<w:p><w:r><w:t>Single</w:t></w:r></w:p>` +
+		`<w:p><w:pPr><w:spacing w:line="480" w:lineRule="auto"/></w:pPr><w:r><w:t>Double</w:t></w:r></w:p>` +
+		`<w:sectPr><w:docGrid w:type="lines" w:linePitch="326"/></w:sectPr>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	if strings.Contains(html, "-ivy-line-multiple: 1;") {
+		t.Errorf("expected no multiple for a single line on the grid:\n%s", html)
+	}
+	if !strings.Contains(html, "-ivy-line-multiple: 2") {
+		t.Errorf("expected the multiple 2:\n%s", html)
 	}
 }

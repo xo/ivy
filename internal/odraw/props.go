@@ -10,6 +10,7 @@ const (
 	PropTextBottom         = 0x0084
 	PropWrapText           = 0x0085
 	PropAnchorText         = 0x0087
+	PropTextFlow           = 0x0088
 	PropCropTop            = 0x0100
 	PropCropBottom         = 0x0101
 	PropCropLeft           = 0x0102
@@ -79,6 +80,15 @@ const (
 	PictureGray       = 0x00000004
 	PictureUseBiLevel = 0x00020000
 	PictureUseGray    = 0x00040000
+)
+
+// The text flows of txflTextFlow, an MSOTXFL (MS-ODRAW 2.4.5).
+const (
+	TextFlowHorz  = 0
+	TextFlowTtoBA = 1
+	TextFlowBtoT  = 2
+	TextFlowTtoBN = 3
+	TextFlowVertN = 5
 )
 
 // The kinds of fills of fillType (MS-ODRAW 2.4.13).

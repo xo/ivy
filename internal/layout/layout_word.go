@@ -3,8 +3,9 @@
 //
 //   - -ivy-line-numbers draws the numbers of the lines of a section in the
 //     margin, as Word does, see numberLines.
-//   - -ivy-line-multiple puts the extra space of a multiple line spacing
-//     below the text of a line, see leadingShift.
+//   - -ivy-line-multiple puts the line gap of a single line above the
+//     text of a line, and the extra space of a multiple line spacing below
+//     it, see leadingShift.
 //   - -ivy-page-top-space leaves out the space before the first block of a
 //     page or of a column after a break that is not forced, see
 //     layoutContext.discardsSpaceBefore.
@@ -80,7 +81,9 @@ func numberLines(lc *layoutContext, root *Box, state lineNumberState) lineNumber
 		for _, child := range box.Children {
 			switch {
 			case child.Kind == KindLine:
-				if !on || child.Height <= 0 {
+				// a row next to a float of -ivy-wrap-flow has one number,
+				// on its first part (D63)
+				if !on || child.Height <= 0 || child.extra().rowPart {
 					continue
 				}
 				lc.spend(1)
@@ -137,19 +140,22 @@ func numberLine(line, section *Box, value lineNumbers, n int) *Box {
 // of style up in its line, whose height is lineHeight. textHeight is the
 // height of the text of the box, from its ascent to its descent. A line of
 // a word processor with a multiple line spacing m is m times as high as a
-// single line. Word and LibreOffice put the text where it is in a single
-// line, of the height lineHeight / m, which has its line gap above the
-// text, and add the rest of the line below the text. CSS puts half of the
-// leading above the text and half below. So the top of the text moves
-// from (lineHeight - textHeight) / 2 to lineHeight/m - textHeight, and at
-// least to the top of the line. A multiple up to 1 keeps the rule of CSS.
+// single line. Word and LibreOffice put the whole line gap of a single
+// line, of the height lineHeight / m, above the text, and add the rest of
+// the line below the text. CSS puts half of the leading above the text and
+// half below. So the top of the text moves from (lineHeight - textHeight) /
+// 2 to lineHeight/m - textHeight. It stays between the top of the line and
+// the place where the text ends at the bottom of the line. A single line,
+// of the multiple 1, has its whole leading above the text. A multiple
+// below 1, and a line that is not higher than its text, keep the rule of
+// CSS. The shift is negative when the text moves down.
 func leadingShift(style *Style, lineHeight, textHeight float64) float64 {
 	m, ok := style.Get("line_multiple").(Float)
-	if !ok || m <= 1 || lineHeight <= 0 {
+	if !ok || m < 1 || lineHeight <= textHeight {
 		return 0
 	}
-	half := (lineHeight - textHeight) / 2
-	return half - min(max(lineHeight/float64(m)-textHeight, 0), half)
+	leading := lineHeight - textHeight
+	return leading/2 - min(max(lineHeight/float64(m)-textHeight, 0), leading)
 }
 
 // strutTextHeight returns the height of the text of the strut of style,

@@ -412,7 +412,7 @@ func PictureRecolor(c Chain) drawingml.Recolor {
 }
 
 // BodyStyle returns the style of the text body of a shape: the insets, the
-// anchor and the wrap of the properties c.
+// anchor, the wrap and the direction of the properties c.
 func BodyStyle(c Chain) drawingml.BodyStyle {
 	var bs drawingml.BodyStyle
 	ins := []struct {
@@ -436,6 +436,15 @@ func BodyStyle(c Chain) drawingml.BodyStyle {
 		bs.AnchorCenter.Set(true)
 	}
 	bs.Wrap.Set(c.Value(PropWrapText, 0) != 2)
+	// the text flow of MSOTXFL (MS-ODRAW 2.4.5): the tops of the glyphs
+	// face the right side of the box and the lines go to the left, or the
+	// tops face the left side and the lines go to the right
+	switch c.Value(PropTextFlow, TextFlowHorz) {
+	case TextFlowTtoBA, TextFlowTtoBN, TextFlowVertN:
+		bs.Vert.Set("vert")
+	case TextFlowBtoT:
+		bs.Vert.Set("vert270")
+	}
 	return bs
 }
 

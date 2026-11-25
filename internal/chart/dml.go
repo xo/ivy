@@ -53,8 +53,12 @@ func Parse(buf []byte, opts Options) (c *Chart, err error) {
 	if c.text.font != "" {
 		c.font = c.text.font
 	}
+	ns, _ := root.TagName().Namespace()
 	if spPr, ok := child(root, "spPr"); ok {
 		c.fill, c.border = p.shapeColors(spPr)
+	} else if ns == nsChartEx && opts.Style != nil {
+		// Word and Excel draw the chart area of the style part.
+		c.fill, c.border = p.styleArea(opts.Style(), lim)
 	} else if _, ok := child(root, "printSettings"); ok {
 		// A chart of a sheet has the settings of its printing, and a white
 		// chart area with a border.
@@ -63,7 +67,7 @@ func Parse(buf []byte, opts Options) (c *Chart, err error) {
 	for i := range 36 {
 		c.colors = append(c.colors, accent(theme, i))
 	}
-	if ns, _ := root.TagName().Namespace(); ns == nsChartEx {
+	if ns == nsChartEx {
 		c.look = lookModern
 		p.chartEx(root, chart)
 	} else {

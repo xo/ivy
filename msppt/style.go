@@ -62,6 +62,9 @@ type cf struct {
 	// symFont is the font of the characters of a symbol font, from
 	// symbolTypeface.
 	symFont opt[int]
+	// pp9rt is the index of the record of the StyleTextProp9Atom of the
+	// run.
+	pp9rt opt[int]
 }
 
 // over sets each field of c that o sets.
@@ -75,6 +78,7 @@ func (c *cf) over(o *cf) {
 	c.size.over(o.size)
 	c.color.over(o.color)
 	c.position.over(o.position)
+	c.pp9rt.over(o.pp9rt)
 }
 
 // The bits of a PFMasks (MS-PPT 2.9.21).
@@ -106,7 +110,8 @@ const (
 	cfBold          = 1 << 0
 	cfItalic        = 1 << 1
 	cfUnderline     = 1 << 2
-	cfStyleFlags    = 0x3FF | 0xF<<10
+	cfPP9rt         = 0xF << 10
+	cfStyleFlags    = 0x3FF | cfPP9rt
 	cfTypeface      = 1 << 16
 	cfSize          = 1 << 17
 	cfColor         = 1 << 18
@@ -239,6 +244,9 @@ func readCF(b []byte) (cf, int, bool) {
 		}
 		if m&cfUnderline != 0 {
 			c.underline.set(f&4 != 0)
+		}
+		if m&cfPP9rt != 0 {
+			c.pp9rt.set(int(f >> 10 & 0xF))
 		}
 	}
 	if m&cfTypeface != 0 {

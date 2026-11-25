@@ -85,11 +85,11 @@ func TestOpen(t *testing.T) {
 	}
 	got := htmlOf(t, doc)
 	for _, want := range []string{
-		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; line-height: 1.1499; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, &#34;Microsoft YaHei&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
+		`<h1 style="margin-top: 12pt; margin-bottom: 6pt; line-height: 1.1499; -ivy-line-multiple: 1; font-size: 18pt; font-family: &#34;Liberation Sans&#34;, &#34;Microsoft YaHei&#34;, sans-serif"><span style="font-weight: bold; font-size: 18pt;`,
 		`<span style="font-weight: bold; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif">bold text</span>`,
 		`<span style="font-style: italic; font-size: 12pt;`,
 		"Unicode: éè € Ω.",
-		`<p style="text-align: center; line-height: 1.1499; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif"><span style="font-size: 20pt;`,
+		`<p style="text-align: center; line-height: 1.1499; -ivy-line-multiple: 1; font-size: 12pt; font-family: &#34;Liberation Serif&#34;, &#34;NSimSun&#34;, serif"><span style="font-size: 20pt;`,
 		"<table ",
 		`<col style="width: 249.3pt"/>`,
 		`border-left: 0.5pt solid #000000`,
@@ -541,7 +541,7 @@ func TestLineHeights(t *testing.T) {
 		want []string
 		not  []string
 	}{
-		{"single", pap{}, []run{{text: "x", chp: tnr}}, []string{`<p style="line-height: 1.1499;`}, []string{`<span style="font-size: 10pt; line-height`}},
+		{"single", pap{}, []run{{text: "x", chp: tnr}}, []string{`<p style="line-height: 1.1499; -ivy-line-multiple: 1;`}, []string{`<span style="font-size: 10pt; line-height`}},
 		{"at least", lspd(360, 0), []run{{text: "x", chp: tnr}}, []string{"line-height: 18pt"}, nil},
 		{"at least small", lspd(100, 0), []run{{text: "x", chp: tnr}}, []string{`<p style="line-height: 1.1499;`}, nil},
 		{"other font", pap{}, []run{{text: "x", chp: noto}}, []string{`<span style="font-size: 10pt; line-height: normal;`}, nil},

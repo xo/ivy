@@ -81,6 +81,7 @@ func (e *Engine) finalizePages() {
 	e.finalizeTOCPages()
 	e.finalizeIndexPages()
 	e.finalizeLabelPages()
+	e.logicalPageRefs() // ivy: the numbers of the pages (ivy_latex.go)
 }
 
 // carryCrossRefs hands this engine everything a previous pass learned that a

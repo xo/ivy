@@ -158,8 +158,12 @@ func (p *odfParser) chart(n roxmltree.Node) {
 		c.border = line
 	}
 	for e := range elements(n) {
-		if isElem(e, nsTable, "table") && p.table == nil {
+		switch {
+		case isElem(e, nsTable, "table") && p.table == nil:
 			p.readTable(e)
+		case e.TagName().Name() == "data-table" && c.table == nil:
+			// LibreOffice writes loext:data-table.
+			c.table = p.dataTable(e)
 		}
 	}
 	for e := range elements(n) {
@@ -330,9 +334,10 @@ func (p *odfParser) plotArea(n roxmltree.Node, class string) {
 		}
 	}
 	// LibreOffice draws the points of a line on the tick marks, and the
-	// bars between them.
+	// bars between them. With a data table, it draws each point in the
+	// middle of its column of the table.
 	if !c.cat.betweenSet {
-		c.cat.between, c.cat.betweenSet = false, true
+		c.cat.between, c.cat.betweenSet = c.table != nil, true
 		for _, pl := range c.plots {
 			if pl.kind == kindBar {
 				c.cat.between = true
@@ -545,6 +550,10 @@ func (p *odfParser) series(n roxmltree.Node, cats []string, k kind) *series {
 				}
 			}
 			i += repeat
+		case isElem(e, nsChart, "regression-curve") && len(s.trends) < maxTrends:
+			if t, ok := p.trendline(e, s); ok {
+				s.trends = append(s.trends, t)
+			}
 		}
 	}
 	if k == kindScatter {
@@ -884,4 +893,89 @@ func (o odfProps) labels() labels {
 	}[o.attr("label-position")]
 	l.text = o.text
 	return l
+}
+
+// odfTrends maps chart:regression-type to the kinds of trendlines, and
+// odfTrendNames to the names that LibreOffice gives them in a legend.
+var (
+	odfTrends = map[string]string{
+		"linear": "linear", "logarithmic": "log", "exponential": "exp", "power": "power",
+		"polynomial": "poly", "moving-average": "movingAvg",
+	}
+	odfTrendNames = map[string]string{
+		"linear": "Linear", "log": "Logarithmic", "exp": "Exponential", "power": "Power",
+		"poly": "Polynomial", "movingAvg": "Moving average",
+	}
+)
+
+// trendline reads chart:regression-curve of the series s, and its
+// chart:equation. It returns false for a curve of the type none.
+// LibreOffice writes some of the properties of the style with the prefix
+// loext.
+func (p *odfParser) trendline(n roxmltree.Node, s *series) (trendline, bool) {
+	st := p.props(ooxml.Attr(n, "style-name"))
+	kind, ok := odfTrends[st.attr("regression-type")]
+	if !ok {
+		return trendline{}, false
+	}
+	t := trendline{kind: kind, order: 2, period: 2}
+	if o, err := strconv.Atoi(st.attr("regression-max-degree")); err == nil && o >= 2 && o <= maxOrder {
+		t.order = o
+	}
+	if o, err := strconv.Atoi(st.attr("regression-period")); err == nil && o >= 2 && o <= maxPoints {
+		t.period = o
+	}
+	if f, ok := parseNumber(st.attr("regression-extrapolate-forward")); ok && f >= 0 && f < 1e9 {
+		t.forward = f
+	}
+	if f, ok := parseNumber(st.attr("regression-extrapolate-backward")); ok && f >= 0 && f < 1e9 {
+		t.backward = f
+	}
+	if st.attr("regression-force-intercept") == "true" {
+		if f, ok := parseNumber(st.attr("regression-intercept-value")); ok {
+			t.intercept, t.hasIntercept = f, true
+		}
+	}
+	t.name = st.attr("regression-name")
+	if t.name == "" && s.name != "" {
+		t.name = odfTrendNames[kind] + " (" + s.name + ")"
+	}
+	if len(t.name) > maxText {
+		t.name = t.name[:maxText]
+	}
+	t.color, t.hasColor = st.stroke()
+	switch st.graphic("stroke") {
+	case "none":
+		t.noLine = true
+	case "dash":
+		t.dash = "sysDash"
+	}
+	if w := length(st.graphic("stroke-width")); w > 0 && w < 100 {
+		t.width = w
+	}
+	for e := range elements(n) {
+		if isElem(e, nsChart, "equation") {
+			t.eq = ooxml.Attr(e, "display-equation") == "true"
+			t.r2 = ooxml.Attr(e, "display-r-square") == "true"
+			t.text = p.props(ooxml.Attr(e, "style-name")).text
+			break
+		}
+	}
+	return t, true
+}
+
+// dataTable reads the data table of a chart, loext:data-table, whose style
+// gives its lines, the keys of the legend and its text.
+func (p *odfParser) dataTable(n roxmltree.Node) *dataTable {
+	st := p.props(ooxml.Attr(n, "style-name"))
+	t := &dataTable{
+		horz:    st.attr("show-horizontal-border") == "true",
+		vert:    st.attr("show-vertical-border") == "true",
+		outline: st.attr("show-outline") == "true",
+		keys:    st.attr("show-keys") == "true",
+		text:    st.text,
+	}
+	t.line, t.hasLine = st.stroke()
+	t.noLine = st.graphic("stroke") == "none"
+	return t
 }

@@ -78,7 +78,7 @@ func TestOpen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer func() { _ = d.Close() }()
+			defer d.Close()
 			if n, err := d.PageCount(t.Context()); n != 1 || err != nil {
 				t.Fatalf("page count %d, %v", n, err)
 			}

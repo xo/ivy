@@ -14,9 +14,12 @@ page description, and XPS renders, as the section of phase 2 below says. PDF
 renders, as the section of phase 3 says. The layout of HTML and CSS puts the
 ebooks on pages, as the section of phase 4 says. The Office formats give
 their pages, as the section of phase 5 says, and DjVu gives its pages, as
-the section of phase 6 says. On 2026-11-19 phases 7a and 7b are done:
-`pdf/pdfenc` writes the pages of a document as a PDF file, with the text
-that a reader can search and copy (D58). These
+the section of phase 6 says. Phase 7 was done on 2026-11-21: `pdf/pdfenc`
+writes the pages of a document as a PDF file, with the text that a reader
+can search and copy, the links and the outline (D58). Phases 8a and 8b were
+done on 2026-11-21: the package `latex` sets LaTeX and plain TeX (D62, D65).
+On 2026-11-25 part of phase 8d came: `internal/formula` draws the equations
+of Office Math, MathML and OpenDocument with `texmath` of okage. These
 formats open, as the section of phase 1 below says:
 OpenDocument, Word, Excel and PowerPoint in Office Open XML, iWork,
 OpenRaster, Krita, PostScript and EPS, the RAW files of cameras, comic book
@@ -333,7 +336,7 @@ The test module compares each page with ddjvu of DjVuLibre, within a mean
 difference of 1.6. An indirect document returns `ErrUnsupported` (D26).
 The work that is left is under "Left by phase 6" in `BACKLOG.md`.
 
-### Phase 7. PDF output (9 to 14 weeks)
+### Phase 7. PDF output, done
 
 The package `pdf/pdfenc` writes the pages of a document as a PDF file,
 through the PDF writer of okage (D58). Each estimate is for one agent with
@@ -373,13 +376,31 @@ also uses. Each estimate is for one agent with a maintainer.
 Phase 8a and phase 8b were done on 2026-11-21, with the math of the
 engine of phase 8d, as "The build of phase 8a" in D62 says. The work that
 is left is under "Left by phase 8a" in `BACKLOG.md`. D65 says how a program
-gives the files of TeX.
+gives the files of TeX. On 2026-11-25 phase 8d gave the equations of Office
+Math in `docx`, of MathML in `html` and `epub`, and the formulas of the text
+documents of `odf`, through the package `internal/formula`. The equations of
+`pptx` and the formulas of the other documents of `odf` are under "LaTeX" in
+`BACKLOG.md`.
 
 The phases can overlap. Phase 2 and the start of phase 4 do not depend on
 each other, and the previews of phase 1 can continue while phase 2 starts.
 The long tail is not a phase. Each format of it waits until a user asks for
 it (D1). The first one is the interpreter of PostScript (D29). From
 2026-11-17 it gives the pages of PostScript and EPS files.
+
+### The text of a page (D64, 4 to 7 weeks)
+
+D64 gives a program the text of each page, and keeps the text of DjVu, PDF
+and PostScript in a PDF file that `pdfenc` writes. Each estimate is for one
+agent with a maintainer. Nothing of it is built on 2026-11-25.
+
+| Phase | What it gives | Estimate |
+| --- | --- | --- |
+| 64a. The text of DjVu in PDF | `display.TextMarker`, the marks of the zones of DjVu in `Draw`, and the invisible text of the PDF device | 1 to 2 weeks |
+| 64b. The capability | `ivy.Texter`, `TextSpan`, the text device and `display.TextOf`, and `Text` of each page type of the display list and of DjVu | 2 to 3 weeks |
+| 64c. The text of PDF and PostScript | the marks of hayro with `AsUnicode`, the invisible runs, and the oracles of Poppler and MuPDF | 1 to 2 weeks |
+
+Phase 64a needs no public API, and it can go first.
 
 ## Risks
 

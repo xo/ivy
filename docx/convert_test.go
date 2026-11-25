@@ -151,7 +151,7 @@ func TestConvert(t *testing.T) {
 		`<img src="media/1.png" alt="A red box" style="width: 72pt; height: 36pt"/>`,
 		`<p style="break-before: page; `,
 		`<span class="pg"></span> of <span class="pgs"></span>`,
-		`position: running(hf1)`,
+		`<div style="position: running(hf1); display: flow-root">`,
 		`text-transform: uppercase`,
 		`<span style="text-decoration-line: underline">loop</span>`,
 	} {

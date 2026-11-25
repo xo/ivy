@@ -64,7 +64,7 @@ func FuzzDecode(f *testing.F) {
 		if cfg, err := png.DecodeConfig(r); err == nil {
 			columns = uint16(cfg.Width)
 		}
-		_ = r.Close()
+		r.Close()
 	}
 	paths, _ := filepath.Glob(filepath.Join("testdata", "streams", "*.bin"))
 	for _, path := range paths {

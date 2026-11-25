@@ -4,7 +4,7 @@ go 1.27.4
 
 require (
 	github.com/xo/ivy v0.0.0
-	github.com/xo/okage v0.20.0
+	github.com/xo/okage v0.20.1
 	golang.org/x/image v0.47.0
 )
 

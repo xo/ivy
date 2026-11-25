@@ -32,6 +32,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
@@ -56,8 +57,9 @@ var Format = ivy.Format{
 type Option func(*options)
 
 type options struct {
-	cfg ivy.Config
-	dir fs.FS
+	cfg  ivy.Config
+	dir  fs.FS
+	name string
 }
 
 // WithConfig sets the configuration that every format shares.
@@ -75,6 +77,16 @@ func WithConfig(cfg ivy.Config) Option {
 func WithDir(dir fs.FS) Option {
 	return func(o *options) {
 		o.dir = dir
+	}
+}
+
+// WithName gives the job name of the document: the name of its input file
+// without the extension, such as "report" for report.tex. The engine reads
+// the files of the run that carry the job name, such as report.bbl, from the
+// folder of WithDir. Without it, the job name is "texput", as in TeX.
+func WithName(name string) Option {
+	return func(o *options) {
+		o.name = name
 	}
 }
 
@@ -151,6 +163,16 @@ func isText(data []byte) bool {
 	return true
 }
 
+// jobName returns the job name that the engine takes for the name of
+// WithName. A name that is empty, or that holds a slash, is no name, and
+// the engine then takes "texput" (D66).
+func jobName(name string) string {
+	if strings.Contains(name, "/") {
+		return ""
+	}
+	return name
+}
+
 // run runs the engine once, and keeps its pages.
 func (d *Document) run(ctx context.Context) (*engine.Doc, error) {
 	d.mu.Lock()
@@ -165,6 +187,7 @@ func (d *Document) run(ctx context.Context) (*engine.Doc, error) {
 	doc, err := engine.Compile(ctx, d.src, engine.RunOptions{
 		Faces:    faces,
 		Resolve:  res.resolve,
+		JobName:  jobName(d.opts.name),
 		MaxPages: lim.MaxObjects,
 	})
 	if err != nil {
@@ -244,8 +267,9 @@ var (
 )
 
 // Size satisfies the ivy.Page interface. It is the paper of the class, or
-// the text of the page with a margin of one inch when the document names
-// no paper.
+// US Letter for a document of plain TeX, as in pdfTeX. A LaTeX document
+// that names no paper and has no class takes the text of the page with a
+// margin of one inch.
 func (p *Page) Size() (width, height float32) {
 	return p.w, p.h
 }

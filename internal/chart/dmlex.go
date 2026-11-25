@@ -1,6 +1,7 @@
 package chart
 
 import (
+	"image/color"
 	"math"
 	"slices"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/xo/okage/roxmltree"
 
+	"github.com/xo/ivy"
 	"github.com/xo/ivy/internal/ooxml"
 )
 
@@ -61,6 +63,48 @@ func (p *dmlParser) chartEx(root, chart roxmltree.Node) {
 			p.plotAreaEx(e, data)
 		}
 	}
+}
+
+// StylePart reads the chart style part, cs:chartStyle, that the chart part
+// part of doc links to. It returns nil when the part has no style part, or
+// when it cannot be read.
+func StylePart(doc *ooxml.Document, part string, lim ivy.Limits) []byte {
+	rels, err := doc.Relationships(part, lim)
+	if err != nil {
+		return nil
+	}
+	for _, r := range rels {
+		if r.External || !r.TypeIs("chartStyle") {
+			continue
+		}
+		buf, err := doc.ReadPart(r.Target)
+		if err != nil {
+			return nil
+		}
+		return buf
+	}
+	return nil
+}
+
+// styleArea returns the fill and the line of the chart area of the chart
+// style part buf, from the cs:spPr of its cs:chartArea. A missing or a
+// noFill color is transparent.
+func (p *dmlParser) styleArea(buf []byte, lim ivy.Limits) (fill, line color.NRGBA) {
+	if len(buf) == 0 {
+		return fill, line
+	}
+	doc, err := ooxml.ParseXML(buf, lim)
+	if err != nil || doc.RootElement().TagName().Name() != "chartStyle" {
+		return fill, line
+	}
+	area, ok := child(doc.RootElement(), "chartArea")
+	if !ok {
+		return fill, line
+	}
+	if spPr, ok := child(area, "spPr"); ok {
+		fill, line = p.shapeColors(spPr)
+	}
+	return fill, line
 }
 
 // exData reads cx:data.

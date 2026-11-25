@@ -16,12 +16,14 @@ func FuzzParse(f *testing.F) {
 		f.Add(test.xml)
 	}
 	f.Add([]byte(odfChart))
+	f.Add(odfExtras())
 	f.Add(exXML("T", "waterfall", "", []string{"a", "b"}, []float64{1, -2}))
 	f.Add(exXML("T", "boxWhisker", "", []string{"a", "a", "b"}, []float64{1, 2, 3}))
 	f.Add(treeXML("treemap", `<cx:dataLabels><cx:visibility categoryName="1" value="1"/></cx:dataLabels>`+
 		`<cx:layoutPr><cx:parentLabelLayout val="banner"/></cx:layoutPr>`, false))
 	f.Add(treeXML("sunburst", `<cx:dataLabels><cx:visibility categoryName="1"/></cx:dataLabels>`, false))
-	f.Add(tableChart("1"))
+	f.Add(tableChart("1", "col"))
+	f.Add(tableChart("1", "bar"))
 	f.Add(trendChart())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		opts := Options{Config: ivy.Config{Limits: ivy.Limits{MaxObjects: 1 << 10}}}

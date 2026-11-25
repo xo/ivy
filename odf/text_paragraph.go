@@ -303,11 +303,9 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 			// twips, and drops the fraction of a twip
 			h := math.Floor(ratio*size*20*min(pct/100, 10)+1e-6) / 20
 			s.set("line-height", odtRatio(h/size))
-			// LibreOffice puts the extra space of the lines below their
-			// text
-			if pct > 100 {
-				s.set("-ivy-line-multiple", odtRatio(min(pct/100, 10)))
-			}
+			// LibreOffice puts the line gap of a single line above its
+			// text, and the extra space of the lines below it
+			s.set("-ivy-line-multiple", odtRatio(min(pct/100, 10)))
 		}
 	default:
 		if v, ok := odtLength(lh); ok && v > 0 {
@@ -318,6 +316,7 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 			s.set("line-height", odtPt(max(ratio*size+v, 1)))
 		} else {
 			s.set("line-height", odtRatio(ratio))
+			s.set("-ivy-line-multiple", "1")
 		}
 	}
 	if p["number-lines"] == "false" {
@@ -1201,6 +1200,25 @@ func odtFloatPosition(g odtProps, y float64) string {
 	return area + odtPt(y)
 }
 
+// odtWrapFlow returns the value of -ivy-wrap-flow of a frame with wrap,
+// from the graphic properties g: the side of the text of style:wrap, and
+// the larger of the left and the right margins, which are the distance
+// of the text from the frame (D63).
+func odtWrapFlow(g odtProps) string {
+	side := "both"
+	switch g["wrap"] {
+	case "left":
+		side = "start"
+	case "right":
+		side = "end"
+	case "biggest":
+		side = "maximum"
+	}
+	left, _ := odtLength(g["margin-left"])
+	right, _ := odtLength(g["margin-right"])
+	return side + " " + odtPt(min(max(left, right, 0), 14400))
+}
+
 // place writes the box of a frame or a shape n, of the width w, at the
 // position (x, y) from its anchor, with the graphic properties g. content
 // writes what the box holds.
@@ -1242,6 +1260,7 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 		if p := odtFloatPosition(g, y); p != "" {
 			s.set("-ivy-float-position", p)
 		}
+		s.set("-ivy-wrap-flow", odtWrapFlow(g))
 	}
 	if !inline {
 		s.set("width", odtPt(w))
@@ -1415,7 +1434,7 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			c.w.WriteString("</span>")
 			return
 		case "object", "object-ole":
-			if c.chart(odtAttr(e, "href"), w, h) {
+			if c.formula(odtAttr(e, "href")) || c.chart(odtAttr(e, "href"), w, h) {
 				return
 			}
 		}

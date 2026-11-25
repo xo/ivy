@@ -140,14 +140,18 @@ func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, ski
 // above the flow stays where it is, so a page has at most two layouts
 // here (D60).
 func makePageFloats(index int, lc *layoutContext, rootBox *Box, html *HTML, grow pageGrowth, state *pageState) (*Box, skipStack) {
-	lc.startPageFloats(nil)
+	lc.startPageFloats(nil, nil)
 	page, resumeAt := makePageGrown(index, lc, rootBox, html, grow)
 	above := lc.pageFloats.above
 	if len(above) == 0 {
 		return page, resumeAt
 	}
+	order := make([]*Box, 0, len(lc.pageFloats.placed))
+	for _, f := range lc.pageFloats.placed {
+		order = append(order, f.box)
+	}
 	state.restore(lc, index)
-	lc.startPageFloats(above)
+	lc.startPageFloats(above, order)
 	return makePageGrown(index, lc, rootBox, html, grow)
 }
 

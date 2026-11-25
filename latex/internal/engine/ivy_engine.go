@@ -22,6 +22,20 @@ type ivyState struct {
 	// steps counts the calls of stopped, so that the channel is read once
 	// for many steps.
 	steps uint32
+	// textWidth is \hsize at the end of the document, in sp, and zero
+	// before it. The pages are assembled after the group of the document
+	// closes, which restores the \hsize of the class (ivy_latex.go).
+	textWidth int
+	// numbered is true when the document sets the page counter or the style
+	// of the page numbers. lastOrdinal, lastNum and numStyle are the place,
+	// the number and the style of the last page that was assembled.
+	numbered             bool
+	lastOrdinal, lastNum int
+	numStyle             byte
+	// inDocument is true after \begin{document}, and startStyle is the
+	// style of the page numbers there.
+	inDocument bool
+	startStyle byte
 }
 
 // stopped reports whether the context of the run is done. The step counter
@@ -80,6 +94,10 @@ type Doc struct {
 	skipped int
 	// specials holds the parsed specials of each page.
 	specials specialCache
+	// outline is the outline of the document. Compile makes it, because
+	// the page builder that finds the page of a heading is not safe for
+	// concurrent use, and DrawPage is.
+	outline []Outline
 }
 
 // The margin of a page of a document that names no paper, as the default
@@ -131,6 +149,15 @@ func Compile(ctx context.Context, src []byte, ro RunOptions) (doc *Doc, err erro
 		if err != nil {
 			return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
 		}
+		e.loadIvyPrims()
+		if err := e.LoadFormat(ivyPlain); err != nil {
+			return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
+		}
+		if latex {
+			if err := e.LoadFormat(ivyLaTeX); err != nil {
+				return nil, fmt.Errorf("latex: %w: %w", ivy.ErrFormat, err)
+			}
+		}
 		e.ivy.done = ctx.Done()
 		r, err := texmath.New(ro.Faces.Math)
 		if err != nil {
@@ -161,12 +188,21 @@ func Compile(ctx context.Context, src []byte, ro RunOptions) (doc *Doc, err erro
 		return nil, fmt.Errorf("latex: %d pages: %w", len(pages), ivy.ErrLimit)
 	}
 	doc = &Doc{e: e, pages: pages, math: e.mathR}
-	doc.margin = e.renderMargin(defaultMargin)
+	var ok bool
+	doc.paperW, doc.paperH, ok = e.paperSizePt()
+	margin := float64(defaultMargin)
+	if !ok && !isLaTeX(src) {
+		// pdfTeX puts a document of plain TeX on US Letter, with the origin
+		// of the text one inch from the top and the left side.
+		doc.paperW, doc.paperH = 8.5*72.27, 11*72.27
+		margin = 72.27
+	}
+	doc.margin = e.renderMargin(margin)
 	doc.vmargin = e.renderVMargin(doc.margin)
-	doc.paperW, doc.paperH, _ = e.paperSizePt()
 	for _, n := range e.SkippedCommands() {
 		doc.skipped += n
 	}
+	doc.outline = doc.makeOutline()
 	return doc, nil
 }
 

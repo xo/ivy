@@ -119,7 +119,7 @@ func sheetHashes(t *testing.T, format ivy.Format, data []byte, cfg ivy.Config, n
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = doc.Close() }()
+	defer doc.Close()
 	pager, ok := doc.(ivy.Pager)
 	if !ok {
 		t.Fatal("expected pages")

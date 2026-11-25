@@ -18,6 +18,9 @@ type shape struct {
 	// index of a text of the slide list, or -1.
 	text    *text
 	textRef int
+	// props9 are the picture bullets and the automatic numbers of the
+	// paragraphs of the text, from the extension of PowerPoint 2000.
+	props9 []pf9
 }
 
 // drawing is the shapes of a slide or of a master.
@@ -35,7 +38,7 @@ func readDrawing(b []byte, maxObjects, maxDepth int) *drawing {
 	d := &drawing{od: odraw.ReadDrawing(dg, maxObjects, maxDepth), byShape: make(map[*odraw.Shape]*shape)}
 	var add func(sh *odraw.Shape, depth int)
 	add = func(sh *odraw.Shape, depth int) {
-		d.byShape[sh] = newShape(sh)
+		d.byShape[sh] = newShape(sh, maxObjects)
 		if depth > 0 {
 			for _, c := range sh.Children {
 				add(c, depth-1)
@@ -46,14 +49,15 @@ func readDrawing(b []byte, maxObjects, maxDepth int) *drawing {
 		add(d.od.Root, maxDepth)
 	}
 	if d.od.Background != nil {
-		d.background = newShape(d.od.Background)
+		d.background = newShape(d.od.Background, maxObjects)
 	}
 	return d
 }
 
 // newShape reads what a slide gives the shape sh: its anchor, its
-// placeholder and its text.
-func newShape(sh *odraw.Shape) *shape {
+// placeholder, its text, and the picture bullets and the automatic numbers
+// of its text.
+func newShape(sh *odraw.Shape, maxObjects int) *shape {
 	s := &shape{Shape: sh, textRef: -1}
 	if a, ok := clientAnchor(sh.ClientAnchor); ok {
 		s.anchor, s.hasAnchor = a, true
@@ -63,6 +67,7 @@ func newShape(sh *odraw.Shape) *shape {
 	if ph := child(sh.ClientData, rtPlaceholderAtom); len(ph) >= 5 {
 		s.placeholder = int(ph[4])
 	}
+	s.props9 = shapeProps9(sh.ClientData, maxObjects)
 	if sh.ClientTextbox != nil {
 		var texts []text
 		for th, tb := range children(sh.ClientTextbox) {

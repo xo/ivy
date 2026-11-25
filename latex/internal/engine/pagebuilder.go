@@ -5,7 +5,9 @@
 
 package engine
 
-import "math"
+import (
+	"math"
+)
 
 // This file is the page builder: it splits the main vertical list into pages no
 // taller than \vsize using TeX's cost-based rule — at each legal breakpoint the
@@ -245,7 +247,7 @@ func (e *Engine) paginateSingleList(list []node, pageOffset int) []*boxNode {
 		switch {
 		case pageIsUnshippable(page):
 			for _, n := range page {
-				if _, isSpecial := n.(specialNode); isSpecial {
+				if carried(n) { // ivy: and the marks and \thispagestyle
 					carry = append(carry, n)
 				}
 			}
@@ -329,7 +331,9 @@ func (e *Engine) effectiveVsize() int {
 func pageIsUnshippable(page []node) bool {
 	for _, n := range page {
 		switch n.(type) {
-		case glueNode, penaltyNode, kernNode, specialNode:
+		// ivy: a mark and \thispagestyle are not material either, as in
+		// tex.web, and they wait for the next page (ivy_latex.go).
+		case glueNode, penaltyNode, kernNode, specialNode, markNode, pageStyleNode, pageCounterNode:
 		default:
 			return false
 		}

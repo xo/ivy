@@ -10,7 +10,7 @@ A unit is one package, or one file of a port with its tests. Claim a unit
 here before you start it, with the date. When the change is committed,
 delete the claim.
 
-No unit is in progress on 2026-11-21.
+No unit is in progress on 2026-11-25.
 
 ## Found by the visual review
 
@@ -56,24 +56,18 @@ found these faults. Each item names a file of the corpus.
    now hold the same lines as in LibreOffice. LibreOffice also ends a split
    cell at its last line, and the layout makes it fill the page to the bottom,
    as CSS Fragmentation says. Source: `odf` and `-ivy-line-multiple` (D56).
-6. Wrap the text on both sides of a picture with square wrapping that is in
-   the middle of the column, as Word does on page 6 of
-   `poi/doc/floating-pictures.doc`. A float of CSS keeps the text on one
-   side. LibreOffice also wraps the text on both sides there. D63 decides
-   the property `-ivy-wrap-flow`, and the formats give it. Source: `msdoc`,
-   `docx`, `odf`, `rtf` and the layout, D63.
-7. Measure the page floats of D60 in Word, with the files `float-*.docx` of
+6. Measure the page floats of D60 in Word, with the files `float-*.docx` of
    `docx/testdata` and `float-*.doc` of `msdoc/testdata`. LibreOffice 26.8
    places the floats of these files within 0.05 inch of ivy, except for two
    files. In `float-t-loop2`, LibreOffice moves the anchor with the table to
    page 2, and ivy keeps the table on page 1, as D60 decides. In
-   `float-t-nofit`, LibreOffice cuts the table at the bottom of the paper,
-   and ivy moves it up until it fits. These parts of D60 are not built yet:
-   the frames of `rtf`, the frames of `odf` that are anchored to the page
-   with wrap, which stay absolute, and `w:tblOverlap` and `allowOverlap` of
-   `docx`. The meaning of inside and outside on the vertical axis is not
-   measured. Source: `msdoc`, `docx`, `odf` and the layout, D60.
-8. Compare the path gradient "shape" of a focus out of the shape with
+   `float-t-nofit`, LibreOffice cuts the table at the bottom of the paper, and
+   ivy moves it up until it fits. These parts of D60 are not built yet: the
+   frames of `rtf`, and the frames of `odf` that are anchored to the page with
+   wrap, which stay absolute. The meaning of inside and outside on the
+   vertical axis is not measured. Source: `msdoc`, `docx`, `odf` and the
+   layout, D60.
+7. Compare the path gradient "shape" of a focus out of the shape with
    PowerPoint. ivy puts the first stop where the ray from the focus enters the
    shape, and the last stop where the ray leaves it. On slide 4 of
    `pptx/testdata/path-gradients.pptx`, the star of ivy differs from
@@ -81,21 +75,21 @@ found these faults. Each item names a file of the corpus.
    on its outline, with the path "circle" about that center, as PowerPoint
    draws the moon. The rule of PowerPoint for this is not known. Source:
    `internal/drawingml`.
-9. Measure in Excel how it fits a row when it opens a file. ivy counts the
+8. Measure in Excel how it fits a row when it opens a file. ivy counts the
    lines of text that wraps with the widths of Calibri (`TextWidth`), and it
    estimates the height of rotated text. An empty cell takes one line of its
    font. A row without cells keeps its height. A row keeps the height of its
    file when that height is at most 2 pixels or 10 percent away from the fit.
    These rules come from 4 files of the corpus and are not measured. Source:
    `internal/sheet`.
-10. Find why Excel breaks some sheets of
-    `poi/xls/conditional-formatting-samples.xls` into other pages than ivy: a
-    narrow band of columns on a page of its own (pages 16, 18 and 20), and a
-    page that only shows the header (page 10). Source: `internal/sheet`.
-11. Find why the pages of the receipt pictures of
+9. Find why Excel breaks some sheets of
+   `poi/xls/conditional-formatting-samples.xls` into other pages than ivy: a
+   narrow band of columns on a page of its own (pages 16, 18 and 20), and a
+   page that only shows the header (page 10). Source: `internal/sheet`.
+10. Find why the pages of the receipt pictures of
     `poi/xls/basic-expense-template-2011.xls`, from page 45, start higher in
     ivy than in Excel. Source: `msxls` and `internal/sheet`.
-12. Compare the WordArt of `internal/odraw` with PowerPoint. No file of the
+11. Compare the WordArt of `internal/odraw` with PowerPoint. No file of the
     corpus has WordArt. `internal/odraw/warp.go` bends the text of the
     triangles, the chevrons, the arches and the circles, the waves, inflate
     and deflate, the fades, the slants and the cans of MS-ODRAW 2.4.24, with
@@ -104,60 +98,43 @@ found these faults. Each item names a file of the corpus.
     and the two mixes of inflate and deflate as plain text. It leaves out
     fKern and gtextFShadow. A file with WordArt of each kind can give the size
     of the text along an arch. Source: `internal/odraw`.
-13. Convert the adjust values of the presets of Office Drawing that
+12. Convert the adjust values of the presets of Office Drawing that
     `internal/odraw/adjust.go` does not convert: the trapezoid, which Office
     Drawing draws with its narrow side down, the arc, the block arc, the
     circular arrow, the bent, curved and U-turn arrows, the ribbons and the
     arrow callouts. Map the callouts of the types 178 to 181. The defaults of
     the tips of the callouts 61, 62, 63 and 106 are not known, and they take
     the defaults of ECMA-376. Source: `internal/odraw`.
-14. Make the running element of the headers and the footers of `docx` a flow
-    root, as `msdoc`, `rtf` and `odf` do. A footer aligned at the bottom moves
-    down by the space before its first paragraph. Source: `docx`.
-15. Find why page 2 of `libreoffice/doc/landscape-letter-form.doc` draws the
+13. Find why page 2 of `libreoffice/doc/landscape-letter-form.doc` draws the
     black bars of its table 1 pixel lower than Word. The header line of Arial
     16 is now 18.4 points high, as in Word. Source: `msdoc`.
-16. Draw the lines, the shapes, the regions and the text of a QuickDraw
+14. Draw the lines, the shapes, the regions and the text of a QuickDraw
     picture (PICT). `internal/pict` draws only the bitmaps of a picture and
     its images of QuickTime, for the pictures of Office Drawing of `msxls`,
     `msppt` and `msdoc`. No file of the corpus has a PICT picture. Source:
     `internal/pict`, 2026-11-18.
-17. Compare a chart of Excel 97 without the records ShapePropsStream with
+15. Compare a chart of Excel 97 without the records ShapePropsStream with
     Excel. `msxls` reads the theme of the record THEME, and a workbook without
     one takes the theme of Office 2007. The corpus has no such chart. Source:
     `msxls`.
-18. Find why a chart that rows cut shows a light seam at some edges of its
+16. Find why a chart that rows cut shows a light seam at some edges of its
     rows, as on page 3 of `poi/xls/three-charts.xls`. A slice of a chart
     reaches 1 point into the next row. A strip across the edge of the row, as
     a picture has, gave more seams in the charts, and the cause is not known.
     Source: `internal/sheet` and the layout.
-19. Put the line gap of a single line above its text, as Word and LibreOffice
-    do. The layout puts half of the gap above the text and half below.
-    `-ivy-line-multiple` (D56) puts the whole gap above only for a multiple
-    line spacing. With Calibri, whose gap is 0.22 em, the text of a single
-    line in Word is about 1 point lower than in ivy. A test with LibreOffice
-    puts the baseline of Liberation Serif 0.935 em below the top of a single
-    line: the ascent and the whole gap. Source: the layout, `docx`, `msdoc`,
-    `odf` and `rtf`.
-20. Find why the text in the cells of the table of
-    `libreoffice/doc/legal-table.doc` is lower in Word than in ivy, and why
-    the rows of Word are taller. `-ivy-line-multiple` (D56) moves the text up
-    in its lines, and the review of the file went from 1.52 to 1.66. Source:
-    `msdoc`.
-21. Find why page 2 of `libreoffice/odt/tdf146272.odt` holds fewer lines in
-    ivy than in LibreOffice. The text after the caption "Figure 2" is 2 pixels
-    higher than in LibreOffice. With `-ivy-line-multiple` (D56) the review of
-    the page went from 8.25 to 9.05, and pages 1 and 3 got better. Source:
-    `odf`.
-22. Read `text:count-empty-lines`, `text:count-in-text-boxes`, the right,
+17. Count the spacing of a footer of `odf` inside its `fo:min-height`, as
+    LibreOffice does. Page 2 of `libreoffice/odt/tdf146272.odt` holds 3 lines
+    fewer than in LibreOffice. Its page style `Mpm2` has a bottom margin of 0,
+    a footer `fo:min-height` of 2cm and `fo:margin-top` of 1.9cm, with
+    `style:dynamic-spacing="true"`. `pageRules` in `odf/text_convert.go`
+    reserves 2cm plus 1.9cm. LibreOffice reserves 2cm in all. The caption
+    "Figure 2" is also 3 pixels lower than in LibreOffice, and the text after
+    it is 3 pixels higher. Source: `odf`, 2026-11-24.
+18. Read `text:count-empty-lines`, `text:count-in-text-boxes`, the right,
     inner and outer positions, and `text:line-number` of a paragraph in the
     line numbering of `odf`. The layout draws the numbers on the left only,
     and counts the empty lines. Source: `odf` and the layout.
-23. Find why the lines of the bulleted list on page 3 of
-    `poi/doc/floating-pictures.doc` are about 15.2 points apart in ivy and
-    14.64 in Word. The text below the list is 3 to 5 pixels lower than in
-    Word. Source: `msdoc`, 2026-11-19.
-24. Measure the picture effects of Word with more values. The contrast and the
+19. Measure the picture effects of Word with more values. The contrast and the
     brightness of `internal/drawingml/recolor.go` come from the washout, the
     brightness of 75 percent and the contrast of 75 percent of pages 4 and 5
     of `poi/doc/floating-pictures.doc`. With a contrast below 1, Word adds
@@ -166,12 +143,47 @@ found these faults. Each item names a file of the corpus.
     COM in the Windows VM of the review, but Word 2024 stopped when the script
     saved or exported the document, so these pictures have no reference.
     Source: `internal/odraw`, 2026-11-19.
-25. Measure in Word how it draws the borders of a row that a page break
+20. Measure in Word how it draws the borders of a row that a page break
     splits. `odf` gives `box-decoration-break: clone` to its tables and its
     cells, so the layout draws the borders of a split cell on both pages, as
     LibreOffice does. `docx`, `msdoc` and `rtf` keep the rule of WeasyPrint,
     with no border at the split. No file of the corpus with a reference of
     Word has a split row. Source: `docx`, `msdoc` and `rtf`, 2026-11-21.
+21. Measure `w:tblOverlap` never and `allowOverlap` 0 in Word. LibreOffice
+    26.8 moves a table with never below the earlier floating tables that it
+    covers, and ivy does the same. LibreOffice does not move a picture with
+    `allowOverlap` 0, but ivy moves it, as ECMA-376 says. ivy does not read
+    `o:allowoverlap` of VML. Source: `docx`, the layout and D60, 2026-11-25.
+22. Float the pictures and the text boxes of the shapes of `rtf` from
+    `\shpwr`, `\shpwrk`, `\shpbx*`, `\shpby*` and `\shpleft`, and give them
+    `-ivy-wrap-flow` (D63). Today `rtf` writes the picture of a shape inline.
+    Source: `rtf` and D63, 2026-11-25.
+23. Place a frame of `odf` that floats at its `svg:x` and its
+    `style:horizontal-pos`, so that the text can go on both sides of a frame
+    in the middle of the column (D63). Today the frame floats to the edge of
+    the column. Source: `odf` and D63, 2026-11-25.
+24. Measure the narrowest part of a line next to a picture that Word and
+    LibreOffice fill with text. The layout leaves a part narrower than 0.25
+    inch empty. Source: the layout and D63, 2026-11-25.
+25. Find why `idpf/epub/linear-algebra.epub` gives more pages than calibre
+    since its MathML draws as math: 555 pages against 498 on US Letter, and
+    525 against 457 on A4. Before, ivy gave fewer pages than calibre. An
+    inline formula with scripts makes its line higher. Compare the height of
+    such lines with calibre. Source: `internal/formula` and the layout,
+    2026-11-25.
+26. Find where a file of PowerPoint 97 to 2003 that PowerPoint 2007 wrote
+    keeps the margin of a paragraph (`marL` of `pptx`). Page 42 of
+    `poi/ppt/custom-geometry.ppt` shows the indent in PowerPoint and
+    LibreOffice, but its StyleTextPropAtom has no margin and level 0. Page 48
+    starts the first line of a paragraph without a bullet at the indent, as
+    PowerPoint does, which goes against `TestNoBulletIndent` (page 38).
+    Source: `msppt`, 2026-11-25.
+27. Start the text of a paragraph right after a number that is wider than its
+    hanging indent, as PowerPoint does. On page 22 of
+    `poi/ppt/custom-geometry.ppt`, the number "10." pushes its text one space
+    to the right. Draw the picture bullets of `pptx` (`a:buBlip`) with
+    `Bullet.Picture`, as `msppt` does. Source: `internal/drawingml`,
+    2026-11-25.
 
 ## Left by the package icc
 
@@ -202,13 +214,16 @@ reads and writes LaTeX, and phase 8 of `PLAN.md` gives its steps.
    packages, math, tables, figures, cross-references and bibliography.
    Phases 8a and 8b give the package `latex`. "Left by phase 8a" holds
    what is left. Source: the maintainers, 2026-11-20.
-2. Write LaTeX: `latex/latexenc` writes a document of ivy as LaTeX source.
-   Source: the maintainers, 2026-11-20.
-3. Draw the equations of Office Math (`docx`), MathML (`html` and `epub`)
-   and the formulas of OpenDocument as math. `docx` now writes the text of
-   an equation in italics, in `converter.math` of `docx/paragraph.go`. This
-   needs the layout of math of item 2 of "Work for okage". Source: D62,
-   2026-11-20.
+2. Write LaTeX with `latex/latexenc`, phase 8e of `PLAN.md`: the HTML of a
+   document of the layout as LaTeX source. Nothing of it is built. Source: the
+   maintainers and D62, 2026-11-20.
+3. Draw the equations of Office Math of `pptx` (`a14:m`) and the formula
+   objects of the presentations, the spreadsheets and the drawings of `odf`.
+   Today `docx`, `html`, `epub` and the text documents of `odf` draw their
+   equations, through `internal/formula`. Source: the build of 2026-11-25.
+4. Give the equations the math font of the document when the font database
+   holds it, such as Cambria Math for Word. Today every equation takes STIX
+   Two Math of okage. Source: the build of 2026-11-25.
 
 ## Left by phase 8a
 
@@ -225,63 +240,55 @@ was built.
    `/usr/share/texmf-dist/tex`. With the files that upstream embeds, it does
    not. Find the cause in the copy of the engine. ivy posts nothing to
    go-tex/engine (`AGENTS.md`, rule 13). Source: phase 8a, 2026-11-21.
-3. Give the links and the destinations of a page to the device through
-   `display.Linker`, and the outline of `Doc.Outline` through
-   `display.Bookmarker`, which phase 7c added. Today `Doc.Links` of
-   `latex/internal/engine/ivy_driver.go` holds them, and a PDF file of a LaTeX
-   document has no links. Source: phase 8a, 2026-11-21.
-4. Draw the pages of `\includepdf` with the package `pdf`, as the figures
+3. Draw the pages of `\includepdf` with the package `pdf`, as the figures
    are drawn. Today they are empty, because upstream rasterizes them with a
    renderer that a program wires. Source: phase 8a, 2026-11-21.
-5. Load the real pgf and TikZ, which upstream loads only with its variable
+4. Load the real pgf and TikZ, which upstream loads only with its variable
    GOTEX_PGF, and add `pgfsys-gotex.def` of upstream, under BSD-3-Clause,
    to the files that the resolver gives. Today a picture of TikZ is a
    framed box. Source: phase 8a, 2026-11-21.
-6. Run more than one engine at a time. The engine changes maps of its
+5. Run more than one engine at a time. The engine changes maps of its
    package when it builds a run, such as `expandableSet` in
    `primitives.go`, `etexif.go` and `readstreams.go`, so `Compile` runs
    one engine at a time. A change of upstream that builds those maps once
    lifts the limit. Source: phase 8a, 2026-11-21.
-7. Map the limits of `ivy.Config` onto the limits of the engine: the steps
+6. Map the limits of `ivy.Config` onto the limits of the engine: the steps
    of expansion, the depth of the input and the size of a paragraph. Today
    the engine keeps its own limits, and the context stops a run. Source:
    phase 8a, 2026-11-21.
-8. Update the copy from upstream, which merges about 10 changes each day,
+7. Update the copy from upstream, which merges about 10 changes each day,
    as `docs/UPSTREAM.md` says. Source: D62.
-9. The tests of the test module and the review command give the folder
+8. The tests of the test module and the review command give the folder
    `fonts` to the formats with `os.DirFS`, and the folder now holds `lm`,
    which `fonts.FS` leaves out (D65). `test/cmd/perf` hides it, so that its
    hashes stay those of `fonts.FS`. Hide it in the others too, such as
    `test/review/render.go` and `test/galley_test.go`. The review now gives
    Latin Modern to a TeX document through `Config.TeX` too. Source: phase
    8a, 2026-11-21.
-10. Write LaTeX with `latex/latexenc`, phase 8e of `PLAN.md`: the HTML of a
-    document of the layout as LaTeX source. Nothing of it is built. Source:
-    D62, 2026-11-21.
-11. Report what the engine skips. In the mode that ivy uses, the engine skips
-    a command or a package that it does not model, and the page loses that
-    part with no error. Give the program the list of what was skipped, for
-    example through `Describe`, and count it in the review. Source: the README
-    of go-tex/engine, 2026-11-21.
-12. Load the real files of the packages that the engine emulates: `geometry`,
+9. Report what the engine skips. In the mode that ivy uses, the engine skips
+   a command or a package that it does not model, and the page loses that
+   part with no error. Give the program the list of what was skipped, for
+   example through `Describe`, and count it in the review. Source: the README
+   of go-tex/engine, 2026-11-21.
+10. Load the real files of the packages that the engine emulates: `geometry`,
     `tikz`, `hyperref`, `graphicx` and the font encodings. The engine has its
     own code for the common uses of each, and other uses of them are lost.
     Source: the README of go-tex/engine, 2026-11-21.
-13. Put a `\marginpar` note in the margin, and break the page at a
+11. Put a `\marginpar` note in the margin, and break the page at a
     `\pagebreak` inside a paragraph. Both need the primitive `\vadjust`, which
     the engine does not have. Today the note is not placed in the margin, and
     the break inside a paragraph has no effect. Source: the README of
     go-tex/engine, 2026-11-21.
-14. Hyphenate languages other than American English. The copy holds only the
+12. Hyphenate languages other than American English. The copy holds only the
     patterns of American English. The patterns of other languages come from
     hyph-utf8 under several licenses, so a program can give them, or the
     maintainers choose which ones ivy holds. Source: phase 8a, 2026-11-21.
-15. Find the documents that stop early. By the count of upstream, about one
+13. Find the documents that stop early. By the count of upstream, about one
     real paper in a thousand still stops before its end, and the step limits
     can stop a long figure of pgf, such as the output of tikzDevice. Measure
     this on the corpus of LaTeX documents of the review. Source: the README of
     go-tex/engine, 2026-11-21.
-16. Draw a formula that holds a command that `texmath` of okage (okage D78)
+14. Draw a formula that holds a command that `texmath` of okage (okage D78)
     does not know. Today the engine drops that one formula. Count these
     formulas in the review, and ask okage for the commands that real documents
     use. Source: phase 8a, 2026-11-21.
@@ -292,37 +299,10 @@ The review of 2026-11-21 renders the 14 TeX documents of
 `test/review/corpus.tsv` beside pdfLaTeX of TeX Live 2026, with `-tex base`.
 Each item names a file of the corpus.
 
-1. Build the option `WithName` of `latex` that D66 decides, and give each TeX
-   document of the review the name of its file. Today `latex` gives the engine
-   no job name, so the engine reads `texput.bbl`, and `repo/tex/report.tex`
-   loses its bibliography and the numbers of `\cite`. Source: the review of
-   LaTeX, 2026-11-21.
-2. Draw the headers and the footers of fancyhdr. In
-   `repo/tex/report.tex`, pdfLaTeX draws `\leftmark`, "Test Report" and
-   "Page N" with their rules on each page. ivy draws an empty page with a
-   header after the title page, and draws the header on two pages only.
-   Source: the review of LaTeX, 2026-11-21.
-3. Turn an image of `\includegraphics` with the key `angle`. In
-   `repo/tex/report.tex`, ivy draws both images of the section
-   "Transforms" without the turn. Source: the review of LaTeX, 2026-11-21.
-4. Take the names of babel for a language that `\babelprovide` loads. In
-   `repo/tex/livre.tex`, ivy writes "Contents", "Chapter" and
-   "Bibliography" where pdfLaTeX writes "Table des matières", "Chapitre"
-   and "Bibliographie". ivy also leaves out the blank pages of `openright`
-   of the class book, its running heads, and the roman numbers of the
-   front matter, so it gives 6 pages where pdfLaTeX gives 11. Source: the
-   review of LaTeX, 2026-11-21.
-5. Indent the environments quote, quotation and verse, and break the lines
-   of verse at `\\`. Draw `\LaTeX` as the logo, not as text. Draw a prime
-   in math, `x'`, as the glyph prime, not as a quote in a superscript. All
-   three are on page 2 of `latex2e/tex/sample2e.tex`, whose page breaks
-   then differ. Source: the review of LaTeX, 2026-11-21.
-6. Draw the end of a proof of amsthm as an open box, as amsthm does, and
-   keep the page breaks of pdfLaTeX. `latex2e/tex/testmath.tex` gives 40
-   pages where pdfLaTeX gives 41, and its pages differ by 3 to 9 after the
-   blur, most by the place of the break. Source: the review of LaTeX,
-   2026-11-21.
-7. Set a document of a class that the tree of `-tex base` does not hold.
+1. Leave the blank pages of `openright` in the class book. `\cleardoublepage`
+   acts as `\clearpage`, so `repo/tex/livre.tex` gives 6 pages where pdfLaTeX
+   gives 11. Source: the review of LaTeX, 2026-11-25.
+2. Set a document of a class that the tree of `-tex base` does not hold.
    `latex2e/tex/cfgguide.tex` uses the class ltxguide: ivy shows the
    characters `|` of its short verbatim, numbers the sections, and gives 18
    pages where pdfLaTeX gives 12. With `-tex dist`, the engine loads
@@ -330,31 +310,26 @@ Each item names a file of the corpus.
    `latex2e/tex/grfguide.tex`, 51 pages with `base` and 2 with `dist`. It is
    item 2 of "Left by phase 8a" with other files. Source: the review of
    LaTeX, 2026-11-21.
-8. Make the engine faster on `latex2e/tex/rotex.tex` with `-tex dist`. One
+3. Make the engine faster on `latex2e/tex/rotex.tex` with `-tex dist`. One
    run takes about 260 seconds, and the other documents wait for it,
-   because `Compile` runs one engine at a time (item 6 of "Left by phase
+   because `Compile` runs one engine at a time (item 5 of "Left by phase
    8a"). With `-tex base` it takes 2 seconds. Source: the review of LaTeX,
    2026-11-21.
-9. Give a slide of beamer its size, 128 by 96 millimeters, and its theme.
+4. Give a slide of beamer its size, 128 by 96 millimeters, and its theme.
    ivy draws the 23 frames of `beamer/tex/beamerexample-conference-talk.tex`
    as pages of US Letter with the text of the frames only. Give a picture
    of the class standalone the size of the picture.
    `janosh/tex/multilayer-perceptron.tex` is a small framed box at the top
-   of a page of US Letter (item 5 of "Left by phase 8a"). Source: the
+   of a page of US Letter (item 4 of "Left by phase 8a"). Source: the
    review of LaTeX, 2026-11-21.
-10. Give a document of plain TeX the page of US Letter. ivy gives a page of
-    the text with margins of one inch, 8.5 by 10.9 inches, so the pages of
-    `repo/tex/plain.tex` and `knuth/tex/story.tex` are 10 pixels shorter
-    than the pages of pdfTeX at 96 dots per inch. Source: the review of
-    LaTeX, 2026-11-21.
-11. Install pgf, the packages of `collection-latexextra` and `repstopdf` in
-    the TeX Live of the machine of the review. Without pgf, the documents
-    of beamer and of TikZ have no reference. Without `standalone.cls`,
-    `csquotes.sty` and `imakeidx.sty`, a document that loads them has no
-    reference. Without `repstopdf`, a document with an EPS figure has no
-    reference, such as `latex2e/tex/rotex.tex` and
-    `latex2e/tex/grfguide.tex`. Then run `render` with `-retry`. Source: the
-    review of LaTeX, 2026-11-21.
+5. Install pgf, the packages of `collection-latexextra` and `repstopdf` in
+   the TeX Live of the machine of the review. Without pgf, the documents
+   of beamer and of TikZ have no reference. Without `standalone.cls`,
+   `csquotes.sty` and `imakeidx.sty`, a document that loads them has no
+   reference. Without `repstopdf`, a document with an EPS figure has no
+   reference, such as `latex2e/tex/rotex.tex` and
+   `latex2e/tex/grfguide.tex`. Then run `render` with `-retry`. Source: the
+   review of LaTeX, 2026-11-21.
 
 ## Left by the charts
 
@@ -370,26 +345,24 @@ Each item names a file of the corpus.
    cache. Source: `internal/chart` (D27).
 2. Draw the depth of a 3D chart. A 3D pie draws as a flat ellipse, and the
    other 3D charts as their 2D form. Source: `internal/chart`.
-3. Draw the data table of a chart whose bars go across, and the
-   trendlines and the data tables of a chart of OpenDocument and of a chart
-   of Excel 97 to 2003. `internal/chart` draws the data table of a chart
-   of DrawingML whose categories go along the bottom, and the trendlines of
-   DrawingML only. Source: `internal/chart`, 2026-11-21.
-4. Find how Excel places the label of a trendline. ivy puts the right
-   side of the label 9 points left of the end of the line, and its middle
-   at the height of the end. In `repo/xlsx/chart-trendline-labels.xlsx`,
-   Excel puts the right side 9 to 19 points left of the end. Source:
-   `internal/chart`, 2026-11-21.
-5. Find when Excel puts the children of a node of a treemap side by side
+3. Find how Excel places the label of a trendline. In
+   `repo/xlsx/chart-trendline-labels.xlsx`, Excel puts the right side of the
+   label 9.0 points left of the end of the line in the scatter chart, and 15.2
+   points left of it in the column chart, whose bars are 12.4 points wide. It
+   puts the middle of the label 0.8 to 3.2 points below the end. ivy uses 9
+   points for every chart. A chart of each type with a label is needed to find
+   the rule. Source: `internal/chart`, 2026-11-24.
+4. Find when Excel puts the children of a node of a treemap side by side
    in a box that is a little higher than wide. In the banners of
    `repo/xlsx/chart-treemap-banner.xlsx`, Excel puts Potato and Carrot side
    by side in a box of 126.0 by 127.1 points. The squarified layout puts
    them one over the other. Source: `internal/chart`, 2026-11-21.
-6. Give a chart of Office 2016 the fill and the line of its chart area
-   from its style part, `cs:chartStyle`, when the chart part has no
-   `cx:spPr`. Word and Excel draw the white chart area and the gray border
-   of the style, as on page 3 of `poi/docx/chartex.docx`. ivy draws no
-   border. Source: `internal/chart` and its callers, 2026-11-21.
+5. Place the label of a trendline of OpenDocument at its `svg:x` and `svg:y`,
+   and give it the number format of its style. ivy puts it where Excel puts
+   it, with the number format of Excel. Source: `internal/chart`, 2026-11-24.
+6. Compare the trendline of a chart of Excel 97 to 2003 whose line is
+   automatic with Excel. `msxls` draws it as a thin black line, and Excel was
+   not measured. Source: `msxls`, 2026-11-25.
 
 ## Left by the CJK fonts of the system
 
@@ -398,12 +371,7 @@ fonts of the system, by their local names too, and a system face of the
 language of the text for a CJK character, when `Config.SystemFonts` is on.
 The formats give the layout their East Asian fonts and languages.
 
-1. Give a run of `docx` the script font of its theme: in
-   `converter.font`, call `EastAsianFor(lang)` of the minor and major fonts
-   for minorEastAsia and majorEastAsia, with the `w:eastAsia` of `w:lang` or
-   of `w:themeFontLang`. `aspose/docx/asian-typography.docx` needs it.
-   Source: `docx`.
-2. Check the synthetic bold of the layout on
+1. Check the synthetic bold of the layout on
    `fbreaderj/fb2/minihelp.zh.fb2`, with SimSun. Source: the layout.
 
 ## Left by the pages of Visio
@@ -531,8 +499,12 @@ The pages of Visio came on 2026-11-17 (D30).
    of Word 6 has ccpHdd at 0x3C and fcPlcfhdd at 0xB0, and the PlcfHdd lists
    only the stories that grpfIhdt of each section sets.
 5. Draw what `msppt` does not draw yet: the pictures of a file that a password
-   protects, picture bullets, vertical text, autofit, notes, comments, charts
-   and OLE objects other than their pictures. Source: `msppt`.
+   protects, notes, comments, the charts of MS Graph and Excel, and OLE
+   objects other than their pictures. The corpus has no file of PowerPoint 97
+   to 2003 with a chart. Read the picture bullets and the numbers of the
+   master styles (TextMasterStyle9Atom) and of the texts of the slide list
+   (OutlineTextProps9Container). Grow a shape with fFitShapeToText in a file
+   that another program wrote. Source: `msppt`.
 6. Compare the pages of `msdoc`, `msxls` and `msppt` with LibreOffice in
    the test module. Source: `msdoc`, `msxls` and `msppt`.
 7. Draw the annotations of the spreadsheets of `odf`. Source: `odf`.
@@ -642,7 +614,7 @@ time is for a page at 96 dpi.
      The layout cannot leave them out, because the collapsible spaces of
      `ProcessWhitespace` go from one text box to the next. The builder now
      makes them in blocks, without a new string, and a box is 352 bytes.
-   - okage: `roxmltree` and `cssselect2`. See item 5 of "Work for okage".
+   - okage: `roxmltree` and `cssselect2`. See item 4 of "Work for okage".
 
    `zipdoc.Archive.Read` also reads each file of a book with
    `raster.ReadAll`, whose buffer grows as it reads. The size of the entry
@@ -709,23 +681,17 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    shadows, the glows and the soft edges with box blurs of its own, in
    `blur.go`, and changes the colors of the pictures itself, in `recolor.go`.
    Source: `internal/drawingml`, 2026-11-19.
-2. Read the OpenType MATH table in `typesetting`, and give a layout of math: a
-   tree of math nodes, a parser of TeX math ported from `go-tex/math`, and the
-   layout of TeX Appendix G, whose result draws with okage, gives its outlines
-   as paths, or gives its glyphs and rules. ivy draws the math of LaTeX,
-   Office Math, MathML and OpenDocument with it, and zuzu the math of its
-   Mermaid labels. Also give the metrics, the kerning of a pair and the
-   ligature of a pair of glyphs, for the engine of D62. okage decides the API
-   in okage D78 (`texmath`). texmath came with okage at 5e860c67. The
-   helpers for the kerning and the ligature of a pair are not in okage yet,
-   and `latex/internal/opentype` shapes the pair to find them. Source: D62,
-   2026-11-20.
+2. Give the kerning and the ligature of a pair of glyphs in `typesetting`, for
+   the engine of D62. Today `latex/internal/opentype` shapes the pair to find
+   them. The layout of math that ivy asked for here came with `texmath` (okage
+   D78), which `latex` and `internal/formula` use. Source: D62, 2026-11-20.
 3. In `pdf`, take a link annotation to a named destination by its name
    alone, and resolve the name in `Document.Finish`, after the last page.
    Today the destination of a link must be known when its page is drawn,
    so pdfenc draws every page a second time when a page links to a later
    page. Source: `pdf/pdfenc`, 2026-11-21.
 4. Allocate less in `roxmltree` and in `cssselect2` for a large document.
+   Source: item 3 of "Left by the speed of 2026-11-18", 2026-11-21.
    `idpf/epub/linear-algebra.epub` holds 25 MB of XHTML with about 270,000
    elements. On 2026-11-21 one run of `test/cmd/perf` on it, which opens
    the book and counts its pages, allocates these:
@@ -744,8 +710,11 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
      iterator of `Element.Children` makes two closures for each element.
      These are about 900,000 objects. An optional method of `Element` that
      gives the children as a slice, or their number, needs none of them.
-
-   Source: item 3 of "Left by the speed of 2026-11-18", 2026-11-21.
+5. In `texmath`, set the prime of `x'` at its full size. texmath sets it as
+   the glyph prime in a superscript of script size, but the prime glyph of an
+   OpenType math font is already raised, so the prime is too small and too
+   high. ivy works around it in `latex/internal/mathsvg` (`basePrimes`).
+   Source: the review of LaTeX, 2026-11-25.
 
 ## Work for magic
 

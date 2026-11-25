@@ -32,3 +32,14 @@ The maintainers decided:
 Each property is off by default. `docx`, `msdoc`, `odf` and `rtf` turn on
 the ones that their application uses. HTML, EPUB and the other formats of
 the web keep the rules of WeasyPrint.
+
+## The build of 2026-11-25
+
+Until 2026-11-25 the layout put the line gap above the text only for a
+multiple line spacing above 1. A single line kept half of the gap above the
+text and half below. Since then, item 2 also applies to a single line: the
+formats give `-ivy-line-multiple: 1`, and the whole gap goes above the
+text. A multiple below 1, and a line that is not higher than its text,
+keep the rule of CSS. `docx` gives no value to a single line on a document
+grid, because Word centers that text. The single lines of Verdana and of
+Tahoma take the ratios of Word, 1.2153 and 1.207.

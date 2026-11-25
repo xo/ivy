@@ -153,8 +153,14 @@ func TestLineMultiple(t *testing.T) {
 		// The single line of a multiple of 4 is 10px high, less than the
 		// text, which stays at the top of the line.
 		{"four", "40px", "4", 0},
-		// A multiple up to 1 keeps the rule of CSS.
-		{"one", "40px", "1", 10},
+		// The single line of 32px has a line gap of 12px, above the text.
+		// CSS puts 10px above it.
+		{"small", "40px", "1.25", 12},
+		// A single line puts its whole leading above the text.
+		{"single", "25px", "1", 5},
+		{"one", "40px", "1", 20},
+		// A multiple below 1 keeps the rule of CSS.
+		{"half", "40px", "0.5", 10},
 		{"invalid", "40px", "-2", 10},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

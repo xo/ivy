@@ -623,7 +623,8 @@ func (e *Engine) readJobBBL() ([]byte, bool) {
 	if e.jobName == "" {
 		return nil, false
 	}
-	data, err := readDocFile(e.jobName + ".bbl")
+	// ivy: the file comes from the resolver of the run (ivy_lmfonts.go).
+	data, err := e.readJobFile(e.jobName + ".bbl")
 	if err != nil {
 		return nil, false
 	}
@@ -656,7 +657,8 @@ func (e *Engine) doBibliography() {
 		file += ".bib"
 	}
 	e.noteRead(file)
-	data, err := readDocFile(file)
+	// ivy: the file comes from the resolver of the run (ivy_lmfonts.go).
+	data, err := e.readJobFile(file)
 	if err != nil {
 		if e.tolerant() {
 			e.recordMissingFile("bibliography")

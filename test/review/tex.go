@@ -274,7 +274,7 @@ func texLogErrors(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading the log of TeX: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer f.Close()
 	return scanTeXErrors(f)
 }
 

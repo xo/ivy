@@ -41,7 +41,7 @@ var lineRatios = map[string]float64{
 	"arial": 1.1499, "liberation sans": 1.1499, "helvetica": 1.1499,
 	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
-	"aptos": 1.2,
+	"aptos": 1.2, "verdana": 1.2153, "tahoma": 1.207,
 }
 
 // defaultLineRatio is the height of a single line of a font that is not in
@@ -49,7 +49,9 @@ var lineRatios = map[string]float64{
 const defaultLineRatio = 1.17
 
 // font returns the name of a font of the properties: a font of the theme,
-// such as "theme:minorHAnsi", resolves through the theme.
+// such as "theme:minorHAnsi", resolves through the theme. An East Asian
+// font of the theme that has no a:ea font takes the font of the script of
+// the East Asian language of the theme fonts (Fonts.EastAsianFor).
 func (c *converter) font(v string) string {
 	theme, ok := strings.CutPrefix(v, "theme:")
 	if !ok {
@@ -64,9 +66,9 @@ func (c *converter) font(v string) string {
 	case "minorHAnsi", "minorAscii":
 		return c.theme.Minor.Latin
 	case "majorEastAsia":
-		return c.theme.Major.EastAsian
+		return c.theme.Major.EastAsianFor(c.themeLang)
 	case "minorEastAsia":
-		return c.theme.Minor.EastAsian
+		return c.theme.Minor.EastAsianFor(c.themeLang)
 	case "majorBidi":
 		return c.theme.Major.ComplexScript
 	case "minorBidi":

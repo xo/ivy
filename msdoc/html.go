@@ -422,6 +422,7 @@ var lineRatios = map[string]float64{
 	"arial": 1.1499, "liberation sans": 1.1499, "helvetica": 1.1499,
 	"times new roman": 1.1499, "liberation serif": 1.1499, "times": 1.1499,
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
+	"verdana": 1.2153, "tahoma": 1.207,
 }
 
 // lineRatio returns the height of a single line of the font ftc, as a
@@ -642,7 +643,8 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 	switch pp := para.pap; {
 	case pp.lineMult > 0:
 		style = append(style, "line-height: "+strconv.FormatFloat(ratio*pp.lineMult, 'f', 3, 64))
-		// Word puts the extra space of the lines below their text
+		// Word puts the line gap of a single line above its text, and
+		// the extra space of the lines below it
 		style = append(style, "-ivy-line-multiple: "+strconv.FormatFloat(pp.lineMult, 'f', 3, 64))
 		spacing.mult = pp.lineMult
 	case pp.lineExact > 0:
@@ -653,6 +655,7 @@ func (p *parser) writeParagraph(b *strings.Builder, para paragraph) {
 		spacing.mult = 0
 	case known:
 		style = append(style, "line-height: "+strconv.FormatFloat(ratio, 'f', 4, 64))
+		style = append(style, "-ivy-line-multiple: 1")
 	default:
 		spacing.ratio = 0
 	}
@@ -953,7 +956,9 @@ func joinsBorder(a, b run) bool {
 // docx does. An object at a position from the margin or from the page,
 // with text around it or above and below it, floats at that position
 // (D60). An object above and below text then has a margin to the right
-// side of the column, so that no line fits beside it.
+// side of the column, so that no line fits beside it. The text wraps
+// around an object on the sides of its wrk, 9 points from it, so that the
+// text is on both sides of an object in the middle of the column (D63).
 func (p *parser) floatStyle(f *floating, w, h float64) []string {
 	pg := p.page
 	if pg.width == 0 {
@@ -1012,6 +1017,21 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 		case f.by == 2 && y > 0:
 			style = append(style, "margin-top: "+num(y)+"pt")
 		}
+		style = append(style, "-ivy-wrap-flow: "+wrapSide(f.wrk)+" 9pt")
 	}
 	return append(style, "width: "+num(w)+"pt", "height: "+num(h)+"pt")
+}
+
+// wrapSide returns the keyword of -ivy-wrap-flow for the wrk of an FSPA:
+// the side of the text that wraps around an object (D63).
+func wrapSide(wrk int) string {
+	switch wrk {
+	case 1:
+		return "start"
+	case 2:
+		return "end"
+	case 3:
+		return "maximum"
+	}
+	return "both"
 }

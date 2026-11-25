@@ -155,7 +155,7 @@ func TestLinks(t *testing.T) {
 	link := binary.LittleEndian.AppendUint32(nil, 4)
 	link = binary.LittleEndian.AppendUint32(link, 13)
 	texts = addText(texts, header{Type: rtTxInteractiveInfo}, link)
-	tb := b.textBody(&texts[0], nil)
+	tb := b.textBody(&texts[0], nil, nil)
 	runs := tb.Paragraphs[0].Runs
 	if len(runs) != 3 || runs[1].Text != "www.x.org" {
 		t.Fatalf("expected the link in a run of its own, got %+v", runs)

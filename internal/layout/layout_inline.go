@@ -135,15 +135,31 @@ func iterLineBoxes(lc *layoutContext, box *Box, positionY, bottomSpace float64, 
 		} else {
 			box.textIndent = 0
 		}
+		// Port: upstream has no -ivy-wrap-flow. A line next to such a
+		// float can leave a room at its height, and the next line goes
+		// there, as a part of the same row (D63).
+		var row *lineRow
 		for {
 			lc.spend(1)
+			lc.lineRow, lc.nextRow = row, nil
 			line, resumeAt := layoutLine(
 				lc, box, positionY, bottomSpace, skip, containingBlock,
 				absoluteBoxes, fixedBoxes, firstLetterStyle, firstLineStyle)
+			next := lc.nextRow
+			lc.lineRow, lc.nextRow = nil, nil
 			firstLineStyle = nil
 			if line != nil {
 				handleLeader(lc, line, containingBlock)
 				positionY = line.PositionY + line.Height
+				if row != nil && line.PositionY == row.y {
+					line.ownExtra().rowPart = true
+					positionY = max(positionY, row.bottom)
+				}
+				row = next
+				if row != nil {
+					row.bottom = positionY
+					positionY = line.PositionY
+				}
 			}
 			if line == nil {
 				return
@@ -174,6 +190,11 @@ func iterLineBoxes(lc *layoutContext, box *Box, positionY, bottomSpace float64, 
 // This function takes care of excluded floating shapes to avoid
 // collisions.
 func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace float64, skip skipStack, containingBlock *Box, absoluteBoxes, fixedBoxes *[]*Box, firstLetterStyle, firstLineStyle *Style) (*Box, skipStack) {
+	// Port: upstream has no -ivy-wrap-flow. The row of the line is taken
+	// before the layout of the line, which can lay out other lines.
+	row := lc.lineRow
+	lc.lineRow = nil
+
 	skip, cont := skipFirstWhitespace(linebox, skip)
 	if cont {
 		return nil, nil
@@ -193,7 +214,7 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 		// No float, width and height will be set by the lines
 		linebox.Width, linebox.Height = 0, 0
 	}
-	positionX, positionY, availableWidth := avoidCollisions(lc, linebox, containingBlock, false)
+	positionX, positionY, availableWidth, rooms := lc.lineCollisions(linebox, containingBlock, row)
 
 	candidateHeight := linebox.Height
 
@@ -208,12 +229,17 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 	var resumeAt skipStack
 	var linePlaceholders, waitingFloats []*Box
 	var lineAbsolutes, lineFixed []*Box
+	var roomStart, roomEnd float64
 	for tries := 0; ; tries++ {
 		originalPositionX := positionX
 		originalPositionY := positionY
 		linebox.PositionX, linebox.PositionY = positionX, positionY
 		originalWidth := linebox.Width
 		maxX := positionX + availableWidth
+		roomStart, roomEnd = positionX, maxX
+		if isStr(containingBlock.Style.Get("direction"), "rtl") {
+			roomStart, roomEnd = positionX-availableWidth, positionX
+		}
 		positionX += linebox.textIndent
 
 		linePlaceholders, waitingFloats = nil, nil
@@ -236,7 +262,12 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 
 		removeLastWhitespace(lc, line)
 
-		_, _, newAvailableWidth := avoidCollisions(lc, linebox, containingBlock, false)
+		// Port: upstream has no -ivy-wrap-flow. Next to such a float, the
+		// line stays in its room, so the room gives the width (D63).
+		newAvailableWidth := availableWidth
+		if !rooms {
+			_, _, newAvailableWidth = avoidCollisions(lc, linebox, containingBlock, false)
+		}
 		offsetX := textAlign(lc, line, newAvailableWidth, resumeAt == nil || preservedLineBreak)
 		if isStr(containingBlock.Style.Get("direction"), "rtl") {
 			offsetX *= -1
@@ -281,7 +312,7 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 		if lc.touchesPageFloat(positionY, line.Height) {
 			line.Width = minWidth
 		}
-		positionX, positionY, availableWidth = avoidCollisions(lc, line, containingBlock, false)
+		positionX, positionY, availableWidth, rooms = lc.lineCollisions(line, containingBlock, row)
 		line.Width = lineWidth
 
 		if firstLineStyle != nil {
@@ -354,6 +385,12 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 	}
 	if len(floatChildren) > 0 {
 		line.Children = append(slices.Clip(line.Children), floatChildren...)
+	}
+
+	// Port: upstream has no -ivy-wrap-flow. The row is set after the
+	// floats of the line, whose layout lays out other lines (D63).
+	if rooms && resumeAt != nil {
+		lc.nextRow = lc.rowAfter(line, containingBlock, roomStart, roomEnd)
 	}
 
 	return line, resumeAt
@@ -976,8 +1013,8 @@ func adjustLineHeight(box *Box) {
 	lineHeight, box.Baseline = strut(box.Style)
 	box.Height = num(box.Style.Get("font_size"))
 	halfLeading := (lineHeight - box.Height) / 2
-	// Port: upstream has no -ivy-line-multiple, which moves the text up
-	// and the leading below it.
+	// Port: upstream has no -ivy-line-multiple, which moves the text in
+	// its line, see leadingShift.
 	var shift float64
 	if _, ok := box.Style.Get("line_multiple").(Float); ok {
 		shift = leadingShift(box.Style, lineHeight, strutTextHeight(box.Style))

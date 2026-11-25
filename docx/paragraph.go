@@ -501,8 +501,9 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 		s.set("background-color", v)
 	}
 	s.set("line-height", c.lineHeight(ppr, rpr))
-	if m := lineMultiple(ppr); m != "" {
-		// Word puts the extra space of the lines below their text
+	if m := c.lineMultiple(ppr, rpr); m != "" {
+		// Word puts the line gap of a single line above its text, and the
+		// extra space of the lines below it
 		s.set("-ivy-line-multiple", m)
 	}
 	if ppr.on("suppressLineNumbers") {
@@ -662,7 +663,7 @@ func (c *converter) lineHeight(ppr, rpr props) string {
 	// On a grid of lines, Word gives a line as many lines of the grid as
 	// its font needs, and multiplies them for the spacing (ECMA-376 Part 1,
 	// 17.6.5).
-	if pitch := c.linePitch(); pitch > 0 && c.margin == "" && ppr["snapToGrid"] != "0" && ppr["snapToGrid"] != "false" && ppr["snapToGrid"] != "off" {
+	if pitch := c.gridPitch(ppr); pitch > 0 {
 		n := math.Ceil(ratio*fontSize(rpr)/pitch - 0.01)
 		return pt(n * pitch * min(line/240, 10))
 	}
@@ -670,18 +671,39 @@ func (c *converter) lineHeight(ppr, rpr props) string {
 }
 
 // lineMultiple returns the value of -ivy-line-multiple of a paragraph
-// whose lines have a multiple spacing, or "".
-func lineMultiple(ppr props) string {
+// whose lines are a multiple of a single line, or "" for lines of a height
+// in points. A line of the rule "atLeast" that is not higher than a single
+// line is a single line, which does not snap to the grid of lines. Word
+// centers the text of a single line in the lines of a grid, as CSS does,
+// so a single line on a grid has no value.
+func (c *converter) lineMultiple(ppr, rpr props) string {
+	line := ppr.num("spacing.line", 240)
 	switch ppr["spacing.lineRule"] {
 	case "", "auto":
+	case "atLeast":
+		if line/20 > c.lineRatio(rpr)*fontSize(rpr) {
+			return ""
+		}
+		return "1"
 	default:
 		return ""
 	}
-	line := ppr.num("spacing.line", 240)
-	if line <= 240 {
+	if line <= 0 {
+		line = 240
+	}
+	if line <= 240 && c.gridPitch(ppr) > 0 {
 		return ""
 	}
 	return num(min(line/240, 10))
+}
+
+// gridPitch returns the pitch of the grid of lines that the lines of a
+// paragraph snap to, or 0.
+func (c *converter) gridPitch(ppr props) float64 {
+	if c.margin != "" || ppr["snapToGrid"] == "0" || ppr["snapToGrid"] == "false" || ppr["snapToGrid"] == "off" {
+		return 0
+	}
+	return c.linePitch()
 }
 
 // linePitch returns the pitch of the grid of lines of the current
@@ -756,18 +778,6 @@ func (c *converter) inlines(n roxmltree.Node, base props) {
 			c.math(e, base)
 		}
 	}
-}
-
-// math writes the text of an equation of Office Math, in italics.
-func (c *converter) math(n roxmltree.Node, base props) {
-	var text strings.Builder
-	for d := range n.Descendants() {
-		if d.IsElement() && d.TagName().Name() == "t" {
-			s, _ := d.Text()
-			text.WriteString(s)
-		}
-	}
-	c.text(text.String(), base.over(props{"i": "1"}), base)
 }
 
 // text writes a run of text with the properties p in a paragraph whose

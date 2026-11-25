@@ -401,7 +401,8 @@ func (e *Engine) mvlHasContent(from int) bool {
 	for _, n := range e.mvl[from:] {
 		switch n.(type) {
 		case pageStyleNode, *pageStyleNode, glueNode, *glueNode, kernNode, *kernNode,
-			penaltyNode, *penaltyNode, specialNode, *specialNode:
+			penaltyNode, *penaltyNode, specialNode, *specialNode,
+			pageCounterNode, markNode: // ivy: no ink either (ivy_latex.go)
 			continue
 		default:
 			return true

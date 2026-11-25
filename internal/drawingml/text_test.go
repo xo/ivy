@@ -128,6 +128,27 @@ func TestBulletChar(t *testing.T) {
 	}
 }
 
+// TestPictureBullet checks the bullet of a picture: an image of the layout,
+// two thirds as high as the text, and a round bullet without a picture.
+func TestPictureBullet(t *testing.T) {
+	run := RunStyle{}
+	run.Size.Set(24)
+	p := Paragraph{Runs: []Run{{Text: "a", Style: run}}}
+	p.Style.Indent.Set(-18)
+	p.Style.Bullet.Set(Bullet{Kind: BulletPicture, Picture: []byte("pic")})
+	var sb strings.Builder
+	writeBullet(&sb, &p, &run, nil, 1)
+	if got := sb.String(); !strings.Contains(got, `<img src="data:application/octet-stream;base64,cGlj" style="height:16pt">`) {
+		t.Errorf("expected an image of 16 points, got %s", got)
+	}
+	p.Style.Bullet.Set(Bullet{Kind: BulletPicture})
+	sb.Reset()
+	writeBullet(&sb, &p, &run, nil, 1)
+	if got := sb.String(); !strings.Contains(got, "• </span>") {
+		t.Errorf("expected a round bullet, got %s", got)
+	}
+}
+
 func TestTextBody(t *testing.T) {
 	c := &Colors{Theme: testTheme}
 	var list ListStyle

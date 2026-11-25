@@ -610,7 +610,8 @@ func (e *Engine) pageOfIndex(idx int) int {
 	pageNo := 0
 	for start := 0; start < len(list); {
 		end := e.findPageBreak(list, start)
-		if len(trimTrailingGlue(list[start:end])) > 0 {
+		// ivy: a page of marks alone ships nothing, as in paginateSingleList
+		if page := trimTrailingGlue(list[start:end]); len(page) > 0 && !pageIsUnshippable(page) {
 			pageNo++
 		}
 		if idx < end {

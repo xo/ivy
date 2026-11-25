@@ -44,6 +44,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 │   └── cb7/                     a module of its own, for 7z (D6)
 ├── docx/  xlsx/  pptx/          Office Open XML
 ├── odf/  rtf/                   OpenDocument, RTF
+├── csv/                         CSV, TSV and TAB, as one table on pages
 ├── msdoc/  msxls/  msppt/       the binary Office formats
 ├── vsdx/  pub/                  the previews of Visio and Publisher
 ├── dmg/  ipa/  apk/  msi/       the containers with an icon or a preview
@@ -57,6 +58,7 @@ github.com/xo/ivy                the root package: the document API (D11)
 │   ├── font/                    the fonts (D10)
 │   ├── layout/                  the port of WeasyPrint (D15)
 │   ├── drawingml/               the shapes of DrawingML, from ECMA-376 (D24)
+│   ├── formula/                 the equations of Office Math, MathML and OpenDocument, on texmath of okage
 │   ├── msole/  offcrypto/  ...  the code that more than one format shares
 │   ├── hayro/                   the port of hayro, which pdf and ps share (D14, D29)
 │   ├── ccitt/  jbig2/  jpeg2000/ the codecs of the port of hayro (D14, D17)
@@ -246,8 +248,8 @@ type Config struct {
 	Logger *slog.Logger
 	// Limits bound the work on one document.
 	Limits Limits
-	// Cache shares the fonts and the ICC profiles between documents. A nil
-	// Cache gives each document a cache of its own.
+	// Cache is kept for a cache that documents share. No format reads it
+	// yet (D45).
 	Cache *Cache
 	// SystemFonts lets a format that lays out text, such as an ebook, use
 	// the fonts of the system, after the fonts that the document embeds and
@@ -320,10 +322,10 @@ const (
 // zero or less.
 func (lim Limits) WithDefaults() Limits
 
-// Cache holds the fonts of the system, the fonts that documents embed, and
-// the transforms of ICC profiles. It is safe for concurrent use. There is no
-// global cache. The formats of phase 1 use no fonts, so it is empty until
-// phase 2.
+// Cache is kept for a cache that documents share, such as the fonts and the
+// transforms of ICC profiles. It is safe for concurrent use. There is no
+// global cache. No format reads it yet, because internal/fontdb holds the
+// fonts (D45).
 type Cache struct{ /* unexported */ }
 
 // NewCache returns an empty cache.
