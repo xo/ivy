@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xo/okage/svg"
@@ -149,6 +150,39 @@ func TestCovering(t *testing.T) {
 	}
 	if id, ok := Covering(Default(), 0, 'あ'); ok {
 		t.Errorf("expected no Go font to draw 'あ', got: %d", id)
+	}
+}
+
+// TestCoveringNoto checks that Covering finds the regular face of a family
+// of Noto of the module github.com/xo/ivy/fonts, that Styled gives its bold
+// face, and that the selector of the layout finds a face of Noto (D74).
+func TestCoveringNoto(t *testing.T) {
+	db, first := repoFonts(t)
+	for r, want := range map[rune]string{'ب': "NotoNaskhArabic", 'क': "NotoSansDevanagari", 'ก': "NotoSansThai"} {
+		id, ok := Covering(db, first, r)
+		if !ok {
+			t.Errorf("%q: expected %s, found nothing", r, want)
+			continue
+		}
+		if got := postScriptName(t, db, id); got != want+"-Regular" {
+			t.Errorf("%q: expected %s-Regular, got: %s", r, want, got)
+		}
+		bold, ok := Styled(db, id, 700, false)
+		if !ok {
+			t.Errorf("%q: expected the bold face of %s", r, want)
+			continue
+		}
+		if got := postScriptName(t, db, bold); got != want+"-Bold" {
+			t.Errorf("%q: expected %s-Bold, got: %s", r, want, got)
+		}
+	}
+	carlito, ok := Find(db, "Calibri", 400, false)
+	if !ok {
+		t.Fatal("expected Carlito")
+	}
+	if id, ok := svg.DefaultFallbackSelector(nil)('ب', []svg.FontID{carlito}, db); !ok ||
+		!strings.HasPrefix(postScriptName(t, db, id), "NotoNaskhArabic") {
+		t.Errorf("expected the selector of the layout to find NotoNaskhArabic, got: %d, %v", id, ok)
 	}
 }
 

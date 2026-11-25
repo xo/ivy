@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/image/font/gofont/goregular"
 
+	"github.com/xo/ivy/internal/hayro/cmap"
 	"github.com/xo/ivy/internal/hayro/syntax"
 )
 
@@ -281,5 +282,115 @@ func TestSymbolicNamedTrueType(t *testing.T) {
 				t.Errorf("flags %d: %U: expected .notdef, got %d", c.flags, r, got)
 			}
 		}
+	}
+}
+
+// scriptToUnicode is a ToUnicode CMap that maps the codes of scriptFont to
+// two Arabic letters, a Latin letter, a Thai letter and a character of the
+// Private Use Area.
+const scriptToUnicode = `/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /ScriptToUnicode def
+/CMapType 2 def
+1 begincodespacerange <0000> <FFFF> endcodespacerange
+5 beginbfchar
+<0001> <0628>
+<0002> <0041>
+<0003> <0E01>
+<0004> <E000>
+<0005> <062A>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end`
+
+// scriptFont is a Type 0 font of no CJK collection that the file does not
+// embed, with a ToUnicode CMap. Its codes are the glyph IDs of Traditional
+// Arabic.
+const scriptFont = `<</Type /Font /Subtype /Type0 /BaseFont /TraditionalArabic /Encoding /Identity-H
+	/ToUnicode /ScriptToUnicode
+	/DescendantFonts [<</Type /Font /Subtype /CIDFontType2 /BaseFont /TraditionalArabic
+	/CIDSystemInfo <</Registry (Adobe) /Ordering (Identity) /Supplement 0>> /DW 500>>]>>`
+
+// TestScriptFallback checks that a character of a CID font that the file
+// does not embed, and that the substitute of a standard font does not draw,
+// draws with the face that the resolver gives for it (D74).
+func TestScriptFallback(t *testing.T) {
+	t.Parallel()
+	read := func(name string) []byte {
+		data, err := os.ReadFile("../../../fonts/noto/" + name)
+		if err != nil {
+			t.Skipf("no fonts module: %v", err)
+		}
+		return data
+	}
+	arabic, thai := read("NotoNaskhArabic-Regular.ttf"), read("NotoSansThai-Regular.ttf")
+	cmaps := func(name cmap.Name) ([]byte, bool) {
+		if name == "ScriptToUnicode" {
+			return []byte(scriptToUnicode), true
+		}
+		return cmapResolver(name)
+	}
+	var mu sync.Mutex
+	chars := map[rune]int{}
+	resolve := func(q *FontQuery) (FontData, uint32, bool) {
+		if c := q.Fallback.Char; c != 0 {
+			mu.Lock()
+			chars[c]++
+			mu.Unlock()
+			switch {
+			case c >= 0x0600 && c <= 0x06FF:
+				return arabic, 0, true
+			case c >= 0x0E00 && c <= 0x0E7F:
+				return thai, 0, true
+			}
+			return nil, 0, false
+		}
+		return defaultResolver(q)
+	}
+	font, ok := NewFontCache().Font(dict(t, scriptFont), resolve, cmaps)
+	if !ok {
+		t.Fatal("cannot read the font")
+	}
+	outline := func(code uint32) (GlyphID, bool) {
+		gid := font.MapCode(code)
+		g, ok := font.Glyph(gid, code).(*OutlineGlyph)
+		return gid, gid != GlyphIDNotdef && ok && !g.Outline().IsEmpty()
+	}
+	beh, ok := outline(1)
+	if !ok || beh>>scriptShift == 0 {
+		t.Errorf("U+0628: expected a glyph of Noto Naskh Arabic, got %#x", beh)
+	}
+	teh, ok := outline(5)
+	if !ok || teh>>scriptShift != beh>>scriptShift {
+		t.Errorf("U+062A: expected a glyph of the program of U+0628, got %#x", teh)
+	}
+	if gid, ok := outline(3); !ok || gid>>scriptShift == 0 || gid>>scriptShift == beh>>scriptShift {
+		t.Errorf("U+0E01: expected a glyph of Noto Sans Thai, got %#x", gid)
+	}
+	if gid, ok := outline(2); !ok || gid>>scriptShift != 0 {
+		t.Errorf("A: expected a glyph of the substitute, got %#x", gid)
+	}
+	// No face draws U+E000, so the font draws nothing, and not the glyph of
+	// the CID in the substitute.
+	if gid := font.MapCode(4); gid != GlyphIDNotdef {
+		t.Errorf("U+E000: expected .notdef, got %#x", gid)
+	}
+	font.MapCode(1)
+	if n := chars[0x0628]; n != 1 {
+		t.Errorf("U+0628: expected one query, got %d", n)
+	}
+	if _, ok := chars['A']; ok {
+		t.Error("A: expected no query, the substitute draws it")
+	}
+	// Without a face for the characters, the Arabic letters draw nothing.
+	font, ok = NewFontCache().Font(dict(t, scriptFont), defaultResolver, cmaps)
+	if !ok {
+		t.Fatal("cannot read the font")
+	}
+	if gid := font.MapCode(1); gid != GlyphIDNotdef {
+		t.Errorf("U+0628 without a face: expected .notdef, got %#x", gid)
 	}
 }

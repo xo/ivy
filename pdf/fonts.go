@@ -38,6 +38,10 @@ var cjkProbes = map[cmap.CIDFamilyKind]rune{
 //  3. The substitute of the standard font that is closest to the font, as
 //     interpret.DefaultFontResolver gives.
 //
+// For a character that the substitute of a CID font does not draw, it gives
+// the first face that draws the character, such as a font of Noto of
+// github.com/xo/ivy/fonts (D74), and none without the fonts of Config.
+//
 // A file that names one of the 14 standard fonts gets the substitute of the
 // standard font. Its methods are safe for concurrent use.
 type fontResolver struct {
@@ -59,6 +63,12 @@ func newFontResolver(cfg ivy.Config, lim ivy.Limits) *fontResolver {
 
 // resolve is a pdffont.FontResolverFn.
 func (r *fontResolver) resolve(q *pdffont.FontQuery) (pdffont.FontData, uint32, bool) {
+	if c := q.Fallback.Char; c != 0 && !q.IsStandard {
+		if r.fsys == nil && !r.system {
+			return nil, 0, false
+		}
+		return r.styled(c, weightOf(&q.Fallback))
+	}
 	if q.IsStandard || r.fsys == nil && !r.system {
 		return interpret.DefaultFontResolver(q)
 	}
@@ -87,10 +97,7 @@ func (r *fontResolver) database() (*svg.FontDatabase, int) {
 // database holds none.
 func (r *fontResolver) named(q *pdffont.FallbackFontQuery) (pdffont.FontData, uint32, bool) {
 	db, _ := r.database()
-	weight := uint16(min(q.FontWeight, 1000))
-	if q.IsBold {
-		weight = max(weight, 700)
-	}
+	weight := weightOf(q)
 	for _, name := range []string{q.PostScriptName, q.FontFamily, q.FontName} {
 		if name == "" {
 			continue
@@ -100,6 +107,29 @@ func (r *fontResolver) named(q *pdffont.FallbackFontQuery) (pdffont.FontData, ui
 		}
 	}
 	return nil, 0, false
+}
+
+// weightOf returns the weight of the font of q.
+func weightOf(q *pdffont.FallbackFontQuery) uint16 {
+	weight := uint16(min(q.FontWeight, 1000))
+	if q.IsBold {
+		weight = max(weight, 700)
+	}
+	return weight
+}
+
+// styled returns the face that draws c, with the weight of its family that
+// is closest to weight, and false if the database holds none (D74).
+func (r *fontResolver) styled(c rune, weight uint16) (pdffont.FontData, uint32, bool) {
+	db, first := r.database()
+	id, ok := fontdb.Covering(db, first, c)
+	if !ok {
+		return nil, 0, false
+	}
+	if s, ok := fontdb.Styled(db, id, weight, false); ok && fontdb.Draws(db, s, c) {
+		id = s
+	}
+	return db.FaceData(id)
 }
 
 // covering returns the first face that draws probe, and false if the

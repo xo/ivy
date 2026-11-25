@@ -26,14 +26,22 @@ import (
 // and as a subset.
 
 // textReaders are the programs that read the text of page n, from 1, of
-// the PDF file at path.
+// the PDF file at path. pdftotext -raw keeps the order of the content
+// stream, and breaks a word from right to left at a mark of its letters,
+// even in the PDF file of Word. Its default mode applies the bidirectional
+// algorithm and reads such a word whole, so a word that the first text
+// does not hold is looked for in the second, alt.
 var textReaders = []struct {
 	name string
 	read func(ctx context.Context, path string, n int) (string, error)
+	alt  func(ctx context.Context, path string, n int) (string, error)
 }{
 	{name: "pdftotext", read: func(ctx context.Context, path string, n int) (string, error) {
 		page := strconv.Itoa(n)
 		return output(ctx, "pdftotext", "-raw", "-enc", "UTF-8", "-f", page, "-l", page, path, "-")
+	}, alt: func(ctx context.Context, path string, n int) (string, error) {
+		page := strconv.Itoa(n)
+		return output(ctx, "pdftotext", "-enc", "UTF-8", "-f", page, "-l", page, path, "-")
 	}},
 	{name: "mutool", read: func(ctx context.Context, path string, n int) (string, error) {
 		return output(ctx, "mutool", "draw", "-q", "-F", "txt", "-o", "-", path, strconv.Itoa(n))
@@ -198,15 +206,27 @@ func pdfBlend(b okage.BlendMode) bool {
 }
 
 // normalText returns s without the characters that a reader of the text
-// of a PDF file can add, drop or split: the spaces, the controls and the
-// characters that draw nothing, such as the soft hyphen.
+// of a PDF file can add, drop or split: the spaces, the controls, the
+// characters that draw nothing, such as the soft hyphen, and the harakat
+// of Arabic, such as the tanween and the shadda. pdftotext and MuPDF move
+// a haraka before its letter, or out of its word, in the PDF file of Word
+// too.
 func normalText(s string) string {
 	return strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == unicode.ReplacementChar ||
+			r >= 0x064B && r <= 0x065F || r == 0x0670 {
 			return -1
 		}
 		return r
 	}, s)
+}
+
+// rightToLeftWord reports whether a word holds a letter of Arabic or of
+// Hebrew.
+func rightToLeftWord(w string) bool {
+	return strings.ContainsFunc(w, func(r rune) bool {
+		return unicode.In(r, unicode.Arabic, unicode.Hebrew) && unicode.IsLetter(r)
+	})
 }
 
 // maxOccurrences bounds the places of one word in a text that
@@ -223,9 +243,13 @@ func matchWords(words []string, text string) (absent []string, unordered int) {
 	// sequence keeps it
 	var tails []int
 	present := 0
+	// A page with words from right to left can give a word of punctuation
+	// only, such as the closing guillemet and the period of a quote, in
+	// any place of the line.
+	rtl := slices.ContainsFunc(words, rightToLeftWord)
 	for _, w := range words {
 		w = normalText(w)
-		if w == "" {
+		if w == "" || rtl && strings.TrimFunc(w, unicode.IsPunct) == "" {
 			continue
 		}
 		var places []int
@@ -236,6 +260,16 @@ func matchWords(words []string, text string) (absent []string, unordered int) {
 			}
 			places = append(places, i+j)
 			i += j + 1
+		}
+		if len(places) == 0 && rightToLeftWord(w) {
+			// A reader moves the punctuation at the edge of a word from
+			// right to left by its own rules for the neutral characters,
+			// such as the Arabic comma after a year.
+			if v := strings.TrimFunc(w, unicode.IsPunct); v != "" && v != w {
+				if j := strings.Index(text, v); j >= 0 {
+					places = append(places, j)
+				}
+			}
 		}
 		if len(places) == 0 {
 			absent = append(absent, w)
@@ -289,6 +323,8 @@ func pdfFonts(ctx context.Context, path string) (all int, bad []string, err erro
 var textOrderDiffers = map[string]string{
 	"idpf/epub/regime-anticancer-arabic.epub": "pdftotext puts a bracket between a text from right to left " +
 		"and a text from left to right in the order of the page, not in the order of the text",
+	"poi/docx/rtl.docx": "pdftotext puts a bracket between a text from right to left " +
+		"and a text from left to right in the order of the page, not in the order of the text",
 }
 
 // textPage reads the text of page n, from 1, of the written file at path
@@ -313,6 +349,14 @@ func textPage(t *testing.T, path string, src ivy.Page, n, num int) {
 			continue
 		}
 		absent, unordered := matchWords(words, text)
+		if len(absent) > 0 && r.alt != nil {
+			alt, err := r.alt(ctx, path, n)
+			if err != nil {
+				t.Errorf("page %d: %v", num, err)
+				continue
+			}
+			absent, _ = matchWords(absent, alt)
+		}
 		line += fmt.Sprintf(" %s=%d/%d", r.name, len(absent), unordered)
 		switch {
 		case len(absent) > 0:

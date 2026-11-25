@@ -85,3 +85,32 @@ func TestDrawTextOutline(t *testing.T) {
       </style>
       <body>X`)
 }
+
+// TestHangingWhite checks that a line from right to left starts left of
+// its box by the width of the white space at its end that the box leaves
+// out, such as the space that hangs at the end of a line of white-space:
+// pre-wrap, and by no more.
+func TestHangingWhite(t *testing.T) {
+	// "ab " drawn from right to left: the space first, then b and a.
+	runs := []GlyphRun{{Glyphs: []Glyph{
+		{Advance: 4, Cluster: 2, ClusterEnd: 3},
+		{Advance: 10, Cluster: 1, ClusterEnd: 2},
+		{Advance: 10, Cluster: 0, ClusterEnd: 1},
+	}}}
+	for _, c := range []struct {
+		name   string
+		text   string
+		length int
+		width  float64
+		want   float64
+	}{
+		{"hanging", "ab ", 3, 20, 4},
+		{"in the box", "ab ", 3, 24, 0},
+		{"no space", "abc", 3, 20, 0},
+		{"part in the box", "ab ", 3, 22, 2},
+	} {
+		if got := hangingWhite(c.text, c.length, runs, c.width); got != c.want {
+			t.Errorf("%s: expected %g, got %g", c.name, c.want, got)
+		}
+	}
+}

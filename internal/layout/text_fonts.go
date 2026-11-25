@@ -1243,6 +1243,16 @@ func (m *fontmap) ResolveFace(r rune) *font.Face {
 			id = int(fallback)
 		} else if fallback, found := svg.DefaultFallbackSelector(nil)(r, m.chain, m.fc.db); found {
 			id = int(fallback)
+			// The selector of okage takes the first face that draws r,
+			// such as NotoNaskhArabic-Bold.ttf before
+			// NotoNaskhArabic-Regular.ttf. Take the face of its family
+			// with the weight and the style of the text (D74).
+			if base, ok := m.fc.db.Face(m.chain[0]); ok {
+				italic := base.Style != svg.FontStyleNormal
+				if s, ok := fontdb.Styled(m.fc.db, fallback, base.Weight, italic); ok && fontdb.Draws(m.fc.db, s, r) {
+					id = int(s)
+				}
+			}
 		}
 		m.fc.fallbacks[key] = id
 	}

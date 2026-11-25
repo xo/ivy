@@ -173,13 +173,19 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		}
 	}
 
+	runs := firstLine.GlyphRuns()
+	// removeLastWhitespace strips the spaces at the end of a line of the
+	// other values of white-space, and moves the line for them.
+	if firstLine.ResolvedDirection == 1 && isStrIn(style.Get("white_space"), "pre-wrap", "break-spaces") {
+		x -= hangingWhite(layout.Text, firstLine.Length, runs, textbox.Width)
+	}
 	fc := layout.fc
 	// The color of the text, for the palette entry of a color glyph that
 	// takes it. The alpha of the color is the opacity of the glyph.
 	fill := s.state.fill
 	fg := color.NRGBA{R: colorByte(fill.r), G: colorByte(fill.g), B: colorByte(fill.b), A: 0xff}
 	variations := fontVariations(style)
-	for _, run := range firstLine.GlyphRuns() {
+	for _, run := range runs {
 		if !run.HasFont || fc == nil {
 			continue
 		}
@@ -260,6 +266,32 @@ func drawFirstLine(s *stream, textbox *Box, textOverflow string, blockEllipsis V
 		}
 		s.fillGlyphs(glyphRun)
 	}
+}
+
+// hangingWhite returns the width of the white space at the end of a line
+// from right to left that the width of its box leaves out, such as the
+// space at the end of a line of white-space: pre-wrap, which hangs. The
+// space is at the left of the line, so the line starts that much to the
+// left of the box, and its other glyphs fill the box.
+//
+// Port: Pango draws the hanging space at the left of the box, and moves
+// the other glyphs to the right by its width, over the box at the right.
+func hangingWhite(text string, length int, runs []GlyphRun, width float64) float64 {
+	length = min(length, len(text))
+	trimmed := len(strings.TrimRightFunc(text[:length], isWhite))
+	if trimmed == length {
+		return 0
+	}
+	var total, white float64
+	for _, run := range runs {
+		for _, g := range run.Glyphs {
+			total += g.Advance
+			if g.Cluster >= trimmed && g.Cluster < length {
+				white += g.Advance
+			}
+		}
+	}
+	return max(0, min(white, total-width))
 }
 
 // textOutline returns the width of the outlines of the glyphs of a text of

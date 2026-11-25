@@ -78,6 +78,7 @@ var toggles = map[string]bool{
 	"b": true, "i": true, "caps": true, "smallCaps": true, "strike": true,
 	"dstrike": true, "vanish": true, "specVanish": true, "outline": true,
 	"emboss": true, "imprint": true, "shadow": true,
+	"bCs": true, "iCs": true, "rtl": true, "cs": true,
 }
 
 // parseRPr reads the properties of a w:rPr element.
@@ -101,7 +102,7 @@ func parseRPr(n roxmltree.Node) props {
 			if v := ooxml.Attr(c, "eastAsia"); v != "" {
 				p["lang.ea"] = v
 			}
-		case name == "sz" || name == "u" || name == "highlight" || name == "vertAlign" ||
+		case name == "sz" || name == "szCs" || name == "u" || name == "highlight" || name == "vertAlign" ||
 			name == "spacing" || name == "position" || name == "rStyle":
 			p[name] = ooxml.Attr(c, "val")
 		case name == "color":
@@ -122,14 +123,16 @@ func parseRPr(n roxmltree.Node) props {
 	return p
 }
 
-// fonts reads the fonts of w:rFonts into p: "font" for the Latin text and
-// "font.ea" for the East Asian text. A font of the theme comes before a
+// fonts reads the fonts of w:rFonts into p: "font" for the Latin text,
+// "font.ea" for the East Asian text and "font.cs" for the text of complex
+// script. A font of the theme comes before a
 // font that the element names, and the font of ASCII before the font of
 // the other Latin text.
 func fonts(p props, n roxmltree.Node) {
 	for key, attrs := range map[string][]string{
 		"font":    {"asciiTheme", "ascii", "hAnsiTheme", "hAnsi"},
 		"font.ea": {"eastAsiaTheme", "eastAsia"},
+		"font.cs": {"cstheme", "cs"},
 	} {
 		for _, a := range attrs {
 			v := ooxml.Attr(n, a)
@@ -173,7 +176,7 @@ func parsePPr(n roxmltree.Node) props {
 		case "jc", "pStyle", "outlineLvl":
 			p[name] = ooxml.Attr(c, "val")
 		case "keepNext", "keepLines", "pageBreakBefore", "contextualSpacing", "widowControl", "suppressAutoHyphens", "snapToGrid",
-			"autoSpaceDE", "autoSpaceDN", "suppressLineNumbers":
+			"autoSpaceDE", "autoSpaceDN", "suppressLineNumbers", "bidi":
 			v := ooxml.Attr(c, "val")
 			if v == "" {
 				v = "1"

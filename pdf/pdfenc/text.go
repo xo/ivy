@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/xo/okage"
 	"github.com/xo/okage/path"
@@ -174,6 +175,7 @@ func (d *device) text(run display.GlyphRun, shader okage.Shader) bool {
 		glyphs[i] = pg
 		emb.glyphs[pg.GlyphID] = struct{}{}
 	}
+	baseText(glyphs, run.Text)
 	pushed := !t.IsIdentity()
 	if pushed {
 		d.s.PushTransform(t)
@@ -233,4 +235,93 @@ func trySubset(emb *embedded) (err error) {
 		return fmt.Errorf("writing the subset of a font: %w", err)
 	}
 	return nil
+}
+
+// baseText gives the text of each cluster of several glyphs of a run from
+// right to left to the widest glyph of the cluster, its base, and an empty
+// range at the start of the cluster to its other glyphs.
+//
+// The writer of PDF gives the text of a cluster to its first glyph. In a
+// run from right to left, the first glyph of a cluster is often a mark with
+// no advance, such as the dots that Noto Naskh Arabic draws apart from
+// their letter. A reader that places the characters by their glyphs, such
+// as pdftotext, then reads a gap in the word and breaks it in two. A run
+// from left to right keeps the ranges of its glyphs: its first glyph is the
+// base.
+func baseText(glyphs []pdf.Glyph, text string) {
+	if !rightToLeft(glyphs) {
+		return
+	}
+	for i := 0; i < len(glyphs); {
+		r := glyphs[i].TextRange
+		j := i + 1
+		for j < len(glyphs) && glyphs[j].TextRange == r {
+			j++
+		}
+		if j-i > 1 && r.Start < r.End {
+			base := i
+			for k := i + 1; k < j; k++ {
+				if abs32(glyphs[k].XAdvance) > abs32(glyphs[base].XAdvance) {
+					base = k
+				}
+			}
+			splitCluster(glyphs[i:j], base-i, text[r.Start:r.End], r.Start)
+		}
+		i = j
+	}
+}
+
+// splitCluster gives the text of a cluster to its glyphs. base is the
+// index of its widest glyph and start the byte of the text of the cluster.
+// When the cluster has one glyph for each character, such as an alef and
+// its tanween, the base takes the first character and the other glyphs
+// take the others, from the last glyph of the run to the first, which is
+// their order in the text. The glyph of a letter then has the same text
+// in each cluster, and the writer needs no /ActualText for it. Else the
+// base takes the text, and the other glyphs take an empty range.
+func splitCluster(cluster []pdf.Glyph, base int, text string, start int) {
+	if utf8.RuneCountInString(text) == len(cluster) {
+		_, n := utf8.DecodeRuneInString(text)
+		cluster[base].TextRange = pdf.TextRange{Start: start, End: start + n}
+		at := start + n
+		for k := len(cluster) - 1; k >= 0; k-- {
+			if k == base {
+				continue
+			}
+			_, m := utf8.DecodeRuneInString(text[at-start:])
+			cluster[k].TextRange = pdf.TextRange{Start: at, End: at + m}
+			at += m
+		}
+		return
+	}
+	for k := range cluster {
+		if k != base {
+			cluster[k].TextRange = pdf.TextRange{Start: start, End: start}
+		}
+	}
+}
+
+// rightToLeft reports whether the clusters of a run go from right to left:
+// the start of the text of each cluster is below the start of the cluster
+// before it, and at least one cluster follows another.
+func rightToLeft(glyphs []pdf.Glyph) bool {
+	down := false
+	for i := 1; i < len(glyphs); i++ {
+		a, b := glyphs[i-1].TextRange, glyphs[i].TextRange
+		switch {
+		case b.Start > a.Start:
+			return false
+		case b.Start < a.Start:
+			down = true
+		}
+	}
+	return down
+}
+
+// abs32 returns the absolute value of v.
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }

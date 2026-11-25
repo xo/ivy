@@ -93,3 +93,4 @@ The decisions were consolidated on 2026-11-16, before the first commit (D4).
 | D71 | [The layout puts the baseline of a slide where PowerPoint does](D071-the-layout-puts-the-baseline-of-a-slide-where-powerpoint-does.md) | Decided |
 | D72 | [The module fonts holds Latin Modern Sans](D072-the-module-fonts-holds-latin-modern-sans.md) | Decided |
 | D73 | [A program gives markdown its highlighter of code](D073-a-program-gives-markdown-its-highlighter-of-code.md) | Decided |
+| D74 | [The module fonts holds Noto fonts for the other scripts](D074-the-module-fonts-holds-noto-fonts-for-the-other-scripts.md) | Decided |

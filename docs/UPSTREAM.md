@@ -87,7 +87,9 @@ ivy also keeps files that are data, not code:
    License 2.0, in `fonts/droid` with its `NOTICE`. It keeps Latin Modern
    and Latin Modern Math under the GUST Font License, an instance of the
    LaTeX Project Public License 1.3c, in `fonts/lm` with the license, the
-   manifests and the notices of the authors (D62). Each one has a row in
+   manifests and the notices of the authors (D62). It keeps the Noto fonts
+   of 18 scripts under the SIL Open Font License, in `fonts/noto` with
+   `OFL.txt` (D74). Each one has a row in
    `upstream/upstreams.tsv` of the kind `copy`, and its folder keeps its
    license. `fonts/README.md` holds the URL, the version and the
    SHA-256 of each file. The license forbids a change to a font that keeps

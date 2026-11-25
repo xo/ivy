@@ -45,6 +45,43 @@ var want = map[string]struct {
 	"caladea/Caladea-BoldItalic.ttf": {"Caladea", "ccabaa7b7e2fdf253d2b1a5fa699dd8a3df8d835a9eb285ad82631a677eb76c0"},
 
 	"droid/DroidSansFallback.ttf": {"Droid Sans Fallback", "21b96a0377f067833a93af3082eb28d4ffab7a8cd46bfd513286f1d64b7b0949"},
+
+	"noto/NotoNaskhArabic-Regular.ttf":    {"Noto Naskh Arabic", "c34fdbd98af4dbc45ca192a23d2eeb77032add83086f5fe32957d23b3f36b221"},
+	"noto/NotoNaskhArabic-Bold.ttf":       {"Noto Naskh Arabic", "380ac34b249d336e1a43c21053df440594e1e3db8f75fabd4d85b649ca1ea4c6"},
+	"noto/NotoSansArmenian-Regular.ttf":   {"Noto Sans Armenian", "73bde9f3c63aa5ed39236e8a2837224605210a98b54d65724676c0119fcaa24c"},
+	"noto/NotoSansArmenian-Bold.ttf":      {"Noto Sans Armenian", "1dd206046cd3f41efddec93359a8d6590e5e2d5fcb036b9025725b560cefe6c6"},
+	"noto/NotoSansBengali-Regular.ttf":    {"Noto Sans Bengali", "5dceda02816fece18ea6796f474f5d3170f1d862f21b1e809cdc94b1caa4b6ec"},
+	"noto/NotoSansBengali-Bold.ttf":       {"Noto Sans Bengali", "2fe8d779e0f19576d1fc11e39f9154b4326a17b693215017dd1f5a8898c3f2c3"},
+	"noto/NotoSansDevanagari-Regular.ttf": {"Noto Sans Devanagari", "9c7d935139ea6a1e6ad9dbac4f6d27ece1e04bca8123c8888d00a0f9df4724cd"},
+	"noto/NotoSansDevanagari-Bold.ttf":    {"Noto Sans Devanagari", "ff2f76a23aad41e0608c2d7dbc4bacd247ff3bec78f0ec2a8fb106b561636e58"},
+	"noto/NotoSansEthiopic-Regular.ttf":   {"Noto Sans Ethiopic", "86b9c07c049e68438388d00a34033fa28cabeef91b26e1bbed67512d360166d4"},
+	"noto/NotoSansEthiopic-Bold.ttf":      {"Noto Sans Ethiopic", "6b06274ea730962522b1fcbfdcb16cb5a385aa36734f31f5c9d0ca910541e880"},
+	"noto/NotoSansGeorgian-Regular.ttf":   {"Noto Sans Georgian", "f4b229b126859725b75031dd8c051335d20c85e4eb6d525af28f3e83e471baa4"},
+	"noto/NotoSansGeorgian-Bold.ttf":      {"Noto Sans Georgian Bold", "517722454bbe6587ada79a0509db8c9b292b6a40b025eebe69c151a6508efc7e"},
+	"noto/NotoSansGujarati-Regular.ttf":   {"Noto Sans Gujarati", "18727143b8eadade0a59dca80959ef784bf8d55e07285d1b4096594dbf829f0a"},
+	"noto/NotoSansGujarati-Bold.ttf":      {"Noto Sans Gujarati", "3ce0cf6e1d0bfe2ef5823772eeb2f25da28ec0c2c1d99c0fce529025723e61a1"},
+	"noto/NotoSansGurmukhi-Regular.ttf":   {"Noto Sans Gurmukhi", "2454c944fda799d2861f11c03e492c453e33083dd1e8d99bd6baac8de71ad0f0"},
+	"noto/NotoSansGurmukhi-Bold.ttf":      {"Noto Sans Gurmukhi", "d16804da302ecb2a7defe0502e65136870445fd88f9fddaef60b68d5f1ee7386"},
+	"noto/NotoSansKannada-Regular.ttf":    {"Noto Sans Kannada", "2870274619c2a4abe5d6b11fcb7c4a372eba765b6b7881d459b0eb0a609a68eb"},
+	"noto/NotoSansKannada-Bold.ttf":       {"Noto Sans Kannada", "e989c72f6fec5a0b3366af5f90e3ce8b2b8a350fc5286c6374f0353937e513f5"},
+	"noto/NotoSansKhmer-Regular.ttf":      {"Noto Sans Khmer", "60c10dbfae33a44f1897cd939789bd173aedb7c7dc0a9af389a737e33cb7e548"},
+	"noto/NotoSansKhmer-Bold.ttf":         {"Noto Sans Khmer", "817382a538f299eb809ee9313ef5c52e0049e3487eb4d02678349755ed607ddf"},
+	"noto/NotoSansLao-Regular.ttf":        {"Noto Sans Lao", "d3976b0ac08702c54999ff42eae295d1597fd73b44e0c57d7f4917524e18afbe"},
+	"noto/NotoSansLao-Bold.ttf":           {"Noto Sans Lao", "6fea2e9f231a4b9cfdeec90e9afaff8818b3d11f74cdb23559275f71eeff1ffd"},
+	"noto/NotoSansMalayalam-Regular.ttf":  {"Noto Sans Malayalam", "cc39bb1f7d63b582a2aec1abf2469a43b805a3523a27e0a0eee8cd32702541d5"},
+	"noto/NotoSansMalayalam-Bold.ttf":     {"Noto Sans Malayalam", "165d635d82b0eb0a04275b92b9334c1ece679b99f263727c24c7c92ebcab51e9"},
+	"noto/NotoSansMyanmar-Regular.ttf":    {"Noto Sans Myanmar", "f4be6ef43871516d8347c5217a2033991b8ecda2dd1200007c2fb431a66d64db"},
+	"noto/NotoSansMyanmar-Bold.ttf":       {"Noto Sans Myanmar", "c40a000f8093de13bdf1379a7c589faa2ea989319f33f244eaaa907033c6889f"},
+	"noto/NotoSansOriya-Regular.ttf":      {"Noto Sans Oriya", "a16645d056017927406546aa78e4ce15e782fd8783467267b75450453d007415"},
+	"noto/NotoSansOriya-Bold.ttf":         {"Noto Sans Oriya", "1c575e8aba40d6baf200e8abac534e9517f431d38cc8131715643037eec149da"},
+	"noto/NotoSansSinhala-Regular.ttf":    {"Noto Sans Sinhala", "46d5b54952a624e6e3981e0968aecc5464f3b1081131dd7a1fcd42fbf7966471"},
+	"noto/NotoSansSinhala-Bold.ttf":       {"Noto Sans Sinhala", "438ce1325e788ec0501042dd6e798c0ec02231a42dbf42e72d17b338aa46742a"},
+	"noto/NotoSansTamil-Regular.ttf":      {"Noto Sans Tamil", "6634d9cc97a726e670df41281dd32b167a6b9b71f2036e19671ff08fdde0c292"},
+	"noto/NotoSansTamil-Bold.ttf":         {"Noto Sans Tamil", "04a472e49fa83b387976756554fe179de631a950d79f652ebba14a39a44f5d71"},
+	"noto/NotoSansTelugu-Regular.ttf":     {"Noto Sans Telugu", "dcb86a5da09365a2d73d725e429403dca988e6d50c1b1d564579a25dbc18bd29"},
+	"noto/NotoSansTelugu-Bold.ttf":        {"Noto Sans Telugu", "44393b05a863057cc2cbfe86623fc20b906b00cf19a2ae9304cdd0f3608889db"},
+	"noto/NotoSansThai-Regular.ttf":       {"Noto Sans Thai", "d4303fe9c63ebb72759ca8b6d2040c8ae81689f7d08d7b91c656154382b49313"},
+	"noto/NotoSansThai-Bold.ttf":          {"Noto Sans Thai", "5227602d7f9108252cfb7d75d6f7b2a26bdb2fc2fa89a702f9063758fb2f86c7"},
 }
 
 // The texts that the licenses hold.
@@ -60,6 +97,7 @@ var licenses = map[string]string{
 	"carlito/OFL.txt":    ofl,
 	"caladea/OFL.txt":    ofl,
 	"droid/NOTICE":       apache,
+	"noto/OFL.txt":       ofl,
 }
 
 // TestFonts makes sure that each file of FS is a TrueType font of its
@@ -239,6 +277,47 @@ func TestCJK(t *testing.T) {
 	}
 	if covers(t, data, 'A') {
 		t.Error("Droid Sans Fallback draws 'A', expected only CJK characters")
+	}
+}
+
+// scripts holds a letter of the script of each family of Noto (D74).
+var scripts = map[string]rune{
+	"NotoNaskhArabic":    'ب',
+	"NotoSansArmenian":   'Ա',
+	"NotoSansBengali":    'ক',
+	"NotoSansDevanagari": 'क',
+	"NotoSansEthiopic":   'ሀ',
+	"NotoSansGeorgian":   'ა',
+	"NotoSansGujarati":   'ક',
+	"NotoSansGurmukhi":   'ਕ',
+	"NotoSansKannada":    'ಕ',
+	"NotoSansKhmer":      'ក',
+	"NotoSansLao":        'ກ',
+	"NotoSansMalayalam":  'ക',
+	"NotoSansMyanmar":    'က',
+	"NotoSansOriya":      'କ',
+	"NotoSansSinhala":    'ක',
+	"NotoSansTamil":      'க',
+	"NotoSansTelugu":     'క',
+	"NotoSansThai":       'ก',
+}
+
+// TestScripts makes sure that the regular and the bold face of each family
+// of Noto draw a letter of their script, so that each can be the fallback
+// of its script (D74).
+func TestScripts(t *testing.T) {
+	t.Parallel()
+	for family, r := range scripts {
+		for _, style := range []string{"Regular", "Bold"} {
+			name := "noto/" + family + "-" + style + ".ttf"
+			data, err := fs.ReadFile(FS(), name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !covers(t, data, r) {
+				t.Errorf("%s does not draw %q", name, r)
+			}
+		}
 	}
 }
 

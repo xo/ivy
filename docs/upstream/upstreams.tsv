@@ -15,3 +15,4 @@ go-tex-engine	https://github.com/go-tex/engine	copy	BSD-3-Clause	8234996d66f8274
 go-typeset-linebreak	https://github.com/go-typeset/linebreak	copy	BSD-3-Clause	48917899e7b189c44cac60ab22e30bd3d9c6eb7a	48917899e7b189c44cac60ab22e30bd3d9c6eb7a	latex/internal/linebreak
 go-typeset-hyphenation	https://github.com/go-typeset/hyphenation	copy	BSD-3-Clause	d9d3c0ca2e61e69ca9fa7252ec732164d6b6e436	d9d3c0ca2e61e69ca9fa7252ec732164d6b6e436	latex/internal/hyphenation
 latin-modern	https://github.com/go-tex/engine	copy	LPPL-1.3c	8234996d66f827438f248e8b0059031f52cb9964	8234996d66f827438f248e8b0059031f52cb9964	fonts/lm
+noto-fonts	https://github.com/notofonts/notofonts.github.io	copy	OFL-1.1	d14cc173a70dc57962ed2d4ad278fc9df83bf9f3	d14cc173a70dc57962ed2d4ad278fc9df83bf9f3	fonts/noto

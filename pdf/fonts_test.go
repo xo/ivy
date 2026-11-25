@@ -53,6 +53,11 @@ func TestFontResolver(t *testing.T) {
 		q.CharacterCollection = &cmap.CharacterCollection{Family: cmap.CIDFamily{Kind: kind}}
 		return pdffont.FontQuery{Fallback: q}
 	}
+	char := func(c rune, bold bool) pdffont.FontQuery {
+		q := pdffont.DefaultFallbackFontQuery()
+		q.PostScriptName, q.IsBold, q.Char = "TraditionalArabic", bold, c
+		return pdffont.FontQuery{Fallback: q}
+	}
 	helvetica, _ := pdffont.Helvetica.GetFontData()
 	times, _ := pdffont.TimesRoman.GetFontData()
 	for _, c := range []struct {
@@ -70,6 +75,9 @@ func TestFontResolver(t *testing.T) {
 		{"CNS1", cjk(cmap.AdobeCNS1), "droid/DroidSansFallback.ttf", nil},
 		{"Korea1", cjk(cmap.AdobeKorea1), "droid/DroidSansFallback.ttf", nil},
 		{"Identity", cjk(cmap.AdobeIdentity), "", helvetica},
+		{"U+0628", char('ب', false), "noto/NotoNaskhArabic-Regular.ttf", nil},
+		{"U+0628 bold", char('ب', true), "noto/NotoNaskhArabic-Bold.ttf", nil},
+		{"U+0E01", char('ก', false), "noto/NotoSansThai-Regular.ttf", nil},
 		{"Times-Roman", pdffont.FontQuery{IsStandard: true, Standard: pdffont.TimesRoman}, "", times},
 	} {
 		data, _, ok := r.resolve(&c.query)
@@ -98,6 +106,10 @@ func TestFontResolver(t *testing.T) {
 	q = cjk(cmap.AdobeJapan1)
 	if data, _, ok := r.resolve(&q); !ok || !bytes.Equal(data, helvetica) {
 		t.Error("Japan1: expected Helvetica without fonts")
+	}
+	q = char('ب', false)
+	if _, _, ok := r.resolve(&q); ok {
+		t.Error("U+0628: expected no font without fonts")
 	}
 }
 

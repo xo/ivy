@@ -525,15 +525,26 @@ func (c *converter) paragraphStyle(p roxmltree.Node, ppr, rpr props) string {
 	if ppr.on("suppressLineNumbers") {
 		s.set("-ivy-line-numbers", "none")
 	}
+	// A paragraph of right-to-left text (w:bidi) starts at the right. Word
+	// reads left and right of w:jc as start and end, as it reads start and
+	// end, so a paragraph of w:bidi with left is at the right.
+	rtl := ppr.on("bidi")
+	if rtl {
+		s.set("direction", "rtl")
+	}
+	start, end := "left", "right"
+	if rtl {
+		start, end = end, start
+	}
 	switch ppr["jc"] {
 	case "center":
 		s.set("text-align", "center")
 	case "right", "end":
-		s.set("text-align", "right")
+		s.set("text-align", end)
 	case "both", "distribute", "lowKashida", "mediumKashida", "highKashida", "thaiDistribute":
 		s.set("text-align", "justify")
 	default:
-		s.set("text-align", "left")
+		s.set("text-align", start)
 	}
 	// An empty paragraph that only ends a section does not break the page
 	// before it, as in LibreOffice: the section after it starts the page.

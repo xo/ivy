@@ -109,6 +109,11 @@ func (c *converter) family(p props) string {
 	latin := c.font(p["font"])
 	ea := c.font(p["font.ea"])
 	var parts []string
+	if cs := c.font(p["font.cs"]); cs != "" && cs != latin && complexScript(p) {
+		// Word draws each character of a run of complex script with the
+		// font cs, the Latin letters too.
+		parts = append(parts, quoteFamily(cs))
+	}
 	if latin != "" {
 		parts = append(parts, quoteFamily(latin))
 	}
@@ -180,9 +185,19 @@ func (c *converter) drawsAll(name, s string) bool {
 	return true
 }
 
+// complexScript reports whether a run takes the properties of complex
+// script, as Word gives them to a run of right-to-left text (w:rtl) and to
+// a run that w:cs marks: w:bCs, w:iCs, w:szCs and the font cs of w:rFonts.
+func complexScript(p props) bool {
+	return p.on("rtl") || p.on("cs")
+}
+
 // fontSize returns the size of the font of the properties in points.
 func fontSize(p props) float64 {
 	sz := p.num("sz", 20) / 2
+	if complexScript(p) && p["szCs"] != "" {
+		sz = p.num("szCs", 20) / 2
+	}
 	if sz <= 0 || sz > 1638 {
 		sz = 10
 	}
@@ -220,11 +235,15 @@ func (c *converter) inherited(p props) []decl {
 	if va := p["vertAlign"]; va == "superscript" || va == "subscript" {
 		size *= 0.65
 	}
+	bold, italic := p.on("b"), p.on("i")
+	if complexScript(p) {
+		bold, italic = p.on("bCs"), p.on("iCs")
+	}
 	out := []decl{
 		{"font-family", c.family(p)},
 		{"font-size", pt(size)},
-		{"font-weight", map[bool]string{true: "bold", false: "normal"}[p.on("b")]},
-		{"font-style", map[bool]string{true: "italic", false: "normal"}[p.on("i")]},
+		{"font-weight", map[bool]string{true: "bold", false: "normal"}[bold]},
+		{"font-style", map[bool]string{true: "italic", false: "normal"}[italic]},
 		{"color", c.color(p)},
 		{"text-transform", map[bool]string{true: "uppercase", false: "none"}[p.on("caps")]},
 		{"font-variant", map[bool]string{true: "small-caps", false: "normal"}[p.on("smallCaps") && !p.on("caps")]},

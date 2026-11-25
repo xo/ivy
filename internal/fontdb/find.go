@@ -177,19 +177,30 @@ func splitWords(s string) string {
 // Covering returns the first face of db that draws r. It looks at the
 // faces of the font files first, the first faces of db that Load counts,
 // then at the other faces with the fallback selector of okage, which the
-// layout uses too. It returns false if no face draws r.
+// layout uses too. Of the faces of the font files, it takes the first
+// regular face that draws r, and else the first face that draws r, so that
+// NotoNaskhArabic-Bold.ttf does not come before NotoNaskhArabic-Regular.ttf
+// (D74). It returns false if no face draws r.
 func Covering(db *svg.FontDatabase, first int, r rune) (svg.FontID, bool) {
-	var base svg.FontID
-	hasBase := false
+	var base, found svg.FontID
+	hasBase, hasFound := false, false
 	i := 0
 	for face := range db.Faces() {
 		if i < first && Draws(db, face.ID, r) {
-			return face.ID, true
+			if face.Weight == 400 && face.Style == svg.FontStyleNormal {
+				return face.ID, true
+			}
+			if !hasFound {
+				found, hasFound = face.ID, true
+			}
 		}
 		if i >= first && !hasBase {
 			base, hasBase = face.ID, true
 		}
 		i++
+	}
+	if hasFound {
+		return found, true
 	}
 	if !hasBase {
 		return 0, false
@@ -199,6 +210,27 @@ func Covering(db *svg.FontDatabase, first int, r rune) (svg.FontID, bool) {
 	// draws no CJK character.
 	id, ok := svg.DefaultFallbackSelector(nil)(r, []svg.FontID{base}, db)
 	return id, ok
+}
+
+// Styled returns the face of the family of the face id with a weight, and
+// italic or not, as the font database matches them. It returns false if db
+// holds no such face. A program that draws a character with the face that
+// Covering gives takes the face of the style of the text with it, such as
+// the bold face of a family of Noto for bold text (D74).
+func Styled(db *svg.FontDatabase, id svg.FontID, weight uint16, italic bool) (svg.FontID, bool) {
+	face, ok := db.Face(id)
+	if !ok || len(face.Families) == 0 {
+		return 0, false
+	}
+	q := svg.FontQuery{
+		Families: []svg.FontFamily{{Kind: svg.FontFamilyNamed, Name: face.Families[0].Name}},
+		Weight:   weight,
+		Stretch:  svg.DefaultFontStretch(),
+	}
+	if italic {
+		q.Style = svg.FontStyleItalic
+	}
+	return db.Query(q)
 }
 
 // Draws reports whether the face id of db draws r. It reads the character

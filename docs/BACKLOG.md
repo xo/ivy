@@ -230,6 +230,12 @@ found these faults. Each item names a file of the corpus.
     `sheet.IndentStep` is 8.25 points, which fits Arial 10, and Excel does not
     scale it with the page. Century Gothic 9 gives about 9 points. Source:
     `internal/sheet`, 2026-11-25.
+40. Put the boxes of a footnote of an ebook from right to left when the
+    document is from right to left. On page 17 of
+    `idpf/epub/regime-anticancer-arabic.epub`, the root has `dir="rtl"`, and
+    the text of the page is from right to left. The footnote puts "[1]" at
+    the left and the year at the right, as a line from left to right does.
+    Source: the layout, 2026-11-26.
 
 ## Left by the package icc
 
@@ -797,6 +803,15 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    size of the script; set the cells of split and aligned in display style.
    ivy works around these in `latex/internal/mathsvg`. Source: the review of
    LaTeX, 2026-11-25.
+5. Give a glyph of a CID font more than one text in the PDF writer. Noto
+   Naskh Arabic draws ى and ي with one dotless glyph, and its dots apart. A
+   ToUnicode map gives a glyph one text, so the writer marks each later use
+   with /ActualText, which pdftotext does not read. A second CID for the
+   same glyph, through a CIDToGIDMap stream, would give each use its own
+   text. Also give a mark of a cluster that has no text an empty entry, so
+   that MuPDF does not read it as U+FFFD. `pdf/pdfenc` gives the text of a
+   cluster from right to left to its base today. Source: `pdfenc` and
+   `poi/docx/rtl.docx`, 2026-11-26.
 
 ## Work for magic
 

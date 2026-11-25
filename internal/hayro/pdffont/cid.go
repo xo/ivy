@@ -51,6 +51,12 @@ type type0Font struct {
 	//
 	// Port: upstream does not read it.
 	unicode unicodeEncoding
+	// scripts holds the faces that draw the characters that the substitute
+	// of a standard font does not draw, for a font of no CJK collection
+	// that the file does not embed, or nil (D74).
+	//
+	// Port: upstream has no such faces.
+	scripts *scriptFonts
 	// cjk is true for a font of one of the four CJK collections of Adobe.
 	//
 	// Port: upstream does not keep it.
@@ -160,6 +166,7 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 	program, ok := loadCIDProgram(fontDescriptor, loader)
 	fallback := !ok
 	var latin *fontProgram
+	var scripts *scriptFonts
 	if !ok {
 		// Port: upstream does not ask for the font that dict names.
 		program, ok = loader.programs.resolveNamed(dict)
@@ -182,6 +189,14 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 		}
 		if program, ok = loader.programs.resolve(&query); !ok {
 			return nil, false
+		}
+		if !isCJK(characterCollection) {
+			// Port: upstream draws the glyph of the CID in the substitute.
+			// Go asks the resolver for a face that draws the character of
+			// the code (D74).
+			q := newFallbackFontQuery(dict)
+			q.CharacterCollection = characterCollection
+			scripts = newScriptFonts(loader.programs, q)
 		}
 	}
 
@@ -243,6 +258,7 @@ func newType0Font(dict syntax.Dict, loader *fontLoader) (*type0Font, bool) {
 		hasFlags:              hasFlags,
 		fallback:              fallback,
 		latin:                 latin,
+		scripts:               scripts,
 		unicode:               unicodeEncodingOf(encObj),
 		cjk:                   isCJK(characterCollection),
 		toUnicodeIsCIDIndexed: toUnicodeIsCIDIndexed,
@@ -298,6 +314,14 @@ func (t *type0Font) mapCode(code uint32) GlyphID {
 	if t.fallback {
 		if glyph, ok := t.mapViaUnicode(toUnicodeKey); ok {
 			return glyph
+		}
+		if t.scripts != nil {
+			// Port: the glyph ID of a CID is a glyph of the font that the
+			// file does not embed. Go draws the character of the code
+			// with a face that draws it, or draws nothing (D74).
+			if r, ok := t.unicodeOf(toUnicodeKey); ok {
+				return t.scripts.glyph(r)
+			}
 		}
 	}
 	switch t.prog.programKind() {
@@ -381,6 +405,11 @@ func (t *type0Font) fallbackGlyph(r rune) GlyphID {
 func (t *type0Font) programOf(glyph GlyphID) (*fontProgram, GlyphID) {
 	if t.latin != nil && glyph&latinGlyph != 0 {
 		return t.latin, glyph &^ latinGlyph
+	}
+	if t.scripts != nil {
+		if prog, id, ok := t.scripts.programOf(glyph); ok {
+			return prog, id
+		}
 	}
 	return t.prog, glyph
 }

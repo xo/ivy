@@ -306,10 +306,12 @@ Carlito and Caladea, which have the metrics of Arial, Times New Roman,
 Courier New, Calibri and Cambria. With `ivy.Config{Fonts: fonts.FS()}`,
 lines and pages break as they do in Office. The module also holds Droid
 Sans Fallback, under the Apache License 2.0, which draws the Chinese,
-Japanese and Korean characters that a document does not embed.
+Japanese and Korean characters that a document does not embed. It also
+holds the Noto fonts of 18 scripts, such as Arabic, Devanagari and Thai,
+for the characters that the other fonts do not draw (D74).
 `fonts.TeX()` gives Latin Modern, the fonts of TeX, under the GUST Font
 License, for `Config.TeX` and the package `latex`. The module adds about
-15.3 MB to a program. `Config.SystemFonts` also lets ivy use the fonts of
+19.1 MB to a program. `Config.SystemFonts` also lets ivy use the fonts of
 the system.
 
 ### Convert the colors of an image

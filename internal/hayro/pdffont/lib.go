@@ -235,6 +235,11 @@ type FontCache struct {
 
 	programsMu sync.Mutex
 	programs   map[Key128]*fontProgram
+	// byData holds the programs of the faces that the font resolver gives
+	// for a character.
+	//
+	// Port: upstream has no such programs.
+	byData map[dataKey]*fontProgram
 }
 
 // NewFontCache is FontCache::new in hayro-font src/lib.rs. It returns an
@@ -243,6 +248,7 @@ func NewFontCache() *FontCache {
 	return &FontCache{
 		fonts:    make(map[Key128]*Font),
 		programs: make(map[Key128]*fontProgram),
+		byData:   make(map[dataKey]*fontProgram),
 	}
 }
 
@@ -457,6 +463,7 @@ func (q *FontQuery) cacheKey() Key128 {
 	} else {
 		h.boolean(false)
 	}
+	h.u64(uint64(uint32(f.Char)))
 	return h.sum()
 }
 
@@ -489,6 +496,12 @@ type FallbackFontQuery struct {
 	// CharacterCollection is the character collection of a CID font, or
 	// nil.
 	CharacterCollection *cmap.CharacterCollection
+	// Char is a character that the font must draw, or 0. Go asks for it
+	// for a character of a CID font that the file does not embed and that
+	// the substitute of a standard font does not draw (D74).
+	//
+	// Port: upstream has no such field.
+	Char rune
 }
 
 // DefaultFallbackFontQuery is the Default implementation of

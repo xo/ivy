@@ -7,6 +7,11 @@
 // It draws the Chinese, Japanese and Korean (CJK) characters that the other
 // fonts do not draw.
 //
+// The package also holds the Noto fonts of 18 scripts that the other fonts
+// do not draw, under the SIL Open Font License 1.1 (D74): Arabic, Armenian,
+// Bengali, Devanagari, Ethiopic, Georgian, Gujarati, Gurmukhi, Kannada,
+// Khmer, Lao, Malayalam, Myanmar, Oriya, Sinhala, Tamil, Telugu and Thai.
+//
 // The package also holds Latin Modern and Latin Modern Math, the fonts of
 // TeX, under the GUST Font License (D62). TeX gives them apart from FS, so
 // that the other formats do not take them for a font of Office. The package
@@ -31,10 +36,11 @@
 // names it, or when a document names the font of Office that it replaces
 // and does not embed that font. A format uses Droid Sans Fallback for a CJK
 // character that the font of the text does not draw, and for the CJK text
-// of a PDF file that does not embed its font.
+// of a PDF file that does not embed its font. A format uses a font of Noto
+// for a character of its script that the font of the text does not draw.
 //
 // The fonts are in their own module, so that a program that does not import
-// it does not hold them. They make a program larger by about 15.3 MB.
+// it does not hold them. They make a program larger by about 19.1 MB.
 package fonts
 
 import (
@@ -44,7 +50,7 @@ import (
 
 // files holds the folders of the fonts.
 //
-//go:embed liberation carlito caladea droid
+//go:embed liberation carlito caladea droid noto
 var files embed.FS
 
 // tex holds the folder of Latin Modern.
@@ -62,6 +68,8 @@ var tex embed.FS
 //   - The folder caladea holds Caladea, and the license in OFL.txt.
 //   - The folder droid holds Droid Sans Fallback in the regular style only,
 //     and the license in NOTICE.
+//   - The folder noto holds the Noto fonts of 18 scripts in the regular and
+//     the bold styles, and the license in OFL.txt.
 //
 // Each call returns the same value, so a format can keep the fonts that it
 // read from it.
