@@ -136,10 +136,9 @@ func newOptions(opts []Option) options {
 // part, Encode still writes the file, and returns a *ivy.PartialError
 // that names each such page.
 //
-// Each anchor of a page becomes a named destination of the file. When a
-// page links to an anchor of a later page, Encode draws the pages a second
-// time, because the writer of okage needs the destination of a link when
-// its page is drawn.
+// Each anchor of a page becomes a named destination of the file. A link
+// to an anchor goes to the named destination, on an earlier or a later
+// page.
 func Encode(ctx context.Context, w io.Writer, d ivy.Document, opts ...Option) error {
 	o := newOptions(opts)
 	pager, ok := d.(ivy.Pager)
@@ -264,13 +263,9 @@ type encoder struct {
 	bytes int64
 
 	// anchors holds the destination of each anchor that the pages named,
-	// and known holds those of an earlier drawing of the pages, or nil.
-	// linked holds the names of the anchors that a link goes to, and ahead
-	// holds those that the file did not know at the link.
+	// and linked holds the names of the anchors that a link goes to.
 	anchors map[string]destination
-	known   map[string]destination
 	linked  map[string]bool
-	ahead   map[string]bool
 	// bookmarks holds the entries of the outline, in the order of the
 	// pages. marks counts the links, the anchors and the bookmarks.
 	bookmarks []bookmark
@@ -386,11 +381,6 @@ func drawPage(ctx context.Context, p ivy.Page, dev *device, dpi float32) error {
 // and a font cannot give its subset, finish draws the pages again onto a
 // new encoder, with the glyphs of that font as paths (D58).
 func (e *encoder) finish(ctx context.Context, w io.Writer) error {
-	if e.known == nil && e.forward() {
-		// a link goes to an anchor of a later page: draw the pages again
-		// with the anchors that this drawing found
-		return e.again(ctx, w, nil)
-	}
 	if e.o.hasInfo {
 		e.doc.SetMetadata(metadata(e.o.info))
 	}
@@ -428,20 +418,8 @@ func finishDocument(doc *pdf.Document, w io.Writer) (err error) {
 	return doc.Finish(w) //nolint:wrapcheck // finish wraps the error of the writer
 }
 
-// forward reports whether a link of the file goes to an anchor that a later
-// page named.
-func (e *encoder) forward() bool {
-	for name := range e.ahead {
-		if _, ok := e.anchors[name]; ok {
-			return true
-		}
-	}
-	return false
-}
-
 // again draws the pages of e onto a new encoder whose fonts of failed, and
-// of the fonts that e blocked, are paths, and writes the file to w. The new
-// encoder knows the anchors of e, so each link finds its anchor.
+// of the fonts that e blocked, are paths, and writes the file to w.
 func (e *encoder) again(ctx context.Context, w io.Writer, failed map[font.SourceKey]bool) error {
 	blocked := maps.Clone(e.blocked)
 	if blocked == nil {
@@ -449,10 +427,6 @@ func (e *encoder) again(ctx context.Context, w io.Writer, failed map[font.Source
 	}
 	maps.Copy(blocked, failed)
 	next := newEncoder(e.o, blocked)
-	next.known = e.anchors
-	if e.known != nil {
-		next.known = e.known
-	}
 	for _, d := range e.drawn {
 		if err := next.page(ctx, d.p, d.n); err != nil {
 			return err

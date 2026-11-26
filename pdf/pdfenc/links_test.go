@@ -281,14 +281,14 @@ func (p *countPage) Draw(ctx context.Context, d display.Device, res float32) err
 }
 
 func TestLinksDraws(t *testing.T) {
-	// A link to an anchor of a later page draws the pages a second time,
-	// and a link to an earlier page does not.
+	// A link to an anchor of a later page, or of an earlier page, draws
+	// the pages once (okage D104).
 	for _, test := range []struct {
 		name  string
 		pages []int
 		draws int
 	}{
-		{"forward", []int{0, 1, 2}, 2},
+		{"forward", []int{0, 1, 2}, 1},
 		{"backward", []int{1, 2}, 1},
 	} {
 		pages := linkPages()

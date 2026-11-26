@@ -376,6 +376,8 @@ type selectorElement struct {
 	el *Element
 }
 
+var _ cssselect2.ChildrenAppender = selectorElement{}
+
 // Children satisfies cssselect2.Element.
 func (s selectorElement) Children() iter.Seq[cssselect2.Element] {
 	return func(yield func(cssselect2.Element) bool) {
@@ -385,6 +387,15 @@ func (s selectorElement) Children() iter.Seq[cssselect2.Element] {
 			}
 		}
 	}
+}
+
+// AppendChildren satisfies cssselect2.ChildrenAppender. It gives the
+// children without the closures of Children (okage D105).
+func (s selectorElement) AppendChildren(dst []cssselect2.Element) []cssselect2.Element {
+	for _, child := range s.el.Children {
+		dst = append(dst, selectorElement{child})
+	}
+	return dst
 }
 
 // LocalName satisfies cssselect2.Element.

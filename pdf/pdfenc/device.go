@@ -396,6 +396,18 @@ func gradientFits(n int, params ...float32) bool {
 	return true
 }
 
+// finitePoints reports whether each point of p is within maxCoordinate.
+// The bounds of a path leave out a point that is NaN, and the writer of
+// okage does not stroke a path with such a point.
+func finitePoints(p *okage.Path) bool {
+	for _, pt := range p.Points() {
+		if !finitePoint(pt) {
+			return false
+		}
+	}
+	return true
+}
+
 // finitePoint reports whether p is within maxCoordinate.
 func finitePoint(p okage.Point) bool {
 	return math.Abs(float64(p.X)) < maxCoordinate && math.Abs(float64(p.Y)) < maxCoordinate
@@ -437,7 +449,7 @@ func (d *device) stroke(p *okage.Path, stroke okage.Stroke, shader okage.Shader,
 		pad = w/2 + 1
 	}
 	bounds, ok := outset(p.Bounds(), pad)
-	if !ok {
+	if !ok || !finitePoints(p) {
 		return
 	}
 	if _, ok := pageBounds(bounds, ctm); !ok {

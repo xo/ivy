@@ -701,7 +701,11 @@ time is for a page at 96 dpi.
      The layout cannot leave them out, because the collapsible spaces of
      `ProcessWhitespace` go from one text box to the next. The builder now
      makes them in blocks, without a new string, and a box is 352 bytes.
-   - okage: `roxmltree` and `cssselect2`. See item 4 of "Work for okage".
+   - okage: `roxmltree` and `cssselect2`. okage D105 made them allocate
+     less, and `internal/layout` gives the children of an element with
+     `AppendChildren`. On 2026-11-26 one run of `test/cmd/perf` on
+     `linear-algebra.epub` allocated 1,252 MB in 6.18 million objects. It
+     allocated 1,268 MB in 7.24 million objects without `AppendChildren`.
 
    `zipdoc.Archive.Read` also reads each file of a book with
    `raster.ReadAll`, whose buffer grows as it reads. The size of the entry
@@ -767,51 +771,6 @@ Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
    the engine of D62. Today `latex/internal/opentype` shapes the pair to find
    them. The layout of math that ivy asked for here came with `texmath` (okage
    D78), which `latex` and `internal/formula` use. Source: D62, 2026-11-20.
-2. In `pdf`, take a link annotation to a named destination by its name
-   alone, and resolve the name in `Document.Finish`, after the last page.
-   Today the destination of a link must be known when its page is drawn,
-   so pdfenc draws every page a second time when a page links to a later
-   page. Source: `pdf/pdfenc`, 2026-11-21.
-3. Allocate less in `roxmltree` and in `cssselect2` for a large document.
-   Source: item 3 of "Left by the speed of 2026-11-18", 2026-11-21.
-   `idpf/epub/linear-algebra.epub` holds 25 MB of XHTML with about 270,000
-   elements. On 2026-11-21 one run of `test/cmd/perf` on it, which opens
-   the book and counts its pages, allocates these:
-   - `roxmltree.parse` allocates about 410 MB. The guess of the number of
-     nodes, `strings.Count(text, "<")`, does not count the text nodes, so
-     `appendNode` grows the list of the nodes, about 175 MB. Then
-     `shrinkToFit` copies the list again, about 90 MB.
-   - `processText` makes a new `textBuffer` for each text that holds an
-     entity, the buffer grows, and `finish` copies it. These are about 1.1
-     million objects. One buffer for the parse can serve each text.
-   - `IterSubtree` of `cssselect2` makes an `ElementWrapper` for each
-     element, about 270,000 objects and 63 MB, and a `frame` on the heap
-     for each element, about 270,000 objects. A list of frames by value
-     needs no object for each element.
-   - `EtreeChildren` grows the list of the children with `append`, and the
-     iterator of `Element.Children` makes two closures for each element.
-     These are about 900,000 objects. An optional method of `Element` that
-     gives the children as a slice, or their number, needs none of them.
-4. In `texmath` of okage D78: set `\ldots`, `\dots`, `\mathellipsis` and
-   `\cdots` as three dots with the spacing of `\mathinner`, as fontmath.ltx
-   does, not as U+2026 and U+22EF of the class ordinary (`1,\ldots,n` is 33.22
-   points wide at 10 points in pdfLaTeX and about 28.3 in texmath); set the
-   prime of `x'` at its full size; give the scripts of an accented character
-   the place of TeX rule 12 (`\hat y_i`); give the shifts of TeX, sub1, sub2
-   and sub_drop, or a way to set a constant of MATH, because OpenType has one
-   SubscriptShiftDown where TeX has two; scale SubscriptBaselineDropMin at the
-   size of the script; set the cells of split and aligned in display style.
-   ivy works around these in `latex/internal/mathsvg`. Source: the review of
-   LaTeX, 2026-11-25.
-5. Give a glyph of a CID font more than one text in the PDF writer. Noto
-   Naskh Arabic draws ى and ي with one dotless glyph, and its dots apart. A
-   ToUnicode map gives a glyph one text, so the writer marks each later use
-   with /ActualText, which pdftotext does not read. A second CID for the
-   same glyph, through a CIDToGIDMap stream, would give each use its own
-   text. Also give a mark of a cluster that has no text an empty entry, so
-   that MuPDF does not read it as U+FFFD. `pdf/pdfenc` gives the text of a
-   cluster from right to left to its base today. Source: `pdfenc` and
-   `poi/docx/rtl.docx`, 2026-11-26.
 
 ## Work for magic
 

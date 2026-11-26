@@ -651,14 +651,14 @@ the layout, of the books, of `pdf`, of `xps` and of `djvu` to the PDF
 device. The device writes them as link annotations, named destinations and
 the outline. The build differs from this decision in these places:
 
-1. The writer of okage needs the destination of a link annotation when
-   the page of the link is drawn. It cannot resolve a name after the last
-   page. So the device keeps the anchors of the pages that it drew. When a
-   link goes to an anchor of a later page, `Encode` draws all the pages a
-   second time, with the anchors of the first drawing. A file without
-   such a link draws its pages once. Item 3 of "Work for okage" in
-   `BACKLOG.md` asks for a link to a name that the writer resolves in
-   `Document.Finish`.
+1. Before okage v0.23.0, the writer of okage needed the destination of a
+   link annotation when the page of the link was drawn. So when a link went
+   to an anchor of a later page, `Encode` drew all the pages a second time,
+   with the anchors of the first drawing. okage D104 gave the target
+   `pdf.DestinationName`, which the writer resolves in `Document.Finish`.
+   Since 2026-11-26, a link to an anchor takes that target, and `Encode`
+   draws each page once. The writer leaves out a link to an anchor that no
+   page of the file holds.
 2. `display.PageAnchor` names a destination that the file gives no name,
    such as an explicit destination of PDF or a page of DjVu. Each page of
    `xps` and `djvu` names its top with it. The device makes a named

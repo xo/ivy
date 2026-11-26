@@ -6,7 +6,7 @@
 // okage gives no helper for the kerning of a pair of characters or for the
 // ligature of a sequence. This package shapes the pair or the sequence with
 // the shaper of okage, with only the one feature on, and reads the result.
-// Item 4 of "Work for okage" in docs/BACKLOG.md asks okage for the helpers.
+// Item 1 of "Work for okage" in docs/BACKLOG.md asks okage for the helpers.
 package opentype
 
 import (

@@ -85,9 +85,9 @@ func (d *device) linkURI(r okage.Rect, uri string, t okage.Transform) {
 }
 
 // LinkAnchor satisfies the display.Linker interface. It adds a link
-// annotation to the named destination of the anchor, when the file knows
-// the page of the anchor. A link to an anchor that a later page names waits
-// for the second drawing of the pages, as Encode says.
+// annotation to the named destination of the anchor. The writer of okage
+// finds the destination of the name when it writes the file, so the anchor
+// can be on a later page (okage D104).
 func (d *device) LinkAnchor(r okage.Rect, name string) {
 	if d.rec != nil {
 		d.rec.LinkAnchor(r, name)
@@ -97,27 +97,14 @@ func (d *device) LinkAnchor(r okage.Rect, name string) {
 }
 
 // linkAnchor adds a link to the anchor name of the rectangle r, which t
-// maps onto the user space of the device.
+// maps onto the user space of the device. The writer leaves out a link to
+// a name that no page of the file holds.
 func (d *device) linkAnchor(r okage.Rect, name string, t okage.Transform) {
 	e := d.enc
 	if !d.marks() || !e.o.links || name == "" || d.state.hidden {
 		return
 	}
-	dst, ok := e.anchors[name]
-	if !ok {
-		dst, ok = e.known[name]
-	}
-	if !ok {
-		// the anchor is on a later page, or on no page of the file
-		if e.ahead == nil {
-			e.ahead = map[string]bool{}
-		}
-		if len(e.ahead) < e.lim.MaxObjects {
-			e.ahead[name] = true
-		}
-		return
-	}
-	if a, ok := d.link(r, t, pdf.NewNamedDestination(name, dst.xyz())); ok && e.mark() {
+	if a, ok := d.link(r, t, pdf.DestinationName(name)); ok && e.mark() {
 		d.page.AddAnnotation(a)
 		e.linked[name] = true
 	}
@@ -167,14 +154,8 @@ func (d *device) anchor(name string, x, y float32, t okage.Transform) {
 	if _, ok := e.anchors[name]; ok {
 		return
 	}
-	dst, ok := e.known[name]
-	if !ok {
-		dst, ok = d.point(x, y, t)
-		if !ok {
-			return
-		}
-	}
-	if e.mark() {
+	dst, ok := d.point(x, y, t)
+	if ok && e.mark() {
 		e.anchors[name] = dst
 	}
 }
