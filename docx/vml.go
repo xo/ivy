@@ -53,8 +53,11 @@ func (c *converter) horizontalRule(shape roxmltree.Node) bool {
 // vmlBox writes a VML shape of the body whose position is absolute, such
 // as a text box, a filled rectangle or a picture, as a box with its fill
 // or its picture, its line and its text. Text that wraps around the shape
-// flows around a float, as for a drawing of DrawingML, except on a page of
-// columns. It returns false for a shape that it does not draw.
+// flows around a float, as for a drawing of DrawingML. A shape above and
+// below the text of a page of columns takes its place on the page. A shape
+// at a position from the margin or from the page with o:allowoverlap off
+// moves down below the floats of the page that it covers (D60). It returns
+// false for a shape that it does not draw.
 func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	if !shape.IsElement() || !vmlShapes[shape.TagName().Name()] || c.margin != "" {
 		return false
@@ -100,7 +103,7 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		return false
 	}
 	sec := c.sections[c.section]
-	colWidth := sec.width - sec.left - sec.right - sec.gutter
+	colWidth := sec.columnWidth()
 	x, y := vmlSigned(st["margin-left"]), vmlSigned(st["margin-top"])
 	switch st["mso-position-horizontal-relative"] {
 	case "page":
@@ -122,23 +125,27 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			wrap, side = ooxml.Attr(e, "type"), ooxml.Attr(e, "side")
 		}
 	}
-	if sec.cols > 1 {
-		// A float stays in its column, and a shape of a page of columns
-		// often crosses them. It takes its place on the page, and the text
-		// does not wrap around it.
+	if sec.cols > 1 && wrap == "topAndBottom" {
+		// A shape above and below the text of a column takes its place on
+		// the page, and the text does not wrap around it. Word and
+		// LibreOffice place it from the top of the part of its paragraph
+		// on the page, and the layout cannot float it there.
 		wrap = ""
 	}
 	// A shape with text around it or above and below it, at a position
-	// from the margin or from the page, floats at that position (D60).
+	// from the margin or from the page, floats at that position, in a
+	// section of one column (D60). In a section with columns, a shape with
+	// text around it floats at its paragraph, in its column.
 	position := ""
-	if c.margin == "" {
+	if c.margin == "" && sec.cols <= 1 {
 		position = floatPosition(st["mso-position-vertical-relative"], st["mso-position-vertical"], y)
 	}
+	avoid := position != "" && vmlOff(ooxml.Attr(shape, "allowoverlap"))
 	var s css
 	switch wrap {
 	case "square", "tight", "through":
 		c.floatSeq = c.paraSeq
-		if x+w/2 > colWidth/2 {
+		if x+w/2 > colWidth/2 && !crossesColumn(sec, x, w) {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
 			s.set("margin-left", "9pt")
@@ -150,16 +157,27 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		switch {
 		case position != "":
 			s.set("-ivy-float-position", position)
+			if avoid {
+				s.set("-ivy-float-overlap", "avoid")
+			}
 		case y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin":
 			s.set("margin-top", pt(y))
 		}
 		s.set("-ivy-wrap-flow", wrapFlow(side)+" 9pt")
+		if wrap != "square" {
+			if v := vmlWrapCoords(ooxml.Attr(shape, "wrapcoords"), w, h); v != "" {
+				s.set("-ivy-wrap-shape", v)
+			}
+		}
 	case "topAndBottom":
 		if position != "" {
 			s.set("float", "left")
 			s.set("margin-left", pt(x))
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
 			s.set("-ivy-float-position", position)
+			if avoid {
+				s.set("-ivy-float-overlap", "avoid")
+			}
 			break
 		}
 		s.set("display", "block")
@@ -351,4 +369,25 @@ func vmlInset(shape roxmltree.Node) [4]float64 {
 		}
 	}
 	return [4]float64{in[1], in[2], in[3], in[0]}
+}
+
+// vmlWrapCoords returns the value of -ivy-wrap-shape for the wrapcoords of
+// a VML shape of w by h points, x and y pairs in a square of 21600 by 21600
+// over the shape, or "" for none (D63). Word wraps the text of a tight or
+// through wrap around them, as on page 1 of
+// libreoffice/docx/mixed-orientation.docx.
+func vmlWrapCoords(v string, w, h float64) string {
+	fields := strings.Fields(strings.ReplaceAll(v, ",", " "))
+	if len(fields)%2 != 0 || len(fields) > 2*maxWrapPoints {
+		return ""
+	}
+	xy := make([]float64, 0, len(fields))
+	for _, f := range fields {
+		n, err := strconv.ParseFloat(f, 64)
+		if err != nil || n != n {
+			return ""
+		}
+		xy = append(xy, n)
+	}
+	return polygonShape(xy, w, h)
 }

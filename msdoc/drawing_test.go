@@ -421,6 +421,57 @@ func TestWrapSide(t *testing.T) {
 	}
 }
 
+// TestWrapShape checks that a shape that turns with square wrap gives the
+// box around it as its wrap shape, that a shape with tight wrap gives its
+// wrap polygon, and that a shape that does not turn with square wrap
+// gives none, so that the text wraps around its border box (D63).
+func TestWrapShape(t *testing.T) {
+	le := binary.LittleEndian
+	// shape returns a shape turned by rot degrees, with the wrap polygon
+	// of the points xy when xy is not empty
+	shape := func(rot float64, xy ...int32) *odraw.Shape {
+		var fopt, arr []byte
+		n := 1
+		fopt = le.AppendUint16(fopt, odraw.PropRotation)
+		fopt = le.AppendUint32(fopt, uint32(int32(rot*65536)))
+		if len(xy) > 0 {
+			arr = le.AppendUint16(nil, uint16(len(xy)/2))
+			arr = le.AppendUint16(arr, uint16(len(xy)/2))
+			arr = le.AppendUint16(arr, 8)
+			for _, v := range xy {
+				arr = le.AppendUint32(arr, uint32(v))
+			}
+			fopt = le.AppendUint16(fopt, odraw.PropWrapPolygon|0x8000)
+			fopt = le.AppendUint32(fopt, uint32(len(arr)))
+			n++
+		}
+		sh := &odraw.Shape{}
+		sh.Props.Read(append(fopt, arr...), n)
+		return sh
+	}
+	triangle := []int32{0, 0, 21600, 0, 10800, 21600}
+	for _, tt := range []struct {
+		name  string
+		wr    int
+		shape *odraw.Shape
+		want  string
+	}{
+		{"square", 2, shape(0, triangle...), ""},
+		{"square turned", 2, shape(30), "-ivy-wrap-shape: polygon(-1.32pt -7.66pt, 43.32pt -7.66pt, 43.32pt 29.66pt, -1.32pt 29.66pt)"},
+		// the box of a shape that turns by a quarter is the box of the
+		// shape turned
+		{"square quarter turn", 2, shape(90), "-ivy-wrap-shape: polygon(1pt 1pt, 41pt 1pt, 41pt 21pt, 1pt 21pt)"},
+		{"tight", 4, shape(0, triangle...), "-ivy-wrap-shape: polygon(1pt 1pt, 41pt 1pt, 21pt 21pt)"},
+		{"through turned", 5, shape(180, triangle...), "-ivy-wrap-shape: polygon(41pt 21pt, 1pt 21pt, 21pt 1pt)"},
+		{"tight without polygon", 4, shape(0), ""},
+	} {
+		d := &drawn{floating: floating{wr: tt.wr, pic: &picture{width: 40, height: 20}}, shape: tt.shape}
+		if got := wrapShape(d, 1); got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 // TestNotes checks that a footnote goes into the paragraph of its
 // reference, with its number, and that an endnote goes to the end of the
 // document with a Roman number.

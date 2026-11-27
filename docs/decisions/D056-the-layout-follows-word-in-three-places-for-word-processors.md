@@ -43,3 +43,52 @@ text. A multiple below 1, and a line that is not higher than its text,
 keep the rule of CSS. `docx` gives no value to a single line on a document
 grid, because Word centers that text. The single lines of Verdana and of
 Tahoma take the ratios of Word, 1.2153 and 1.207.
+
+## The build of 2026-11-27
+
+LibreOffice leaves out the extra space of a multiple line spacing in three
+places, and keeps the spacing above a paragraph in one more place. The
+measures come from files that LibreOffice 26 converted to PDF, and from
+`libreoffice/odt/landscape-a4-table.odt`.
+
+1. LibreOffice keeps the last line of a page when its text fits and only
+   its extra space passes the bottom of the page. The keyword `last` of
+   `-ivy-line-multiple` makes the layout do this: the line stays on the
+   page, and it loses its extra space. `odf` writes `last` for the
+   paragraphs of the flow of the page that have a proportional line
+   spacing above 100%.
+2. LibreOffice leaves out the extra space below the last line of each part
+   of a table cell when the setting AddParaLineSpacingToTableCells is
+   false. A file whose settings.xml has the configuration settings without
+   this item takes false, as the files of older versions do. A file without
+   these settings takes true, the default of a new document. With `last`,
+   the layout takes the extra space away from the last line of each part
+   of a cell, so the part ends below its text. `odf` writes `last` for the
+   paragraphs of a cell only when the setting is false.
+3. At the top of the part of a cell after a page break, LibreOffice keeps
+   the spacing above the first paragraph, and leaves out the spacing below
+   the paragraph before it. It keeps it too when the paragraph goes on
+   from the page before. A length after `discard` of `-ivy-page-top-space`
+   gives that spacing, and the layout keeps up to that length of the top
+   margin there. Word leaves out the whole space, so `docx` and `msdoc`
+   give no length. `odf` gives fo:margin-top of each paragraph of a cell.
+
+With these rules, the pages of `landscape-a4-table.odt` hold the same lines
+as in LibreOffice. The row "K bodu 96" on page 19 is as high as in
+LibreOffice.
+
+The spacing above a paragraph that contextual spacing leaves out is not
+kept at the top of a part of a cell. LibreOffice keeps it, so the text of
+page 23 of `landscape-a4-table.odt` starts 12 points lower in LibreOffice
+than in ivy. With that spacing, the pages from 24 to 28 move by 2 lines.
+The cause is the line above the footnotes. In ivy it takes 9.5 points
+with its spacing. The line of style:footnote-sep of LibreOffice takes 6.2
+points.
+
+On the same day, `-ivy-line-numbers` took three keywords after its four
+values, for the line numbering of `odf`. The side is `left`, `right`,
+`inner` or `outer`, and `inner` and `outer` take the side of the page.
+With `no-empty`, an empty line does not count. With `reset`, the first line
+of the box takes the first number. `odf` gives them from
+`text:number-position`, `text:count-empty-lines` and `text:line-number`.
+LibreOffice writes `inside` and `outside`, and `odf` reads both pairs.

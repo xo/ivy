@@ -108,9 +108,10 @@ func TestPageFloatCSS(t *testing.T) {
 	}
 }
 
-// TestFloatOverlap checks that a table with w:tblOverlap "never" and a
-// drawing with allowOverlap off avoid the other page floats, and that the
-// other values and a drawing at its paragraph do not (D60).
+// TestFloatOverlap checks that a table with w:tblOverlap "never", a
+// drawing with allowOverlap off and a VML shape with o:allowoverlap off
+// avoid the other page floats, and that the other values and a drawing at
+// its paragraph do not (D60).
 func TestFloatOverlap(t *testing.T) {
 	table := func(overlap string) string {
 		return `<w:tbl><w:tblPr><w:tblpPr w:vertAnchor="margin" w:horzAnchor="margin" w:tblpY="1440"/>` + overlap +
@@ -125,6 +126,10 @@ func TestFloatOverlap(t *testing.T) {
 			`<a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr/><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>` +
 			`</wp:anchor></w:drawing></w:r></w:p>`
 	}
+	vml := func(allow, relative, wrap string) string {
+		return `<w:p><w:r><w:pict><v:rect ` + allow + ` style="position:absolute;margin-left:0;margin-top:72pt;width:216pt;height:144pt;` +
+			`mso-position-vertical-relative:` + relative + `" fillcolor="red"><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="` + wrap + `"/></v:rect></w:pict></w:r></w:p>`
+	}
 	for _, tt := range []struct {
 		name, body string
 		want       int
@@ -136,11 +141,58 @@ func TestFloatOverlap(t *testing.T) {
 		{"drawing false", drawing("false", "page"), 1},
 		{"drawing 1", drawing("1", "margin"), 0},
 		{"drawing at its paragraph", drawing("0", "paragraph"), 0},
+		{"vml f", vml(`o:allowoverlap="f"`, "margin", "square"), 1},
+		{"vml false", vml(`o:allowoverlap="false"`, "page", "topAndBottom"), 1},
+		{"vml t", vml(`o:allowoverlap="t"`, "margin", "square"), 0},
+		{"vml", vml(``, "margin", "square"), 0},
+		{"vml at its paragraph", vml(`o:allowoverlap="f"`, "text", "square"), 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			html, _ := convertHTML(t, fixture.DOCX(tt.body))
 			if got := strings.Count(html, "-ivy-float-overlap: avoid"); got != tt.want {
 				t.Errorf("got %d floats that avoid the others, want %d:\n%s", got, tt.want, html)
+			}
+		})
+	}
+}
+
+// TestColumnFloat checks that a drawing and a VML shape with text around
+// them float in their column in a section with columns, without
+// -ivy-float-position, and that a shape that crosses the right side of its
+// column floats at the left with a margin that gives its place (D60).
+// The section has 3 columns of 120pt, with 36pt between them.
+func TestColumnFloat(t *testing.T) {
+	const sect = `<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>` +
+		`<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="720" w:footer="720" w:gutter="0"/>` +
+		`<w:cols w:num="3" w:space="720"/></w:sectPr>`
+	vml := func(x, relative, wrap string) string {
+		return `<w:p><w:r><w:pict><v:oval style="position:absolute;margin-left:` + x + `;margin-top:72pt;width:140pt;height:92pt;` +
+			`mso-position-vertical-relative:` + relative + `" fillcolor="aqua"><w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="` + wrap + `"/></v:oval></w:pict></w:r>` +
+			`<w:r><w:t>Text</w:t></w:r></w:p>` + sect
+	}
+	drawing := func(x string) string {
+		return `<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300">` +
+			`<wp:positionH relativeFrom="column"><wp:posOffset>` + x + `</wp:posOffset></wp:positionH>` +
+			`<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>` +
+			`<wp:extent cx="635000" cy="635000"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Picture 1"/>` +
+			`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"/></a:graphic>` +
+			`</wp:anchor></w:drawing></w:r><w:r><w:t>Text</w:t></w:r></w:p>` + sect
+	}
+	for _, tt := range []struct {
+		name, body, want string
+	}{
+		{"vml across", vml("270pt", "text", "tight"), "float: left; margin-left: 270pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt"},
+		{"vml in its column", vml("-20pt", "text", "square"), "float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt"},
+		{"vml from the margin", vml("270pt", "margin", "square"), "float: left; margin-left: 270pt; margin-right: 9pt; -ivy-wrap-flow: both 9pt"},
+		{"vml above and below", vml("270pt", "text", "topAndBottom"), "position: absolute"},
+		// 50pt wide at 100pt crosses the column, at 60pt it does not
+		{"drawing across", drawing("1270000"), "float: left; margin-left: 100pt; margin-right: 9pt"},
+		{"drawing at the right", drawing("762000"), "float: right; margin-right: 10pt; margin-left: 9pt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, fixture.DOCX(tt.body))
+			if !strings.Contains(html, tt.want) || strings.Contains(html, "-ivy-float-position") {
+				t.Errorf("expected %q and no -ivy-float-position in the xhtml:\n%s", tt.want, html)
 			}
 		})
 	}

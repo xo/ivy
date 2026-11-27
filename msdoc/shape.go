@@ -502,6 +502,11 @@ func (p *parser) writeDrawn(b *strings.Builder, d *drawn) {
 	f.left, f.top = f.left-int(math.Round(pad*20)), f.top-int(math.Round(pad*20))
 	w, h = w+2*pad, h+2*pad
 	style := p.floatStyle(&f, w, h)
+	if slices.ContainsFunc(style, func(v string) bool { return strings.HasPrefix(v, "-ivy-wrap-flow") }) {
+		if shape := wrapShape(d, pad); shape != "" {
+			style = append(style, shape)
+		}
+	}
 	if len(d.texts) > 0 {
 		// the text boxes of a group are on the object of the group
 		if !slices.Contains(style, "position: absolute") {
@@ -521,6 +526,56 @@ func (p *parser) writeDrawn(b *strings.Builder, d *drawn) {
 	}
 	b.WriteString(`<img src="` + attr(f.pic.name) + `" alt="" style="` + attr(strings.Join(style, "; ")) + `"/>`)
 }
+
+// The values of the wr of an FSPA that wrap the text around the outline
+// of a shape: tight and through.
+const (
+	wrTight   = 4
+	wrThrough = 5
+)
+
+// wrapShape returns the style of the outline that the text wraps around
+// the shape d, whose object is larger than the shape by the bleed pad on
+// each side, or "" for the border box of the object (D63). Word wraps the
+// text around the wrap polygon of a shape with tight or through wrap, and
+// around the box of a shape that turns with square wrap, on page 6 of
+// poi/doc/floating-pictures.doc. The polygon and the box turn with the
+// shape, and leave out the bleed.
+func wrapShape(d *drawn, pad float64) string {
+	if d.shape == nil || d.pic == nil {
+		return ""
+	}
+	c := odraw.Chain{&d.shape.Props}
+	tight := d.wr == wrTight || d.wr == wrThrough
+	turns := odraw.Fixed(c.Value(odraw.PropRotation, 0)) != 0
+	polygon := tight && c.Complex(odraw.PropWrapPolygon) != nil
+	if !turns && !polygon {
+		return ""
+	}
+	r := odraw.Rect{Left: pad, Top: pad, Right: pad + d.pic.width, Bottom: pad + d.pic.height}
+	points := odraw.WrapPolygon(d.shape, c, r, tight)
+	if len(points) > 2*maxWrapPoints {
+		return ""
+	}
+	if !tight {
+		// square wrap takes the box around the shape that turns
+		left, top, right, bottom := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
+		for i := 0; i+1 < len(points); i += 2 {
+			left, right = min(left, points[i]), max(right, points[i])
+			top, bottom = min(top, points[i+1]), max(bottom, points[i+1])
+		}
+		points = []float64{left, top, right, top, right, bottom, left, bottom}
+	}
+	parts := make([]string, 0, len(points)/2)
+	for i := 0; i+1 < len(points); i += 2 {
+		parts = append(parts, num(points[i])+"pt "+num(points[i+1])+"pt")
+	}
+	return "-ivy-wrap-shape: polygon(" + strings.Join(parts, ", ") + ")"
+}
+
+// maxWrapPoints is the largest number of points of a wrap polygon that
+// the layout takes.
+const maxWrapPoints = 1024
 
 // writeTextbox writes a text box that floats at f: a block with its text,
 // whose background is the object of its shape. The block is larger than

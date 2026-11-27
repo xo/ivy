@@ -194,6 +194,10 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 	// before the layout of the line, which can lay out other lines.
 	row := lc.lineRow
 	lc.lineRow = nil
+	// The floats of -ivy-wrap-flow of the line keep their place in each
+	// try of the line. A float lays out lines of its own.
+	defer func(state lineFloatState) { lc.lineFloats = state }(lc.lineFloats)
+	lc.lineFloats = lineFloatState{active: true}
 
 	skip, cont := skipFirstWhitespace(linebox, skip)
 	if cont {
@@ -252,6 +256,20 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 			&waitingFloats, &lineChildren, firstLetterStyle, firstLineStyle)
 		line, resumeAt = split.box, split.resumeAt
 		preservedLineBreak := split.preservedLineBreak
+		// Port: upstream has no -ivy-wrap-flow. A float of -ivy-wrap-flow
+		// that the line placed cuts the line in rooms, as a float before
+		// the line does. So the line is laid out again next to it, with
+		// the text before the float in the first room (D63).
+		if added := lc.lineFloats.added; len(added) > 0 && tries < maxLineTries {
+			lc.spend(1)
+			lc.lineFloats.added = nil
+			excludedShapes.boxes = append(excludedShapes.boxes, added...)
+			linebox.Width = inlineMinContentWidth(lc, linebox, true, skip, true, false)
+			linebox.Height, _ = strut(linebox.Style)
+			minWidth = linebox.Width
+			positionX, positionY, availableWidth, rooms = lc.lineCollisions(linebox, containingBlock, row)
+			continue
+		}
 		alignTabs(line, lc.tabOrigin)
 		linebox.Width, linebox.Height = line.Width, line.Height
 
@@ -847,6 +865,14 @@ func inlineOutOfFlowLayout(lc *layoutContext, box, containingBlock *Box, index i
 			appendBoxes(waitingFloats, child)
 		}
 
+	case child.IsFloated() && lc.wrapsLine(child, *waitingFloats):
+		// Port: upstream has no -ivy-wrap-flow. Such a float does not move
+		// the content of the line before it. The line is laid out again
+		// in the rooms next to it, see getNextLinebox (D63).
+		child.PositionX = positionX
+		newChild := lc.lineWrapFloat(child, containingBlock, absoluteBoxes, fixedBoxes, bottomSpace)
+		*waitingChildren = append(*waitingChildren, waitingChild{index, newChild, child})
+
 	case child.IsFloated():
 		child.PositionX = positionX
 		floatWidth := shrinkToFit(lc, child, containingBlock.Width)
@@ -1016,7 +1042,7 @@ func adjustLineHeight(box *Box) {
 	// Port: upstream has no -ivy-line-multiple, which moves the text in
 	// its line, see leadingShift.
 	var shift float64
-	if _, ok := box.Style.Get("line_multiple").(Float); ok {
+	if _, _, ok := lineMultipleOf(box.Style); ok {
 		shift = leadingShift(box.Style, lineHeight, strutTextHeight(box.Style))
 	}
 	// Port: upstream has no -ivy-line-baseline, see baselineShift.
@@ -1526,11 +1552,19 @@ func inlineBoxVerticality(box *Box, topBottomSubtrees *[]*Box, baselineY float64
 			// align top with the top of the parent’s content area
 			top := baselineY - box.Baseline + box.MarginTop +
 				box.BorderTopWidth + box.PaddingTop
+			// Port: upstream has no -ivy-line-multiple, see textExtent.
+			if textTop, _, ok := textExtent(box, baselineY); ok {
+				top = textTop
+			}
 			childBaselineY = top + child.Baseline
 		case isStr(verticalAlign, "text-bottom"):
 			// align bottom with the bottom of the parent’s content area
 			bottom := baselineY - box.Baseline + box.MarginTop +
 				box.BorderTopWidth + box.PaddingTop + box.Height
+			// Port: upstream has no -ivy-line-multiple, see textExtent.
+			if _, textBottom, ok := textExtent(box, baselineY); ok {
+				bottom = textBottom
+			}
 			childBaselineY = bottom - child.MarginHeight() + child.Baseline
 		case isStrIn(verticalAlign, "top", "bottom"):
 			// TODO: actually implement vertical-align: top and bottom

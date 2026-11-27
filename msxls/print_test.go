@@ -170,3 +170,38 @@ func TestNameBIFF5(t *testing.T) {
 		t.Errorf("expected the area %+v, got: %+v", want, p.areas)
 	}
 }
+
+// TestDefaultMargins checks the margins of a sheet without the records of
+// the margins, the margins of the old versions of Excel, and of a sheet
+// with a record of the left margin.
+func TestDefaultMargins(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		recs [][]byte
+		exp  [4]float64
+	}{
+		{"none", nil, [4]float64{72, 54, 72, 54}},
+		{"left", [][]byte{float(0.25)}, [4]float64{72, 54, 72, 18}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var b biff
+			b.record(recBOF, u16(biff8, bofGlobals, 0, 0), u32(0, 0))
+			b.record(recFont, u16(200, 0, 0x7FFF, 400, 0), []byte{0, 0, 0, 0}, []byte{5, 0}, []byte("Arial"))
+			b.record(recXF, u16(0, 0), make([]byte, 16))
+			pos := b.record(recBoundSheet, u32(0), []byte{0, 0}, []byte{6, 0}, []byte("Margin"))
+			b.record(recEOF)
+			binary.LittleEndian.PutUint32(b.buf[pos+4:], uint32(len(b.buf)))
+			b.record(recBOF, u16(biff8, bofWorksheet, 0, 0), u32(0, 0))
+			b.record(recNumber, u16(0, 0, 0), float(1))
+			for _, r := range test.recs {
+				b.record(recLeftMargin, r)
+			}
+			b.record(recEOF)
+			book := bookOf(t, fixture.CFB(fixture.CFBEntry{Name: "Workbook", Data: b.buf}))
+			p := book.Sheets[0].Page
+			if got := [4]float64{p.Top, p.Right, p.Bottom, p.Left}; got != test.exp {
+				t.Errorf("expected the margins %v, got: %v", test.exp, got)
+			}
+		})
+	}
+}

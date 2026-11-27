@@ -33,10 +33,7 @@ func (c *converter) word(s *state, t token) {
 		return
 	}
 	if s.dest == destShape {
-		i := map[string]int{"shpleft": 0, "shptop": 1, "shpright": 2, "shpbottom": 3}
-		if k, ok := i[t.word]; ok {
-			c.shapeBox[k] = t.param
-		}
+		c.shapeWord(t)
 		return
 	}
 	if s.dest == destSkip || s.dest == destShapeName {
@@ -120,16 +117,17 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		s.dest = destSkip
 	case w == "shpinst":
 		s.dest = destShape
-		c.shapeBox = [4]int{}
-		c.shapeProps = nil
+		c.shape = shapeData{bx: originColumn, by: originColumn}
+	case w == "shpgrp":
+		s.shapeGroup = true
 	case w == "sn" && s.dest == destShape:
 		s.dest = destShapeName
-		c.shapeProp = ""
+		c.shape.prop = ""
 	case w == "sv" && s.dest == destShape:
 		// Only the picture of the property pib is the picture of the
 		// shape. The other pictures fill it, and the other values are
 		// text
-		if strings.TrimSpace(c.shapeProp) != "pib" {
+		if strings.TrimSpace(c.shape.prop) != "pib" {
 			s.dest = destShapeValue
 		}
 	case w == "shprslt":
@@ -137,6 +135,15 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		s.dest = destSkip
 	case w == "shptxt" && s.dest == destShape:
 		s.dest = destText
+		if p := c.shapeParent(); p != nil && c.floatsShape(p) {
+			// the text of a text box that floats waits for the end of
+			// its shape, and a shape in the text box has its own state
+			c.flushBytes(s)
+			outer := c.shape
+			s.kind, s.outer = "shptxt", &outer
+			s.target = &target{}
+			s.par = defaultPara()
+		}
 	case w == "listtext" || w == "pntext":
 		if s.dest != destText {
 			s.dest = destSkip
@@ -517,7 +524,7 @@ func (c *converter) paraWord(s *state, t token) bool {
 			p.borderRight = false
 		}
 	default:
-		return false
+		return p.frame.word(t)
 	}
 	return true
 }

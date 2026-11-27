@@ -303,6 +303,7 @@ var InitialValues = map[string]Value{
 	"float_position": String("auto"),
 	"float_overlap":  String("allow"),
 	"wrap_flow":      String("auto"),
+	"wrap_shape":     String("none"),
 	"stroke_adjust":  String("none"),
 	"line_baseline":  String("normal"),
 	"text_outline":   String("none"),
@@ -391,8 +392,9 @@ var Inherited = map[string]bool{
 // wrapper box. See https://www.w3.org/TR/CSS21/tables.html#model. Only the
 // properties that are not inherited are listed.
 //
-// Port: upstream has no -ivy-float-position, no -ivy-float-overlap and no
-// -ivy-wrap-flow. They go to the wrapper, which floats (D60, D63).
+// Port: upstream has no -ivy-float-position, no -ivy-float-overlap, no
+// -ivy-wrap-flow and no -ivy-wrap-shape. They go to the wrapper, which
+// floats (D60, D63).
 var TableWrapperBoxProperties = map[string]bool{
 	"bottom":              true,
 	"break_after":         true,
@@ -422,6 +424,7 @@ var TableWrapperBoxProperties = map[string]bool{
 	"transform_origin":    true,
 	"vertical_align":      true,
 	"wrap_flow":           true,
+	"wrap_shape":          true,
 	"z_index":             true,
 }
 

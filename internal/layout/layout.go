@@ -989,6 +989,13 @@ type layoutContext struct {
 	forcedBreak     bool
 	brokenOutOfFlow []brokenOutOfFlow
 	inColumn        bool
+	// columnFloats holds the floats of -ivy-wrap-flow of the columns that
+	// the layout of a row of columns placed before the current column, see
+	// layout_column_float.go.
+	columnFloats columnFloatState
+	// lineFloats holds the floats of -ivy-wrap-flow of the line that the
+	// layout lays out, see layout_wrap_flow.go.
+	lineFloats lineFloatState
 
 	// pageMaker holds the states of the pagination, the page_maker of
 	// upstream. It is set by layout_document.
@@ -1035,6 +1042,10 @@ type layoutContext struct {
 	// column box, or the first in-flow child of such a box. Upstream has
 	// no such property. See layoutContext.discardsSpaceBefore.
 	columnTopBox *Box
+	// cellTop is set while columnTopBox comes from the top of the part of
+	// a split table cell, where a block keeps the space before it that
+	// -ivy-page-top-space gives. See layoutContext.spaceBeforeKept.
+	cellTop bool
 
 	// pageFloats is the state of the page floats of -ivy-float-position on
 	// the page that the page maker makes (D60). Upstream has no such
@@ -1202,7 +1213,11 @@ func (lc *layoutContext) finishBlockFormattingContext(root *Box) {
 		boxBottom := root.ContentBoxY() + root.Height
 		maxShapeBottom := boxBottom
 		for _, shape := range lc.excludedShapes() {
-			maxShapeBottom = max(maxShapeBottom, shape.PositionY+shape.MarginHeight())
+			// Port: upstream has no -ivy-wrap-flow. The float of a column
+			// before does not make the column higher.
+			if !lc.isColumnFloat(shape) {
+				maxShapeBottom = max(maxShapeBottom, shape.PositionY+shape.MarginHeight())
+			}
 		}
 		root.Height += maxShapeBottom - boxBottom
 	}

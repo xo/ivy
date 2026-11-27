@@ -375,9 +375,24 @@ func (c *converter) runBorder(p props) []decl {
 // border returns the value of a border of CSS for a border of
 // WordprocessingML, "val sz color space", and the space in points.
 func border(v string) (string, float64) {
+	width, style := borderLine(v)
+	if style == "" {
+		return "", 0
+	}
+	f := strings.Fields(v)
+	color, ok := hexColor(f[2])
+	if !ok {
+		color = "#000000"
+	}
+	return pt(width) + " " + style + " " + color, min(number(f[3], 0), 31)
+}
+
+// borderLine returns the width in points and the style of CSS of a border
+// of WordprocessingML, "val sz color space". The style is "" for no border.
+func borderLine(v string) (float64, string) {
 	f := strings.Fields(v)
 	if len(f) != 4 || f[0] == "nil" || f[0] == "none" {
-		return "", 0
+		return 0, ""
 	}
 	width := number(f[1], 4) / 8
 	style := "solid"
@@ -390,10 +405,5 @@ func border(v string) (string, float64) {
 	case strings.HasPrefix(f[0], "dash"):
 		style = "dashed"
 	}
-	width = min(max(width, 0.25), 12)
-	color, ok := hexColor(f[2])
-	if !ok {
-		color = "#000000"
-	}
-	return pt(width) + " " + style + " " + color, min(number(f[3], 0), 31)
+	return min(max(width, 0.25), 12), style
 }

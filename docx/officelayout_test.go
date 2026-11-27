@@ -146,6 +146,47 @@ func TestRowHeightMargins(t *testing.T) {
 	}
 }
 
+// TestRowHeightBorders checks that a row of a least height takes the
+// halves of the borders above and below it on top of that height, so that
+// the height is between the borders, as Word does on page 1 of
+// poi/docx/form-footnotes.docx, and that a row of an exact height does
+// not.
+func TestRowHeightBorders(t *testing.T) {
+	table := func(rule string) string {
+		row := `<w:tr><w:trPr><w:trHeight w:val="602"` + rule + `/></w:trPr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr>`
+		return `<w:tbl><w:tblPr><w:tblBorders><w:top w:val="double" w:sz="6" w:space="0" w:color="auto"/>` +
+			`<w:insideH w:val="single" w:sz="6" w:space="0" w:color="auto"/></w:tblBorders></w:tblPr>` +
+			`<w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>` + row + row + row + `</w:tbl>`
+	}
+	html, _ := convertHTML(t, fixture.DOCX(table("")))
+	// The first row has the double border of 2.25 points above it, the
+	// second row the borders of 0.75 point, and the last row no border
+	// below it.
+	for _, want := range []string{`<tr style="height: 31.6pt">`, `<tr style="height: 30.85pt">`, `<tr style="height: 30.48pt">`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q:\n%s", want, html)
+		}
+	}
+	html, _ = convertHTML(t, fixture.DOCX(table(` w:hRule="exact"`)))
+	if strings.Count(html, `<tr style="height: 30.1pt">`) != 3 {
+		t.Errorf("expected rows of 30.1 points:\n%s", html)
+	}
+}
+
+// TestPictureLines checks that a paragraph of pictures and breaks takes
+// the font of its runs, not of its style, and puts its pictures at the
+// bottom of their lines, as the banner on page 9 of poi/docx/drawing.docx.
+func TestPictureLines(t *testing.T) {
+	run := `<w:r><w:rPr><w:sz w:val="17"/></w:rPr>`
+	body := `<w:p>` + strings.Replace(inlineImage, "<w:r>", run, 1) + run + `<w:br/></w:r>` +
+		strings.Replace(inlineImage, "<w:r>", run, 1) + `</w:p><w:p>` + inlineImage + `<w:r><w:t>text</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body, imagePart))
+	// The second paragraph has text, so its picture stays on the baseline.
+	if strings.Count(html, `<p class="pictures" style="`) != 1 || !strings.Contains(html, "font-size: 8.5pt") {
+		t.Errorf("expected one paragraph of pictures of 8.5 points:\n%s", html)
+	}
+}
+
 // TestHorizontalRule checks that a horizontal line of Word draws as a box
 // of the width of the column, as on page 1 of poi/docx/drawing.docx.
 func TestHorizontalRule(t *testing.T) {

@@ -57,6 +57,10 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 	height := style.Get("height")
 	originalBottomSpace := bottomSpace
 	lc.inColumn = true
+	// Port: upstream has no -ivy-wrap-flow. The columns of the box see
+	// only the floats of the columns of the box before them.
+	defer func(state columnFloatState) { lc.columnFloats = state }(lc.columnFloats)
+	lc.columnFloats = columnFloatState{}
 
 	if isStr(style.Get("position"), "relative") {
 		// New containing block, use a new absolute list
@@ -252,6 +256,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 			// Remove extra excluded shapes introduced during the previous
 			// loop
 			lc.truncateExcludedShapes(originalExcludedShapes)
+			lc.columnFloats.reset(width, gap, isStr(style.Get("direction"), "rtl"))
 
 			// Render the columns
 			columnSkipStack = skip
@@ -278,6 +283,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 				}
 				newBoxes = append(newBoxes, newBox)
 				columnSkipStack = resumeAt
+				lc.columnFloats.collect(newBox, i)
 
 				// Calculate consumed height, empty space and next box
 				// height
@@ -403,6 +409,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 		var columns []*Box
 		// Port: upstream has no -ivy-page-top-space, see above.
 		forced := false
+		lc.columnFloats.reset(width, gap, isStr(style.Get("direction"), "rtl"))
 		for {
 			lc.spend(1)
 			columnBox := createColumnBox(box, containingBlock, columnChildren, width, currentPositionY)
@@ -427,6 +434,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 			next = result.nextPage
 			skip = columnSkipStack
 			columns = append(columns, newChild)
+			lc.columnFloats.collect(newChild, i)
 			maxColumnHeight = max(maxColumnHeight, newChild.MarginHeight())
 			if skip == nil {
 				bottomSpace = originalBottomSpace

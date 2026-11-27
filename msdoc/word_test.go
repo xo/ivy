@@ -292,6 +292,45 @@ func TestExactRowHeight(t *testing.T) {
 	}
 }
 
+// TestRowBorders checks that a row of a least height holds that height
+// between its borders, and that a row of an exact height holds its
+// borders, as on page 2 of libreoffice/doc/landscape-letter-form.doc. The
+// layout puts half of each border between two rows in each row.
+func TestRowBorders(t *testing.T) {
+	// row returns a row of one cell with borders of b eighths of a point,
+	// of the height h in twips
+	row := func(b byte, h uint16) *tap {
+		cell := u16s(0, 0)
+		for range 4 {
+			cell = append(cell, b, 1, 1, 0)
+		}
+		def := append(append(append(u16s(0), 1), u16s(0, 2880)...), cell...)
+		binary.LittleEndian.PutUint16(def, uint16(len(def)-1))
+		t := &tap{}
+		applyTap(t, sprm{op: sprmTDefTable, operand: def})
+		applyTap(t, sprm{op: sprmTDyaRowHeight, operand: u16s(h)})
+		return t
+	}
+	var b strings.Builder
+	// an exact row of 17 points with borders of 0.5 points, a least row
+	// of 17 points with a border of 2 points below it, and that row
+	writeTable(&b, []tableRow{
+		{cells: []string{"A"}, tap: row(4, 0xFEAC)},
+		{cells: []string{"B"}, tap: row(4, 340)},
+		{cells: []string{"C"}, tap: row(16, 340)},
+	}, page{})
+	html := b.String()
+	for _, want := range []string{
+		`<tr style="height: 17pt"><td style="border-top: 0.5pt solid #000000; border-left: 0.5pt solid #000000; border-bottom: 0.5pt solid #000000; border-right: 0.5pt solid #000000; padding: 0pt 0pt 0pt 0pt"><div style="display: flow-root; height: 16.5pt">A</div>`,
+		`<tr style="height: 18.25pt"><td style="border-top: 0.5pt solid #000000; border-left: 0.5pt solid #000000; border-bottom: 0.5pt solid #000000; border-right: 0.5pt solid #000000; padding: 0pt 0pt 0pt 0pt">B</td>`,
+		`<tr style="height: 19pt"><td`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the table:\n%s", want, html)
+		}
+	}
+}
+
 // TestEastAsianFont checks that a run gives its East Asian font after its
 // font, and the language of its East Asian text, as the package docx does.
 func TestEastAsianFont(t *testing.T) {

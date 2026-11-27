@@ -11,7 +11,7 @@ func TestWrapFlow(t *testing.T) {
 		want string
 	}{
 		{odtProps{"wrap": "parallel", "margin-left": "0.1in", "margin-right": "0.2in"}, "both 14.4pt"},
-		{odtProps{"wrap": "dynamic"}, "both 0pt"},
+		{odtProps{"wrap": "dynamic"}, "maximum 0pt"},
 		{odtProps{"wrap": "left", "margin-left": "9pt"}, "start 9pt"},
 		{odtProps{"wrap": "right", "margin-right": "-9pt"}, "end 0pt"},
 		{odtProps{"wrap": "biggest", "margin-right": "1cm"}, "maximum 28.35pt"},

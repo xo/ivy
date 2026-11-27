@@ -15,18 +15,23 @@ import (
 )
 
 // shapesContent is a content.xml of a text with a style of a shape and the
-// shapes of the tests, in its order: a rectangle, a turned square, a line
-// and a group.
+// shapes of the tests, in its order: a rectangle, a turned square, a line,
+// a group, a square whose style gives the width of a marker and no marker,
+// and a line with a marker.
 const shapesContent = `<office:document-content xmlns:office="` + nsOffice + `" xmlns:style="` + nsStyle + `" xmlns:draw="` + nsDraw + `" xmlns:svg="` + nsSVG + `" xmlns:text="` + nsText + `" xmlns:fo="` + nsFO + `">
 <office:automatic-styles>
 <style:style style:name="gr1" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#ff0000" draw:stroke="none"/></style:style>
 <style:style style:name="gr2" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-width="4pt"/></style:style>
+<style:style style:name="gr3" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-width="2pt" draw:marker-start="" draw:marker-start-width="10pt"/></style:style>
+<style:style style:name="gr4" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-width="2pt" draw:marker-end="Arrow" draw:marker-end-width="10pt"/></style:style>
 </office:automatic-styles>
 <office:body><office:text><text:p>
 <draw:rect draw:style-name="gr1" svg:x="10pt" svg:y="20pt" svg:width="30pt" svg:height="40pt"/>
 <draw:rect draw:style-name="gr1" draw:transform="rotate (0.785398163397448) translate (0pt 0pt)" svg:width="10pt" svg:height="10pt"/>
 <draw:line draw:style-name="gr2" svg:x1="0pt" svg:y1="5pt" svg:x2="100pt" svg:y2="5pt"/>
 <draw:g><draw:rect draw:style-name="gr1" svg:x="0pt" svg:y="0pt" svg:width="10pt" svg:height="10pt"/><draw:ellipse draw:style-name="gr1" svg:x="50pt" svg:y="20pt" svg:width="10pt" svg:height="10pt"/></draw:g>
+<draw:rect draw:style-name="gr3" svg:x="0pt" svg:y="0pt" svg:width="10pt" svg:height="10pt"/>
+<draw:line draw:style-name="gr4" svg:x1="0pt" svg:y1="0pt" svg:x2="100pt" svg:y2="0pt"/>
 </text:p></office:text></office:body></office:document-content>`
 
 // recorder is a display.Device that counts the paths that it fills.
@@ -57,8 +62,8 @@ func TestShapes(t *testing.T) {
 			shapes = append(shapes, n)
 		}
 	}
-	if len(shapes) != 4 {
-		t.Fatalf("expected 4 shapes, got: %d", len(shapes))
+	if len(shapes) != 6 {
+		t.Fatalf("expected 6 shapes, got: %d", len(shapes))
 	}
 	near := func(a, b float64) bool { return math.Abs(a-b) < 0.01 }
 	for i, exp := range [...][4]float64{
@@ -68,6 +73,9 @@ func TestShapes(t *testing.T) {
 		// the half of the line of 4 points goes around it
 		{-2, 3, 104, 4},
 		{0, 0, 60, 30},
+		// the width of a marker counts only with a marker
+		{-1, -1, 12, 12},
+		{-10, -10, 120, 20},
 	} {
 		sh, ok := s.Shape(t.Context(), shapes[i], true)
 		if !ok {

@@ -380,14 +380,69 @@ The build of 2026-11-19 differs from the proposal in these places:
    in such a section.
 7. Wrap above and below gets the margin of point 14 in the shapes of
    `msdoc` and `docx`, and not only in the tables and the frames.
-8. The frames of `rtf` and the frames of `odf` that are anchored to the
-   page are not built.
+8. The frames of `rtf` are not built. Point 10 builds the frames of `odf`
+   that are anchored to the page.
 9. On 2026-11-25 the property `-ivy-float-overlap: avoid` came. It moves a
    page float down below the page floats before it that it covers. `docx`
    gives it for `w:tblOverlap` never and for `allowOverlap` 0. A second
    layout of the page keeps the place that the first layout gave such a
    float. LibreOffice 26.8 moves such a table in the same way. It does not
    move such a picture, and ivy moves it, as ECMA-376 says.
+10. On 2026-11-27 `odf` gives the property to a frame or a shape that is
+    anchored to the page, with a `style:wrap` other than run-through, and
+    with `style:vertical-rel` page or page-content, or without it. The
+    frame floats at its `svg:x`, and its wrap gives `-ivy-wrap-flow`
+    (D63). A frame with the wrap none gets the margin of point 14 of the
+    proposal. `fo:margin-top` and `fo:margin-bottom` give the distances of
+    the text above and below the frame. A frame without `style:wrap` or with
+    the wrap run-through stays an absolute box. So does a frame on a page
+    with columns. On the test files `float-page-*.odt` of `odf`, with the
+    wraps left, right, parallel and none, ivy places the frame and the
+    words of the text within 0.01 inch of LibreOffice 26.8. The frame goes
+    on the page where its element is in the text, which is the first page.
+    `odf` does not read `text:anchor-page-number`.
+11. On 2026-11-27 `rtf` gives the property to its frames and to its
+    shapes. This replaces point 8. A frame of `rtf` is a paragraph with the
+    words of a frame of RTF 1.9.1, such as `\absw`, `\phmrg`, `\pvpg` and
+    `\posy`. The paragraphs with the same words share one frame. A frame at
+    a position from the margin or from the page floats there, as a frame of
+    `docx` does. A frame without `\pvmrg`, `\pvpg` or `\pvpara` has its
+    position from the margin, as in LibreOffice 26.8. A frame with
+    `\pvpara` and a width floats at the top of the next paragraph, and its
+    position is a margin above it. `\nowrap` gives the margin of point 14
+    of the proposal, and `\overlay` gives an absolute box. `\dxfrtext`,
+    `\dfrmtxtx` and `\dfrmtxty` give the distances of the text. A frame of a
+    drop cap, of a table, of a header, a footer or a note, or of a section
+    with columns stays a paragraph. A shape with wrap floats at its
+    position from the margin or from the page, from `\shpby` or from the
+    property `posrelv`. Its property `posv` gives top, center and bottom.
+    On the test files `float-f-*.rtf` and `float-x-*.rtf` of `rtf`, ivy
+    places the frames, the text boxes and the words of the text within 0.01
+    inch of LibreOffice 26.8. LibreOffice 26.8 places a picture of a shape
+    from its paragraph, and ignores `\shpbymargin`, `posrelv` 0, `posh` and
+    `posv` for it. So only the unit tests of `rtf` test such a picture.
+12. On 2026-11-27 `docx` gives `-ivy-float-overlap: avoid` to a VML
+    shape with `o:allowoverlap` off, as for `allowOverlap` 0. In a section
+    with columns, a drawing or a VML shape with square, tight or through
+    wrap floats at its paragraph, in its column, as in `msdoc` (point 6).
+    This replaces open point 6 for these shapes. `docx` takes the width
+    of a column of the section for the side of the float. A shape that
+    crosses the right side of its column floats at the left, with a margin
+    that gives its place. The layout makes the lines of the later columns
+    of the same row avoid such a float, as Word and LibreOffice 26.8 do
+    (D63). A VML shape with the wrap top and bottom in a section with
+    columns stays an absolute box without wrap. Word and LibreOffice place
+    it from the top of the part of its paragraph on the page, and the
+    layout cannot float it there. A float with a position from the margin
+    or from the page in a section with columns floats at its paragraph.
+    A continuous section of `docx` also gets its own left and right
+    margins, on the page of the section before it too, as in Word. The
+    pages that start in the section keep the page and the headers of the
+    section before it. On page 1 of `libreoffice/docx/mixed-orientation.docx`,
+    the mean difference from Word goes from 14.59 to 8.97. Word draws the
+    ellipse of that page 102 points wide, and not 140 points as the file
+    says. LibreOffice draws it 140 points wide, and ivy places the text
+    around it as LibreOffice does.
 
 The restore of the saved state of a page also no longer keeps the name of
 a running element that the page added. The page lost the rest of a float

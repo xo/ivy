@@ -152,3 +152,74 @@ The build of 2026-11-25 differs from the proposal in these places:
 5. `odf` places a frame that floats at the edge of the column, because it
    does not read `svg:x` for a float. So a frame of `odf` gains only the
    distance.
+6. On 2026-11-27 `odf` places a frame that floats at its `svg:x` and its
+   `style:horizontal-pos`, in the area of its `style:horizontal-rel`. This
+   replaces point 5. The frame floats to the side of the column where its
+   center is, and a margin gives its place, as in `msdoc`. So the text goes
+   on both sides of a frame in the middle of the column. For left, center
+   and right, LibreOffice aligns the frame with its `fo:margin-left` and
+   `fo:margin-right` in the area. For `svg:x`, it puts the border of the
+   frame at that place. In a table cell, a frame, a header, a footer or a
+   section with columns, `odf` does not know the width of the column, and
+   the frame still floats at the edge of the column.
+7. LibreOffice 26.8 puts the text of the wrap dynamic of `odf` on the larger
+   side of the frame only. So `odf` gives `maximum` for dynamic, as for
+   biggest.
+8. On the test files `float-mid.odt` and `float-right.odt` of `odf`, ivy
+   places the frames and the words of the text within 0.01 inch of
+   LibreOffice 26.8. LibreOffice also puts the left margin of a paragraph
+   again after a frame that covers the start of a line, and the layout does
+   not.
+9. On 2026-11-27 `rtf` floats the picture and the text box of a shape of
+   the body, and gives them `-ivy-wrap-flow`. This replaces point 4. `rtf`
+   reads `\shpwr`, `\shpwrk`, `\shpbx`, `\shpby`, `\shpleft`, `\shptop` and
+   the properties `posrelh`, `posrelv`, `posh` and `posv`, as `msdoc` reads
+   an FSPA. The wrap distances come from the properties `dxWrapDistLeft`,
+   `dxWrapDistRight`, `dyWrapDistTop` and `dyWrapDistBottom`, with the
+   defaults of MS-ODRAW: 9 points at the left and the right, and 0 above
+   and below. A shape goes to the start of its paragraph, because Word
+   places it from the top of the paragraph. A shape of a header, a footer,
+   a note, a text box or a group of shapes stays in its line. On the test
+   files `float-s-*.rtf` and `float-x-*.rtf` of `rtf`, ivy places the
+   pictures, the text boxes and the words of the text within 0.01 inch of
+   LibreOffice 26.8. LibreOffice 26.8 gives a text box other default
+   distances than MS-ODRAW, so these test files give the distances.
+10. On 2026-11-27 a float in the middle of the text of a line no longer
+    moves the text before it into the room after it. The layout places the
+    float at once, and lays out the line again in the rooms next to the
+    float. So the text before the float stays in the first room.
+11. On 2026-11-27 the lines of a column avoid a float of `-ivy-wrap-flow`
+    of a column before it in the same row of columns, as Word and
+    LibreOffice 26.8 wrap the text of each column around a shape that
+    crosses the columns. The floats and the blocks of the column avoid
+    such a float on the side of the column with the larger room. The
+    float does not change the clearance or the height of the column. A
+    column does not avoid a float of a column after it.
+12. On 2026-11-27 the layout gets the property `-ivy-wrap-shape: none |
+    polygon(<length> <length>, ...)`. It gives a float of `-ivy-wrap-flow`
+    the polygon that the text wraps around, in place of the border box.
+    Each point is a distance from the left and from the top of the border
+    box. A line avoids the part of the polygon next to it, and the distance
+    at the left and the right of that part. This answers open point 2. The
+    blocks of a later column still avoid the border box of the float, as
+    in point 11.
+13. On 2026-11-27 `msdoc` gives a shape with tight or through wrap its wrap
+    polygon, pWrapPolygonVertices of MS-ODRAW. The points are in a square
+    of 21600 by 21600 over the box of the shape, and they turn with the
+    shape. A shape that turns with square wrap gives the box around the
+    turned shape. The polygon and the box leave out the bleed of the
+    object of the shape. On page 6 of `poi/doc/floating-pictures.doc`,
+    each part of a row next to the two pictures starts within 1 point of
+    Word.
+14. On 2026-11-27 `docx` gives a drawing with tight or through wrap its
+    `wp:wrapPolygon`, and a VML shape with tight or through wrap its
+    `wrapcoords`. Word writes the points in a square of 21600 by 21600 over
+    the extent of the drawing, and not in EMU. On the test file
+    `float-s-tight.docx` of `docx`, ivy places the words next to a diamond
+    within 0.2 point of LibreOffice 26.8.
+15. On 2026-11-27 test files measured the narrowest room in LibreOffice
+    26.8. LibreOffice puts text in a room of any width that holds the first
+    word of the line, such as a room of 4 points that holds an "i" of 12
+    points. The pages of Word of the corpus have no room narrower than 0.25
+    inch next to a picture, so the width of Word is not measured. The layout
+    keeps the rule of point 3.

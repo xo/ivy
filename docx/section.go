@@ -32,6 +32,9 @@ type section struct {
 	refs map[string]string
 	// name is the name of the page of the section in the style sheet.
 	name string
+	// page is the section whose page the section has: the section itself,
+	// or the section before a continuous section.
+	page *section
 	// running maps "header.default" and the like to the name of the running
 	// element that the section shows.
 	running map[string]string
@@ -176,6 +179,17 @@ func defaultSection(paper ivy.Paper) *section {
 	return s
 }
 
+// columnWidth returns the width in points of a column of the section s:
+// the width of the page area without the gutter, less the space between
+// the columns, shared by the columns.
+func (s *section) columnWidth() float64 {
+	w := s.width - s.left - s.right - s.gutter
+	if s.cols > 1 {
+		w = max(w-float64(s.cols-1)*s.colSpace, 0) / float64(s.cols)
+	}
+	return w
+}
+
 // convertBody converts w:body. Each w:sectPr of a paragraph ends a section, and the
 // w:sectPr of the body is the last section.
 func (c *converter) convertBody(body roxmltree.Node) {
@@ -239,9 +253,19 @@ func (c *converter) startSection(i int) {
 		// starts has the size and the headers of the section before.
 		s.name = prev.name
 		s.running = prev.running
+		s.page = prev.page
 		style.set("page", s.name)
+		// Word gives the text of a continuous section its own left and
+		// right margins, also on the page of the section before.
+		if d := s.left + s.gutter - s.page.left - s.page.gutter; d != 0 {
+			style.set("margin-left", pt(d))
+		}
+		if d := s.right - s.page.right; d != 0 {
+			style.set("margin-right", pt(d))
+		}
 	default:
 		s.name = "s" + strconv.Itoa(i+1)
+		s.page = s
 		style.set("page", s.name)
 		switch s.typ {
 		case "evenPage":

@@ -412,14 +412,15 @@ func conditions(tp props, rows []*tableRow, r, col, span, cols int) []string {
 // row converts row r of a table.
 func (c *converter) row(st *style, tp props, rows []*tableRow, r, cols int) {
 	row := rows[r]
+	table := tp
 	// The exceptions of the row replace the properties of the table.
 	tp = tp.over(row.ex)
 	var s css
 	if h := number(row.tr["height"], 0) / 20; h > 0 {
 		if row.tr["hRule"] != "exact" {
 			// Word gives a row of a least height the top and the bottom
-			// margins of its cells on top of that height.
-			h += rowMargins(tp, row)
+			// margins and borders of its cells on top of that height.
+			h += min(rowMargins(tp, row)+rowBorders(st, table, rows, r, cols), 1584)
 		}
 		s.set("height", pt(h))
 	}
@@ -453,8 +454,40 @@ func rowMargins(tp props, row *tableRow) float64 {
 	return min(m, 1584)
 }
 
-// cell converts a cell of row r of a table.
-func (c *converter) cell(st *style, tp props, rows []*tableRow, r, cols int, cell *tableCell) {
+// rowBorders returns half of the widest border above row r of a table and
+// half of the widest border below it, in points, from the style st and the
+// properties table of the table. A row of a least height in Word holds
+// that height between the borders, as on page 1 of
+// poi/docx/form-footnotes.docx. The layout collapses the borders of the
+// cells, and puts half of each border between two rows in each row.
+func rowBorders(st *style, table props, rows []*tableRow, r, cols int) float64 {
+	// edge returns the widest border at the top or at the bottom, by
+	// side, of the cells of row i that start or end in that row.
+	edge := func(i int, side string) float64 {
+		if i < 0 || i >= len(rows) {
+			return 0
+		}
+		tp := table.over(rows[i].ex)
+		w := 0.0
+		for _, cell := range rows[i].cells {
+			if cell.rowSpan == 0 || side == "bottom" && cell.rowSpan > 1 {
+				continue
+			}
+			_, tc := cellProps(st, tp, rows, i, cols, cell)
+			v, _ := borderLine(cellBorders(tp, tc, rows, i, cols, cell)[side])
+			w = max(w, v)
+		}
+		return w
+	}
+	top := max(edge(r, "top"), edge(r-1, "bottom"))
+	bottom := max(edge(r, "bottom"), edge(r+1, "top"))
+	return (top + bottom) / 2
+}
+
+// cellProps returns the style of the text of a cell of row r of a table,
+// and the properties of the cell, with the conditional formatting of the
+// style st of the table.
+func cellProps(st *style, tp props, rows []*tableRow, r, cols int, cell *tableCell) (*cellStyle, props) {
 	cs := &cellStyle{ppr: st.ppr, rpr: st.rpr}
 	tc := st.tc
 	for _, name := range conditions(tp, rows, r, cell.col, cell.span, cols) {
@@ -464,8 +497,12 @@ func (c *converter) cell(st *style, tp props, rows []*tableRow, r, cols int, cel
 			tc = tc.over(cond.tc)
 		}
 	}
-	tc = tc.over(cell.tc)
-	var s css
+	return cs, tc.over(cell.tc)
+}
+
+// cellBorders returns the borders of a cell of row r of a table by side,
+// from the properties tp of the table and the properties tc of the cell.
+func cellBorders(tp, tc props, rows []*tableRow, r, cols int, cell *tableCell) map[string]string {
 	last := r+cell.rowSpan-1 >= len(rows)-1
 	sides := map[string]string{
 		"top":    pick(r == 0, tp["tbl.top"], tp["tbl.insideH"]),
@@ -473,12 +510,21 @@ func (c *converter) cell(st *style, tp props, rows []*tableRow, r, cols int, cel
 		"left":   pick(cell.col == 0, tp["tbl.left"], tp["tbl.insideV"]),
 		"right":  pick(cell.col+cell.span >= cols, tp["tbl.right"], tp["tbl.insideV"]),
 	}
-	for _, side := range [...]string{"top", "right", "bottom", "left"} {
-		v := sides[side]
+	for side := range sides {
 		if o, ok := tc["tc."+side]; ok {
-			v = o
+			sides[side] = o
 		}
-		if b, _ := border(v); b != "" {
+	}
+	return sides
+}
+
+// cell converts a cell of row r of a table.
+func (c *converter) cell(st *style, tp props, rows []*tableRow, r, cols int, cell *tableCell) {
+	cs, tc := cellProps(st, tp, rows, r, cols, cell)
+	var s css
+	sides := cellBorders(tp, tc, rows, r, cols, cell)
+	for _, side := range [...]string{"top", "right", "bottom", "left"} {
+		if b, _ := border(sides[side]); b != "" {
 			s.set("border-"+side, b)
 		}
 	}

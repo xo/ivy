@@ -17,8 +17,11 @@ import (
 )
 
 // minRoomWidth is the width in pixels of the narrowest room that holds
-// text next to a float of -ivy-wrap-flow: 0.25 inch. The width of Word is
-// not measured (D63).
+// text next to a float of -ivy-wrap-flow: 0.25 inch. LibreOffice 26.8
+// puts text in a room of any width that holds the first word of the line,
+// such as a room of 4 points that holds an "i" of 12 points. The pages of
+// Word of the corpus have no such room, so the width of Word is not
+// measured (D63).
 const minRoomWidth = 24
 
 // lineRow is a row of lines next to a float of -ivy-wrap-flow: the height
@@ -45,6 +48,65 @@ func wrapFlow(box *Box) (string, float64) {
 	return str(t[0]), num(t[1])
 }
 
+// wrapShape returns the points of the polygon of -ivy-wrap-shape of a
+// float, x and y in pixels from the top left corner of its border box, or
+// nil for none.
+func wrapShape(box *Box) []float64 {
+	t, ok := box.Style.Get("wrap_shape").(Tuple)
+	if !ok || len(t) < 6 || len(t)%2 != 0 {
+		return nil
+	}
+	points := make([]float64, len(t))
+	for i, v := range t {
+		f, ok := v.(Float)
+		if !ok {
+			return nil
+		}
+		points[i] = float64(f)
+	}
+	return points
+}
+
+// polygonSpan returns the part of the polygon of points, at x0 and y0, that
+// is next to a line box at the height y and h high: the left and the right
+// of the part, and the bottom of the polygon. ok is false when the
+// polygon is not next to the line box, by the rule of collides.
+func polygonSpan(points []float64, x0, y0, y, h float64) (start, end, bottom float64, ok bool) {
+	n := len(points) / 2
+	top, bottom := math.Inf(1), math.Inf(-1)
+	for i := range n {
+		top, bottom = min(top, y0+points[2*i+1]), max(bottom, y0+points[2*i+1])
+	}
+	if !collides(top, bottom, y, h) {
+		return 0, 0, bottom, false
+	}
+	// the part of each edge between the top and the bottom of the line
+	// box gives the part of the polygon next to it
+	lo, hi := max(y, top), min(y+h, bottom)
+	start, end = math.Inf(1), math.Inf(-1)
+	for i := range n {
+		j := (i + 1) % n
+		x1, y1 := x0+points[2*i], y0+points[2*i+1]
+		x2, y2 := x0+points[2*j], y0+points[2*j+1]
+		a, b := max(min(y1, y2), lo), min(max(y1, y2), hi)
+		if a > b {
+			continue
+		}
+		if y1 == y2 {
+			start, end = min(start, x1, x2), max(end, x1, x2)
+			continue
+		}
+		for _, v := range [2]float64{a, b} {
+			x := x1 + (x2-x1)*(v-y1)/(y2-y1)
+			start, end = min(start, x), max(end, x)
+		}
+	}
+	if start > end {
+		return 0, 0, bottom, false
+	}
+	return start, end, bottom, true
+}
+
 // wrapsFlow reports whether a float of the current formatting context has
 // -ivy-wrap-flow.
 func (lc *layoutContext) wrapsFlow() bool {
@@ -68,7 +130,8 @@ func collides(top, bottom, y, h float64) bool {
 // the order of the text of the containing block, and the bottoms of the
 // floats next to it. The floats without -ivy-wrap-flow bound the line, as
 // in avoidCollisions. A float with -ivy-wrap-flow cuts the line at its
-// border box and its distance. A room narrower than minRoomWidth next to
+// border box and its distance, or at the part of the polygon of its
+// -ivy-wrap-shape next to the line and its distance. A room narrower than minRoomWidth next to
 // such a float holds no text. bounds is the room of the line without the
 // floats of -ivy-wrap-flow.
 func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (rooms []room, bottoms []float64, bounds room) {
@@ -97,14 +160,18 @@ func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (roo
 			}
 			continue
 		}
-		top := shape.BorderBoxY()
-		bottom := top + shape.BorderHeight()
-		if !collides(top, bottom, y, h) {
+		x, top := shape.BorderBoxX(), shape.BorderBoxY()
+		start, end, bottom := x, x+shape.BorderWidth(), top+shape.BorderHeight()
+		if points := wrapShape(shape); points != nil {
+			var ok bool
+			if start, end, bottom, ok = polygonSpan(points, x, top, y, h); !ok {
+				continue
+			}
+		} else if !collides(top, bottom, y, h) {
 			continue
 		}
 		bottoms = append(bottoms, bottom)
-		x := shape.BorderBoxX()
-		cuts = append(cuts, cut{side, x - distance, x + shape.BorderWidth() + distance})
+		cuts = append(cuts, cut{side, start - distance, end + distance})
 	}
 	bounds = room{left, right}
 	if len(cuts) == 0 {
@@ -252,4 +319,51 @@ func (lc *layoutContext) rowAfter(line, containingBlock *Box, start, end float64
 		}
 	}
 	return nil
+}
+
+// lineFloatState holds the floats of -ivy-wrap-flow that the layout of a
+// line placed. A float of the line keeps its place when the layout lays
+// out the line again.
+type lineFloatState struct {
+	// active is set while getNextLinebox lays out a line.
+	active bool
+	// placed maps the box of the tree of a float of the line to its laid
+	// out box.
+	placed map[*Box]*Box
+	// added holds the floats that the current try of the line placed for
+	// the first time.
+	added []*Box
+}
+
+// wrapsLine reports whether the line places the float box of
+// -ivy-wrap-flow at once, and lays out its text in the rooms next to it.
+// waiting holds the floats that wait for the end of the line, which keep
+// their order.
+func (lc *layoutContext) wrapsLine(box *Box, waiting []*Box) bool {
+	side, _ := wrapFlow(box)
+	return side != "" && lc.lineFloats.active && len(waiting) == 0
+}
+
+// lineWrapFloat lays out the float box of -ivy-wrap-flow of a line, of the
+// containing block containingBlock, at its place, or returns the box that
+// an earlier try of the line laid out. That box is again an excluded shape
+// of the formatting context.
+func (lc *layoutContext) lineWrapFloat(box, containingBlock *Box, absoluteBoxes, fixedBoxes *[]*Box, bottomSpace float64) *Box {
+	s := &lc.lineFloats
+	if placed, ok := s.placed[box]; ok {
+		if !slices.Contains(lc.excludedShapes(), placed) {
+			lc.appendExcludedShape(placed)
+		}
+		return placed
+	}
+	newBox, resumeAt := floatLayout(lc, box, containingBlock, absoluteBoxes, fixedBoxes, bottomSpace, nil)
+	if len(resumeAt) > 0 {
+		lc.addBrokenOutOfFlow(box, box, containingBlock, resumeAt)
+	}
+	if s.placed == nil {
+		s.placed = map[*Box]*Box{}
+	}
+	s.placed[box] = newBox
+	s.added = append(s.added, newBox)
+	return newBox
 }

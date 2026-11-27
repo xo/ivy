@@ -61,6 +61,7 @@ const (
 	PropShadowOffsetY      = 0x0206
 	PropShadowBools        = 0x023F
 	PropMaster             = 0x0301
+	PropWrapPolygon        = 0x0383
 	PropGroupBools         = 0x03BF
 )
 

@@ -142,8 +142,13 @@ func (b *builder) pad(n roxmltree.Node, depth, maxDepth int) float64 {
 	if w, ok := length(gp.get("svg:stroke-width")); ok {
 		pad = w / 2
 	}
-	for _, name := range [...]string{"draw:marker-start-width", "draw:marker-end-width"} {
-		if w, ok := length(gp.get(name)); ok {
+	// A width counts only with a marker: a style can give the width of a
+	// marker and no marker, as draw:marker-start="".
+	for _, name := range [...]string{"draw:marker-start", "draw:marker-end"} {
+		if gp.get(name) == "" {
+			continue
+		}
+		if w, ok := length(gp.get(name + "-width")); ok {
 			pad = max(pad, w)
 		}
 	}

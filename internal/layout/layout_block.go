@@ -95,7 +95,7 @@ func blockLevelLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, sk
 		// space before a paragraph at the top of a page after a break that
 		// is not forced, see layoutContext.discardsSpaceBefore.
 		if lc.discardsSpaceBefore(box, pageIsEmpty, inFlow) {
-			box.MarginTop = 0
+			box.MarginTop = lc.spaceBeforeKept(box, box.MarginTop)
 			if box.BorderTopWidth == 0 && !hasBackground(box.Style) {
 				box.PaddingTop = 0
 			}
@@ -540,8 +540,16 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 		// blockInFlowLayout.
 		descentOverflow := pageOverflow && isStr(box.Style.Get("page_overflow"), "descent")
 		descent := -1.0
+		// Port: upstream has no -ivy-line-multiple. With 'last', a line
+		// fits when it passes the bottom of the page by up to the extra
+		// space below its text, and then loses that space, as the last
+		// line of a page of LibreOffice does. See lastLineSpace.
+		lastSpace := lastLineSpace(box, line)
 		overflowsPage := func(positionY float64) bool {
 			if !lc.overflowsPage(bottomSpace, positionY) {
+				return false
+			}
+			if lastSpace > 0 && !lc.overflowsPage(bottomSpace, positionY-lastSpace) {
 				return false
 			}
 			if !descentOverflow {
@@ -694,6 +702,11 @@ func lineboxLayout(lc *layoutContext, box *Box, index int, child *Box, newChildr
 			}
 		}
 
+		if lastSpace > 0 && lc.overflowsPage(bottomSpace, newPositionY+offsetY) {
+			line.Height -= lastSpace
+			line.ownExtra().lastCut = true
+			newPositionY -= lastSpace
+		}
 		if descentOverflow && lc.overflowsPage(bottomSpace, newPositionY+offsetY) {
 			if descent < 0 {
 				descent = lineDescent(box, line)
@@ -799,7 +812,7 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 			case lc.discardsSpaceBefore(child, pageIsEmpty, pageOverflow):
 				// Port: upstream has no -ivy-page-top-space, see
 				// blockLevelLayoutShared.
-				childMarginTop = 0
+				childMarginTop = lc.spaceBeforeKept(child, childMarginTop)
 			case lc.currentPage > 1 && pageIsEmpty:
 				switch str(box.Style.Get("margin_break")) {
 				case "discard":
@@ -1042,11 +1055,22 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 
 	if box.EstablishesFormattingContext() {
 		lc.createBlockFormattingContext(box)
+		if box.IsColumn {
+			lc.addColumnFloats(box)
+		}
 	}
 
 	// TODO: merge this with _in_flow_layout, flex_layout…
 	isStart := skip == nil
 	box.RemoveDecoration(!isStart, false)
+	// Port: upstream has no -ivy-page-top-space. A block that goes on at
+	// the top of the part of a split table cell keeps the space before it
+	// that the property gives, as a paragraph of LibreOffice does. See
+	// layoutContext.spaceBeforeKept.
+	if !isStart && columnTop && lc.cellTop {
+		_, keep := pageTopSpaceOf(box.Style)
+		box.MarginTop = max(keep, 0)
+	}
 
 	discard = discard || isStr(box.Style.Get("continue"), "discard")
 	drawBottomDecoration := discard || isStr(box.Style.Get("box_decoration_break"), "clone")

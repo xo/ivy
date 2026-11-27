@@ -673,7 +673,7 @@ import the module of the fonts.
 
 ## The properties of ivy
 
-`css_ivy.go` is not a port. It adds fourteen properties for the formats of
+`css_ivy.go` is not a port. It adds fifteen properties for the formats of
 the word processors, such as `docx` and `odf`. Upstream does not have them. A
 style sheet names each one with the prefix `-ivy-`, such as
 `-ivy-tab-stops`, and the validation ignores the name without the prefix.
@@ -765,8 +765,13 @@ style sheet names each one with the prefix `-ivy-`, such as
    baseline of its line. The numbers are text boxes in an anonymous block
    that is the last child of the root box of the page. The state of the
    numbers at the end of a page goes to the next page with the state of
-   the pages. `docx`, `msdoc`, `odf` and `rtf` read the numbering of the
-   lines of their sections.
+   the pages. Three keywords can follow the four values, in any order. The
+   side is `left`, the default, `right`, `inner` or `outer`. `inner` and
+   `outer` take the side of the page. With `no-empty`, an empty line does
+   not count. With `reset`, the first line of the box takes the first
+   number. `docx`, `msdoc`, `odf` and `rtf` read the numbering of the lines
+   of their sections. `odf` gives the side, `no-empty` and `reset` from
+   `text:number-position`, `text:count-empty-lines` and `text:line-number`.
 7. `-ivy-line-multiple` is `none`, the initial value, or a number that is
    not negative: the multiple of a single line that the line height of a
    word processor is (D56). With a number m of 1 or more, the text of a
@@ -780,7 +785,10 @@ style sheet names each one with the prefix `-ivy-`, such as
    The property is inherited. `docx`, `msdoc`, `odf` and `rtf` set it on a
    paragraph with a single or a multiple line spacing, as Word and
    LibreOffice put the line gap above the text and the extra space below
-   it.
+   it. The keyword `last` can follow the number. With `last`, the last line
+   of a page can pass the bottom of the page by its extra space, and it
+   then loses that space. The last line of each part of a table cell loses
+   it too. `odf` gives `last` as LibreOffice does.
 8. `-ivy-page-top-space` is `keep`, the initial value, or `discard`. With
    `discard`, a block of the flow of the root box that starts a page
    other than the first, after a break that is not forced, has no space
@@ -793,8 +801,12 @@ style sheet names each one with the prefix `-ivy-`, such as
    column has no space before it either, as in Word: each column after a
    column that a forced break does not end, and the first column at the
    top of a page after a break that is not forced. A column break keeps
-   the space, as a page break does. The property is inherited. `docx`,
-   `msdoc`, `odf` and `rtf` turn it on.
+   the space, as a page break does. A length that is not negative can
+   follow `discard`. With a length, a block at the top of the part of a
+   split table cell keeps up to that length of its top margin, as
+   LibreOffice keeps the space above a paragraph there. The property is
+   inherited. `docx`, `msdoc`, `odf` and `rtf` turn it on, and `odf` gives
+   the length.
 9. `-ivy-float-position` is `auto`, the initial value, or `page` or
    `margin` and a length, `top`, `center` or `bottom`, in any order, such
    as `margin 1in`. It places a float of the flow of the page at a vertical
@@ -813,7 +825,10 @@ style sheet names each one with the prefix `-ivy-`, such as
     column. The length is the distance between the float and the text, to
     the left and to the right. `start`, `end` and `maximum` put the text on
     one side (D63). The property is not inherited, and a table gives it to
-    its wrapper. See `layout_wrap_flow.go`.
+    its wrapper. A float in the middle of a line is placed at once, and the
+    line is laid out again next to it. In columns, the lines of the later
+    columns of the same row avoid the float too. See `layout_wrap_flow.go`
+    and `layout_column_float.go`.
 12. `-ivy-stroke-adjust` is `none`, the initial value, or `pixels`. With
     `pixels`, a collapsed border of the table of the box is drawn on whole
     pixels, at least one pixel wide, as a viewer draws the hairlines of a
@@ -829,6 +844,14 @@ style sheet names each one with the prefix `-ivy-`, such as
     glyphs of a text with that width in the color of the text, and does
     not fill them, as Word draws the outline effect of a run. `docx` gives
     it for `w:outline`. The property is inherited.
+15. `-ivy-wrap-shape` is `none`, the initial value, or a polygon of at least
+    3 points, such as `polygon(0 0, 10pt 0, 10pt 20pt)`. Each point is a
+    length from the left and a length from the top of the border box of the
+    float, and a length can be negative. The property applies to a float
+    with `-ivy-wrap-flow`. The text wraps around the polygon in place of
+    the border box, as Word wraps the text around the wrap polygon of a
+    picture with tight wrap (D63). `msdoc` and `docx` give it. The property
+    is not inherited.
 
 ## The hooks for the later stages
 

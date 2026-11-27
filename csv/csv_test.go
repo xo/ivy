@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -162,11 +163,15 @@ func TestHTML(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		// the widths of Liberation Sans, without a minimum
-		`<col style="width:32.67pt"><col style="width:99.93pt"><col style="width:300pt">`,
-		`<td class="c">Name</td><td class="c">Amount in US dollars</td><td class="s1 c">Note</td>`,
+		// the widths of Liberation Sans in the pixels of LibreOffice,
+		// without a minimum, and a long field as wide as the page within
+		// its margins, on a page of its own
+		`<col style="width:32.64pt"><col style="width:103.68pt"></colgroup>`,
+		`<td class="c">Name</td><td>Amount in US dollars</td>`,
 		`<td class="c">alpha</td><td class="n c">1,234.50</td>`,
-		`<td class="n c">-2</td><td class="s1 c">long long`,
+		`<colgroup><col style="width:511.2pt"></colgroup>`,
+		`<tr><td class="s1 c">Note</td>`,
+		`<td class="s1 c">long long`,
 		`font-family:"Liberation Sans", sans-serif;font-size:10pt;`,
 		"tr{break-inside:avoid;height:12.78pt}",
 		"border:0.5pt solid #cccccc;-ivy-stroke-adjust:pixels;",
@@ -192,7 +197,7 @@ func TestEmptyColumn(t *testing.T) {
 	}
 	// a column without text keeps the default width, and a narrow
 	// column is narrower
-	if want := `<col style="width:11.56pt"><col style="width:48pt"><col style="width:17.12pt">`; !strings.Contains(string(doc), want) {
+	if want := `<col style="width:14.11pt"><col style="width:48pt"><col style="width:19.51pt">`; !strings.Contains(string(doc), want) {
 		t.Errorf("expected %q in the table:\n%s", want, doc)
 	}
 }
@@ -329,4 +334,19 @@ func FuzzOpen(f *testing.F) {
 			_, _ = ivy.RenderImage(ctx, page, 8, color.White)
 		}
 	})
+}
+
+// TestColumnWidth checks that a column is as wide as its first field with
+// the most characters, as LibreOffice makes it, and not as its widest field.
+func TestColumnWidth(t *testing.T) {
+	d := open(t, []byte("ITU,iii\nRRW,iiii\nWW,WWW\n"), ivy.Config{})
+	cols := d.workbook().Sheets[0].Cols
+	// "ITU" is 4, 8 and 9 pixels wide, as in LibreOffice, and "iiii" 4
+	// times 3 pixels
+	if got, want := cols[0].Width, 21*textPixel+colPadding; math.Abs(got-want) > 1e-9 {
+		t.Errorf("expected the width %v of ITU, got: %v", want, got)
+	}
+	if got, want := cols[1].Width, 12*textPixel+colPadding; math.Abs(got-want) > 1e-9 {
+		t.Errorf("expected the width %v of iiii, got: %v", want, got)
+	}
 }

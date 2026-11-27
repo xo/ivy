@@ -2,6 +2,8 @@ package odf
 
 import (
 	"bytes"
+	"fmt"
+	"image/color"
 	"image/png"
 	"strings"
 	"testing"
@@ -165,6 +167,52 @@ func TestTextTightLeading(t *testing.T) {
 	}
 }
 
+// TestTextCellLineSpacing checks that the last line of a page leaves out
+// the extra space of a proportional line spacing, and that the last line
+// of each part of a table cell does too when settings.xml does not set
+// AddParaLineSpacingToTableCells, as in LibreOffice. It also checks that
+// a paragraph of a cell keeps its own spacing above it at the top of the
+// part of a cell (libreoffice/odt/landscape-a4-table.odt).
+func TestTextCellLineSpacing(t *testing.T) {
+	settings := func(item string) []fixture.Entry {
+		return []fixture.Entry{{Name: "settings.xml", Data: []byte(`<?xml version="1.0" encoding="UTF-8"?><office:document-settings ` + odtNamespaces +
+			` xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><office:settings><config:config-item-set config:name="ooo:configuration-settings">` +
+			item + `</config:config-item-set></office:settings></office:document-settings>`)}}
+	}
+	const auto = `<style:style style:name="PS" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:line-height="150%" fo:margin-top="4pt" fo:margin-bottom="2pt"/></style:style>`
+	body := `<text:p text:style-name="PS">Body</text:p>` +
+		`<table:table table:style-name="Tbl"><table:table-column table:style-name="Tbl.A"/><table:table-row><table:table-cell table:style-name="Cell">` +
+		`<text:p text:style-name="PS">One</text:p><text:p text:style-name="PS">Two</text:p></table:table-cell></table:table-row></table:table>`
+	item := `<config:config-item config:name="AddParaLineSpacingToTableCells" config:type="boolean">%s</config:config-item>`
+	for _, tt := range []struct {
+		name    string
+		entries []fixture.Entry
+		last    bool
+	}{
+		// A file without the settings takes the default of a new document.
+		{"default", nil, false},
+		{"older", settings(""), true},
+		{"false", settings(fmt.Sprintf(item, "false")), true},
+		{"true", settings(fmt.Sprintf(item, "true")), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := odtHTML(t, odtWith(body, auto, nil, tt.entries...))
+			if p := odtParagraph(t, html, "Body"); !strings.Contains(p, "-ivy-line-multiple: 1.5 last;") || strings.Contains(p, "-ivy-page-top-space") {
+				t.Errorf("expected the paragraph of the page to leave out the space below its last line, got: %s", p)
+			}
+			for _, text := range []string{"One", "Two"} {
+				p := odtParagraph(t, html, text)
+				if got := strings.Contains(p, "-ivy-line-multiple: 1.5 last;"); got != tt.last {
+					t.Errorf("got 'last' %t for the paragraph %s of the cell, want %t: %s", got, text, tt.last, p)
+				}
+				if !strings.Contains(p, "-ivy-page-top-space: discard 4pt") {
+					t.Errorf("expected the paragraph %s to keep its own spacing above it, got: %s", text, p)
+				}
+			}
+		})
+	}
+}
+
 // TestTextSpacing checks that the spacing above a paragraph adds to the
 // spacing below the paragraph before it, and that the layout discards it
 // at the top of a page, except after a page break, as LibreOffice does
@@ -267,5 +315,81 @@ func TestTextAsianSize(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected %q in the html:\n%s", want, html)
 		}
+	}
+}
+
+// TestTextFooterSpacing checks that the min-height of a footer holds its
+// spacing, and that with style:dynamic-spacing the content of the footer
+// takes the spacing first, as in LibreOffice
+// (libreoffice/odt/tdf146272.odt).
+func TestTextFooterSpacing(t *testing.T) {
+	for _, tt := range []struct {
+		name, props, margin, box, div string
+	}{
+		// The part is 72pt with its spacing of 36pt, and its line of
+		// 11.7pt fits in the rest.
+		{"min-height", `fo:min-height="1in" fo:margin-top="0.5in"`, "108pt", "padding-bottom: 36pt; padding-top: 36pt }", "; min-height: 36pt"},
+		// The line and the spacing are taller than the min-height.
+		{"content", `fo:min-height="0.5in" fo:margin-top="0.5in"`, "83.7pt", "padding-bottom: 36pt; padding-top: 36pt }", ""},
+		// The content takes the spacing, and the part keeps its height.
+		{"dynamic", `fo:min-height="1in" fo:margin-top="0.5in" style:dynamic-spacing="true"`, "108pt", "padding-bottom: 36pt }", "; min-height: 36pt"},
+		{"dynamic content", `fo:min-height="0.1in" fo:margin-top="0.5in" style:dynamic-spacing="true"`, "47.7pt", "padding-bottom: 36pt }", ""},
+		// A fixed height holds the spacing too.
+		{"fixed", `svg:height="1in" fo:margin-top="0.5in"`, "108pt", "padding-bottom: 36pt }", "; min-height: 36pt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			edit := func(s string) string {
+				s = strings.Replace(s, `<style:header-style><style:header-footer-properties fo:min-height="0in" fo:margin-bottom="0.1in"/></style:header-style>`,
+					`<style:footer-style><style:header-footer-properties `+tt.props+`/></style:footer-style>`, 1)
+				s = strings.Replace(s, "<style:header>", "<style:footer>", 1)
+				return strings.Replace(s, "</style:header>", "</style:footer>", 1)
+			}
+			html, sheet := odtHTML(t, odtWith(`<text:p>Body</text:p>`, "", edit))
+			if want := "margin: 18pt 36pt " + tt.margin + " 36pt;"; !strings.Contains(sheet, want) {
+				t.Errorf("expected %q, got:\n%s", want, sheet)
+			}
+			if want := "@bottom-center { content: element(hf1); " + tt.box; !strings.Contains(sheet, want) {
+				t.Errorf("expected %q, got:\n%s", want, sheet)
+			}
+			if want := `<div style="position: running(hf1); display: flow-root` + tt.div + `">`; !strings.Contains(html, want) {
+				t.Errorf("expected %q, got:\n%s", want, html)
+			}
+		})
+	}
+}
+
+// TestTextFrameSpacing checks three rules of LibreOffice for frames
+// (libreoffice/odt/ooo96040-2.odt, libreoffice/odt/tdf146272.odt): a text
+// box leaves out the spacing below its last paragraph, a frame at the top
+// of its paragraph moves up into the spacing above the paragraph, and an
+// object alone in its paragraph sets the height of its line.
+func TestTextFrameSpacing(t *testing.T) {
+	const auto = `<style:style style:name="Top" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:margin-top="12pt"/></style:style>` +
+		`<style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="none" style:vertical-pos="top" style:vertical-rel="paragraph"/></style:style>`
+	img := func(anchor string) string {
+		return `<draw:frame draw:style-name="fr1" text:anchor-type="` + anchor + `" svg:width="1in" svg:height="0.5in"><draw:image xlink:href="Pictures/red.png"/></draw:frame>`
+	}
+	body := `<text:p text:style-name="Body"><draw:frame text:anchor-type="as-char" svg:width="2in"><draw:text-box>` +
+		`<text:p text:style-name="Body">Boxed</text:p></draw:text-box></draw:frame> text</text:p>` +
+		`<text:p text:style-name="Top">` + img("paragraph") + `Below</text:p>` +
+		`<text:p text:style-name="Top">Before` + img("paragraph") + `</text:p>` +
+		`<text:p text:style-name="Body">` + img("as-char") + `</text:p>`
+	red := fixture.Entry{Name: "Pictures/red.png", Data: fixture.PNG(40, 20, color.NRGBA{R: 255, A: 255})}
+	html, _ := odtHTML(t, odtWith(body, auto, nil, red))
+	if !strings.Contains(html, `Boxed</p><div style="margin-top: -6pt"></div></span>`) {
+		t.Errorf("expected the text box without the spacing below its paragraph, got:\n%s", html)
+	}
+	if p := odtParagraph(t, html, "Below"); !strings.Contains(p, `<span style="display: block; margin-top: -12pt`) ||
+		!strings.Contains(p, `style="display: block; width: 72pt; height: 36pt"`) {
+		t.Errorf("expected the frame in the spacing above its paragraph, got: %s", p)
+	}
+	// A frame after text stays where it is.
+	if !strings.Contains(html, `Before<span style="display: block; width: 72pt">`) {
+		t.Errorf("expected the frame after the text in place, got:\n%s", html)
+	}
+	// The line of Body is 115% of 13.8pt, 15.86pt, which adds 2.06pt
+	// below the picture.
+	if !strings.Contains(html, `<span><img src="media/1.png" alt="" style="vertical-align: top; margin-bottom: 2.06pt; width: 72pt; height: 36pt"/></span></p>`) {
+		t.Errorf("expected the picture at the top of its line, got:\n%s", html)
 	}
 }

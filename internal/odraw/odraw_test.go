@@ -478,3 +478,53 @@ func TestPictureRecolor(t *testing.T) {
 		t.Error("expected no file for a picture that the store does not hold")
 	}
 }
+
+// TestWrapPolygon checks the outline that the text wraps around: the
+// corners of the box, or the wrap polygon in a square of 21600 over the
+// box, turned about the center of the box as the shape turns.
+func TestWrapPolygon(t *testing.T) {
+	// polygon returns the properties of a wrap polygon of the points xy,
+	// in an IMsoArray of 8 bytes for each point, turned by rot degrees
+	polygon := func(rot float64, xy ...int32) *Props {
+		arr := le.AppendUint16(nil, uint16(len(xy)/2))
+		arr = le.AppendUint16(arr, uint16(len(xy)/2))
+		arr = le.AppendUint16(arr, 8)
+		for _, v := range xy {
+			arr = le.AppendUint32(arr, uint32(v))
+		}
+		var fopt []byte
+		fopt = le.AppendUint16(fopt, PropWrapPolygon|0x8000)
+		fopt = le.AppendUint32(fopt, uint32(len(arr)))
+		fopt = le.AppendUint16(fopt, PropRotation)
+		fopt = le.AppendUint32(fopt, uint32(int32(rot*65536)))
+		fopt = append(fopt, arr...)
+		var p Props
+		p.Read(fopt, 2)
+		return &p
+	}
+	box := Rect{Left: 10, Top: 20, Right: 50, Bottom: 40}
+	for _, tt := range []struct {
+		name    string
+		props   *Props
+		polygon bool
+		want    []float64
+	}{
+		{"box", polygon(0, 0, 0, 21600, 0, 10800, 21600), false, []float64{10, 20, 50, 20, 50, 40, 10, 40}},
+		{"polygon", polygon(0, 0, 0, 21600, 0, 10800, 21600), true, []float64{10, 20, 50, 20, 30, 40}},
+		// a half turn puts the polygon upside down in the same box
+		{"half turn", polygon(180, 0, 0, 21600, 0, 10800, 21600), true, []float64{50, 40, 10, 40, 30, 20}},
+		// a quarter turn swaps the sides of the box about its center at
+		// (30, 30), and turns it back, so its first corner is at the top
+		// right
+		{"quarter turn", polygon(90, 0, 0, 21600, 0, 21600, 21600, 0, 21600), false, []float64{50, 20, 50, 40, 10, 40, 10, 20}},
+	} {
+		got := WrapPolygon(&Shape{Props: *tt.props}, Chain{tt.props}, box, tt.polygon)
+		ok := len(got) == len(tt.want)
+		for i := range got {
+			ok = ok && math.Abs(got[i]-tt.want[i]) < 1e-3
+		}
+		if !ok {
+			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

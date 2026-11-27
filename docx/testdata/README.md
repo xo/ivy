@@ -27,3 +27,4 @@ holds the word `Tn` for its row n, and a frame holds the word `Frame`.
 | `float-t-loop3.docx` | a table of 12 rows, at the top of the margin | before P10 |
 | `float-t-loop2.docx` | the same table | before P12 |
 | `float-t-nofit.docx` | a table of 6 rows, 9.5 inches below the top of the page | before P06 |
+| `float-s-tight.docx` | the picture of `float-s-late.docx`, 1.5 inches from the left of the margin, with tight wrap around a diamond (`wp:wrapPolygon`) | in P12 |

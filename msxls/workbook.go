@@ -391,6 +391,13 @@ func (w *workbook) readSheet(ctx context.Context, bs boundSheet, lim ivy.Limits)
 		defHeight: 0,
 		page:      sheet.DefaultPage,
 	}
+	// Excel gives a sheet without the records of the margins the margins
+	// of its old versions: 1 inch at the top and the bottom, and 0.75 inch
+	// at the left and the right, as page 45 of
+	// poi/xls/basic-expense-template-2011.xls shows. A record replaces its
+	// margin.
+	sh.page.Top, sh.page.Bottom = 72, 72
+	sh.page.Left, sh.page.Right = 54, 54
 	if bs.pos < 0 || bs.pos+4 > len(w.wb) || le.Uint16(w.wb[bs.pos:]) != recBOF {
 		return sh, nil
 	}

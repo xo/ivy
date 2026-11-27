@@ -1281,7 +1281,7 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 	// Port: upstream has no -ivy-line-numbers. The numbers of the lines
 	// depend on the lines of the pages before, so the state at the end of
 	// the page goes to the next page.
-	lineNumbers := numberLines(lc, rootBox, pageData.lineNumbers)
+	lineNumbers := numberLines(lc, rootBox, pageData.lineNumbers, pageData.rightPage)
 
 	page.Children = []*Box{rootBox, footnoteArea, noteArea}
 

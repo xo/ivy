@@ -340,18 +340,32 @@ func (c *converter) endParagraph(s *state) {
 	if lvl > 0 {
 		out = &t.level(lvl).cell
 	}
+	frame := c.paraFrame(t, s.par, lvl)
+	if frame != t.frame {
+		c.closeFrame(t)
+	}
 	if t == c.body && lvl == 0 {
 		c.openSection()
 	}
+	if frame != t.frame {
+		c.openFrame(t, frame)
+	}
 	out.WriteString(`<p style="` + attrText(c.paraStyle(s.par, s.chr, t.breakNext)) + `">`)
 	t.breakNext = ""
+	// a paragraph that holds only shapes that float has the line of its
+	// mark, as in Word
+	floats := t.floats > 0 && t.floats == t.para.Len() && t.marker == ""
 	if para := marker(t, s.par); para == "" {
 		out.WriteString("<br/>")
 	} else {
 		out.WriteString(para)
+		if floats {
+			out.WriteString("<br/>")
+		}
 	}
 	out.WriteString("</p>")
 	t.para.Reset()
+	t.floats = 0
 }
 
 // tableLevel is the table of a target at one level of nesting: the rows
@@ -477,6 +491,8 @@ func (c *converter) closeTables(t *target, lvl int) {
 		out := &t.out
 		if n > 1 {
 			out = &t.level(n - 1).cell
+		} else {
+			c.closeFrame(t)
 		}
 		c.writeTable(out, l)
 	}
@@ -715,6 +731,7 @@ func (c *converter) endTarget(t *target) {
 		c.endRow(s, false)
 	}
 	c.closeTable(t)
+	c.closeFrame(t)
 }
 
 // openSection opens the element of the current section, if it is not open.
@@ -813,6 +830,7 @@ func (c *converter) closeSection() {
 	if sec.titlePage {
 		c.sheet.WriteString("@page " + name + ":nth(1 of " + name + ") { " + margins(box("headerf"), box("footerf")) + " }\n")
 	}
+	c.closeFrame(c.body)
 	c.body.out.WriteString("</div>")
 }
 
@@ -825,6 +843,7 @@ func (c *converter) endNested(parent, s *state) {
 	}
 	// A header or a footer is a running element at the start of its
 	// section.
+	c.closeFrame(c.body)
 	c.openSection()
 	c.writeFixed()
 	c.hfNum++
@@ -896,11 +915,6 @@ func (c *converter) endPicture(parent *state, p *picture) {
 	// in twips, scaled.
 	w := p.goalW * max(p.scaleX, 1) / 100
 	h := p.goalH * max(p.scaleY, 1) / 100
-	if parent.dest == destShape {
-		if sw, sh := c.shapeBox[2]-c.shapeBox[0], c.shapeBox[3]-c.shapeBox[1]; sw > 0 && sh > 0 {
-			w, h = sw, sh
-		}
-	}
 	if w <= 0 || h <= 0 {
 		// A picture without a goal size takes \picw and \pich: pixels for
 		// a bitmap, and hundredths of a millimeter for a metafile.
@@ -909,12 +923,36 @@ func (c *converter) endPicture(parent *state, p *picture) {
 			w, h = p.width*1440/2540, p.height*1440/2540
 		}
 	}
+	if parent.dest == destShape {
+		// the picture of a shape that floats waits for the end of the
+		// shape, which places it. Another one stays in its line, with the
+		// size of its shape
+		if p := c.shapeParent(); p != nil && c.floatsShape(p) {
+			c.shape.pic, c.shape.picW, c.shape.picH = name, w, h
+			return
+		}
+		if sw, sh := c.shape.box[2]-c.shape.box[0], c.shape.box[3]-c.shape.box[1]; sw > 0 && sh > 0 {
+			w, h = sw, sh
+		}
+	}
 	var s css
+	sizeCSS(&s, w, h)
+	c.inline(parent, imgHTML(name, s.String()))
+}
+
+// sizeCSS sets the width and the height of a box of w by h twips. It sets
+// neither when w or h is not more than 0.
+func sizeCSS(s *css, w, h int) {
 	if w > 0 && h > 0 {
 		s.set("width", pt(min(w, 288000)))
 		s.set("height", pt(min(h, 288000)))
 	}
-	c.inline(parent, `<img src="`+name+`" alt="" style="`+attrText(s.String())+`"/>`)
+}
+
+// imgHTML returns the element of the picture name with the declarations
+// style.
+func imgHTML(name, style string) string {
+	return `<img src="` + name + `" alt="" style="` + attrText(style) + `"/>`
 }
 
 // symbolChars maps the characters of the font Symbol to Unicode.

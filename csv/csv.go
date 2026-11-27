@@ -6,9 +6,10 @@
 // The table has light gridlines, because a file of values has no style that
 // separates its cells. The text is in Liberation Sans of 10 points. A field
 // that holds a number is aligned to the right, and the other fields to the
-// left. Each column is as wide as its longest field, up to 300 points, and
-// a longer field breaks into lines. A row is as high as LibreOffice prints
-// a row of the default height, 12.784 points.
+// left. Each column is as wide as LibreOffice makes it, from its first field
+// with the most characters, up to the width of the page, and a longer field
+// breaks into lines. A row is as high as LibreOffice prints a row of the
+// default height, 12.784 points.
 //
 // The package finds the separator in the first records: the one that
 // gives the same number of fields, more than one, to the most records.
@@ -340,13 +341,16 @@ const (
 )
 
 // The sizes of the columns, in points: the width of a column without text,
-// and the widest column. The padding holds the padding of the cell on both
-// sides and a little room, as LibreOffice adds to the optimal width of a
-// column.
+// and the padding that LibreOffice adds to the width of the text of a
+// column. LibreOffice measures the text of Liberation Sans of 10 points in
+// whole pixels of a font of 13 pixels to the em, and a pixel is 0.7722
+// points of the width of a column: the letter J, 6.5 pixels, takes 7
+// pixels, and 30 letters W make a column 286.7 points wide.
 const (
 	defColWidth  = 48
-	maxColWidth  = 300
-	colPadding   = 6
+	colPadding   = 8.7
+	textPPEM     = 13
+	textPixel    = 0.7722
 	maxSizedCols = 4096
 )
 
@@ -368,7 +372,13 @@ func (d *Document) workbook() *sheet.Workbook {
 	sh.Page.SetPaper(d.cfg.Paper)
 	db, first := fontdb.Load(d.cfg.Fonts, d.cfg.SystemFonts, d.lim, d.cfg.Log())
 	m := sheet.NewMeasure(db, first, fontFamily)
+	// LibreOffice makes a column as wide as its first field with the most
+	// characters, which is not always its widest field: the field "RRW"
+	// after the field "ITU" of datasets/csv/country-codes.csv does not
+	// count, nor a field of Chinese characters after a longer field of
+	// Latin letters.
 	var widths []float64
+	var chars []int
 	for i, rec := range d.rows {
 		if i >= sheet.MaxRows {
 			break
@@ -381,8 +391,11 @@ func (d *Document) workbook() *sheet.Workbook {
 			if c < maxSizedCols {
 				for len(widths) <= c {
 					widths = append(widths, 0)
+					chars = append(chars, 0)
 				}
-				widths[c] = max(widths[c], textWidth(m, f)+colPadding)
+				if n := utf8.RuneCountInString(f); n > chars[c] {
+					chars[c], widths[c] = n, textWidth(m, f)+colPadding
+				}
 			}
 			if f == "" {
 				continue
@@ -395,14 +408,22 @@ func (d *Document) workbook() *sheet.Workbook {
 		}
 		sh.Rows = append(sh.Rows, row)
 	}
+	// A column is at most as wide as the page within its margins, and a
+	// longer field breaks into lines. LibreOffice makes such a column wider
+	// than the page.
+	pw, ph := sh.Page.Width, sh.Page.Height
+	if sh.Page.Landscape != (pw > ph) {
+		pw = ph
+	}
+	maxWidth := max(72, pw-sh.Page.Left-sh.Page.Right)
 	wrap := make(map[int]bool)
 	for c, w := range widths {
-		if w <= colPadding {
+		if chars[c] == 0 {
 			// a column without text keeps the default width
 			w = defColWidth
 		}
-		sh.Cols = append(sh.Cols, sheet.Col{Min: c, Max: c, Width: min(maxColWidth, w)})
-		if w > maxColWidth {
+		sh.Cols = append(sh.Cols, sheet.Col{Min: c, Max: c, Width: min(maxWidth, w)})
+		if w > maxWidth {
 			// a long field breaks into lines
 			wrap[c] = true
 		}
@@ -424,14 +445,14 @@ func (d *Document) workbook() *sheet.Workbook {
 }
 
 // textWidth returns the width in points of the widest line of s, as m
-// measures it.
+// measures it in the pixels of LibreOffice.
 func textWidth(m *sheet.Measure, s string) float64 {
 	if !strings.ContainsAny(s, "\r\n") {
-		return m.ArialTextWidth(s, fontSize)
+		return m.PixelTextWidth(s, textPPEM, textPixel)
 	}
 	width := 0.0
 	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r", "\n"), "\n") {
-		width = max(width, m.ArialTextWidth(line, fontSize))
+		width = max(width, m.PixelTextWidth(line, textPPEM, textPixel))
 	}
 	return width
 }

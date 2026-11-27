@@ -641,20 +641,22 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 				// page. See layoutContext.splitCellTop.
 				cellTop := lc.splitCellTop(cell, cellSkip, pageIsEmpty)
 				if cellTop {
-					lc.columnTopBox = cell
+					lc.columnTopBox, lc.cellTop = cell, true
 				}
 				result := blockContainerLayout(lc, cell, bottomSpace, cellSkip, pageIsEmpty,
 					absoluteBoxes, fixedBoxes, nil, nil, nil, false, noMaxLines)
+				lc.cellTop = false
 				cell.Style = originalStyle
 				newCell, cellResumeAt := result.box, result.resumeAt
 				if newCell == nil {
 					cell = cell.CopyWithChildren(nil)
 					var cellAbsoluteBoxes, cellFixedBoxes []*Box
 					if cellTop {
-						lc.columnTopBox = cell
+						lc.columnTopBox, lc.cellTop = cell, true
 					}
 					cell = blockContainerLayout(lc, cell, bottomSpace, cellSkip, true,
 						&cellAbsoluteBoxes, &cellFixedBoxes, nil, nil, nil, false, noMaxLines).box
+					lc.cellTop = false
 					cellResumeAt = skipStack{0: nil}
 					if cell == nil {
 						// Port: the layout of an empty cell on an empty
@@ -676,6 +678,10 @@ func tableLayout(lc *layoutContext, table *Box, bottomSpace float64, skip skipSt
 					resumeAt[indexRow][indexCell] = cellResumeAt
 				}
 				cell.ownTable().Empty = len(cell.InFlowOrFloatedChildren()) == 0
+				// Port: upstream has no -ivy-line-multiple. With 'last', the
+				// last line of the part of the cell has no extra space below
+				// its text, see lastLineSpace.
+				cell.Height -= lastLineCut(cell)
 				cell.ownTable().contentHeight = cell.Height
 				if cell.ownTable().computedHeight != Auto {
 					cell.Height = max(cell.Height, cell.ownTable().computedHeight)

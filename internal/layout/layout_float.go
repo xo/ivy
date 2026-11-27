@@ -201,6 +201,11 @@ func getClearance(lc *layoutContext, box *Box, direction string, collapsedMargin
 	clearance, hasClearance := 0.0, false
 	hypotheticalPosition := box.PositionY + collapsedMargin
 	for _, excludedShape := range lc.excludedShapes() {
+		// Port: upstream has no -ivy-wrap-flow. A box does not clear the
+		// float of a column before it, see layout_column_float.go.
+		if lc.isColumnFloat(excludedShape) {
+			continue
+		}
 		if clears(boxClear, str(excludedShape.Style.Get("float"))) {
 			y, h := excludedShape.PositionY, excludedShape.MarginHeight()
 			if hypotheticalPosition < y+h {
@@ -254,6 +259,21 @@ func avoidCollisions(lc *layoutContext, box, containingBlock *Box, outer bool) (
 		}
 		var leftBounds, rightBounds []float64
 		for _, shape := range collidingShapes {
+			// Port: upstream has no -ivy-wrap-flow. The copy of a float of
+			// a column before bounds the box on the side of its larger
+			// room, see layout_column_float.go.
+			if lc.isColumnFloat(shape) {
+				left := containingBlock.ContentBoxX()
+				right := left + containingBlock.Width
+				l, r := columnFloatBounds(shape, left, right)
+				if l > left {
+					leftBounds = append(leftBounds, l)
+				}
+				if r < right {
+					rightBounds = append(rightBounds, r)
+				}
+				continue
+			}
 			floatValue := str(shape.Style.Get("float"))
 			if slices.Contains(leftKeywords, floatValue) {
 				leftBounds = append(leftBounds, shape.PositionX+shape.MarginWidth())

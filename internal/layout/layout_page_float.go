@@ -320,10 +320,10 @@ func floatsRight(box *Box) bool {
 }
 
 // lastOrdinaryShape returns the last excluded shape of shapes that is not
-// a page float, or nil.
+// a page float or the copy of a float of a column before, or nil.
 func (lc *layoutContext) lastOrdinaryShape(shapes []*Box) *Box {
 	for i := len(shapes) - 1; i >= 0; i-- {
-		if !lc.pageFloats.shapes[shapes[i]] {
+		if !lc.pageFloats.shapes[shapes[i]] && !lc.isColumnFloat(shapes[i]) {
 			return shapes[i]
 		}
 	}

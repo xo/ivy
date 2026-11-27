@@ -33,7 +33,13 @@ var wingdingsChars = map[rune]rune{
 // symbolRune returns the Unicode character of the character r of a font,
 // for the fonts of symbols. A symbol font maps its characters to the
 // private area from U+F020 to U+F0FF, or to the range of ASCII and Latin-1.
+// A character of the font Symbol that the font does not have is
+// notdefRune, which escapeSymbols writes as the empty box of the font.
 func symbolRune(font string, r rune) rune {
+	if r == notdefRune {
+		// A noncharacter draws nothing.
+		return 0
+	}
 	lower := strings.ToLower(font)
 	isSymbol := lower == "symbol"
 	isWingdings := strings.HasPrefix(lower, "wingdings")
@@ -49,6 +55,9 @@ func symbolRune(font string, r rune) rune {
 		if u, ok := symbolChars[c]; ok {
 			return u
 		}
+		if c >= 0x7f && c <= 0xa0 || c == 0xf0 || c == 0xff {
+			return notdefRune
+		}
 	case isWingdings:
 		if u, ok := wingdingsChars[c]; ok {
 			return u
@@ -62,6 +71,35 @@ func symbolRune(font string, r rune) rune {
 		}
 	}
 	return c
+}
+
+// notdefRune stands for the empty box that Word draws for a character that
+// the font Symbol does not have, from 0x7F to 0xA0, 0xF0 and 0xFF. It is a
+// noncharacter, which no text of a document holds.
+const notdefRune = '\uffff'
+
+// notdefBox is the HTML of the empty box of notdefRune: the glyph .notdef
+// of Symbol, 0.5 em wide and 0.625 em high, in an advance of 0.6 em. Its
+// lines are 1/64 em wide in the font. The box has lines of 0.05 em, which
+// a page of 96 dots per inch still shows. Word gives the line of the box
+// the ascent and the descent of Symbol, 1.005 em and 0.22 em, so the
+// margins of the box take the line as high, as on page 1 of
+// poi/docx/form-footnotes.docx.
+const notdefBox = `<span style="display: inline-block; width: 0.4em; height: 0.525em; ` +
+	`border: 0.05em solid; margin: 0.38em 0.05em 0.22em; vertical-align: -0.22em"></span>`
+
+// escapeSymbols writes the text s as escape does, with notdefBox for each
+// notdefRune.
+func escapeSymbols(b *strings.Builder, s string) {
+	for {
+		before, after, found := strings.Cut(s, string(notdefRune))
+		escape(b, before, false)
+		if !found {
+			return
+		}
+		b.WriteString(notdefBox)
+		s = after
+	}
 }
 
 // symbolCodes returns the text s of a symbol font with each character in the

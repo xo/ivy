@@ -105,6 +105,8 @@ type paraProps struct {
 	side byte
 	// noLine is set for a paragraph whose lines have no numbers.
 	noLine bool
+	// frame holds the properties of the frame of the paragraph.
+	frame frameProps
 }
 
 // sectionProps are the properties of a section, in twips.
@@ -239,6 +241,11 @@ type state struct {
 	row *rowDef
 	// style is the style of the style sheet that the group defines.
 	style *styleEntry
+	// shapeGroup is set in a group of shapes, \shpgrp, whose shapes stay
+	// in the line. outer is the shape around the text of a text box,
+	// \shptxt, which the end of the group restores.
+	shapeGroup bool
+	outer      *shapeData
 }
 
 // styleEntry is a style of the style sheet: its kind, 'p' for a paragraph
@@ -269,6 +276,10 @@ type target struct {
 	// levels holds the tables of the target, by their level of nesting
 	// from 1.
 	levels []*tableLevel
+	// frame is the frame whose element is open in out, or the zero value.
+	frame frameProps
+	// floats is the end of the shapes that float at the start of para.
+	floats int
 }
 
 // converter converts RTF into XHTML.
@@ -304,16 +315,12 @@ type converter struct {
 	starred bool
 	// styles holds the styles of the style sheet.
 	styles []*styleEntry
-	// shapeProp is the name of the last property of a shape, and shapeBox
-	// the box of the shape in twips: left, top, right and bottom.
-	shapeProp string
-	shapeBox  [4]int
-	// shapeProps holds the values of the properties of the shape, by
-	// their names, and fixed the images of the WordArt of the headers and
-	// the footers, which wait for the element of their section.
-	shapeProps map[string]string
-	fixed      []string
-	fixedSeen  map[string]bool
+	// shape is the shape of the current group \shpinst, and fixed the
+	// images of the WordArt of the headers and the footers, which wait for
+	// the element of their section.
+	shape     shapeData
+	fixed     []string
+	fixedSeen map[string]bool
 
 	doc     sectionProps
 	section sectionProps
@@ -457,7 +464,7 @@ func (c *converter) token(t token) {
 			return
 		}
 		s := *c.top()
-		s.closeLink, s.kind, s.info, s.row = false, "", "", nil
+		s.closeLink, s.kind, s.info, s.row, s.outer = false, "", "", nil, nil
 		c.stack = append(c.stack, &s)
 		return
 	case tokenClose:
@@ -539,8 +546,8 @@ func (c *converter) text(s *state, b []byte) {
 			s.field.inst.Write(b)
 		}
 	case destShapeName:
-		if len(c.shapeProp) < 64 {
-			c.shapeProp += string(b)
+		if len(c.shape.prop) < 64 {
+			c.shape.prop += string(b)
 		}
 	case destShapeValue:
 		c.shapeValue(c.decode(b, s))
@@ -750,6 +757,10 @@ func (c *converter) closeGroup() {
 	case s.kind == "listtext" && s.target != parent.target:
 		c.flushRun(s.target)
 		c.listText(parent, s)
+	case s.kind == "shptxt" && s.outer != nil:
+		c.endTarget(s.target)
+		c.shape = *s.outer
+		c.shape.text, c.shape.hasText = s.target.out.String(), true
 	case s.kind != "" && s.target != parent.target:
 		c.endTarget(s.target)
 		c.endNested(parent, s)

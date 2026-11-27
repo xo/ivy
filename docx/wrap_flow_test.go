@@ -1,6 +1,8 @@
 package docx
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -32,10 +34,23 @@ func TestWrapFlow(t *testing.T) {
 		{"right", anchor(`<wp:wrapThrough wrapText="right"/>`), "-ivy-wrap-flow: end 18pt"},
 		{"largest", anchor(`<wp:wrapSquare wrapText="largest"/>`), "-ivy-wrap-flow: maximum 18pt"},
 		{"no side", anchor(`<wp:wrapSquare/>`), "-ivy-wrap-flow: both 18pt"},
+		// The points of the polygon are in a square of 21600 over the
+		// extent of 50 points.
+		{"polygon", anchor(`<wp:wrapTight wrapText="bothSides"><wp:wrapPolygon edited="1"><wp:start x="10800" y="0"/>` +
+			`<wp:lineTo x="21600" y="10800"/><wp:lineTo x="10800" y="21600"/><wp:lineTo x="-432" y="10800"/>` +
+			`<wp:lineTo x="10800" y="0"/></wp:wrapPolygon></wp:wrapTight>`),
+			"-ivy-wrap-flow: both 18pt; -ivy-wrap-shape: polygon(25pt 0pt, 50pt 25pt, 25pt 50pt, -1pt 25pt, 25pt 0pt)"},
+		{"square polygon", anchor(`<wp:wrapSquare><wp:wrapPolygon><wp:start x="0" y="0"/><wp:lineTo x="1" y="1"/>` +
+			`<wp:lineTo x="2" y="0"/></wp:wrapPolygon></wp:wrapSquare>`), "-ivy-wrap-flow: both 18pt; width"},
 		{"top and bottom", anchor(`<wp:wrapTopAndBottom/>`), ""},
 		{"none", anchor(`<wp:wrapNone/>`), ""},
 		{"vml", vml(`<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="square" side="largest"/>`), "-ivy-wrap-flow: maximum 9pt"},
 		{"vml both", vml(`<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="tight"/>`), "-ivy-wrap-flow: both 9pt"},
+		// the wrapcoords of a VML shape are in a square of 21600 over the
+		// shape of 50 points
+		{"vml wrapcoords", strings.Replace(vml(`<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="tight"/>`),
+			`fillcolor`, `wrapcoords="10800 0 21600 21600 0 21600 10800 0" fillcolor`, 1),
+			"-ivy-wrap-flow: both 9pt; -ivy-wrap-shape: polygon(25pt 0pt, 50pt 50pt, 0pt 50pt, 25pt 0pt)"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			html, _ := convertHTML(t, fixture.DOCX(tt.body))
@@ -49,5 +64,24 @@ func TestWrapFlow(t *testing.T) {
 				t.Errorf("expected %q in the xhtml:\n%s", tt.want, html)
 			}
 		})
+	}
+}
+
+// TestWrapPolygonFile checks the wrap polygon of the picture of
+// float-s-tight.docx of testdata: a diamond in a picture of 3 by 2 inches,
+// from x = 180 to x = 396 points on the page (D63). LibreOffice 26.8 wraps
+// the text around the diamond, and ivy places each word of the rows next
+// to it within 0.2 point of LibreOffice. In the row from y = 141 to y =
+// 155, the diamond and its distance of 9 points cut the line from x = 262
+// to x = 314.
+func TestWrapPolygonFile(t *testing.T) {
+	buf, err := os.ReadFile(filepath.Join("testdata", "float-s-tight.docx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, _ := convertHTML(t, buf)
+	want := "-ivy-wrap-flow: both 9pt; -ivy-wrap-shape: polygon(108pt 0pt, 216pt 72pt, 108pt 144pt, 0pt 72pt, 108pt 0pt)"
+	if !strings.Contains(html, want) {
+		t.Errorf("expected %q in the xhtml:\n%s", want, html)
 	}
 }

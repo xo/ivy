@@ -130,12 +130,16 @@ type odtPageLayout struct {
 	columns                  int
 	columnGap                float64
 	// header and footer are the min-height and the spacing of the header
-	// and the footer.
+	// and the footer. As in LibreOffice, the height holds the spacing.
 	headerHeight, headerSpace float64
 	footerHeight, footerSpace float64
 	// headerFixed and footerFixed are set when the header or the footer
 	// has a fixed height, svg:height, and does not grow with its content.
 	headerFixed, footerFixed bool
+	// headerDynamic and footerDynamic are set by style:dynamic-spacing:
+	// the content of the header or the footer takes the spacing first,
+	// before the part grows.
+	headerDynamic, footerDynamic bool
 	// noSize is set when the layout gives no fo:page-width and no
 	// fo:page-height, and orientation is its style:print-orientation.
 	noSize      bool
@@ -178,10 +182,11 @@ type odtStyles struct {
 	// the same names, and the styles map holds them under their name with
 	// the prefix odtStylesPart.
 	partAuto map[string]bool
-	// lineNumbers is the value of -ivy-line-numbers of the text, from
-	// text:linenumbering-configuration, or "" when its lines have no
+	// lineNumbers is the line numbering of the text, from
+	// text:linenumbering-configuration, or nil when its lines have no
 	// numbers, and lineNumberStyle is the text style of the numbers.
-	lineNumbers, lineNumberStyle string
+	lineNumbers     *odtLineNumbering
+	lineNumberStyle string
 }
 
 // odtStylesPart is the prefix of the name of an automatic style of
@@ -386,33 +391,65 @@ func (ts *odtStyles) readStyles(n roxmltree.Node, auto, part bool) {
 	}
 }
 
-// odtLineNumbers returns the value of -ivy-line-numbers of a
-// text:linenumbering-configuration, or "" when the lines have no numbers
-// (ODF 1.3 Part 3, 16.29.1). text:number-lines is true by default. The
-// layout draws the numbers on the left only, and counts the empty lines,
-// as text:count-empty-lines does by default. text:increment is the step,
-// and text:offset the distance from the text. The numbers restart on each
-// page with text:restart-on-page, and else go on through the text.
-func odtLineNumbers(n roxmltree.Node) string {
+// odtLineNumbering is a text:linenumbering-configuration (ODF 1.3 Part 3,
+// 16.29.1), with the distance in points.
+type odtLineNumbering struct {
+	distance float64
+	step     int
+	restart  string
+	// side is the side of the numbers for the layout, and noEmpty is set
+	// when the empty lines do not count.
+	side    string
+	noEmpty bool
+}
+
+// value returns the value of -ivy-line-numbers that starts at first. With
+// reset, the first line of the paragraph takes the number first.
+func (l *odtLineNumbering) value(first int, reset bool) string {
+	v := odtPt(l.distance) + " " + strconv.Itoa(l.step) + " " + strconv.Itoa(first) + " " + l.restart + " " + l.side
+	if l.noEmpty {
+		v += " no-empty"
+	}
+	if reset {
+		v += " reset"
+	}
+	return v
+}
+
+// odtLineNumbers returns the line numbering of a
+// text:linenumbering-configuration, or nil when the lines have no numbers.
+// text:number-lines is true by default. text:increment is the step, and
+// text:offset the distance from the text. The numbers restart on each page
+// with text:restart-on-page, and else go on through the text. The empty
+// lines count unless text:count-empty-lines is false. text:number-position
+// is left, right, inner or outer. LibreOffice writes inside and outside
+// for the last two, and reads inner and outer as left. ivy reads both
+// pairs. text:count-in-text-boxes is not read: the lines of a frame have
+// no numbers.
+func odtLineNumbers(n roxmltree.Node) *odtLineNumbering {
 	if odtAttr(n, "number-lines") == "false" {
-		return ""
+		return nil
 	}
-	if pos := odtAttr(n, "number-position"); pos != "" && pos != "left" {
-		return ""
+	l := &odtLineNumbering{step: 1, distance: 14.15, restart: "continuous", side: "left"}
+	switch odtAttr(n, "number-position") {
+	case "right":
+		l.side = "right"
+	case "inner", "inside":
+		l.side = "inner"
+	case "outer", "outside":
+		l.side = "outer"
 	}
-	step, err := strconv.Atoi(odtAttr(n, "increment"))
-	if err != nil || step < 1 || step > 100 {
-		step = 1
+	if step, err := strconv.Atoi(odtAttr(n, "increment")); err == nil && step >= 1 && step <= 100 {
+		l.step = step
 	}
-	distance, ok := odtLength(odtAttr(n, "offset"))
-	if !ok || distance < 0 || distance > 1584 {
-		distance = 14.15
+	if distance, ok := odtLength(odtAttr(n, "offset")); ok && distance >= 0 && distance <= 1584 {
+		l.distance = distance
 	}
-	restart := "continuous"
 	if odtAttr(n, "restart-on-page") == "true" {
-		restart = "page"
+		l.restart = "page"
 	}
-	return odtPt(distance) + " " + strconv.Itoa(step) + " 1 " + restart
+	l.noEmpty = odtAttr(n, "count-empty-lines") == "false"
+	return l
 }
 
 // readODTListStyle reads a text:list-style.
@@ -522,11 +559,12 @@ func readODTPageLayout(n roxmltree.Node) *odtPageLayout {
 		if fixed {
 			height = h
 		}
+		dynamic := odtAttr(pr, "dynamic-spacing") == "true"
 		if part == "header-style" {
-			pl.headerHeight, pl.headerFixed = height, fixed
+			pl.headerHeight, pl.headerFixed, pl.headerDynamic = height, fixed, dynamic
 			pl.headerSpace, _ = odtLength(odtAttr(pr, "margin-bottom"))
 		} else {
-			pl.footerHeight, pl.footerFixed = height, fixed
+			pl.footerHeight, pl.footerFixed, pl.footerDynamic = height, fixed, dynamic
 			pl.footerSpace, _ = odtLength(odtAttr(pr, "margin-top"))
 		}
 	}

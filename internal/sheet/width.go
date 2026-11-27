@@ -1,6 +1,8 @@
 package sheet
 
 import (
+	"math"
+
 	"github.com/xo/okage/svg"
 
 	"github.com/xo/ivy/internal/font"
@@ -148,15 +150,31 @@ func NewMeasure(db *svg.FontDatabase, first int, family string) *Measure {
 func (m *Measure) ArialTextWidth(s string, size float64) float64 {
 	units := 0.0
 	for _, r := range s {
-		if r >= 0x180 {
-			if em := m.em(r); em >= 0 {
-				units += em * 2048
-				continue
-			}
-		}
-		units += float64(runeUnits(&arialWidths, r))
+		units += m.units(r)
 	}
 	return units * size / 2048
+}
+
+// PixelTextWidth returns the width in points of the text s as LibreOffice
+// measures the text of a cell on the screen: each character is a whole
+// number of pixels wide in a font of ppem pixels to the em, and a pixel is
+// pixel points wide.
+func (m *Measure) PixelTextWidth(s string, ppem, pixel float64) float64 {
+	px := 0.0
+	for _, r := range s {
+		px += math.Round(m.units(r) * ppem / 2048)
+	}
+	return px * pixel
+}
+
+// units returns the advance of r in units of 1/2048 em.
+func (m *Measure) units(r rune) float64 {
+	if r >= 0x180 {
+		if em := m.em(r); em >= 0 {
+			return em * 2048
+		}
+	}
+	return float64(runeUnits(&arialWidths, r))
 }
 
 // em returns the advance of r in ems, or -1 when no face draws r.

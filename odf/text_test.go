@@ -133,7 +133,7 @@ func TestTextConvert(t *testing.T) {
 		`rowspan="2"`,
 		`<col style="width: 72pt"/><col style="width: 72pt"/><col style="width: 72pt"/>`,
 		`display: block; margin-left: auto; margin-right: auto; width: 72pt`,
-		`<img src="media/1.png" alt="" style="width: 72pt; height: 36pt"/>`,
+		`<img src="media/1.png" alt="" style="display: block; width: 72pt; height: 36pt"/>`,
 		`<a href="https://example.com/">link</a><br/>next` + "\t" + `tab`,
 		`Page <span class="pg"></span> of <span class="pgs"></span>`,
 		// the space before the first paragraph stays in a header

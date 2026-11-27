@@ -17,11 +17,14 @@
 //     the margin, see numberLines (D56).
 //   - -ivy-line-multiple puts the line gap of a single line above the
 //     text of a line, and the extra space of a multiple line spacing below
-//     it, see leadingShift (D56).
+//     it, see leadingShift. With 'last', the last line of a page and of
+//     each part of a table cell has no extra space, see lastLineSpace
+//     (D56).
 //   - -ivy-page-top-space leaves out the space before the first block of
 //     a page, of a column or of the part of a split table cell after a
-//     break that is not forced, see layoutContext.discardsSpaceBefore
-//     (D56).
+//     break that is not forced, see layoutContext.discardsSpaceBefore. A
+//     length keeps that much of it at the top of the part of a cell, see
+//     layoutContext.spaceBeforeKept (D56).
 //   - -ivy-float-position places a float of the flow of the page at a
 //     vertical position from the top of the page or of the page area, see
 //     layout_page_float.go (D60).
@@ -30,6 +33,10 @@
 //   - -ivy-wrap-flow puts the text on both sides of a float, or on one
 //     side of it, as a word processor wraps the text around a picture,
 //     see layout_wrap_flow.go (D63).
+//   - -ivy-wrap-shape gives such a float the polygon that the text wraps
+//     around, in place of its border box, as a word processor wraps the
+//     text around the wrap polygon of a picture, see layout_wrap_flow.go
+//     (D63).
 //   - -ivy-stroke-adjust puts the collapsed borders of a table cell on
 //     whole pixels, as a spreadsheet draws its grid, see
 //     drawCollapsedBorders.
@@ -61,6 +68,7 @@ var ivyProperties = map[string]bool{
 	"float-position": true,
 	"float-overlap":  true,
 	"wrap-flow":      true,
+	"wrap-shape":     true,
 	"stroke-adjust":  true,
 	"line-baseline":  true,
 	"text-outline":   true,
@@ -93,13 +101,17 @@ var validatePageOverflow = singleKeyword(func(keyword string) bool {
 // of the numbers from the text, the step, the first number and when the
 // numbers restart, in this order, such as '18pt 1 1 page'. The distance is
 // a length that is not negative. The step and the first number are
-// integers from 1. The restart is 'page', 'section' or 'continuous'. The
-// property is inherited.
+// integers from 1. The restart is 'page', 'section' or 'continuous'. Three
+// keywords can follow, in any order: the side of the numbers, 'left',
+// 'right', 'inner' or 'outer', 'left' by default; 'no-empty', which does
+// not count the empty lines; and 'reset', which makes the first line of the
+// box take the first number, in the section around the box. The property is
+// inherited.
 func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "none" {
 		return String("none"), nil
 	}
-	if len(tokens) != 4 {
+	if len(tokens) < 4 || len(tokens) > 7 {
 		return nil, nil
 	}
 	distance, ok := getLength(tokens[0], false, false).(Dimension)
@@ -118,36 +130,63 @@ func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 	if !in(restart, "page", "section", "continuous") {
 		return nil, nil
 	}
-	return Tuple{distance, counts[0], counts[1], String(restart)}, nil
+	side, empty, reset := "", "", ""
+	for _, token := range tokens[4:] {
+		switch k := getKeyword(token); {
+		case side == "" && in(k, "left", "right", "inner", "outer"):
+			side = k
+		case empty == "" && k == "no-empty":
+			empty = k
+		case reset == "" && k == "reset":
+			reset = k
+		default:
+			return nil, nil
+		}
+	}
+	if side == "" {
+		side = "left"
+	}
+	return Tuple{distance, counts[0], counts[1], String(restart), String(side), String(empty), String(reset)}, nil
 }
 
 // computeLineNumbers computes -ivy-line-numbers: the distance in pixels.
 func computeLineNumbers(style *Style, name string, value Value) Value {
 	t, ok := value.(Tuple)
-	if !ok || len(t) != 4 {
+	if !ok || len(t) != 7 {
 		return value
 	}
 	d, ok := t[0].(Dimension)
 	if !ok {
 		return value
 	}
-	return Tuple{Float(toPixels(d, style, name, -1)), t[1], t[2], t[3]}
+	return Tuple{Float(toPixels(d, style, name, -1)), t[1], t[2], t[3], t[4], t[5], t[6]}
 }
 
 // validateLineMultiple validates -ivy-line-multiple: 'none' or a number
 // that is not negative, the multiple of a single line that the line height
-// of a word processor is. The property is inherited.
+// of a word processor is. The keyword 'last' can follow the number. With
+// it, the last line of a page, and the last line of each part of a table
+// cell, has no extra space below its text, as in LibreOffice. The value is
+// the number, or a tuple of the number and 'last'. The property is
+// inherited.
 func validateLineMultiple(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "none" {
 		return String("none"), nil
 	}
-	if len(tokens) != 1 {
+	if len(tokens) < 1 || len(tokens) > 2 {
 		return nil, nil
 	}
-	if n, ok := getNumber(tokens[0], false, false).(Dimension); ok {
+	n, ok := getNumber(tokens[0], false, false).(Dimension)
+	if !ok {
+		return nil, nil
+	}
+	if len(tokens) == 1 {
 		return Float(n.Value), nil
 	}
-	return nil, nil
+	if getKeyword(tokens[1]) != "last" {
+		return nil, nil
+	}
+	return Tuple{Float(n.Value), String("last")}, nil
 }
 
 // validateLineBaseline validates -ivy-line-baseline: 'normal' or 'win'.
@@ -162,10 +201,34 @@ var validateLineBaseline = singleKeyword(func(keyword string) bool {
 // With 'discard', a block of the flow of the page that starts a page after
 // a break that is not forced has no space before it, as a paragraph of
 // Word (D56). So does a block at the top of a column after a break that is
-// not forced. The property is inherited.
-var validatePageTopSpace = singleKeyword(func(keyword string) bool {
-	return keyword == "keep" || keyword == "discard"
-})
+// not forced. A length that is not negative can follow 'discard': a block
+// at the top of the part of a split table cell keeps that much of its
+// space before it, as a paragraph of LibreOffice keeps its own space above
+// it there. The value is the keyword, or a tuple of 'discard' and the
+// length. The property is inherited.
+func validatePageTopSpace(tokens []tinycss2.Node, _ string) (Value, error) {
+	switch keyword := getSingleKeyword(tokens); keyword {
+	case "keep", "discard":
+		return String(keyword), nil
+	}
+	if len(tokens) != 2 || getKeyword(tokens[0]) != "discard" {
+		return nil, nil
+	}
+	if d, ok := getLength(tokens[1], false, false).(Dimension); ok {
+		return Tuple{String("discard"), d}, nil
+	}
+	return nil, nil
+}
+
+// computePageTopSpace computes -ivy-page-top-space: the length in pixels.
+func computePageTopSpace(style *Style, name string, value Value) Value {
+	if t, ok := value.(Tuple); ok && len(t) == 2 {
+		if d, ok := t[1].(Dimension); ok {
+			return Tuple{t[0], Float(toPixels(d, style, name, -1))}
+		}
+	}
+	return value
+}
 
 // validateFloatPosition validates -ivy-float-position: 'auto', or 'page'
 // or 'margin' and a length, 'top', 'center' or 'bottom', in any order,
@@ -272,6 +335,65 @@ func computeWrapFlow(style *Style, name string, value Value) Value {
 		return Tuple{t[0], Float(toPixels(d, style, name, -1))}
 	}
 	return value
+}
+
+// maxWrapShapePoints is the largest number of points of the polygon of
+// -ivy-wrap-shape.
+const maxWrapShapePoints = 1024
+
+// validateWrapShape validates -ivy-wrap-shape: 'none', or a polygon of at
+// least 3 points, such as 'polygon(0 0, 10px 0, 10px 20px)'. Each point is
+// a length from the left and a length from the top of the border box of
+// the float, and a length can be negative. The value is a tuple of the
+// lengths, two for each point. The property applies to a float with
+// -ivy-wrap-flow, and is not inherited (D63).
+func validateWrapShape(tokens []tinycss2.Node, _ string) (Value, error) {
+	if getSingleKeyword(tokens) == "none" {
+		return String("none"), nil
+	}
+	if len(tokens) != 1 {
+		return nil, nil
+	}
+	f, ok := tokens[0].(*tinycss2.FunctionBlock)
+	if !ok || f.LowerName != "polygon" {
+		return nil, nil
+	}
+	parts := splitOnComma(f.Arguments)
+	if len(parts) < 3 || len(parts) > maxWrapShapePoints {
+		return nil, nil
+	}
+	out := make(Tuple, 0, 2*len(parts))
+	for _, part := range parts {
+		part = removeWhitespace(part)
+		if len(part) != 2 {
+			return nil, nil
+		}
+		for _, token := range part {
+			length, ok := getLength(token, true, false).(Dimension)
+			if !ok {
+				return nil, nil
+			}
+			out = append(out, length)
+		}
+	}
+	return out, nil
+}
+
+// computeWrapShape computes -ivy-wrap-shape: the lengths in pixels.
+func computeWrapShape(style *Style, name string, value Value) Value {
+	t, ok := value.(Tuple)
+	if !ok {
+		return value
+	}
+	out := make(Tuple, len(t))
+	for i, v := range t {
+		d, ok := v.(Dimension)
+		if !ok {
+			return String("none")
+		}
+		out[i] = Float(toPixels(d, style, name, -1))
+	}
+	return out
 }
 
 // validateStrokeAdjust validates -ivy-stroke-adjust: 'none' or 'pixels'.

@@ -313,6 +313,10 @@ func TestPaper(t *testing.T) {
 func FuzzOpen(f *testing.F) {
 	f.Add(sample())
 	f.Add([]byte(`{\rtf1\ansi{\fonttbl{\f0 Arial;}}\trowd\cellx100\intbl a\cell\row\sect\sectd\pgwsxn100 b\par}`))
+	// the shapes and the frames that float (D60, D63)
+	f.Add(shapeFile("", 1440, 2880, 0, `\shpbxmargin\shpbymargin\shpwr2\shpwrk3`, `{\sp{\sn posv}{\sv 3}}`))
+	f.Add([]byte(`{\rtf1\ansi\pard A {\shp{\*\shpinst\shpright2880\shpbottom1440\shpwr1{\shptxt \pard Box\par}}}\par
+\pard\phpg\posxc\pvpg\posyb\absw2880\absh-1440\dxfrtext180 One\par Two\par\pard\pvpara\posy360\absw2880\overlay Three\par}`))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 14, MaxDepth: 32}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))

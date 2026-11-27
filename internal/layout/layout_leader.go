@@ -61,7 +61,9 @@ func handleLeader(lc *layoutContext, line, containingBlock *Box) {
 
 		// Take care of excluded shapes
 		for _, shape := range lc.excludedShapes() {
-			if shape.PositionY+shape.Height > line.PositionY {
+			// Port: upstream has no -ivy-wrap-flow. The float of a column
+			// before is not next to the line.
+			if shape.PositionY+shape.Height > line.PositionY && !lc.isColumnFloat(shape) {
 				extraWidth -= shape.Width
 			}
 		}

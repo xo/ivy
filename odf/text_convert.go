@@ -105,14 +105,37 @@ type odtConverter struct {
 	// whose styles are those of styles.xml.
 	part bool
 	// tight is set when the lines leave out the external leading of their
-	// fonts. See readSettings.
-	tight bool
+	// fonts, and cellSpace when the last line of a table cell keeps the
+	// extra space of a multiple line spacing. See readSettings.
+	tight     bool
+	cellSpace bool
 	// lastBottom is the spacing below the last paragraph, in points,
 	// which the margin above the next paragraph holds, and forced is set
 	// when a page break comes before the next paragraph or table. See
 	// paragraphStyle.
 	lastBottom float64
 	forced     bool
+	// cells counts the table cells around the current block.
+	cells int
+	// paraW and paraMark are the writer and its length after the start of
+	// the last paragraph, and paraTop is the spacing above that
+	// paragraph, in points. See place.
+	paraW    *strings.Builder
+	paraMark int
+	paraTop  float64
+	// paraLeft and paraRight are the margins at the left and the right of
+	// the paragraph that the converter writes, in points. See floatLeft.
+	paraLeft, paraRight float64
+	// columns counts the sections with columns around the current block.
+	columns int
+	// aloneOK is set when the line spacing of the last paragraph lets an
+	// object alone in it set the height of its line, and aloneBottom is
+	// the extra space of a multiple line spacing below that object, in
+	// points. alone holds the style of such an object until its content
+	// takes it. See place.
+	aloneOK     bool
+	aloneBottom float64
+	alone       string
 
 	// counters holds the counters of each list style, by level.
 	counters map[string]*[10]int
@@ -177,12 +200,12 @@ func convertText(ctx context.Context, d *Document) (layout.Source, error) {
 	var out strings.Builder
 	out.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	out.WriteString(`<html xmlns="http://www.w3.org/1999/xhtml"><head><meta charset="UTF-8"/><title></title></head>` + "\n<body")
-	if c.st.lineNumbers != "" {
+	if c.st.lineNumbers != nil {
 		// The numbers of the lines have the font of the body, which the
 		// text style of the numbers gives. Each paragraph gives its own
 		// font.
 		var s odtCSS
-		s.set("-ivy-line-numbers", c.st.lineNumbers)
+		s.set("-ivy-line-numbers", c.st.lineNumbers.value(1, false))
 		p := c.st.textOver(c.st.props("paragraph", "Standard"), c.st.lineNumberStyle)
 		for _, d := range c.inherited(p) {
 			s.set(d.name, d.value)
@@ -224,7 +247,14 @@ func odtFind(n roxmltree.Node, names ...string) (roxmltree.Node, bool) {
 // height of its lines when AddExternalLeading is true, which is the
 // default. UnxForceZeroExtLeading, which old files of OpenOffice.org on
 // Unix set, leaves it out, and LibreOffice on Linux follows it.
+//
+// LibreOffice leaves out the extra space of a multiple line spacing below
+// the last line of a table cell when AddParaLineSpacingToTableCells is
+// false. When the settings of the document do not give it, it is false,
+// as in the files of older versions. A file without these settings takes
+// the default of a new document, true.
 func (c *odtConverter) readSettings() {
+	c.cellSpace = true
 	if c.d.archive.Find("settings.xml") == nil {
 		return
 	}
@@ -234,7 +264,17 @@ func (c *odtConverter) readSettings() {
 		return
 	}
 	for n := range doc.RootElement().Descendants() {
-		if !n.IsElement() || n.TagName().Name() != "config-item" {
+		if !n.IsElement() {
+			continue
+		}
+		switch n.TagName().Name() {
+		case "config-item-set":
+			if odtAttr(n, "name") == "ooo:configuration-settings" {
+				c.cellSpace = c.cellSpace && odtSetting(n, "AddParaLineSpacingToTableCells") == "true"
+			}
+			continue
+		case "config-item":
+		default:
 			continue
 		}
 		text, _ := n.Text()
@@ -246,6 +286,18 @@ func (c *odtConverter) readSettings() {
 			c.tight = c.tight || v == "true"
 		}
 	}
+}
+
+// odtSetting returns the value of the config:config-item name, a child of
+// the config:config-item-set set, or "" when the set does not hold it.
+func odtSetting(set roxmltree.Node, name string) string {
+	for n := range set.Children() {
+		if n.IsElement() && n.TagName().Name() == "config-item" && odtAttr(n, "name") == name {
+			text, _ := n.Text()
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
 }
 
 // readXML reads and parses an entry of the package, decrypted.
@@ -423,7 +475,11 @@ func (c *odtConverter) section(n roxmltree.Node) {
 		// The margins of the blocks of columns do not collapse with the
 		// margins around them.
 		c.lastBottom = 0
-		defer func() { c.lastBottom = 0 }()
+		c.columns++
+		defer func() {
+			c.lastBottom = 0
+			c.columns--
+		}()
 	}
 	c.blocks(n)
 	c.w.WriteString("</div>")
@@ -508,7 +564,15 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) floa
 	case strings.HasSuffix(sel, ":left"):
 		header, footer = "header-left", "footer-left"
 	}
-	part := func(name, def string) (string, float64, bool) {
+	// As in LibreOffice, the min-height or the height of a header or a
+	// footer holds its spacing, and the content of the part takes the
+	// rest. With style:dynamic-spacing, the content takes the spacing
+	// first, and the part grows only when its content is taller than the
+	// whole part.
+	content := func(height, space float64) float64 {
+		return max(height-space, 0)
+	}
+	part := func(name, def string, minHeight float64) (string, float64, bool) {
 		if mp == nil {
 			return "", 0, false
 		}
@@ -519,16 +583,36 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) floa
 		if !ok || odtAttr(n, "display") == "false" {
 			return "", 0, false
 		}
-		return c.headerFooter(n)
+		return c.headerFooter(n, minHeight)
+	}
+	hSpace, fSpace := max(pl.headerSpace, 0), max(pl.footerSpace, 0)
+	hHeight, fHeight := max(pl.headerHeight, 0), max(pl.footerHeight, 0)
+	hMin, fMin := content(hHeight, hSpace), content(fHeight, fSpace)
+	if pl.headerFixed && pl.headerDynamic {
+		hMin = hHeight
+	}
+	if pl.footerFixed && pl.footerDynamic {
+		fMin = fHeight
 	}
 	top, bottom := pl.top, pl.bottom
-	hName, hHeight, hOK := part(header, "header")
-	fName, fHeight, fOK := part(footer, "footer")
+	hName, hEst, hOK := part(header, "header", hMin)
+	fName, fEst, fOK := part(footer, "footer", fMin)
+	// size returns the height of a part from the estimate of the height of
+	// its content.
+	size := func(height, space, est float64, fixed, dynamic bool) float64 {
+		switch {
+		case fixed:
+			return height
+		case dynamic:
+			return max(height, est)
+		}
+		return max(height, space+est)
+	}
 	if hOK {
-		top += max(pl.headerHeight, hHeight) + pl.headerSpace
+		top += size(hHeight, hSpace, hEst, pl.headerFixed, pl.headerDynamic)
 	}
 	if fOK {
-		bottom += max(pl.footerHeight, fHeight) + pl.footerSpace
+		bottom += size(fHeight, fSpace, fEst, pl.footerFixed, pl.footerDynamic)
 	}
 	box := func(name string, ok bool) string {
 		if ok {
@@ -540,18 +624,21 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) floa
 	// each paragraph. When the header is taller, the layout makes the
 	// margin of the page grow, so that the body starts below the header and
 	// its spacing, as in LibreOffice. A header of a fixed height does not
-	// grow.
+	// grow. The running element is at least as tall as the min-height of
+	// its content. The layout aligns a footer at the bottom of its box, so
+	// the text of a short footer stays at the top of the content, as in
+	// LibreOffice.
 	fit := "none"
 	if hOK && !pl.headerFixed || fOK && !pl.footerFixed {
 		fit = "grow"
 	}
 	topBox := "content: " + box(hName, hOK) + "; padding-top: " + odtPt(pl.top)
-	if hOK && !pl.headerFixed {
-		topBox += "; padding-bottom: " + odtPt(pl.headerSpace)
+	if hOK && !pl.headerFixed && !pl.headerDynamic {
+		topBox += "; padding-bottom: " + odtPt(hSpace)
 	}
 	bottomBox := "content: " + box(fName, fOK) + "; padding-bottom: " + odtPt(pl.bottom)
-	if fOK && !pl.footerFixed {
-		bottomBox += "; padding-top: " + odtPt(pl.footerSpace)
+	if fOK && !pl.footerFixed && !pl.footerDynamic {
+		bottomBox += "; padding-top: " + odtPt(fSpace)
 	}
 	c.sheet.WriteString(sel + " { size: " + odtPt(pl.width) + " " + odtPt(pl.height) +
 		"; margin: " + odtPt(top) + " " + odtPt(pl.right) + " " + odtPt(bottom) + " " + odtPt(pl.left) + "; " +
@@ -566,9 +653,10 @@ func (c *odtConverter) styleName(n roxmltree.Node) string {
 	return c.st.partName(odtAttr(n, "style-name"), c.part)
 }
 
-// headerFooter converts a part of a master page into a running element. It
-// returns its name and an estimate of its height in points.
-func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
+// headerFooter converts a part of a master page into a running element, at
+// least minHeight tall. It returns its name and an estimate of the height
+// of its content in points.
+func (c *odtConverter) headerFooter(n roxmltree.Node, minHeight float64) (string, float64, bool) {
 	key := strconv.Itoa(int(n.ID()))
 	if name, ok := c.running[key]; ok {
 		return name, c.runningHeights[key], name != ""
@@ -578,7 +666,11 @@ func (c *odtConverter) headerFooter(n roxmltree.Node) (string, float64, bool) {
 	// the element is a flow root, so that the space before its first
 	// paragraph stays in it, and a footer that the layout aligns at the
 	// bottom of its box does not move down by that space
-	c.w.WriteString(`<div style="position: running(` + name + `); display: flow-root">`)
+	style := "position: running(" + name + "); display: flow-root"
+	if minHeight > 0 {
+		style += "; min-height: " + odtPt(minHeight)
+	}
+	c.w.WriteString(`<div style="` + style + `">`)
 	c.nested++
 	part, last := c.part, c.lastBottom
 	c.part, c.lastBottom = true, 0

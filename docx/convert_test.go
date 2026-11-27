@@ -306,6 +306,28 @@ func TestSections(t *testing.T) {
 	}
 }
 
+// TestContinuousSection checks that a continuous section stays on the page
+// of the section before it, with its own left and right margins, as in
+// Word.
+func TestContinuousSection(t *testing.T) {
+	body := `<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/>` +
+		`<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:gutter="0"/></w:sectPr></w:pPr></w:p>` +
+		`<w:p><w:pPr><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/>` +
+		`<w:pgMar w:top="1588" w:right="1797" w:bottom="1440" w:left="1758" w:gutter="0"/></w:sectPr></w:pPr>` +
+		`<w:r><w:t>Text</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:t>Same</w:t></w:r></w:p><w:sectPr><w:type w:val="continuous"/><w:pgSz w:w="12240" w:h="15840"/>` +
+		`<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:gutter="0"/></w:sectPr>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	for _, want := range []string{
+		`<div class="section" style="page: s1; margin-left: -2.1pt; margin-right: -0.15pt">`,
+		`<div class="section" style="page: s1">`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q, got:\n%s", want, html)
+		}
+	}
+}
+
 func TestPaper(t *testing.T) {
 	landscape := ivy.A4.Landscape()
 	text := `<w:p><w:r><w:t>Text</w:t></w:r></w:p>`

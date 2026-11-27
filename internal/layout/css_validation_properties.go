@@ -348,6 +348,7 @@ func init() {
 	property("float-position", validateFloatPosition)
 	property("float-overlap", validateFloatOverlap)
 	property("wrap-flow", validateWrapFlow)
+	property("wrap-shape", validateWrapShape)
 	property("stroke-adjust", validateStrokeAdjust)
 	property("line-baseline", validateLineBaseline)
 	property("text-outline", validateTextOutline)

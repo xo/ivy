@@ -19,8 +19,13 @@ func TestTextLineNumbers(t *testing.T) {
 		{"continuous", `<text:linenumbering-configuration text:style-name="LineNumbering" text:offset="0.5in" text:increment="5" text:number-position="left"/>`, `-ivy-line-numbers: 36pt 5 1 continuous`},
 		{"page", `<text:linenumbering-configuration text:restart-on-page="true"/>`, `-ivy-line-numbers: 14.15pt 1 1 page`},
 		{"off", `<text:linenumbering-configuration text:number-lines="false" text:increment="5"/>`, ""},
-		// The layout draws the numbers on the left only.
-		{"right", `<text:linenumbering-configuration text:number-position="right"/>`, ""},
+		{"right", `<text:linenumbering-configuration text:number-position="right"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous right;`},
+		// LibreOffice writes inside and outside, and ODF names them inner
+		// and outer.
+		{"inside", `<text:linenumbering-configuration text:number-position="inside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner;`},
+		{"inner", `<text:linenumbering-configuration text:number-position="inner"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner;`},
+		{"outside", `<text:linenumbering-configuration text:number-position="outside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous outer;`},
+		{"empty", `<text:linenumbering-configuration text:count-empty-lines="false"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous left no-empty;`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			edit := func(s string) string {
@@ -52,6 +57,29 @@ func TestTextLineNumbers(t *testing.T) {
 	}
 }
 
+// TestTextLineNumberStart checks that text:line-number gives the number of
+// the first line of a paragraph, from the numbering of the text.
+func TestTextLineNumberStart(t *testing.T) {
+	const auto = `<style:style style:name="PR" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties text:line-number="10"/></style:style>` +
+		`<style:style style:name="P0" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties text:line-number="0"/></style:style>`
+	edit := func(s string) string {
+		return strings.Replace(s, "</office:styles>", `<text:linenumbering-configuration text:increment="5"/></office:styles>`, 1)
+	}
+	body := `<text:p text:style-name="PR">Restart</text:p><text:p text:style-name="P0">Zero</text:p>`
+	html, _ := odtHTML(t, odtWith(body, auto, edit))
+	if p := odtParagraph(t, html, "Restart"); !strings.Contains(p, "-ivy-line-numbers: 14.15pt 5 10 continuous left reset;") {
+		t.Errorf("expected the paragraph to start at 10, got: %s", p)
+	}
+	if p := odtParagraph(t, html, "Zero"); strings.Contains(p, "-ivy-line-numbers") {
+		t.Errorf("expected the paragraph to go on, got: %s", p)
+	}
+	// Without the numbering of the text, the paragraph has no numbers.
+	html, _ = odtHTML(t, odtWith(body, auto, nil))
+	if p := odtParagraph(t, html, "Restart"); strings.Contains(p, "-ivy-line-numbers") {
+		t.Errorf("expected no numbers, got: %s", p)
+	}
+}
+
 // TestTextLineMultiple checks that a single line and a proportional line
 // spacing put the line gap above their text, and that a line of a fixed
 // height does not (D56).
@@ -61,7 +89,7 @@ func TestTextLineMultiple(t *testing.T) {
 		`<style:style style:name="P3" style:family="paragraph"><style:paragraph-properties fo:line-height="200%"/></style:style>`
 	body := `<text:p text:style-name="P1">Single</text:p><text:p text:style-name="P2">Fixed</text:p><text:p text:style-name="P3">Double</text:p>`
 	html, _ := odtHTML(t, odtWith(body, auto, nil))
-	for text, want := range map[string]string{"Single": "-ivy-line-multiple: 1;", "Double": "-ivy-line-multiple: 2;"} {
+	for text, want := range map[string]string{"Single": "-ivy-line-multiple: 1;", "Double": "-ivy-line-multiple: 2 last;"} {
 		if p := odtParagraph(t, html, text); !strings.Contains(p, want) {
 			t.Errorf("expected %q in the paragraph %s, got: %s", want, text, p)
 		}

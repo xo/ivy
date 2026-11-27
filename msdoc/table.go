@@ -743,7 +743,12 @@ func writeTable(b *strings.Builder, rows []tableRow, pg page) {
 			b.WriteString("</thead><tbody>")
 		}
 		b.WriteString("<tr")
-		if h := abs(t.rowHeight); h > 0 && h < 31680 {
+		borders := rowBorders(rows, r)
+		switch h := abs(t.rowHeight); {
+		case t.rowHeight > 0 && h < 31680:
+			// Word holds a row of a least height between its borders
+			b.WriteString(` style="height: ` + num(float64(h)/20+borders) + `pt"`)
+		case h > 0 && h < 31680:
 			b.WriteString(` style="height: ` + pt(h) + `"`)
 		}
 		b.WriteString(">")
@@ -797,7 +802,9 @@ func writeTable(b *strings.Builder, rows []tableRow, pg page) {
 				// a cell. The text that does not fit shows, and is not cut,
 				// so that the shapes that the cell anchors show. The block
 				// keeps the space before its first paragraph inside, so
-				// that the space does not make the row taller
+				// that the space does not make the row taller. The height
+				// of the row in Word holds its borders
+				h = max(h-borders, 0.05)
 				b.WriteString(`<div style="display: flow-root; height: ` + num(h) + `pt">` + html + "</div>")
 			} else {
 				b.WriteString(html)
@@ -841,22 +848,8 @@ func tableEdges(rows []tableRow) []int {
 // table.
 func cellStyle(t *tap, c tableCell, i int, top, bottom bool) string {
 	var style []string
-	// the border of the cell, else the border of the table at that side
-	sides := [4]struct {
-		name  string
-		table brc
-	}{
-		{"top", pick(top, t.borders[0], t.borders[4])},
-		{"left", pick(i == 0, t.borders[1], t.borders[5])},
-		{"bottom", pick(bottom, t.borders[2], t.borders[4])},
-		{"right", pick(i+1 >= len(t.cells), t.borders[3], t.borders[5])},
-	}
-	for k, side := range sides {
-		br := c.borders[k]
-		if !br.set {
-			br = side.table
-		}
-		style = append(style, "border-"+side.name+": "+br.css())
+	for k, br := range cellBorders(t, c, i, top, bottom) {
+		style = append(style, "border-"+[...]string{"top", "left", "bottom", "right"}[k]+": "+br.css())
 	}
 	pad := [4]int{0, t.gapHalf, 0, t.gapHalf}
 	for k := range 4 {
@@ -876,6 +869,60 @@ func cellStyle(t *tap, c tableCell, i int, top, bottom bool) string {
 		style = append(style, fmt.Sprintf("background-color: #%06x", c.shading.color))
 	}
 	return strings.Join(style, "; ")
+}
+
+// cellBorders returns the borders of the cell c, the cell i of the row t,
+// at the top, the left, the bottom and the right: the border of the cell,
+// else the border of the table at that side. top and bottom are set for a
+// cell of the first and of the last row of the table.
+func cellBorders(t *tap, c tableCell, i int, top, bottom bool) [4]brc {
+	sides := [4]brc{
+		pick(top, t.borders[0], t.borders[4]),
+		pick(i == 0, t.borders[1], t.borders[5]),
+		pick(bottom, t.borders[2], t.borders[4]),
+		pick(i+1 >= len(t.cells), t.borders[3], t.borders[5]),
+	}
+	for k := range sides {
+		if c.borders[k].set {
+			sides[k] = c.borders[k]
+		}
+	}
+	return sides
+}
+
+// rowBorders returns half of the widest border above the row r of a table
+// and half of the widest border below it, in points. The layout collapses
+// the borders of the cells, and puts half of each border between two rows
+// in each row. A row of a least height in Word holds that height between
+// its borders, and a row of an exact height holds its borders, as on page
+// 2 of libreoffice/doc/landscape-letter-form.doc.
+func rowBorders(rows []tableRow, r int) float64 {
+	// edge returns the widest border at the top, side 0, or at the bottom,
+	// side 2, of the cells of row k that start or end in that row
+	edge := func(k, side int) float64 {
+		if k < 0 || k >= len(rows) {
+			return 0
+		}
+		t := rows[k].tap
+		w := 0.0
+		for i := range rows[k].cells {
+			var c tableCell
+			if i < len(t.cells) {
+				c = t.cells[i]
+			}
+			switch {
+			case side == 0 && c.vertMerge == vertMergeContinue && k > 0:
+				continue
+			case side == 2 && k+1 < len(rows) && i < len(rows[k+1].tap.cells) && rows[k+1].tap.cells[i].vertMerge == vertMergeContinue:
+				continue
+			}
+			w = max(w, cellBorders(t, c, i, k == 0, k+1 == len(rows))[side].cssWidth())
+		}
+		return w
+	}
+	top := max(edge(r, 0), edge(r-1, 2))
+	bottom := max(edge(r, 2), edge(r+1, 0))
+	return (top + bottom) / 2
 }
 
 // exactHeight returns the height of the content of the cells of the row

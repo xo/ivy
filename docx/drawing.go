@@ -418,7 +418,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		return
 	}
 	var ph, pv position
-	wrap, wrapText := "wrapNone", ""
+	wrap, wrapText, polygon := "wrapNone", "", ""
 	for e := range n.Children() {
 		if !e.IsElement() {
 			continue
@@ -430,10 +430,13 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 			pv = readPosition(e)
 		case "wrapNone", "wrapSquare", "wrapTight", "wrapThrough", "wrapTopAndBottom":
 			wrap, wrapText = name, ooxml.Attr(e, "wrapText")
+			if name == "wrapTight" || name == "wrapThrough" {
+				polygon = wrapPolygon(e, w, h)
+			}
 		}
 	}
 	sec := c.sections[c.section]
-	colWidth := sec.width - sec.left - sec.right - sec.gutter
+	colWidth := sec.columnWidth()
 	x := ph.offset
 	switch ph.relative {
 	case "page":
@@ -471,7 +474,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		}
 	case wrap == "wrapSquare" || wrap == "wrapTight" || wrap == "wrapThrough":
 		c.floatSeq = c.paraSeq
-		if x+w/2 > colWidth/2 {
+		if x+w/2 > colWidth/2 && !crossesColumn(sec, x, w) {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
 			s.set("margin-left", pt(distL))
@@ -492,6 +495,9 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 			s.set("margin-top", pt(pv.offset))
 		}
 		s.set("-ivy-wrap-flow", wrapFlow(wrapText)+" "+pt(max(distL, distR)))
+		if polygon != "" {
+			s.set("-ivy-wrap-shape", polygon)
+		}
 	case wrap == "wrapTopAndBottom":
 		s.set("display", "block")
 		s.set("margin-left", pt(max(x, 0)))
@@ -522,6 +528,61 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
 	c.graphic(g, w, h, docAlt(n))
 	c.w.WriteString("</span>")
+}
+
+// maxWrapPoints is the largest number of points of a wrap polygon that
+// the layout takes.
+const maxWrapPoints = 1024
+
+// wrapPolygon returns the value of -ivy-wrap-shape for the wp:wrapPolygon
+// of the wrap element n of a drawing of w by h points, or "" when it has
+// none (D63). Word writes the points of the polygon in a square of 21600
+// by 21600 over the extent of the drawing, and not in EMU. Word wraps the
+// text of a tight or through wrap around the polygon.
+func wrapPolygon(n roxmltree.Node, w, h float64) string {
+	poly, ok := child(n, "wrapPolygon")
+	if !ok {
+		return ""
+	}
+	var xy []float64
+	for e := range poly.Children() {
+		if !e.IsElement() {
+			continue
+		}
+		if name := e.TagName().Name(); name == "start" || name == "lineTo" {
+			xy = append(xy, number(ooxml.Attr(e, "x"), 0), number(ooxml.Attr(e, "y"), 0))
+		}
+		if len(xy) > 2*maxWrapPoints {
+			return ""
+		}
+	}
+	return polygonShape(xy, w, h)
+}
+
+// polygonShape returns the value of -ivy-wrap-shape for the points xy, x
+// and y pairs in a square of 21600 by 21600 over a drawing of w by h
+// points, or "" for fewer than 3 points or more than maxWrapPoints.
+func polygonShape(xy []float64, w, h float64) string {
+	if len(xy) < 6 || len(xy) > 2*maxWrapPoints {
+		return ""
+	}
+	parts := make([]string, 0, len(xy)/2)
+	for i := 0; i+1 < len(xy); i += 2 {
+		x := min(max(xy[i], -1e6), 1e6) * w / 21600
+		y := min(max(xy[i+1], -1e6), 1e6) * h / 21600
+		parts = append(parts, pt(x)+" "+pt(y))
+	}
+	return "polygon(" + strings.Join(parts, ", ") + ")"
+}
+
+// crossesColumn reports whether a drawing of the width w at x points from
+// the left of its column crosses the right side of the column, in a
+// section with columns. Such a drawing floats at the left of the column,
+// with a margin that gives its place, so that its border box keeps its
+// place on the page. The lines of the later columns avoid it as the lines
+// of its column do (D60, D63).
+func crossesColumn(sec *section, x, w float64) bool {
+	return sec.cols > 1 && x+w > sec.columnWidth()
 }
 
 // wrapFlow returns the keyword of -ivy-wrap-flow for the side of the text

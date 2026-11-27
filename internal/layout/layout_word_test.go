@@ -91,6 +91,18 @@ func TestLineNumbers(t *testing.T) {
 		{"nested", "10px 1 1 page", `<div><p>a</p><div><p>b</p></div></div>`, "1 2"},
 		// The property is not valid without the restart.
 		{"invalid", "10px 1 1", `<div>` + seven + `</div>`, " | "},
+		{"unknown keyword", "10px 1 1 page center", `<div>` + seven + `</div>`, " | "},
+		// With no-empty, an empty line does not count, and a line with an
+		// image does.
+		{"empty", "10px 1 1 page", `<div><p>a</p><p><br></p><p>b</p></div>`, "1 2 3"},
+		{"no-empty", "10px 1 1 page no-empty", `<div><p>a</p><p><br></p><p> </p><p>b</p><p><img src="pattern.png"></p></div>`, "1 2 3"},
+		// A box with reset gives the first number to its first line, and
+		// the lines after it go on from there.
+		{"reset", "10px 1 1 continuous", `<div><p>a</p><p style="-ivy-line-numbers: 10px 1 7 continuous reset">b<br>c</p><p>d</p></div>`, "1 7 8 9"},
+		{"reset nested", "10px 1 1 continuous", `<div><p>a</p><div style="-ivy-line-numbers: 10px 1 7 continuous reset"><p>b</p></div><p>c</p></div>`, "1 7 8"},
+		// The part of the box on the next page goes on.
+		{"reset pages", "10px 1 1 continuous", `<div>` + strings.Repeat("<p>a</p>", 4) +
+			`<p style="-ivy-line-numbers: 10px 1 7 continuous reset">b<br>c<br>d</p></div>`, "1 2 3 4 7 | 8 9"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			body := strings.ReplaceAll(tt.body, "<div>", `<div style="-ivy-line-numbers: `+tt.value+`">`)
@@ -121,6 +133,37 @@ func TestLineNumbersPlace(t *testing.T) {
 		}
 		assertApprox(t, "the end of the number", n.right, 60-16)
 		assertApprox(t, "the baseline of the number", n.baseline, line.PositionY+line.Baseline)
+	}
+}
+
+func TestLineNumbersSide(t *testing.T) {
+	// The content of a page is 160px wide from x = 40px. A number on the
+	// right starts at the distance after the content, and inner and outer
+	// change sides from the first page, a right page, to the second.
+	for _, tt := range []struct {
+		side        string
+		left, right bool
+	}{
+		{"right", false, false},
+		{"inner", true, false},
+		{"outer", false, true},
+	} {
+		t.Run(tt.side, func(t *testing.T) {
+			pages := renderPages(t, wordStyle+`<div style="-ivy-line-numbers: 10px 1 1 page `+tt.side+`">`+
+				strings.Repeat("<p>a</p>", 6)+`</div>`)
+			numbers := pageLineNumbers(t, pages)
+			if len(numbers) != 2 {
+				t.Fatalf("got the numbers %v, want 2 pages", numbers)
+			}
+			for i, left := range [...]bool{tt.left, tt.right} {
+				n := numbers[i][0]
+				if left {
+					assertApprox(t, "the end of the number", n.right, 30)
+				} else if start := n.right - 20; start < 209 || start > 211 {
+					t.Errorf("page %d: got a number from %v, want it from 210", i+1, start)
+				}
+			}
+		})
 	}
 }
 
@@ -177,6 +220,34 @@ func TestLineMultiple(t *testing.T) {
 			assertNear(t, "the top of the text", text.ContentBoxY(), tt.textTop)
 			assertNear(t, "the top of the span", span.ContentBoxY(), tt.textTop)
 			assertNear(t, "the baseline of the line", line.PositionY+line.Baseline, tt.textTop+16)
+		})
+	}
+}
+
+func TestLineMultipleTextBottom(t *testing.T) {
+	// The test font of emoji has an ascent of 950 and a descent of 250 in
+	// 1024 units, so its text of 20px is 23.4375px high, from 18.5547px
+	// above the baseline. The single line of 30px puts its leading of
+	// 6.5625px above the text, so the text ends at the bottom of the line.
+	// A box of 50px at the bottom of the text then ends the line, which is
+	// 50px high. Without -ivy-line-multiple, the content area of upstream
+	// is 20px high, with half of the leading of 10px above it, so it ends
+	// 5px above the line, which is 55px high.
+	for _, tt := range []struct {
+		multiple string
+		height   float64
+	}{
+		{"1", 50},
+		{"none", 55},
+	} {
+		t.Run(tt.multiple, func(t *testing.T) {
+			pages := renderPages(t, `<style>@font-face { src: url(NotoColorEmojiCOLR.subset.ttf); font-family: emoji }
+				@page { size: 200px } body { margin: 0 }</style>
+				<p style="margin: 0; font: 20px/30px emoji; -ivy-line-multiple: `+tt.multiple+`"><span style="display: inline-block; width: 10px; height: 50px; vertical-align: text-bottom"></span></p>`)
+			_, body := pageBody(t, pages[0])
+			line := only(t, body.Children[0])
+			assertNear(t, "the height of the line", line.Height, tt.height)
+			assertNear(t, "the top of the box", line.Children[0].PositionY, 0)
 		})
 	}
 }
@@ -328,5 +399,116 @@ func assertNear(t *testing.T, name string, got, want float64) {
 	t.Helper()
 	if got < want-0.01 || got > want+0.01 {
 		t.Errorf("%s = %v, want %v", name, got, want)
+	}
+}
+
+// pageLinesCells returns the line boxes of the text of a page, in their
+// order, and the boxes of the table cells of the page.
+func pageLinesCells(page *Box) (lines, cells []*Box) {
+	page.Descendants(func(b *Box) bool {
+		switch b.Kind {
+		case KindLine:
+			lines = append(lines, b)
+		case KindTableCell:
+			cells = append(cells, b)
+		}
+		return true
+	})
+	return lines, cells
+}
+
+func TestLineMultipleLast(t *testing.T) {
+	// A line of 26px with a multiple of 1.3 has a single line of 20px and
+	// 6px of extra space below its text. Three lines and the text of a
+	// fourth one fit on the page of 100px, but four whole lines do not.
+	six := strings.Repeat("a<br>", 5) + "a"
+	for _, tt := range []struct {
+		name     string
+		multiple string
+		cell     bool
+		// lines is the number of lines on each page, bottom the bottom
+		// of the last line of the first page, and height the height of
+		// the cell on the last page.
+		lines  []int
+		bottom float64
+		height float64
+	}{
+		{"page", "1.3", false, []int{3, 3}, 78, 0},
+		// With 'last', the last line of the page loses its extra space,
+		// as in LibreOffice.
+		{"page last", "1.3 last", false, []int{4, 2}, 98, 0},
+		{"cell", "1.3", true, []int{3, 3}, 78, 78},
+		// In a cell, the last line of each part of the cell loses its
+		// extra space: the last line of the page, and the last line of
+		// the cell.
+		{"cell last", "1.3 last", true, []int{4, 2}, 98, 46},
+		{"invalid", "1.3 first", false, []int{3, 3}, 78, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := `<p style="line-height: 26px; -ivy-line-multiple: ` + tt.multiple + `">` + six + `</p>`
+			if tt.cell {
+				p = `<table><tr><td>` + p + `</td></tr></table>`
+			}
+			pages := renderPages(t, wordStyle+`<style>table { border-collapse: collapse } td { padding: 0 }</style>`+p)
+			if len(pages) != len(tt.lines) {
+				t.Fatalf("got %d pages, want %d", len(pages), len(tt.lines))
+			}
+			for i, page := range pages {
+				lines, cells := pageLinesCells(page)
+				if len(lines) != tt.lines[i] {
+					t.Fatalf("page %d: got %d lines, want %d", i+1, len(lines), tt.lines[i])
+				}
+				if i == 0 {
+					last := lines[len(lines)-1]
+					assertApprox(t, "the bottom of the last line", last.PositionY+last.Height, tt.bottom)
+				}
+				if tt.cell && i == len(pages)-1 {
+					if len(cells) != 1 {
+						t.Fatalf("page %d: got %d cells, want 1", i+1, len(cells))
+					}
+					assertApprox(t, "the height of the cell", cells[0].Height, tt.height)
+				}
+			}
+		})
+	}
+}
+
+func TestPageTopSpaceCellLength(t *testing.T) {
+	// The cell goes on at the top of the second page. Its first paragraph
+	// there keeps 4px of its space before with the length of
+	// -ivy-page-top-space, as a paragraph of LibreOffice keeps its own
+	// space above it and not the space below the paragraph before it.
+	style := `-ivy-page-top-space: discard 4px`
+	for _, tt := range []struct {
+		name, body, text string
+	}{
+		{"start", strings.Repeat("<p>a</p>", 4) + `<p style="margin-top: 10px; ` + style + `">b</p>`, "b"},
+		// A paragraph that goes on from the page before keeps it too.
+		{"continued", strings.Repeat("<p>a</p>", 3) + `<p style="margin-top: 10px; ` + style + `">b<br>c</p>`, "c"},
+		// The space is at most the margin.
+		{"margin", strings.Repeat("<p>a</p>", 4) + `<p style="margin-top: 2px; ` + style + `">b</p>`, "b"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `<div style="-ivy-page-top-space: discard"><table><tr><td>` + tt.body + `</td></tr></table></div>`
+			pages := renderPages(t, wordStyle+`<style>table { border-collapse: collapse } td { padding: 0 }</style>`+body)
+			if len(pages) != 2 {
+				t.Fatalf("got %d pages, want 2", len(pages))
+			}
+			var text *Box
+			pages[1].Descendants(func(b *Box) bool {
+				if b.Kind == KindText && b.Text == tt.text && text == nil {
+					text = b
+				}
+				return true
+			})
+			if text == nil {
+				t.Fatalf("no text %s on the second page", tt.text)
+			}
+			want := 4.0
+			if tt.name == "margin" {
+				want = 2
+			}
+			assertApprox(t, "the top of the text", text.PositionY, want)
+		})
 	}
 }

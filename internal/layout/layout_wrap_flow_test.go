@@ -90,6 +90,38 @@ func TestWrapFlowValidation(t *testing.T) {
 	})
 }
 
+func TestWrapShapeValidation(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  Value
+	}{
+		{"none", String("none")},
+		{"polygon(0 0, 10px 0, 10px 20px)", Tuple{Float(0), Float(0), Float(10), Float(0), Float(10), Float(20)}},
+		{"polygon(-3pt 0, 1in 0, 0 1in)", Tuple{Float(-4), Float(0), Float(96), Float(0), Float(0), Float(96)}},
+		// The values that are not valid keep the initial value.
+		{"polygon(0 0, 10px 0)", String("none")},
+		{"polygon(0 0, 10px 0, 10px)", String("none")},
+		{"polygon(0 0, 10px 0, 10px 20px 1px)", String("none")},
+		{"polygon(0 0, 10% 0, 10px 20px)", String("none")},
+		{"circle(10px)", String("none")},
+		{"polygon(0 0, 1px 0, 1px 1px) polygon(0 0, 1px 0, 1px 1px)", String("none")},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			page := renderPages(t, `<style>@page { size: 100px } div { -ivy-wrap-shape: `+tt.value+` }</style><div></div>`)[0]
+			var got Value
+			page.Descendants(func(d *Box) bool {
+				if d.ElementTag == "div" {
+					got = d.Style.Get("wrap_shape")
+				}
+				return got == nil
+			})
+			if !Equal(got, tt.want) {
+				t.Errorf("-ivy-wrap-shape: %s = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWrapFlow(t *testing.T) {
 	// float returns a float of the class f with the style -ivy-wrap-flow:
 	// value, and more style.
@@ -131,6 +163,17 @@ func TestWrapFlow(t *testing.T) {
 		float("maximum 10px", "margin-left: 100px") + `<p>aaa bbb ccc ddd</p>`,
 		"aaa@50,50 bbb@50,70 ccc ddd@50,90",
 	}, {
+		// The polygon of -ivy-wrap-shape is a diamond in the float of
+		// 40px by 80px, from x = 130 to x = 170 and from y = 50 to y =
+		// 130. The part of the diamond next to each line cuts it: from x
+		// = 140 to x = 160 for the first and the fourth lines, and from x
+		// = 130 to x = 170 for the two lines in the middle. The line
+		// below the diamond takes the whole width.
+		"polygon",
+		float("both", "margin-left: 80px; height: 80px; -ivy-wrap-shape: polygon(20px 0, 40px 40px, 20px 80px, 0 40px)") +
+			`<p>aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii</p>`,
+		"aaaa@50,50 bbbb@160,50 cccc@50,70 dddd@170,70 eeee@50,90 ffff@170,90 gggg@50,110 hhhh@160,110 iiii@50,130",
+	}, {
 		// A room narrower than 0.25 inch holds no text: here the room of
 		// 20px on the left of the float.
 		"narrow room",
@@ -155,6 +198,19 @@ func TestWrapFlow(t *testing.T) {
 		"inside a line",
 		float("both 10px", "margin-left: 80px; margin-top: 10px") + `<p>aaa bbb ccc ddd eee</p>`,
 		"aaa@50,50 bbb@180,50 ccc@50,70 ddd@180,70 eee@50,90",
+	}, {
+		// The float is in the middle of the first line. The text before it
+		// stays in the first room, and the text after it goes on in the
+		// next room.
+		"in the text",
+		`<p>aa <span class=f style="-ivy-wrap-flow: both 10px; margin-left: 80px"></span>bbb ccc ddd eee</p>`,
+		"aa @50,50 bbb@180,50 ccc@50,70 ddd@180,70 eee@50,90",
+	}, {
+		// The float is in the text of the second line, which it cuts in
+		// two parts. The first line does not see it.
+		"in a later line",
+		`<p>aaa bbb ccc <span class=f style="-ivy-wrap-flow: both 10px; margin-left: 80px"></span>ddd eee fff</p>`,
+		"aaa bbb@50,50 ccc @50,70 ddd@180,70 eee@50,90 fff@180,90",
 	}, {
 		// A paragraph that ends in a room ends at the bottom of its row,
 		// and the next paragraph starts below it.
@@ -222,5 +278,65 @@ func TestWrapFlowPageBreak(t *testing.T) {
 	got := describeWords(pages)
 	if want := "aaa@50,210 bbb@180,210 ccc@50,230 ddd@180,230 | eee@50,50"; !strings.HasSuffix(got, want) {
 		t.Errorf("got %s, want %s", got, want)
+	}
+}
+
+func TestWrapFlowColumns(t *testing.T) {
+	// Two columns of 90px, from x = 50 to x = 140 and from x = 160 to
+	// x = 250, take 10 lines each. The first column is filled before the
+	// second one, unless the style gives more.
+	for _, tt := range []struct {
+		name  string
+		style string
+		body  string
+		want  string
+	}{{
+		// The float of the first column crosses into the second one. Its
+		// border box and its distance cut the lines from x = 110 to
+		// x = 170. The lines of both columns avoid it.
+		"across", "",
+		`<div class=f style="-ivy-wrap-flow: both 10px; margin-left: 70px"></div>` +
+			`<p>aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm</p>`,
+		"aaa@50,50 bbb@50,70 ccc@50,90 ddd@50,110 eee@50,130 fff@50,150 ggg@50,170 hhh@50,190 iii@50,210 jjj@50,230 " +
+			"kkk@170,50 lll@170,70 mmm@160,90",
+	}, {
+		// A float without -ivy-wrap-flow does not move the lines of the
+		// second column.
+		"auto", "",
+		`<div class=f style="margin-left: 70px; margin-right: -110px"></div>` +
+			`<p>aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm</p>`,
+		"aaa@50,50 bbb@50,70 ccc@50,90 ddd@50,110 eee@50,130 fff@50,150 ggg@50,170 hhh@50,190 iii@50,210 jjj@50,230 " +
+			"kkk@160,50 lll@160,70 mmm@160,90",
+	}, {
+		// The float of the second column, from x = 110 to x = 170 with its
+		// distance, does not move the lines of the first one, which are
+		// 80px wide.
+		"later column", "",
+		`<p>aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj</p>` +
+			`<div class=f style="-ivy-wrap-flow: both 10px; margin-left: -40px"></div><p>kkk</p>`,
+		"aaaa@50,50 bbbb@50,70 cccc@50,90 dddd@50,110 eeee@50,130 ffff@50,150 gggg@50,170 hhhh@50,190 iiii@50,210 jjjj@50,230 " +
+			"kkk@170,50",
+	}, {
+		// The columns that the layout balances avoid the float too.
+		"balance", "column-fill: balance",
+		`<div class=f style="-ivy-wrap-flow: both 10px; margin-left: 70px; height: 80px"></div>` +
+			`<p>aaa bbb ccc ddd eee fff ggg hhh</p>`,
+		"aaa@50,50 bbb@50,70 ccc@50,90 ddd@50,110 eee@170,50 fff@170,70 ggg@170,90 hhh@170,110",
+	}, {
+		// From right to left, the first column is on the right. The float
+		// cuts the lines from x = 130 to x = 190, and the text of the
+		// second column is at the right of its room.
+		"rtl", "column-fill: balance; direction: rtl",
+		`<div class=f style="float: right; -ivy-wrap-flow: both 10px; margin-right: 70px; height: 80px"></div>` +
+			`<p>aaa bbb ccc ddd eee fff ggg hhh</p>`,
+		"aaa@190,50 bbb@190,70 ccc@190,90 ddd@190,110 eee@70,50 fff@70,70 ggg@70,90 hhh@70,110",
+	}} {
+		t.Run(tt.name, func(t *testing.T) {
+			pages := renderPages(t, wrapFlowStyle+`<div style="columns: 2; column-gap: 20px; column-fill: auto; `+
+				tt.style+`">`+tt.body+`</div>`)
+			if got := describeWords(pages); got != tt.want {
+				t.Errorf("got  %s\nwant %s", got, tt.want)
+			}
+		})
 	}
 }

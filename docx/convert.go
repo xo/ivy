@@ -32,6 +32,7 @@ table { border-collapse: collapse; border-spacing: 0 }
 td { padding: 0; vertical-align: top; border: none }
 a { color: inherit; text-decoration: none }
 img { vertical-align: baseline }
+p.pictures img { vertical-align: bottom }
 .pg::before { content: counter(page) }
 .pgs::before { content: counter(pages) }
 .fn { float: footnote; counter-increment: note }

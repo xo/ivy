@@ -349,6 +349,9 @@ type boxExtra struct {
 	// a parent subtracts it from the bottom of the block when it checks
 	// the bottom of the page. See lineboxLayout.
 	pageOverflow float64
+	// lastCut is set on a line box that lost the extra space of 'last' of
+	// -ivy-line-multiple. See lastLineSpace.
+	lastCut bool
 	// rowPart is set on a line box that is not the first part of its row
 	// next to a float of -ivy-wrap-flow (D63). See iterLineBoxes.
 	rowPart bool

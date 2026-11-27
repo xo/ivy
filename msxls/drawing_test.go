@@ -103,6 +103,10 @@ func drawingWorkbook(png []byte) []byte {
 	binary.LittleEndian.PutUint32(b.buf[sheet1+4:], uint32(len(b.buf)))
 	b.record(recBOF, u16(biff8, bofWorksheet, 0, 0), u32(0, 0))
 	b.record(recNumber, u16(0, 0, 0), float(1))
+	// the margins Normal at the left and the right, so that the 10
+	// columns fit on one page
+	b.record(recLeftMargin, float(0.7))
+	b.record(recRightMargin, float(0.7))
 	child := func(typ, l, t, r, bottom, fill int) []byte {
 		return rec(0xF, 0, odraw.RecSpContainer,
 			rec(2, typ, odraw.RecFSP, u32(1030, 0xA02)),

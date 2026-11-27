@@ -266,6 +266,9 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 
 	style := c.paragraphStyle(p, ppr, line)
 	start := `<p style="` + attrText(style) + `">`
+	if pictureOnly(p) {
+		start = `<p class="pictures" style="` + attrText(style) + `">`
+	}
 	para, open := c.para, c.open
 	c.para, c.open = start, nil
 	c.paraSeq++
@@ -359,12 +362,15 @@ func (c *converter) endsBeforePage(p roxmltree.Node) bool {
 
 // lineFont returns the properties rpr of the runs of the paragraph p with
 // the font and the size of most of its text. A run of a larger font makes
-// its own line taller, as in Word.
+// its own line taller, as in Word. A paragraph without text, such as one of
+// pictures and breaks, takes the font of its first run that shows
+// something. Word gives the lines of such a paragraph the height of that
+// font, as on page 9 of poi/docx/drawing.docx.
 func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
 	type font struct{ font, ea, sz string }
 	count := map[font]int{}
 	runs := map[font]props{}
-	var best props
+	var best, first props
 	most := 0
 	n := 0
 	for d := range p.Descendants() {
@@ -374,14 +380,18 @@ func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
 		if n++; n > 256 {
 			break
 		}
-		chars := 0
+		chars, shows := 0, false
 		for t := range d.Children() {
-			if t.IsElement() && t.TagName().Name() == "t" {
+			if !t.IsElement() {
+				continue
+			}
+			if t.TagName().Name() == "t" {
 				v, _ := t.Text()
 				chars += len(v)
 			}
+			shows = shows || contentNames[t.TagName().Name()]
 		}
-		if chars == 0 {
+		if chars == 0 && (!shows || first != nil) {
 			continue
 		}
 		run := rpr
@@ -397,6 +407,10 @@ func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
 		if run.on("vanish") || run["vertAlign"] == "superscript" || run["vertAlign"] == "subscript" {
 			continue
 		}
+		if chars == 0 {
+			first = run
+			continue
+		}
 		k := font{run["font"], run["font.ea"], run["sz"]}
 		if _, ok := runs[k]; !ok {
 			runs[k] = run
@@ -405,6 +419,9 @@ func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
 		if count[k] > most {
 			best, most = runs[k], count[k]
 		}
+	}
+	if best == nil {
+		best = first
 	}
 	if best == nil {
 		return rpr
@@ -418,6 +435,37 @@ func (c *converter) lineFont(p roxmltree.Node, rpr props) props {
 		}
 	}
 	return out
+}
+
+// pictureOnly reports whether the paragraph p shows pictures and no text.
+// Word puts the bottom of a picture on a line without text at the bottom of
+// the line, which is as high as the picture or as a line of the font, as on
+// page 9 of poi/docx/drawing.docx.
+func pictureOnly(p roxmltree.Node) bool {
+	pictures := false
+	for d := range p.Descendants() {
+		if !d.IsElement() {
+			continue
+		}
+		switch d.TagName().Name() {
+		case "drawing", "pict", "object":
+			if !pictures {
+				r, ok := d.ParentElement()
+				pictures = ok && r.TagName().Name() == "r" && !inDrawing(r, p)
+			}
+		case "t":
+			if v, _ := d.Text(); v != "" {
+				if r, ok := d.ParentElement(); ok && !inDrawing(r, p) {
+					return false
+				}
+			}
+		case "sym", "fldSimple", "oMath", "footnoteReference", "endnoteReference":
+			if !inDrawing(d, p) {
+				return false
+			}
+		}
+	}
+	return pictures
 }
 
 // inDrawing reports whether the run r of the paragraph p is in a drawing or
@@ -769,7 +817,7 @@ func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props) {
 		style += run
 	}
 	c.w.WriteString(`<span style="` + attrText(style) + `">`)
-	escape(c.w, text+suffix, false)
+	escapeSymbols(c.w, text+suffix)
 	c.w.WriteString("</span>")
 }
 
@@ -951,8 +999,22 @@ func (c *converter) runContent(r roxmltree.Node, p, base props) {
 			text.WriteRune('\u00ad')
 		case "sym":
 			v, err := strconv.ParseUint(ooxml.Attr(e, "char"), 16, 32)
-			if err == nil && v < 0x110000 {
-				text.WriteRune(symbolRune(ooxml.Attr(e, "font"), rune(v)))
+			if err != nil || v >= 0x110000 {
+				continue
+			}
+			if r := symbolRune(ooxml.Attr(e, "font"), rune(v)); r != notdefRune {
+				text.WriteRune(r)
+				continue
+			}
+			flush()
+			if c.fieldHidden() || p.on("vanish") {
+				continue
+			}
+			// The box takes the size and the color of the run.
+			if style := c.runStyle(p, base); style != "" {
+				c.w.WriteString(`<span style="` + attrText(style) + `">` + notdefBox + "</span>")
+			} else {
+				c.w.WriteString(notdefBox)
 			}
 		case "br":
 			flush()

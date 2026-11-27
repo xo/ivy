@@ -305,6 +305,57 @@ func (s *Style) Bleed(c Chain, r Rect) float64 {
 	return pad + 1
 }
 
+// wrapPolygonSize is the size of the square of the coordinates of a wrap
+// polygon: the box of the shape is 21600 by 21600.
+const wrapPolygonSize = 21600
+
+// WrapPolygon returns the outline that the text wraps around, of the shape
+// sh with the properties c in the box r, in points as x and y pairs: the
+// wrap polygon of the shape (pWrapPolygonVertices of MS-ODRAW 2.3.4.33)
+// when polygon is set and the shape has one, else the corners of the box.
+// The outline turns and flips as Figure draws the shape.
+func WrapPolygon(sh *Shape, c Chain, r Rect, polygon bool) []float64 {
+	x, y := min(r.Left, r.Right), min(r.Top, r.Bottom)
+	w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
+	flipH, flipV := sh.Flags&FSPFlipH != 0, sh.Flags&FSPFlipV != 0
+	rot := Fixed(c.Value(PropRotation, 0))
+	if math.IsNaN(rot) || math.IsInf(rot, 0) {
+		rot = 0
+	}
+	if flipH != flipV {
+		rot = -rot
+	}
+	rot = math.Mod(rot, 360)
+	if rot < 0 {
+		rot += 360
+	}
+	if (rot >= 45 && rot < 135) || (rot >= 225 && rot < 315) {
+		cx, cy := x+w/2, y+h/2
+		w, h = h, w
+		x, y = cx-w/2, cy-h/2
+	}
+	points := []float64{0, 0, w, 0, w, h, 0, h}
+	if verts := Array(c.Complex(PropWrapPolygon), 4); polygon && len(verts) >= 3 {
+		points = make([]float64, 0, 2*len(verts))
+		for _, v := range verts {
+			var vx, vy float64
+			if len(v) >= 8 {
+				vx, vy = float64(int32(le.Uint32(v))), float64(int32(le.Uint32(v[4:])))
+			} else {
+				vx, vy = float64(int16(le.Uint16(v))), float64(int16(le.Uint16(v[2:])))
+			}
+			points = append(points, vx*w/wrapPolygonSize, vy*h/wrapPolygonSize)
+		}
+	}
+	t := drawingml.ShapeTransform(x, y, w, h, rot, flipH, flipV)
+	for i := 0; i+1 < len(points); i += 2 {
+		px, py := float32(points[i]), float32(points[i+1])
+		points[i] = float64(t.SX*px + t.KX*py + t.TX)
+		points[i+1] = float64(t.KY*px + t.SY*py + t.TY)
+	}
+	return points
+}
+
 // Hidden reports whether the properties c hide the shape.
 func Hidden(c Chain) bool {
 	return c.Flag(PropGroupBools, GroupHidden, GroupUseHidden, false)

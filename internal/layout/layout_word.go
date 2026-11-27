@@ -12,7 +12,10 @@
 
 package layout
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // maxLineNumber bounds the step and the first number of -ivy-line-numbers.
 // Word takes at most 100 for the step and 32767 for the first number.
@@ -29,23 +32,36 @@ type lineNumbers struct {
 	step, first int
 	// restart is 'page', 'section' or 'continuous'.
 	restart string
+	// side is 'left', 'right', 'inner' or 'outer': the side of the
+	// content where the numbers go. Inner is the left on a right page.
+	side string
+	// noEmpty is set when the empty lines do not count, and reset when
+	// the first line of the box takes the number first, in the section
+	// around the box.
+	noEmpty, reset bool
 }
 
 // lineNumbersOf returns the value of -ivy-line-numbers of a style, and false
 // for 'none'.
 func lineNumbersOf(style *Style) (lineNumbers, bool) {
 	t, ok := style.Get("line_numbers").(Tuple)
-	if !ok || len(t) != 4 {
+	if !ok || len(t) != 7 {
 		return lineNumbers{}, false
 	}
 	distance, ok1 := t[0].(Float)
 	step, ok2 := t[1].(Int)
 	first, ok3 := t[2].(Int)
 	restart, ok4 := t[3].(String)
-	if !ok1 || !ok2 || !ok3 || !ok4 || step < 1 {
+	side, ok5 := t[4].(String)
+	empty, ok6 := t[5].(String)
+	reset, ok7 := t[6].(String)
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || step < 1 {
 		return lineNumbers{}, false
 	}
-	return lineNumbers{float64(distance), int(step), int(first), string(restart)}, true
+	return lineNumbers{
+		distance: float64(distance), step: int(step), first: int(first), restart: string(restart),
+		side: string(side), noEmpty: empty != "", reset: reset != "",
+	}, true
 }
 
 // lineNumberState is the state of the numbers of the lines at the start of
@@ -56,6 +72,9 @@ type lineNumberState struct {
 	last    int
 	section *Element
 	started bool
+	// reset is the element of the last box with 'reset', whose part on
+	// the next page does not reset the number again.
+	reset *Element
 }
 
 // numberLines numbers the lines of the page, whose root box is root, from
@@ -63,41 +82,58 @@ type lineNumberState struct {
 // line is numbered when its block has a value of -ivy-line-numbers other
 // than 'none'. Only the line boxes of the in-flow blocks of the root box
 // count, as in Word: the lines of a table, a float, a flex or grid item,
-// an absolutely positioned box, a margin box or a footnote do not. The
-// number of a line whose number is a multiple of the step is drawn, with
-// its end at the distance before the start of the content of the box that
-// declares the numbers, and its baseline at the baseline of the line. The
-// numbers are text boxes in a block that is the last child of root.
-func numberLines(lc *layoutContext, root *Box, state lineNumberState) lineNumberState {
+// an absolutely positioned box, a margin box or a footnote do not. With
+// 'no-empty', a line without text and without an atomic box does not
+// count, as LibreOffice does for an empty paragraph. A box with 'reset'
+// gives the first number to its first line, and stays in the section
+// around it. The number of a line whose number is a multiple of the step
+// is drawn, with its baseline at the baseline of the line. On the left, the
+// number ends at the distance before the start of the content of the box
+// that declares the numbers. On the right, it starts at the distance after
+// the end of that content. rightPage is set on a right page, where 'inner'
+// is the left and 'outer' the right. The numbers are text boxes in a block
+// that is the last child of root.
+func numberLines(lc *layoutContext, root *Box, state lineNumberState, rightPage bool) lineNumberState {
 	var lines []*Box
-	pageStart := true
+	// pageStart is set before the first numbered line of the page, and
+	// reset while a box with 'reset' waits for its first line.
+	pageStart, reset := true, false
 	var walk func(box, section *Box, parent lineNumbers, parentOn bool)
 	walk = func(box, section *Box, parent lineNumbers, parentOn bool) {
 		value, on := lineNumbersOf(box.Style)
 		if on && (!parentOn || value != parent) {
-			// the box declares the numbers: it starts a section
-			section = box
+			// the box declares the numbers: it starts a section, or
+			// sets the number of its first line in the section around it
+			if !value.reset || section == nil {
+				section = box
+			}
+			if value.reset && box.Element != state.reset {
+				reset, state.reset = true, box.Element
+				defer func() { reset = false }()
+			}
 		}
 		for _, child := range box.Children {
 			switch {
 			case child.Kind == KindLine:
 				// a row next to a float of -ivy-wrap-flow has one number,
 				// on its first part (D63)
-				if !on || child.Height <= 0 || child.extra().rowPart {
+				if !on || child.Height <= 0 || child.extra().rowPart || value.noEmpty && emptyLine(child) {
 					continue
 				}
 				lc.spend(1)
 				switch {
-				case !state.started,
+				case reset,
+					!state.started,
 					value.restart == "page" && pageStart,
 					value.restart == "section" && section.Element != state.section:
 					state.last = value.first
 				default:
 					state.last++
 				}
+				reset = false
 				state.started, state.section, pageStart = true, section.Element, false
 				if state.last%value.step == 0 {
-					if line := numberLine(child, section, value, state.last); line != nil {
+					if line := numberLine(child, section, value, state.last, rightPage); line != nil {
 						lines = append(lines, line)
 					}
 				}
@@ -115,10 +151,28 @@ func numberLines(lc *layoutContext, root *Box, state lineNumberState) lineNumber
 	return state
 }
 
+// emptyLine reports whether the line box line holds no text other than
+// spaces, and no atomic box, such as an image or an inline block. A float
+// or an absolutely positioned box is not in the line.
+func emptyLine(line *Box) bool {
+	for _, child := range line.Children {
+		switch {
+		case child.IsFloated() || child.IsAbsolutelyPositioned():
+		case child.Kind == KindText:
+			if strings.TrimSpace(child.Text) != "" {
+				return false
+			}
+		case child.Kind != KindInline || !emptyLine(child):
+			return false
+		}
+	}
+	return true
+}
+
 // numberLine returns a line box with the number n of the line box line,
 // in the style of the box section that declares the numbers, or nil when
-// the number has no text.
-func numberLine(line, section *Box, value lineNumbers, n int) *Box {
+// the number has no text. rightPage is set on a right page.
+func numberLine(line, section *Box, value lineNumbers, n int, rightPage bool) *Box {
 	style := section.Style.AnonymousStyle()
 	text := strconv.Itoa(n)
 	m := SplitFirstLine(text, style, nil, 0, true, false)
@@ -128,7 +182,12 @@ func numberLine(line, section *Box, value lineNumbers, n int) *Box {
 	textBox := newTextBox(section.ElementTag, style, section.Element, m.Layout.Text)
 	textBox.TextLayout = m.Layout
 	textBox.Width, textBox.Height, textBox.Baseline = m.Width, m.Height, m.Baseline
-	textBox.PositionX = section.ContentBoxX() - value.distance - m.Width
+	right := value.side == "right" || value.side == "inner" && !rightPage || value.side == "outer" && rightPage
+	if right {
+		textBox.PositionX = section.ContentBoxX() + section.Width + value.distance
+	} else {
+		textBox.PositionX = section.ContentBoxX() - value.distance - m.Width
+	}
 	textBox.PositionY = line.PositionY + line.Baseline - m.Baseline
 	box := anonymousFrom(KindLine, section, []*Box{textBox})
 	box.PositionX, box.PositionY = textBox.PositionX, textBox.PositionY
@@ -150,12 +209,88 @@ func numberLine(line, section *Box, value lineNumbers, n int) *Box {
 // below 1, and a line that is not higher than its text, keep the rule of
 // CSS. The shift is negative when the text moves down.
 func leadingShift(style *Style, lineHeight, textHeight float64) float64 {
-	m, ok := style.Get("line_multiple").(Float)
+	m, _, ok := lineMultipleOf(style)
 	if !ok || m < 1 || lineHeight <= textHeight {
 		return 0
 	}
 	leading := lineHeight - textHeight
-	return leading/2 - min(max(lineHeight/float64(m)-textHeight, 0), leading)
+	return leading/2 - min(max(lineHeight/m-textHeight, 0), leading)
+}
+
+// lineMultipleOf returns the multiple of -ivy-line-multiple of a style,
+// whether the value has 'last', and false for 'none'.
+func lineMultipleOf(style *Style) (m float64, last, ok bool) {
+	switch v := style.Get("line_multiple").(type) {
+	case Float:
+		return float64(v), false, true
+	case Tuple:
+		if len(v) == 2 {
+			if m, ok := v[0].(Float); ok {
+				return float64(m), isStr(v[1], "last"), true
+			}
+		}
+	}
+	return 0, false, false
+}
+
+// lastLineSpace returns the extra space below the text of the line box
+// line of box that 'last' of -ivy-line-multiple leaves out, or 0. The
+// extra space of a line of a multiple m above 1 is the part of its height
+// above a single line, its height times (1 - 1/m), see leadingShift.
+// LibreOffice leaves it out below the last line of a page in the flow of
+// the page, so that line stays on the page when its text fits. When the
+// setting AddParaLineSpacingToTableCells of the document is false, it
+// also leaves it out below the last line of each part of a table cell,
+// see lastLineCut.
+func lastLineSpace(box, line *Box) float64 {
+	m, last, ok := lineMultipleOf(box.Style)
+	if !ok || !last || m <= 1 || line.Height <= 0 || line.extra().lastCut {
+		return 0
+	}
+	return line.Height * (1 - 1/m)
+}
+
+// lastLineCut takes the extra space of 'last' of -ivy-line-multiple away
+// from the last line box of the block container box, the last line of a
+// part of a table cell, and returns the height that box loses. The line
+// is in the last in-flow child of box, or in the last in-flow child of
+// that child, and so on, through blocks whose height is 'auto'. Each block
+// on the way loses the same height. A table or a replaced box ends the
+// search.
+func lastLineCut(box *Box) float64 {
+	child := findLastInFlowChild(box.Children)
+	switch {
+	case child == nil:
+		return 0
+	case child.Kind == KindLine:
+		cut := lastLineSpace(box, child)
+		if cut > 0 {
+			child.Height -= cut
+			child.ownExtra().lastCut = true
+		}
+		return cut
+	case child.Kind != KindBlock || child.IsTableWrapper || !isStr(child.Style.Get("height"), "auto"):
+		return 0
+	}
+	cut := lastLineCut(child)
+	child.Height -= cut
+	return cut
+}
+
+// pageTopSpaceOf returns whether -ivy-page-top-space of a style is
+// 'discard', and the length that a block keeps at the top of the part of
+// a split table cell.
+func pageTopSpaceOf(style *Style) (discard bool, keep float64) {
+	switch v := style.Get("page_top_space").(type) {
+	case String:
+		return v == "discard", 0
+	case Tuple:
+		if len(v) == 2 {
+			keep, _ := v[1].(Float)
+			return isStr(v[0], "discard"), float64(keep)
+		}
+	}
+	return false, 0
 }
 
 // strutTextHeight returns the height of the text of the strut of style,
@@ -165,6 +300,27 @@ func strutTextHeight(style *Style) float64 {
 	normal.Set("line_height", String("normal"))
 	height, _ := strut(normal)
 	return height
+}
+
+// textExtent returns the top and the bottom of the text of the strut of a
+// box with -ivy-line-multiple, from the ascent to the descent of its font,
+// when its baseline is at baselineY. ok is false for another box. The
+// content area of a box of upstream is as high as its font size, so its
+// bottom is above the descent of the text. A word processor ends a line of
+// single spacing that holds only pictures at the bottom of the pictures,
+// and they align at the bottom of the text with text-bottom, as on page 5
+// of poi/doc/floating-pictures.doc.
+func textExtent(box *Box, baselineY float64) (top, bottom float64, ok bool) {
+	if _, _, ok := lineMultipleOf(box.Style); !ok {
+		return 0, 0, false
+	}
+	normal := box.Style.Copy()
+	normal.Set("line_height", String("normal"))
+	height, baseline := strut(normal)
+	if height <= 0 {
+		return 0, 0, false
+	}
+	return baselineY - baseline, baselineY - baseline + height, true
 }
 
 // discardsSpaceBefore reports whether box, a block of the flow of the root
@@ -182,8 +338,23 @@ func strutTextHeight(style *Style) float64 {
 // its top, see layoutContext.columnTopBox and startColumn. Word leaves out
 // the space before a paragraph at the top of each column too.
 func (lc *layoutContext) discardsSpaceBefore(box *Box, pageIsEmpty, inFlow bool) bool {
-	return (lc.columnTopBox == box || inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak) &&
-		isStr(box.Style.Get("page_top_space"), "discard")
+	discard, _ := pageTopSpaceOf(box.Style)
+	return (lc.columnTopBox == box || inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak) && discard
+}
+
+// spaceBeforeKept returns the top margin margin of box, whose space before
+// discardsSpaceBefore leaves out: 0, or at the top of the part of a split
+// table cell, up to the length of -ivy-page-top-space. LibreOffice keeps
+// the space above the first paragraph of such a part, without the space
+// below the paragraph before it, which the margin also holds. It keeps
+// that space too when the paragraph goes on from the page before, see
+// blockContainerLayoutShared.
+func (lc *layoutContext) spaceBeforeKept(box *Box, margin float64) float64 {
+	if !lc.cellTop || lc.columnTopBox != box {
+		return 0
+	}
+	_, keep := pageTopSpaceOf(box.Style)
+	return max(min(keep, margin), 0)
 }
 
 // splitCellTop reports whether the first in-flow child of the table cell
@@ -194,8 +365,8 @@ func (lc *layoutContext) discardsSpaceBefore(box *Box, pageIsEmpty, inFlow bool)
 // such a part of a cell, as at the top of the page. A row that starts on
 // the page keeps the space before the paragraphs of its cells.
 func (lc *layoutContext) splitCellTop(cell *Box, skip skipStack, pageIsEmpty bool) bool {
-	return len(skip) > 0 && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak &&
-		isStr(cell.Style.Get("page_top_space"), "discard")
+	discard, _ := pageTopSpaceOf(cell.Style)
+	return len(skip) > 0 && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak && discard
 }
 
 // startColumn sets the column box column as the box whose first in-flow
@@ -204,10 +375,12 @@ func (lc *layoutContext) splitCellTop(cell *Box, skip skipStack, pageIsEmpty boo
 // i of a row of columns after a column that a forced break did not end, or
 // the first column at the top of a page whose space before is discarded,
 // pageTop. Word keeps the space after a column break, as after a page
-// break.
+// break. It also sets i as the index of the column for the floats of the
+// columns before it, see layout_column_float.go.
 func (lc *layoutContext) startColumn(column *Box, i int, pageTop, forced bool) {
-	lc.columnTopBox = nil
-	if (i > 0 && !forced || i == 0 && pageTop) && isStr(column.Style.Get("page_top_space"), "discard") {
+	lc.columnTopBox, lc.cellTop = nil, false
+	lc.columnFloats.index = i
+	if discard, _ := pageTopSpaceOf(column.Style); (i > 0 && !forced || i == 0 && pageTop) && discard {
 		lc.columnTopBox = column
 	}
 }
