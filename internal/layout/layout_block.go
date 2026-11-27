@@ -95,7 +95,7 @@ func blockLevelLayoutShared(lc *layoutContext, box *Box, bottomSpace float64, sk
 		// space before a paragraph at the top of a page after a break that
 		// is not forced, see layoutContext.discardsSpaceBefore.
 		if lc.discardsSpaceBefore(box, pageIsEmpty, inFlow) {
-			box.MarginTop = lc.spaceBeforeKept(box, box.MarginTop)
+			box.MarginTop = lc.spaceBeforeKept(box)
 			if box.BorderTopWidth == 0 && !hasBackground(box.Style) {
 				box.PaddingTop = 0
 			}
@@ -393,7 +393,7 @@ func blockOutOfFlowLayout(lc *layoutContext, box *Box, index int, child *Box, ne
 	case lc.isPageFloat(child):
 		// Port: upstream has no -ivy-float-position. A page float has its
 		// place on the page, and it does not break the page (D60).
-		newChild = lc.flowPageFloat(child, box, child.PositionY, absoluteBoxes, fixedBoxes)
+		newChild = lc.flowPageFloat(child, box, child.PositionY, child.PositionY, absoluteBoxes, fixedBoxes)
 		if newChild != nil {
 			newChild.index = index
 			*newChildren = append(*newChildren, newChild)
@@ -812,7 +812,7 @@ func blockInFlowLayout(lc *layoutContext, box *Box, index int, child *Box, newCh
 			case lc.discardsSpaceBefore(child, pageIsEmpty, pageOverflow):
 				// Port: upstream has no -ivy-page-top-space, see
 				// blockLevelLayoutShared.
-				childMarginTop = lc.spaceBeforeKept(child, childMarginTop)
+				childMarginTop = lc.spaceBeforeKept(child)
 			case lc.currentPage > 1 && pageIsEmpty:
 				switch str(box.Style.Get("margin_break")) {
 				case "discard":
@@ -1053,11 +1053,15 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 		fixedBoxes = &[]*Box{}
 	}
 
+	// Port: upstream has no -ivy-float-position. A column or a table cell
+	// can place page floats before its flow (D60).
+	var pageFloats []*Box
 	if box.EstablishesFormattingContext() {
 		lc.createBlockFormattingContext(box)
 		if box.IsColumn {
 			lc.addColumnFloats(box)
 		}
+		pageFloats = lc.placeLocalFloatsBefore(box, absoluteBoxes, fixedBoxes)
 	}
 
 	// TODO: merge this with _in_flow_layout, flex_layout…
@@ -1351,6 +1355,9 @@ func blockContainerLayoutShared(lc *layoutContext, box *Box, bottomSpace float64
 		relativePositioning(child, sizeBlock(newBox.Width, newBox.Height))
 	}
 
+	if len(pageFloats) > 0 {
+		newBox.Children = append(slices.Clip(newBox.Children), pageFloats...)
+	}
 	if box.EstablishesFormattingContext() {
 		lc.finishBlockFormattingContext(newBox)
 	}

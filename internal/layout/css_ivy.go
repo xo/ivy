@@ -23,13 +23,15 @@
 //   - -ivy-page-top-space leaves out the space before the first block of
 //     a page, of a column or of the part of a split table cell after a
 //     break that is not forced, see layoutContext.discardsSpaceBefore. A
-//     length keeps that much of it at the top of the part of a cell, see
+//     length gives the space at the top of the part of a cell, see
 //     layoutContext.spaceBeforeKept (D56).
 //   - -ivy-float-position places a float of the flow of the page at a
-//     vertical position from the top of the page or of the page area, see
-//     layout_page_float.go (D60).
+//     vertical position from the top of the page, of the page area, of the
+//     line of its anchor or of its block, see layout_page_float.go (D60).
 //   - -ivy-float-overlap moves such a float down below the floats of the
 //     page that it covers, see layout_page_float.go (D60).
+//   - -ivy-float-page puts such a float on the page of a number, see
+//     layout_page_float.go (D60).
 //   - -ivy-wrap-flow puts the text on both sides of a float, or on one
 //     side of it, as a word processor wraps the text around a picture,
 //     see layout_wrap_flow.go (D63).
@@ -49,7 +51,11 @@
 
 package layout
 
-import "github.com/xo/okage/tinycss2"
+import (
+	"slices"
+
+	"github.com/xo/okage/tinycss2"
+)
 
 // ivyPrefix is the prefix of the properties that ivy adds to the layout.
 const ivyPrefix = "-ivy-"
@@ -67,6 +73,7 @@ var ivyProperties = map[string]bool{
 	"page-top-space": true,
 	"float-position": true,
 	"float-overlap":  true,
+	"float-page":     true,
 	"wrap-flow":      true,
 	"wrap-shape":     true,
 	"stroke-adjust":  true,
@@ -101,17 +108,18 @@ var validatePageOverflow = singleKeyword(func(keyword string) bool {
 // of the numbers from the text, the step, the first number and when the
 // numbers restart, in this order, such as '18pt 1 1 page'. The distance is
 // a length that is not negative. The step and the first number are
-// integers from 1. The restart is 'page', 'section' or 'continuous'. Three
+// integers from 1. The restart is 'page', 'section' or 'continuous'. Four
 // keywords can follow, in any order: the side of the numbers, 'left',
 // 'right', 'inner' or 'outer', 'left' by default; 'no-empty', which does
-// not count the empty lines; and 'reset', which makes the first line of the
-// box take the first number, in the section around the box. The property is
-// inherited.
+// not count the empty lines; 'reset', which makes the first line of the
+// box take the first number, in the section around the box; and
+// 'object-bottom', which draws the number of a line that holds only
+// atomic boxes at the bottom of those boxes. The property is inherited.
 func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "none" {
 		return String("none"), nil
 	}
-	if len(tokens) < 4 || len(tokens) > 7 {
+	if len(tokens) < 4 || len(tokens) > 8 {
 		return nil, nil
 	}
 	distance, ok := getLength(tokens[0], false, false).(Dimension)
@@ -130,7 +138,7 @@ func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 	if !in(restart, "page", "section", "continuous") {
 		return nil, nil
 	}
-	side, empty, reset := "", "", ""
+	side, empty, reset, object := "", "", "", ""
 	for _, token := range tokens[4:] {
 		switch k := getKeyword(token); {
 		case side == "" && in(k, "left", "right", "inner", "outer"):
@@ -139,6 +147,8 @@ func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 			empty = k
 		case reset == "" && k == "reset":
 			reset = k
+		case object == "" && k == "object-bottom":
+			object = k
 		default:
 			return nil, nil
 		}
@@ -146,20 +156,20 @@ func validateLineNumbers(tokens []tinycss2.Node, _ string) (Value, error) {
 	if side == "" {
 		side = "left"
 	}
-	return Tuple{distance, counts[0], counts[1], String(restart), String(side), String(empty), String(reset)}, nil
+	return Tuple{distance, counts[0], counts[1], String(restart), String(side), String(empty), String(reset), String(object)}, nil
 }
 
 // computeLineNumbers computes -ivy-line-numbers: the distance in pixels.
 func computeLineNumbers(style *Style, name string, value Value) Value {
 	t, ok := value.(Tuple)
-	if !ok || len(t) != 7 {
+	if !ok || len(t) != 8 {
 		return value
 	}
 	d, ok := t[0].(Dimension)
 	if !ok {
 		return value
 	}
-	return Tuple{Float(toPixels(d, style, name, -1)), t[1], t[2], t[3], t[4], t[5], t[6]}
+	return Tuple{Float(toPixels(d, style, name, -1)), t[1], t[2], t[3], t[4], t[5], t[6], t[7]}
 }
 
 // validateLineMultiple validates -ivy-line-multiple: 'none' or a number
@@ -202,7 +212,7 @@ var validateLineBaseline = singleKeyword(func(keyword string) bool {
 // a break that is not forced has no space before it, as a paragraph of
 // Word (D56). So does a block at the top of a column after a break that is
 // not forced. A length that is not negative can follow 'discard': a block
-// at the top of the part of a split table cell keeps that much of its
+// at the top of the part of a split table cell takes that length as its
 // space before it, as a paragraph of LibreOffice keeps its own space above
 // it there. The value is the keyword, or a tuple of 'discard' and the
 // length. The property is inherited.
@@ -232,9 +242,10 @@ func computePageTopSpace(style *Style, name string, value Value) Value {
 
 // validateFloatPosition validates -ivy-float-position: 'auto', or 'page'
 // or 'margin' and a length, 'top', 'center' or 'bottom', in any order,
-// such as 'margin 1in' or 'bottom page'. The value is a tuple of the
-// keyword of the area and of the length or the keyword of the position.
-// The length can be negative. The property is not inherited (D60).
+// such as 'margin 1in' or 'bottom page', or 'line' or 'block' and a
+// length, such as 'line -10pt'. The value is a tuple of the keyword of the
+// area and of the length or the keyword of the position. The length can
+// be negative. The property is not inherited (D60).
 func validateFloatPosition(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "auto" {
 		return String("auto"), nil
@@ -245,7 +256,7 @@ func validateFloatPosition(tokens []tinycss2.Node, _ string) (Value, error) {
 	var area, position Value
 	for _, token := range tokens {
 		switch keyword := getKeyword(token); {
-		case in(keyword, "page", "margin"):
+		case in(keyword, "page", "margin", "line", "block"):
 			if area != nil {
 				return nil, nil
 			}
@@ -266,8 +277,29 @@ func validateFloatPosition(tokens []tinycss2.Node, _ string) (Value, error) {
 	if area == nil || position == nil {
 		return nil, nil
 	}
+	if _, ok := position.(String); ok && in(string(area.(String)), "line", "block") {
+		return nil, nil
+	}
 	return Tuple{area, position}, nil
 }
+
+// maxFloatPage is the largest number of a page of -ivy-float-page. A
+// larger number is this one. The pages after the end of the flow that wait
+// for a page float are blank pages, so the bound keeps their number low.
+const maxFloatPage = 1000
+
+// validateFloatPage validates -ivy-float-page: 'auto', or an integer of 1
+// or more, the number of the page of a page float of -ivy-float-position.
+// The property is not inherited (D60).
+var validateFloatPage = singleToken(func(token tinycss2.Node, _ string) (Value, error) {
+	if getKeyword(token) == "auto" {
+		return String("auto"), nil
+	}
+	if n, ok := positiveInteger(token).(Int); ok {
+		return min(n, Int(maxFloatPage)), nil
+	}
+	return nil, nil
+})
 
 // validateFloatOverlap validates -ivy-float-overlap: 'allow' or 'avoid'.
 // With 'avoid', a page float of -ivy-float-position moves down below the
@@ -290,24 +322,33 @@ func computeFloatPosition(style *Style, name string, value Value) Value {
 }
 
 // validateWrapFlow validates -ivy-wrap-flow: 'auto', or 'both', 'start',
-// 'end' or 'maximum' and an optional length that is not negative, in any
-// order, such as 'both 9pt'. The value is a tuple of the keyword and of
-// the length, which is 0 when the value has none. The property is not
+// 'end' or 'maximum', an optional length that is not negative and the
+// optional keyword 'margin', in any order, such as 'both 9pt'. The value
+// is a tuple of the keyword and of the length, which is 0 when the value
+// has none, and then 'margin' when the value has it. The property is not
 // inherited (D63).
 func validateWrapFlow(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "auto" {
 		return String("auto"), nil
 	}
-	if len(tokens) == 0 || len(tokens) > 2 {
+	if len(tokens) == 0 || len(tokens) > 3 {
 		return nil, nil
 	}
 	var side, distance Value
+	margin := false
 	for _, token := range tokens {
-		if keyword := getKeyword(token); in(keyword, "both", "start", "end", "maximum") {
+		switch keyword := getKeyword(token); {
+		case in(keyword, "both", "start", "end", "maximum"):
 			if side != nil {
 				return nil, nil
 			}
 			side = String(keyword)
+			continue
+		case keyword == "margin":
+			if margin {
+				return nil, nil
+			}
+			margin = true
 			continue
 		}
 		length, ok := getLength(token, false, false).(Dimension)
@@ -322,17 +363,22 @@ func validateWrapFlow(tokens []tinycss2.Node, _ string) (Value, error) {
 	if distance == nil {
 		distance = Dimension{Value: 0, Unit: "px"}
 	}
+	if margin {
+		return Tuple{side, distance, String("margin")}, nil
+	}
 	return Tuple{side, distance}, nil
 }
 
 // computeWrapFlow computes -ivy-wrap-flow: the length in pixels.
 func computeWrapFlow(style *Style, name string, value Value) Value {
 	t, ok := value.(Tuple)
-	if !ok || len(t) != 2 {
+	if !ok || len(t) < 2 {
 		return value
 	}
 	if d, ok := t[1].(Dimension); ok {
-		return Tuple{t[0], Float(toPixels(d, style, name, -1))}
+		out := slices.Clone(t)
+		out[1] = Float(toPixels(d, style, name, -1))
+		return out
 	}
 	return value
 }
@@ -344,9 +390,11 @@ const maxWrapShapePoints = 1024
 // validateWrapShape validates -ivy-wrap-shape: 'none', or a polygon of at
 // least 3 points, such as 'polygon(0 0, 10px 0, 10px 20px)'. Each point is
 // a length from the left and a length from the top of the border box of
-// the float, and a length can be negative. The value is a tuple of the
-// lengths, two for each point. The property applies to a float with
-// -ivy-wrap-flow, and is not inherited (D63).
+// the float, and a length can be negative. A percentage is of the width of
+// the border box for the first length of a point, and of its height for
+// the second. The value is a tuple of the lengths, two for each point. The
+// property applies to a float with -ivy-wrap-flow, and is not inherited
+// (D63).
 func validateWrapShape(tokens []tinycss2.Node, _ string) (Value, error) {
 	if getSingleKeyword(tokens) == "none" {
 		return String("none"), nil
@@ -369,7 +417,7 @@ func validateWrapShape(tokens []tinycss2.Node, _ string) (Value, error) {
 			return nil, nil
 		}
 		for _, token := range part {
-			length, ok := getLength(token, true, false).(Dimension)
+			length, ok := getLength(token, true, true).(Dimension)
 			if !ok {
 				return nil, nil
 			}
@@ -379,7 +427,8 @@ func validateWrapShape(tokens []tinycss2.Node, _ string) (Value, error) {
 	return out, nil
 }
 
-// computeWrapShape computes -ivy-wrap-shape: the lengths in pixels.
+// computeWrapShape computes -ivy-wrap-shape: the lengths in pixels. A
+// percentage stays a percentage, which wrapShape resolves.
 func computeWrapShape(style *Style, name string, value Value) Value {
 	t, ok := value.(Tuple)
 	if !ok {
@@ -390,6 +439,10 @@ func computeWrapShape(style *Style, name string, value Value) Value {
 		d, ok := v.(Dimension)
 		if !ok {
 			return String("none")
+		}
+		if d.Unit == "%" {
+			out[i] = d
+			continue
 		}
 		out[i] = Float(toPixels(d, style, name, -1))
 	}

@@ -41,6 +41,29 @@ frame of RTF 1.9.1 (D60):
   margin, 2 inches below its top, with the text above and below it,
   `\nowrap`.
 
+`float-s-tight.rtf` holds a picture of 2 by 2 inches in the second
+paragraph, 2.25 inches from the left of the column, with tight wrap,
+`\shpwr4`. Its wrap polygon, `pWrapPolygonVertices`, is a diamond, and the
+text goes on both sides of the diamond (D63).
+
+Each file `float-t-*.rtf` holds a table that floats, with rows of 0.5 inch
+and the words of the position of a table of RTF 1.9.1 in each row. Each
+table keeps 9 points of distance from the text at its left and its right,
+with `\tdfrmtxtLeft` and `\tdfrmtxtRight` (D60):
+
+- `float-t-late.rtf`: a table of 3 inches, with the text of its first cell
+  at the left of the margin and its top 1 inch below the top of the margin,
+  before the paragraph `P12` on page 1.
+- `float-t-bottom.rtf`: the same table at the bottom of the margin, before
+  the paragraph `P02`, with 7.2 points of distance above it.
+- `float-t-page.rtf`: a table of 2 inches at the right of the page, 2
+  inches from its top.
+- `float-t-mid.rtf`: a table of 2 inches, with the text of its first cell 2
+  inches from the left of the margin, and its top 1 inch below the top of
+  the margin. The text goes on both sides of it (D63).
+- `float-t-para.rtf`: the same table, 0.25 inch below the top of the next
+  paragraph, `\tpvpara`.
+
 The text boxes give the distances of the text with `dyWrapDistTop`,
 `dyWrapDistBottom`, `dxWrapDistLeft` and `dxWrapDistRight`, because
 LibreOffice takes other defaults than MS-ODRAW. The pictures do not use

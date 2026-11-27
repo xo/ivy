@@ -3,7 +3,8 @@ package rtf
 // This file places the frames: the paragraphs at a position on the page,
 // which RTF 1.9.1 calls positioned objects and frames (\absw, \phmrg,
 // \posx and the others). The paragraphs with the same frame share one
-// element.
+// element. It also places the tables that float (\tphmrg, \tposx and the
+// others).
 
 // maxFrameSize is the largest size or position of a frame, in twips.
 const maxFrameSize = 31680
@@ -246,4 +247,142 @@ func pageFloatCSS(s *css, x, w, col int, dist [4]int, wrap bool, position string
 		s.set("margin", pt(dist[0])+" "+pt(dist[1])+" "+pt(dist[2])+" "+pt(x))
 	}
 	s.set("-ivy-float-position", position)
+}
+
+// tablePos is the position of a table that floats, from the words of the
+// rows of RTF 1.9.1, such as \tphmrg, \tposx and \tpvpg.
+type tablePos struct {
+	// set is set by a word of the position. A table without it is a block
+	// in the flow.
+	set bool
+	// h and v are the origins of the position, as in frameProps: 'c' the
+	// column, 'm' the margin, 'p' the page and 't' the paragraph. 0 is
+	// the column for h and the margin for v, as in LibreOffice 26.8.
+	h, v byte
+	// x and y are the position from the origins in twips, when xAlign and
+	// yAlign are 0. Else xAlign and yAlign are the alignments of
+	// frameProps. \tposyil, the line of the paragraph, is the position y.
+	x, y           int
+	xAlign, yAlign byte
+	// dist holds the distances of the text in twips, at the top, the
+	// right, the bottom and the left.
+	dist [4]int
+	// noOverlap is set by \tabsnoovrlp, for a table that does not cover
+	// another table that floats.
+	noOverlap bool
+}
+
+// word handles a control word of the position of a table. It returns
+// false for another control word.
+func (p *tablePos) word(t token) bool {
+	v := min(max(t.param, -maxFrameSize), maxFrameSize)
+	switch t.word {
+	case "tphcol":
+		p.h = 'c'
+	case "tphmrg":
+		p.h = 'm'
+	case "tphpg":
+		p.h = 'p'
+	case "tpvmrg":
+		p.v = 'm'
+	case "tpvpg":
+		p.v = 'p'
+	case "tpvpara":
+		p.v = 't'
+	case "tposx", "tposnegx":
+		p.x, p.xAlign = v, 0
+	case "tposxl", "tposxc", "tposxr", "tposxi", "tposxo":
+		p.xAlign = t.word[5]
+	case "tposy", "tposnegy":
+		p.y, p.yAlign = v, 0
+	case "tposyil":
+		p.yAlign = 0
+	case "tposyt", "tposyc", "tposyb", "tposyin", "tposyout":
+		p.yAlign = t.word[5]
+	case "tdfrmtxtTop", "tdfrmtxtRight", "tdfrmtxtBottom", "tdfrmtxtLeft":
+		k := map[string]int{"tdfrmtxtTop": 0, "tdfrmtxtRight": 1, "tdfrmtxtBottom": 2, "tdfrmtxtLeft": 3}[t.word]
+		p.dist[k] = min(max(t.param, 0), 14400)
+		return true
+	case "tabsnoovrlp":
+		p.noOverlap = t.param != 0
+		return true
+	default:
+		return false
+	}
+	p.set = true
+	return true
+}
+
+// tableFloatCSS sets the declarations of a table of the width w that
+// floats at the position p, whose first cell has the padding pad at the
+// left, all in twips, in the current section (D60). It follows the PDF
+// files of LibreOffice 26.8. A position or the left alignment puts the
+// text of the first cell there, so the edge of the table is the padding
+// to the left of it, but not to the left of the page. The right alignment
+// keeps the distance of the text from the right side of the area. A table
+// at a position from the margin or from the page floats there. A table at
+// its paragraph floats at the top of the next paragraph, with its
+// position as a margin above it. The text goes on both sides of a table
+// that leaves half an inch beside it on each side (D63). A table that
+// leaves less than half an inch beside it on both sides has no text beside
+// it.
+func (c *converter) tableFloatCSS(s *css, p tablePos, w, pad int) {
+	sec := c.section
+	col := sec.width - sec.left - sec.right
+	originX, areaW := 0, col
+	if p.h == 'p' {
+		originX, areaW = -sec.left, sec.width
+	}
+	var x int
+	switch p.xAlign {
+	case 'l', 'i':
+		x = max(originX-pad, -sec.left)
+	case 'c':
+		x = originX + (areaW-w)/2
+	case 'r', 'o':
+		x = originX + areaW - w - p.dist[1]
+	default:
+		x = max(originX+p.x-pad, -sec.left)
+	}
+	x = min(max(x, -maxFrameSize), maxFrameSize)
+	position, top := "", p.dist[0]
+	if p.v == 't' {
+		top = max(p.y, 0)
+	} else {
+		area := "margin "
+		if p.v == 'p' {
+			area = "page "
+		}
+		position = area + pt(p.y)
+		switch p.yAlign {
+		case 't', 'i':
+			position = area + "top"
+		case 'c':
+			position = area + "center"
+		case 'b', 'o':
+			position = area + "bottom"
+		}
+	}
+	d := p.dist
+	rest := col - x - w
+	left, right := x-d[3] >= 720, rest-d[1] >= 720
+	switch {
+	case !left && !right:
+		s.set("float", "left")
+		s.set("margin", pt(top)+" "+pt(max(rest, 0))+" "+pt(d[2])+" "+pt(x))
+	case left && right:
+		s.set("float", "left")
+		s.set("margin", pt(top)+" "+pt(d[1])+" "+pt(d[2])+" "+pt(x))
+		s.set("-ivy-wrap-flow", "both "+pt(max(d[1], d[3])))
+	case left:
+		s.set("float", "right")
+		s.set("margin", pt(top)+" "+pt(rest)+" "+pt(d[2])+" "+pt(d[3]))
+	default:
+		s.set("float", "left")
+		s.set("margin", pt(top)+" "+pt(d[1])+" "+pt(d[2])+" "+pt(x))
+	}
+	s.set("-ivy-float-position", position)
+	if p.noOverlap && position != "" {
+		s.set("-ivy-float-overlap", "avoid")
+	}
 }

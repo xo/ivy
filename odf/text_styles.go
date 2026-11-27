@@ -144,6 +144,81 @@ type odtPageLayout struct {
 	// fo:page-height, and orientation is its style:print-orientation.
 	noSize      bool
 	orientation string
+	// footnoteSep is the line above the footnotes, from
+	// style:footnote-sep.
+	footnoteSep odtFootnoteSep
+	// mirrored is set by style:page-usage mirrored: the left pages swap
+	// the margins at their left and at their right.
+	mirrored bool
+}
+
+// odtFootnoteSep is a style:footnote-sep: the line above the footnotes of a
+// page and its spacing, with the lengths in points.
+type odtFootnoteSep struct {
+	// width is the thickness of the line, and relWidth its length in
+	// percent of the width of the page area.
+	width, relWidth float64
+	// before is the spacing between the text of the page and the line,
+	// and after is the spacing between the line and the footnotes.
+	before, after float64
+	// adjust is the side of the line: left, center or right.
+	adjust, color string
+	// none is set for style:line-style none. The line then keeps its
+	// thickness in the spacing and is not drawn.
+	none bool
+}
+
+// defaultODTFootnoteSep is the line above the footnotes of a page layout
+// without style:footnote-sep, as LibreOffice draws it: 0.5 points thick,
+// a quarter of the width at the left, with 57 twips above and below it.
+var defaultODTFootnoteSep = odtFootnoteSep{
+	width: 0.5, relWidth: 25, before: 2.85, after: 2.85, adjust: "left", color: "#000000",
+}
+
+// readODTFootnoteSep reads a style:footnote-sep. LibreOffice takes 0 for a
+// thickness or a spacing that the element does not give, and a solid line.
+func readODTFootnoteSep(n roxmltree.Node) odtFootnoteSep {
+	length := func(name string) float64 {
+		v, _ := odtLength(odtAttr(n, name))
+		return min(max(v, 0), 1000)
+	}
+	fs := odtFootnoteSep{
+		width:  length("width"),
+		before: length("distance-before-sep"),
+		after:  length("distance-after-sep"),
+		adjust: odtAttr(n, "adjustment"),
+		color:  odtColor(odtAttr(n, "color")),
+		none:   odtAttr(n, "line-style") == "none",
+	}
+	if v, err := strconv.ParseFloat(strings.TrimSuffix(odtAttr(n, "rel-width"), "%"), 64); err == nil {
+		fs.relWidth = min(max(v, 0), 100)
+	}
+	if fs.color == "" {
+		fs.color = "#000000"
+	}
+	return fs
+}
+
+// css returns the declarations of the @footnote rule of a page for the
+// line fs. The line is a background over the top border of the footnote
+// area, so that it can be shorter than the area, as the line of docx.
+func (fs odtFootnoteSep) css() string {
+	s := "margin-top: " + odtPt(fs.before) + "; padding-top: " + odtPt(fs.after)
+	if fs.width <= 0 {
+		return s + "; border-top: none"
+	}
+	s += "; border-top: " + odtPt(fs.width) + " solid transparent"
+	if fs.none || fs.relWidth <= 0 {
+		return s
+	}
+	pos := "left"
+	switch fs.adjust {
+	case "center", "right":
+		pos = fs.adjust
+	}
+	return s + "; background: linear-gradient(" + fs.color + ", " + fs.color + ") border-box no-repeat" +
+		"; background-size: " + odtNum(fs.relWidth) + "% " + odtPt(fs.width) +
+		"; background-position: " + pos + " top"
 }
 
 // odtMasterPage is a style:master-page.
@@ -404,9 +479,11 @@ type odtLineNumbering struct {
 }
 
 // value returns the value of -ivy-line-numbers that starts at first. With
-// reset, the first line of the paragraph takes the number first.
+// reset, the first line of the paragraph takes the number first. The
+// number of a line that holds only an object goes at the bottom of the
+// object, as LibreOffice draws it.
 func (l *odtLineNumbering) value(first int, reset bool) string {
-	v := odtPt(l.distance) + " " + strconv.Itoa(l.step) + " " + strconv.Itoa(first) + " " + l.restart + " " + l.side
+	v := odtPt(l.distance) + " " + strconv.Itoa(l.step) + " " + strconv.Itoa(first) + " " + l.restart + " " + l.side + " object-bottom"
 	if l.noEmpty {
 		v += " no-empty"
 	}
@@ -515,12 +592,16 @@ func readODTListStyle(n roxmltree.Node) *[10]*odtListLevel {
 // and odtConverter.pageLayout puts the page on the paper of the program
 // (D32).
 func defaultODTPageLayout() *odtPageLayout {
-	return &odtPageLayout{width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1, noSize: true}
+	return &odtPageLayout{
+		width: 612, height: 792, top: 72, right: 72, bottom: 72, left: 72, columns: 1, noSize: true,
+		footnoteSep: defaultODTFootnoteSep,
+	}
 }
 
 // readODTPageLayout reads a style:page-layout.
 func readODTPageLayout(n roxmltree.Node) *odtPageLayout {
 	pl := defaultODTPageLayout()
+	pl.mirrored = odtAttr(n, "page-usage") == "mirrored"
 	if pr, ok := odtChild(n, "page-layout-properties"); ok {
 		pl.noSize = odtAttr(pr, "page-width") == "" && odtAttr(pr, "page-height") == ""
 		pl.orientation = odtAttr(pr, "print-orientation")
@@ -543,6 +624,9 @@ func readODTPageLayout(n roxmltree.Node) *odtPageLayout {
 				pl.columns = min(v, 16)
 			}
 			pl.columnGap, _ = odtLength(odtAttr(cols, "column-gap"))
+		}
+		if sep, ok := odtChild(pr, "footnote-sep"); ok {
+			pl.footnoteSep = readODTFootnoteSep(sep)
 		}
 	}
 	for _, part := range [...]string{"header-style", "footer-style"} {

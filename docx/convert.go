@@ -28,6 +28,7 @@ const documentName = "index.xhtml"
 const styleSheet = `html { font-family: serif; font-size: 10pt; line-height: 1.17; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
 body { margin: 0; counter-reset: note; -ivy-text-autospace: ideograph-alpha ideograph-numeric }
 p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2 }
+.fit p { white-space: pre }
 table { border-collapse: collapse; border-spacing: 0 }
 td { padding: 0; vertical-align: top; border: none }
 a { color: inherit; text-decoration: none }

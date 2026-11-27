@@ -60,3 +60,20 @@ func TestSymbolNotdef(t *testing.T) {
 		t.Errorf("expected 2 empty boxes, got %d:\n%s", n, html)
 	}
 }
+
+// TestSymbolBulletLine checks that the bullet of the font Symbol gives its
+// line the height of a line of Symbol, as Word does: the lines of the table
+// INSTRUCTIONS of poi/docx/form-footnotes.docx are 11.03 points apart at 9
+// points, not the 10.35 points of Times New Roman.
+func TestSymbolBulletLine(t *testing.T) {
+	numbering := fixture.WordPart{ID: "rIdN", Type: "numbering", Name: "word/numbering.xml", Data: fixture.WordXML("w:numbering",
+		`<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="`+"\uf0a8"+`"/>`+
+			`<w:pPr><w:ind w:left="360" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr></w:lvl></w:abstractNum>`+
+			`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>`)}
+	body := `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr><w:spacing w:line="360" w:lineRule="auto"/></w:pPr>` +
+		`<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="18"/></w:rPr><w:t>Item</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body, numbering))
+	if want := "min-width: 18pt; text-indent: 0; line-height: 1.84; font-size: 10pt"; !strings.Contains(html, want) {
+		t.Errorf("expected %q:\n%s", want, html)
+	}
+}

@@ -99,6 +99,21 @@ func TestInlineFootnote(t *testing.T) {
 	pageEqual(t, "footnote area y", footnoteArea.PositionY, 5)
 }
 
+// TestFootnoteAreaRounding checks that a footnote stays on the page of its
+// call when the sums of the margin, the border, the padding and the
+// height of the footnote area differ from the bottom of the footnote in
+// their last bit. It is not a test of upstream, which moves the footnote
+// to the next page then. The lengths come from the line above the
+// footnotes of a file of LibreOffice.
+func TestFootnoteAreaRounding(t *testing.T) {
+	pages := pageRender(t, footnoteStyle("612pt 792pt", `
+            @page { margin: 72pt; @footnote { margin-top: 14.15pt; padding-top: 8.5pt; border-top: 2.87pt solid } }
+            span { line-height: 10pt }`)+`
+        <div>abc<span>de</span></div>`, 1)
+	children := unpack(t, pages[0], 2)
+	footnoteMarkerText(t, children[1], 0, "1.", "de")
+}
+
 // TestBlockFootnote is test_block_footnote.
 func TestBlockFootnote(t *testing.T) {
 	page := pageRender(t, `

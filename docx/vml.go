@@ -54,9 +54,11 @@ func (c *converter) horizontalRule(shape roxmltree.Node) bool {
 // as a text box, a filled rectangle or a picture, as a box with its fill
 // or its picture, its line and its text. Text that wraps around the shape
 // flows around a float, as for a drawing of DrawingML. A shape above and
-// below the text of a page of columns takes its place on the page. A shape
-// at a position from the margin or from the page with o:allowoverlap off
-// moves down below the floats of the page that it covers (D60). It returns
+// below the text of a column floats at its position from the top of the
+// part of its paragraph in the column, as in Word. A shape at a position
+// from the margin or from the page with o:allowoverlap off moves down
+// below the floats of the page that it covers (D60). A text box with
+// mso-wrap-style none is as wide as its text, see fitsText. It returns
 // false for a shape that it does not draw.
 func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	if !shape.IsElement() || !vmlShapes[shape.TagName().Name()] || c.margin != "" {
@@ -125,27 +127,28 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			wrap, side = ooxml.Attr(e, "type"), ooxml.Attr(e, "side")
 		}
 	}
-	if sec.cols > 1 && wrap == "topAndBottom" {
-		// A shape above and below the text of a column takes its place on
-		// the page, and the text does not wrap around it. Word and
-		// LibreOffice place it from the top of the part of its paragraph
-		// on the page, and the layout cannot float it there.
-		wrap = ""
-	}
 	// A shape with text around it or above and below it, at a position
-	// from the margin or from the page, floats at that position, in a
-	// section of one column (D60). In a section with columns, a shape with
-	// text around it floats at its paragraph, in its column.
-	position := ""
-	if c.margin == "" && sec.cols <= 1 {
-		position = floatPosition(st["mso-position-vertical-relative"], st["mso-position-vertical"], y)
+	// from the margin or from the page, floats at that position (D60). In
+	// a section with columns, a shape with text around it from its
+	// paragraph floats at its paragraph, in its column. A shape above and
+	// below the text of a column floats from the top of the part of its
+	// paragraph in the column, as Word and LibreOffice place it.
+	position := floatPosition(st["mso-position-vertical-relative"], st["mso-position-vertical"], y)
+	if position == "" && sec.cols > 1 && wrap == "topAndBottom" && st["mso-position-vertical"] == "" {
+		switch st["mso-position-vertical-relative"] {
+		case "", "text":
+			position = "block " + pt(y)
+		case "line":
+			position = "line " + pt(y)
+		}
 	}
 	avoid := position != "" && vmlOff(ooxml.Attr(shape, "allowoverlap"))
+	fit := fitsText(st, hasText, src)
 	var s css
 	switch wrap {
 	case "square", "tight", "through":
 		c.floatSeq = c.paraSeq
-		if x+w/2 > colWidth/2 && !crossesColumn(sec, x, w) {
+		if x+w/2 > colWidth/2 && !crossesColumn(sec, x, w) && !fit {
 			s.set("float", "right")
 			s.set("margin-right", pt(max(colWidth-x-w, 0)))
 			s.set("margin-left", "9pt")
@@ -165,7 +168,7 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		}
 		s.set("-ivy-wrap-flow", wrapFlow(side)+" 9pt")
 		if wrap != "square" {
-			if v := vmlWrapCoords(ooxml.Attr(shape, "wrapcoords"), w, h); v != "" {
+			if v := vmlWrapCoords(ooxml.Attr(shape, "wrapcoords"), w, h, fit); v != "" {
 				s.set("-ivy-wrap-shape", v)
 			}
 		}
@@ -173,7 +176,12 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		if position != "" {
 			s.set("float", "left")
 			s.set("margin-left", pt(x))
-			s.set("margin-right", pt(max(colWidth-x-w, 0)))
+			if fit {
+				// The shape can be narrower than w.
+				s.set("margin-right", pt(max(colWidth-x, 0)))
+			} else {
+				s.set("margin-right", pt(max(colWidth-x-w, 0)))
+			}
 			s.set("-ivy-float-position", position)
 			if avoid {
 				s.set("-ivy-float-overlap", "avoid")
@@ -185,6 +193,9 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		if y > 0 && st["mso-position-vertical-relative"] != "page" && st["mso-position-vertical-relative"] != "margin" {
 			s.set("margin-top", pt(y))
 		}
+		// A block takes the width of its column, so it keeps the width of
+		// the shape.
+		fit = false
 	default:
 		s.set("display", "block")
 		s.set("position", "absolute")
@@ -218,7 +229,9 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			s.set("z-index", "-1")
 		}
 	}
-	s.set("width", pt(w))
+	if !fit {
+		s.set("width", pt(w))
+	}
 	s.set("height", pt(h))
 	s.set("box-sizing", "border-box")
 	if fill != "" {
@@ -253,7 +266,12 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			s.set("justify-content", "flex-end")
 		}
 	}
-	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
+	class := ""
+	if fit {
+		// The text of the box does not wrap, see the style sheet.
+		class = ` class="fit"`
+	}
+	c.w.WriteString(`<span` + class + ` style="` + attrText(s.String()) + `">`)
 	if src != "" {
 		var is css
 		is.set("display", "block")
@@ -269,6 +287,27 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 	}
 	c.w.WriteString("</span>")
 	return true
+}
+
+// fitsText reports whether a VML shape with the style st is as wide as
+// the longest line of its text box, plus the insets of the text box and
+// its line: a shape with text and without a picture, with mso-wrap-style
+// none, at its place from the left of its area. Word draws such a shape
+// at that width and not at the width of its style, and keeps its left
+// side and its height. For an ellipse, the width counts the insets of the
+// width of the style. On pages 1 and 2 of
+// libreoffice/docx/mixed-orientation.docx, Word draws an ellipse of 140
+// points 102.3 points wide, and a rectangle of 114 points 77.3 points wide.
+// The text of the shape does not wrap.
+func fitsText(st map[string]string, hasText bool, src string) bool {
+	if !hasText || src != "" || strings.TrimSpace(st["mso-wrap-style"]) != "none" {
+		return false
+	}
+	switch st["mso-position-horizontal"] {
+	case "", "left", "inside":
+		return true
+	}
+	return false
 }
 
 // vmlSigned returns a length of the style of a VML shape that can be
@@ -375,8 +414,9 @@ func vmlInset(shape roxmltree.Node) [4]float64 {
 // a VML shape of w by h points, x and y pairs in a square of 21600 by 21600
 // over the shape, or "" for none (D63). Word wraps the text of a tight or
 // through wrap around them, as on page 1 of
-// libreoffice/docx/mixed-orientation.docx.
-func vmlWrapCoords(v string, w, h float64) string {
+// libreoffice/docx/mixed-orientation.docx. With fit, the points are
+// percentages of the box, whose width the layout gives.
+func vmlWrapCoords(v string, w, h float64, fit bool) string {
 	fields := strings.Fields(strings.ReplaceAll(v, ",", " "))
 	if len(fields)%2 != 0 || len(fields) > 2*maxWrapPoints {
 		return ""
@@ -388,6 +428,9 @@ func vmlWrapCoords(v string, w, h float64) string {
 			return ""
 		}
 		xy = append(xy, n)
+	}
+	if fit {
+		return polygonPercent(xy)
 	}
 	return polygonShape(xy, w, h)
 }

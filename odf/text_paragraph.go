@@ -3,6 +3,7 @@ package odf
 import (
 	"math"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -249,8 +250,10 @@ func (c *odtConverter) indents(name string, p odtProps, list *odtList) (left, in
 
 // paragraphStyle returns the style attribute of a paragraph with the
 // properties p, the margin at the left left and the indent of the first
-// line indent.
-func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
+// line indent. cellTop is the spacing above the paragraph at the top of
+// the part of a table cell after a page break, which contextual spacing
+// does not leave out there.
+func (c *odtConverter) paragraphStyle(p odtProps, left, indent, cellTop float64) string {
 	var s odtCSS
 	for _, d := range c.inherited(p) {
 		s.set(d.name, d.value)
@@ -290,11 +293,11 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 			s.set("margin-break", "keep")
 		}
 	}
-	if top > 0 && !forced && c.cells > 0 {
+	if cellTop > 0 && !forced && c.cells > 0 {
 		// LibreOffice keeps the spacing above the first paragraph of the
 		// part of a cell after a page break, without the spacing below
 		// the paragraph before it
-		s.set("-ivy-page-top-space", "discard "+odtPt(top))
+		s.set("-ivy-page-top-space", "discard "+odtPt(cellTop))
 	}
 	if bottom > 0 {
 		s.set("margin-bottom", odtPt(bottom))
@@ -302,7 +305,7 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 	family, _ := c.st.font(p)
 	size := odtFontSize(p)
 	ratio := odtLineRatio(family, size, c.tight)
-	c.aloneOK, c.aloneBottom = false, 0
+	c.aloneOK, c.aloneBottom, c.lineFixed = false, 0, false
 	switch lh := p["line-height"]; {
 	case strings.HasSuffix(lh, "%"):
 		if pct, err := strconv.ParseFloat(strings.TrimSuffix(lh, "%"), 64); err == nil && pct > 0 {
@@ -325,6 +328,7 @@ func (c *odtConverter) paragraphStyle(p odtProps, left, indent float64) string {
 	default:
 		if v, ok := odtLength(lh); ok && v > 0 {
 			s.set("line-height", odtPt(v))
+			c.lineFixed = true
 		} else if v, ok := odtLength(p["line-height-at-least"]); ok && v > ratio*size {
 			s.set("line-height", odtPt(v))
 			c.aloneOK = true
@@ -429,6 +433,10 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		// margin as its other lines.
 		indent = 0
 	}
+	// LibreOffice keeps the spacing above a paragraph at the top of the
+	// part of a cell after a page break, also when contextual spacing
+	// leaves it out.
+	cellTop, _ := odtLength(p["margin-top"])
 	if p["contextual-spacing"] == "true" {
 		// LibreOffice leaves out the spacing between two paragraphs of
 		// the same paragraph style
@@ -444,7 +452,7 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 			p = p.over(zero)
 		}
 	}
-	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, left, indent)) + `">`)
+	c.w.WriteString(`<p style="` + odtAttrText(c.paragraphStyle(p, left, indent, cellTop)) + `">`)
 	mark := c.w.Len()
 	c.paraW, c.paraMark = c.w, mark
 	c.paraTop, _ = odtLength(p["margin-top"])
@@ -456,6 +464,15 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 		c.noteMark = false
 		c.w.WriteString(`<span class="fnref"></span>`)
 	}
+	// The frames at the top of the paragraph come first, before the
+	// label of the list and the text.
+	top := c.topFrames(n, nil, 0)
+	for _, e := range top {
+		c.frame(e)
+	}
+	atTop := c.atTop
+	defer func() { c.atTop = atTop }()
+	c.atTop = top
 	if item != nil && item.marker != "" {
 		c.marker(item, p, left, indent)
 		item.marker = ""
@@ -484,6 +501,49 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 	if v := p["break-after"]; v == "page" || v == "column" {
 		c.lastBottom, c.forced = 0, true
 	}
+}
+
+// topFrames appends to frames the frames of the paragraph n that go at
+// its top, and returns them. It looks in the text of n and in its spans
+// and links, at most 64 levels deep. See topFrame.
+func (c *odtConverter) topFrames(n roxmltree.Node, frames []roxmltree.Node, depth int) []roxmltree.Node {
+	if depth > 64 {
+		return frames
+	}
+	for e := range n.Children() {
+		if !e.IsElement() {
+			continue
+		}
+		switch e.TagName().Name() {
+		case "frame":
+			if c.topFrame(e) {
+				frames = append(frames, e)
+			}
+		case "span", "a":
+			frames = c.topFrames(e, frames, depth+1)
+		}
+	}
+	return frames
+}
+
+// topFrame reports whether the frame n goes at the top of its paragraph:
+// a frame that the paragraph anchors, without wrap, at the top of the
+// paragraph or of its content. LibreOffice puts such a frame there, also
+// when text comes before it in the paragraph, and the text of the
+// paragraph starts below the frame.
+func (c *odtConverter) topFrame(n roxmltree.Node) bool {
+	if odtAttr(n, "anchor-type") != "paragraph" {
+		return false
+	}
+	g := c.st.props("graphic", c.styleName(n))
+	if g["wrap"] != "none" && g["wrap"] != "" {
+		return false
+	}
+	if rel := g["vertical-rel"]; rel != "paragraph" && rel != "paragraph-content" {
+		return false
+	}
+	y, _ := odtLength(odtAttr(n, "y"))
+	return g["vertical-pos"] == "top" || g["vertical-pos"] == "from-top" && y == 0
 }
 
 // odtParagraphNear returns the paragraph after the paragraph n, or before
@@ -802,7 +862,9 @@ func (c *odtConverter) inlines(n roxmltree.Node, p odtProps) {
 			c.w.WriteString(`<span class="pgs"></span>`)
 			c.space = false
 		case "frame":
-			c.frame(e)
+			if !slices.Contains(c.atTop, e) {
+				c.frame(e)
+			}
 		case "ruby":
 			if base, ok := odtChild(e, "ruby-base"); ok {
 				c.inlines(base, p)
@@ -1232,7 +1294,10 @@ func odtFloatPosition(g odtProps, y float64) string {
 // odtWrapFlow returns the value of -ivy-wrap-flow of a frame with wrap,
 // from the graphic properties g: the side of the text of style:wrap, and
 // the larger of the left and the right margins, which are the distance
-// of the text from the frame (D63).
+// of the text from the frame (D63). LibreOffice 26.8 starts a line after
+// a frame that covers the start of the line at the frame, plus the
+// distance, plus the margin of the paragraph, so the value has the
+// keyword margin.
 func odtWrapFlow(g odtProps) string {
 	side := "both"
 	switch g["wrap"] {
@@ -1247,7 +1312,7 @@ func odtWrapFlow(g odtProps) string {
 	}
 	left, _ := odtLength(g["margin-left"])
 	right, _ := odtLength(g["margin-right"])
-	return side + " " + odtPt(min(max(left, right, 0), 14400))
+	return side + " " + odtPt(min(max(left, right, 0), 14400)) + " margin"
 }
 
 // floatLeft returns the place of a frame or a shape of the width w that
@@ -1311,6 +1376,45 @@ func (c *odtConverter) floatLeft(anchor string, g odtProps, x, w float64) (left,
 		left = areaLeft + x
 	}
 	return min(max(left, -14400), 14400), width, true
+}
+
+// floatEdge returns the side and the margin of a frame or a shape that
+// floats at svg:x x, with the graphic properties g, when the converter
+// does not know the width of the column: in a table cell, a frame, a
+// header, a footer or a section with columns. See floatLeft. The frame
+// floats to the left, with a margin from the left edge of the content of
+// its paragraph, or to the right, with a margin from the right edge. ok is
+// false when the place needs the width of the column: for a frame at the
+// center, in an area of the page, or anchored to the page.
+func (c *odtConverter) floatEdge(anchor string, g odtProps, x float64) (side string, margin float64, ok bool) {
+	if anchor == "page" {
+		return "", 0, false
+	}
+	// The distances of the left and the right edges of the area of
+	// style:horizontal-rel inside the content of the paragraph. The
+	// paragraph area holds the margins of the paragraph.
+	var areaLeft, areaRight float64
+	switch g["horizontal-rel"] {
+	case "paragraph-content", "char":
+	case "paragraph", "":
+		areaLeft, areaRight = -c.paraLeft, -c.paraRight
+	default:
+		return "", 0, false
+	}
+	marginLeft, _ := odtLength(g["margin-left"])
+	marginRight, _ := odtLength(g["margin-right"])
+	marginLeft, marginRight = min(max(marginLeft, 0), 14400), min(max(marginRight, 0), 14400)
+	switch g["horizontal-pos"] {
+	case "left", "inside":
+		margin = areaLeft + marginLeft
+	case "right", "outside":
+		return "right", min(max(areaRight+marginRight, -14400), 14400), true
+	case "center":
+		return "", 0, false
+	default:
+		margin = areaLeft + x
+	}
+	return "left", min(max(margin, -14400), 14400), true
 }
 
 // pageFloatPosition returns the value of -ivy-float-position of a frame
@@ -1377,6 +1481,13 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 	case inline:
 	case position != "":
 		c.pageFloat(&s, g, x, w, position)
+		// LibreOffice puts the frame on the page of
+		// text:anchor-page-number, and not on the page where its element
+		// is in the text. It adds blank pages when the text ends before
+		// that page.
+		if page, err := strconv.Atoi(odtAttr(n, "anchor-page-number")); err == nil && page > 1 {
+			s.set("-ivy-float-page", strconv.Itoa(min(page, 1000)))
+		}
 	case anchor == "page" || anchor == "frame" || g["wrap"] == "run-through":
 		s.set("position", "absolute")
 		if anchor == "page" && c.layout != nil {
@@ -1424,6 +1535,11 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 					s.set("margin-left", odtPt(left))
 				}
 			}
+		} else if side, margin, ok := c.floatEdge(anchor, g, x); ok {
+			s.set("float", side)
+			if margin != 0 {
+				s.set("margin-"+side, odtPt(margin))
+			}
 		} else {
 			side := "left"
 			if g["horizontal-pos"] == "right" || g["wrap"] == "left" {
@@ -1453,8 +1569,12 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 	if inline && c.aloneOK && odtAlone(n) {
 		c.alone = "vertical-align: top; margin-bottom: " + odtPt(c.aloneBottom) + "; "
 	}
+	// LibreOffice keeps a line of a fixed height at that height when a
+	// picture as a character is taller. The bottom of the picture stays
+	// at the baseline, and the picture goes up over the lines above it.
+	c.raise = inline && c.lineFixed
 	content()
-	c.alone = ""
+	c.alone, c.raise = "", false
 	c.w.WriteString("</span>")
 	c.space = false
 }
@@ -1492,6 +1612,18 @@ func (c *odtConverter) takeAlone() string {
 	s := c.alone
 	c.alone = ""
 	return s
+}
+
+// takeRaise returns the style of a picture as a character of the height h
+// in a line of a fixed height, once, or "". The negative margin takes the
+// height of the picture out of the line, so that the line keeps its
+// height. See place.
+func (c *odtConverter) takeRaise(h float64) string {
+	if !c.raise {
+		return ""
+	}
+	c.raise = false
+	return "margin-top: " + odtPt(-h) + "; "
 }
 
 // odtShapes holds the local names of the shapes of the namespace draw that
@@ -1552,7 +1684,7 @@ func (c *odtConverter) shape(n roxmltree.Node) {
 		s.set("width", odtPt(sh.W))
 		s.set("height", odtPt(sh.H))
 		if !over {
-			c.w.WriteString(`<img src="` + src + `" alt="" style="` + alone + s.String() + `"/>`)
+			c.w.WriteString(`<img src="` + src + `" alt="" style="` + alone + c.takeRaise(sh.H) + s.String() + `"/>`)
 			return
 		}
 		img := `<img src="` + src + `" alt="" style="` + s.String() + `"/>`
@@ -1648,7 +1780,7 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			}
 			// A picture apart from the lines is a block, so that its box
 			// does not hold the descent of a line.
-			style := c.takeAlone()
+			style := c.takeAlone() + c.takeRaise(h)
 			if odtAttr(n, "anchor-type") != "as-char" {
 				style = "display: block; "
 			}
@@ -1664,7 +1796,7 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			s.set("box-sizing", "border-box")
 			s.set("width", odtPt(w))
 			s.set("min-height", odtPt(h))
-			odtBox(&s, g)
+			odtBox(&s, odtFrameFill(g))
 			c.w.WriteString(`<span style="` + odtAttrText(s.String()) + `">`)
 			list, last := c.list, c.lastBottom
 			c.list = nil
@@ -1682,6 +1814,23 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			}
 		}
 	}
+}
+
+// odtFrameFill returns the graphic properties g of a frame with the
+// background of its draw:fill. LibreOffice writes the background of a
+// frame as draw:fill solid with draw:fill-color, and it draws no
+// background for draw:fill none. The other fills keep
+// fo:background-color.
+func odtFrameFill(g odtProps) odtProps {
+	switch g["fill"] {
+	case "solid":
+		if v := odtColor(g["fill-color"]); v != "" {
+			return g.over(odtProps{"background-color": v})
+		}
+	case "none":
+		return g.over(odtProps{"background-color": "transparent"})
+	}
+	return g
 }
 
 // chart writes the embedded object href of w by h points as an object of

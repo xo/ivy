@@ -207,7 +207,7 @@ func (cv *canvas) pie(b box, inner bool) {
 			})
 			if ok {
 				mx, my := polar(x, y, (in+outer)/2, (a0+a1)/2)
-				cv.t.draw(cv.dev, block{lines: t.lines, st: t.st}, mx+t.dx*cv.w, my+t.dy*cv.h, alignCenter, alignCenter, 0)
+				cv.t.draw(cv.dev, block{lines: t.lines, st: t.st, spans: t.spans}, mx+t.dx*cv.w, my+t.dy*cv.h, alignCenter, alignCenter, 0)
 			}
 		}
 	}
@@ -223,7 +223,10 @@ func (cv *canvas) pie(b box, inner bool) {
 				ha = alignEnd
 			}
 		}
-		cv.t.draw(cv.dev, l.b, l.x, l.y, ha, alignCenter, 0)
+		// Office and LibreOffice center the lines of a label
+		b := l.b
+		b.center = true
+		cv.t.draw(cv.dev, b, l.x, l.y, ha, alignCenter, 0)
 	}
 }
 
@@ -288,11 +291,17 @@ func (cv *canvas) pieLabels(p *plot, s *series, cx, cy, r, start, dir, k float64
 		if pos == "" {
 			pos = "bestFit"
 		}
-		var lines []string
-		for _, l := range t.lines {
-			lines = append(lines, cv.t.wrap(l, t.st, maxW)...)
+		var bl block
+		if t.spans != nil {
+			spans := cv.t.wrapSpans(t.spans, t.st, maxW)
+			bl = block{lines: spanLines(spans), st: t.st, spans: spans}
+		} else {
+			var lines []string
+			for _, l := range t.lines {
+				lines = append(lines, cv.t.wrap(l, t.st, maxW)...)
+			}
+			bl = block{lines: lines, st: t.st}
 		}
-		bl := block{lines: lines, st: t.st}
 		w, h := cv.t.size(bl)
 		e := explodeOf(s, i)
 		ox, oy := polar(cx, cy, r*e, mid)

@@ -138,9 +138,13 @@ func makePage(index int, lc *layoutContext, rootBox *Box, html *HTML) (*Box, ski
 // is then made again from the state before the page, with these floats
 // placed before the flow. A page float that the second layout places
 // above the flow stays where it is, so a page has at most two layouts
-// here (D60).
+// here (D60). The page floats of -ivy-float-page that waited for the page
+// are placed before the flow in each layout.
 func makePageFloats(index int, lc *layoutContext, rootBox *Box, html *HTML, grow pageGrowth, state *pageState) (*Box, skipStack) {
-	lc.startPageFloats(nil, nil)
+	// The page floats of -ivy-float-page that waited for this page go
+	// before its flow.
+	due, waiting := dueFloats(lc.pageMaker[index].waitingFloats, index+1)
+	lc.startPageFloats(due, nil, waiting)
 	page, resumeAt := makePageGrown(index, lc, rootBox, html, grow)
 	above := lc.pageFloats.above
 	if len(above) == 0 {
@@ -151,7 +155,7 @@ func makePageFloats(index int, lc *layoutContext, rootBox *Box, html *HTML, grow
 		order = append(order, f.box)
 	}
 	state.restore(lc, index)
-	lc.startPageFloats(above, order)
+	lc.startPageFloats(append(slices.Clip(due), above...), order, waiting)
 	return makePageGrown(index, lc, rootBox, html, grow)
 }
 

@@ -50,6 +50,8 @@ func TestWrapFlowValidation(t *testing.T) {
 		{"0.25in start", Tuple{String("start"), Float(24)}},
 		{"end 0", Tuple{String("end"), Float(0)}},
 		{"maximum 9pt", Tuple{String("maximum"), Float(12)}},
+		{"both 10px margin", Tuple{String("both"), Float(10), String("margin")}},
+		{"margin start", Tuple{String("start"), Float(0), String("margin")}},
 		// The values that are not valid keep the initial value.
 		{"10px", String("auto")},
 		{"both -1px", String("auto")},
@@ -57,6 +59,8 @@ func TestWrapFlowValidation(t *testing.T) {
 		{"both start", String("auto")},
 		{"both 1px 2px", String("auto")},
 		{"left", String("auto")},
+		{"margin", String("auto")},
+		{"both margin margin", String("auto")},
 	} {
 		t.Run(tt.value, func(t *testing.T) {
 			page := renderPages(t, `<style>@page { size: 100px } div { -ivy-wrap-flow: `+tt.value+` }</style><div></div>`)[0]
@@ -102,7 +106,8 @@ func TestWrapShapeValidation(t *testing.T) {
 		{"polygon(0 0, 10px 0)", String("none")},
 		{"polygon(0 0, 10px 0, 10px)", String("none")},
 		{"polygon(0 0, 10px 0, 10px 20px 1px)", String("none")},
-		{"polygon(0 0, 10% 0, 10px 20px)", String("none")},
+		{"polygon(0 0, 10% 0, 10px 20px)", Tuple{Float(0), Float(0), Dimension{10, "%"}, Float(0), Float(10), Float(20)}},
+		{"polygon(0 0, 10% 0, 10px)", String("none")},
 		{"circle(10px)", String("none")},
 		{"polygon(0 0, 1px 0, 1px 1px) polygon(0 0, 1px 0, 1px 1px)", String("none")},
 	} {
@@ -174,6 +179,12 @@ func TestWrapFlow(t *testing.T) {
 			`<p>aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii</p>`,
 		"aaaa@50,50 bbbb@160,50 cccc@50,70 dddd@170,70 eeee@50,90 ffff@170,90 gggg@50,110 hhhh@160,110 iiii@50,130",
 	}, {
+		// The same diamond in percentages of the border box.
+		"polygon percentages",
+		float("both", "margin-left: 80px; height: 80px; -ivy-wrap-shape: polygon(50% 0, 100% 50%, 50% 100%, 0 50%)") +
+			`<p>aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii</p>`,
+		"aaaa@50,50 bbbb@160,50 cccc@50,70 dddd@170,70 eeee@50,90 ffff@170,90 gggg@50,110 hhhh@160,110 iiii@50,130",
+	}, {
 		// A room narrower than 0.25 inch holds no text: here the room of
 		// 20px on the left of the float.
 		"narrow room",
@@ -223,6 +234,24 @@ func TestWrapFlow(t *testing.T) {
 		"page float",
 		`<p>aaa</p>` + float("both 10px", "margin-left: 80px; -ivy-float-position: margin 0") + `<p>bbb ccc ddd</p>`,
 		"aaa@50,50 bbb@50,70 ccc@180,70 ddd@50,90",
+	}, {
+		// With the keyword margin, a line after a float that covers the
+		// start of the line starts after the float, its distance and the
+		// margin of the paragraph: at x = 50 + 40 + 10 + 20. The float is
+		// in the text of the first paragraph. The second float does not
+		// cover the start of the lines of the third paragraph, so the
+		// room after it has no margin.
+		"margin keyword",
+		`<p style="margin-left: 20px"><span class=f style="-ivy-wrap-flow: both 10px margin; margin-left: -20px"></span>aa bb cc</p>` +
+			`<p style="margin-left: 20px">dd</p>` + float("both 10px margin", "margin-left: 80px") +
+			`<p style="margin-left: 20px">ee ff</p>`,
+		"aa bb@120,50 cc@120,70 dd@70,90 ee@70,110 ff@180,110",
+	}, {
+		// From right to left, the keyword margin takes the margin at the
+		// right: the room ends at x = 250 - 40 - 10 - 20.
+		"margin keyword rtl",
+		`<div style="direction: rtl"><p style="margin-right: 20px"><span class=f style="float: right; -ivy-wrap-flow: both 10px margin; margin-right: -20px"></span>aa bb cc</p></div>`,
+		"aa bb@80,50 cc@140,70",
 	}, {
 		// In a text from right to left, the first room is on the right,
 		// and the text is at the right of each room.

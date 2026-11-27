@@ -347,6 +347,7 @@ func init() {
 	property("page-top-space", validatePageTopSpace)
 	property("float-position", validateFloatPosition)
 	property("float-overlap", validateFloatOverlap)
+	property("float-page", validateFloatPage)
 	property("wrap-flow", validateWrapFlow)
 	property("wrap-shape", validateWrapShape)
 	property("stroke-adjust", validateStrokeAdjust)

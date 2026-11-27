@@ -234,49 +234,101 @@ func (p *dmlParser) manualLayout(n roxmltree.Node) (box [4]float64, inner, ok bo
 // title reads the text of c:title, from rich text or from the cache of a
 // reference, and its style. It returns nil for a title without text.
 func (p *dmlParser) title(n roxmltree.Node) ([]string, textStyle) {
-	var lines []string
-	var style textStyle
+	rt := p.richText(n)
+	return rt.lines, rt.style
+}
+
+// richText is the text of a title or of a label.
+type richText struct {
+	// lines are the lines of the text, or nil for a text without text.
+	lines []string
+	// style is the style of the text body, with the style of the first run
+	// that has properties, as a title takes it.
+	style textStyle
+	// body is the style of the text body alone.
+	body textStyle
+	// spans are the runs of each line of c:rich, each with the style of its
+	// own properties. A line breaks at a:br and at a line feed. spans is
+	// nil for the cache of a reference.
+	spans [][]span
+}
+
+// richText reads the text of n, a c:title or a c:dLbl, from its c:tx: rich
+// text or the cache of a reference. It reads the style of c:txPr and of the
+// body of c:rich.
+func (p *dmlParser) richText(n roxmltree.Node) richText {
+	var rt richText
 	if txPr, ok := child(n, "txPr"); ok {
-		style = p.bodyStyle(txPr)
+		rt.style = p.bodyStyle(txPr)
 	}
 	tx, ok := child(n, "tx")
 	if !ok {
-		return nil, style
+		rt.body = rt.style
+		return rt
 	}
 	if rich, ok := child(tx, "rich"); ok {
-		style = p.bodyStyle(rich).merge(style)
+		rt.style = p.bodyStyle(rich).merge(rt.style)
+		rt.body = rt.style
 		first := true
+		size := 0
 		for para := range elements(rich) {
 			if para.TagName().Name() != "p" {
 				continue
 			}
 			var b strings.Builder
+			var line []span
 			for r := range elements(para) {
 				switch r.TagName().Name() {
 				case "r", "fld":
-					if rPr, ok := child(r, "rPr"); ok && first {
-						style = p.runStyle(rPr).merge(style)
-						first = false
+					var st textStyle
+					if rPr, ok := child(r, "rPr"); ok {
+						st = p.runStyle(rPr)
+						if first {
+							rt.style = st.merge(rt.style)
+							first = false
+						}
 					}
-					if t, ok := child(r, "t"); ok {
-						b.WriteString(text(t))
+					t, ok := child(r, "t")
+					if !ok {
+						continue
+					}
+					s := text(t)
+					b.WriteString(s)
+					for i, part := range strings.Split(s, "\n") {
+						if i > 0 {
+							rt.spans = append(rt.spans, line)
+							line = nil
+						}
+						if part != "" && size < maxText*16 && len(rt.spans) < maxLines {
+							line = append(line, span{text: part, st: st})
+							size += len(part)
+						}
 					}
 				case "br":
-					lines = append(lines, b.String())
+					rt.lines = append(rt.lines, b.String())
 					b.Reset()
+					rt.spans = append(rt.spans, line)
+					line = nil
 				}
 			}
-			lines = append(lines, b.String())
+			rt.lines = append(rt.lines, b.String())
+			rt.spans = append(rt.spans, line)
 		}
 	} else {
-		lines = []string{p.seriesName(tx)}
+		rt.body = rt.style
+		rt.lines = []string{p.seriesName(tx)}
 	}
-	for _, l := range lines {
+	if len(rt.spans) > maxLines {
+		rt.spans = rt.spans[:maxLines]
+	}
+	for _, l := range rt.lines {
 		if strings.TrimSpace(l) != "" {
-			return clip(lines), style
+			rt.lines = clip(rt.lines)
+			return rt
 		}
 	}
-	return nil, style
+	rt.lines, rt.spans = nil, nil
+	return rt
 }
 
 // clip bounds the length of each line of a text.
@@ -769,12 +821,19 @@ func (p *dmlParser) pointLabel(n roxmltree.Node) (int, *pointLabel) {
 				}
 			}
 		case "tx":
-			lines, style := p.title(n)
-			for _, l := range lines {
-				pt.lines = append(pt.lines, strings.Split(l, "\n")...)
+			rt := p.richText(n)
+			if rt.spans != nil {
+				// each run keeps its own style
+				pt.spans = rt.spans
+				pt.lines = spanLines(rt.spans)
+				pt.text = rt.body.merge(pt.text)
+			} else {
+				for _, l := range rt.lines {
+					pt.lines = append(pt.lines, strings.Split(l, "\n")...)
+				}
+				pt.text = rt.style.merge(pt.text)
 			}
 			pt.hasText = len(pt.lines) > 0
-			pt.text = style.merge(pt.text)
 		default:
 			p.labelPart(e, &pt.labels)
 		}

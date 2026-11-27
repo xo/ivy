@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/xo/ivy/internal/fontdb"
 )
 
 // exXML returns a chart of Office 2016 with one series of the layout
@@ -245,6 +248,61 @@ func TestPointLabels(t *testing.T) {
 		t.Error("expected no label on a deleted point")
 	}
 	render(t, c, 300, 200)
+}
+
+// TestRichLabel checks that each run of the rich text of a label keeps its
+// own style: the name is regular, and the percent takes the bold of the
+// body.
+func TestRichLabel(t *testing.T) {
+	cats := strCache("A", "a", "b")
+	dLbls := `<c:dLbls><c:dLbl><c:idx val="1"/><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1100" b="1"/></a:pPr>` +
+		`<a:r><a:rPr sz="1100" b="0"/><a:t>Name</a:t></a:r><a:r><a:rPr sz="1100"/><a:t>` + "\n" + `8%</a:t></a:r>` +
+		`</a:p></c:rich></c:tx><c:showVal val="1"/></c:dLbl><c:showVal val="1"/></c:dLbls>`
+	xml := chartXML("", `<c:pieChart><c:varyColors val="1"/>`+
+		strings.Replace(ser(0, "S", "", cats, "1", "3"), "</c:ser>", dLbls+"</c:ser>", 1)+`</c:pieChart>`, "", "")
+	c, err := Parse(xml, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := c.plots[0].series[0].labels
+	tg, ok := tagOf(l, 1, func(labels) string { return "auto" })
+	if !ok || !slices.Equal(tg.lines, []string{"Name", "8%"}) || len(tg.spans) != 2 {
+		t.Fatalf("expected two lines of rich text, got %+v", tg)
+	}
+	if !tg.st.bold {
+		t.Errorf("expected the bold of the body as the style of the label, got %+v", tg.st)
+	}
+	tx := newTexter(fontdb.Default(), "Go")
+	rec := &runRecorder{}
+	tx.draw(rec, block{lines: tg.lines, st: tg.st, spans: tg.spans}, 0, 0, alignStart, alignStart, 0)
+	if len(rec.runs) != 2 || rec.runs[0].Text != "Name" || rec.runs[1].Text != "8%" {
+		t.Fatalf("expected a run for each line, got %d runs", len(rec.runs))
+	}
+	regular, bold := tx.face(textStyle{}), tx.face(textStyle{bold: true})
+	if rec.runs[0].Face != regular || rec.runs[1].Face != bold {
+		t.Errorf("expected a regular name and a bold percent")
+	}
+	render(t, c, 300, 200)
+}
+
+// TestWrapSpans checks that the lines of rich text break at the spaces,
+// and that a word keeps the part of each of its runs.
+func TestWrapSpans(t *testing.T) {
+	tx := newTexter(fontdb.Default(), "Go")
+	st := textStyle{size: 10, color: color.NRGBA{A: 255}}
+	bold := textStyle{bold: true, hasBold: true}
+	in := [][]span{{{text: "Systems Moderni", st: textStyle{}}, {text: "zation 6%", st: bold}}}
+	maxW := tx.spanWidth([]span{{text: "Moderni"}, {text: "zation 6%", st: bold}}, st) + 0.5
+	got := tx.wrapSpans(in, st, maxW)
+	if lines := spanLines(got); !slices.Equal(lines, []string{"Systems", "Modernization 6%"}) {
+		t.Fatalf("expected two lines, got %q", lines)
+	}
+	if len(got[1]) != 2 || got[1][0].text != "Moderni" || got[1][1].text != "zation 6%" || got[1][1].st != bold {
+		t.Errorf("expected the runs of the word, got %+v", got[1])
+	}
+	if got := tx.wrapSpans([][]span{nil}, st, maxW); len(got) != 1 || got[0] != nil {
+		t.Errorf("expected an empty line, got %+v", got)
+	}
 }
 
 func TestPie3D(t *testing.T) {

@@ -50,6 +50,262 @@ const theme = "github-light-default";
 // fenceLang returns the language of the info string of a block of code.
 const fenceLang = (info) => (info || "").trim().split(/\s+/)[0].toLowerCase();
 
+// The raw HTML of a Markdown file goes through the sanitizer of GitHub, as
+// in the package markdown of ivy: only the elements and the attributes of
+// its allow list stay. The HTML that markdown-it and its plugins make, such
+// as the classes of an alert, of Shiki and of KaTeX, is not raw HTML and
+// stays. The renderer writes the NUL character before and after each piece
+// of raw HTML. markdown-it replaces each NUL character of the text by
+// U+FFFD, so the marks are the only ones in its output. sanitize removes
+// them.
+const rawMark = "\u0000";
+const toSet = (s) => new Set(s.trim().split(/\s+/));
+
+// allowedTags are the elements that GitHub allows.
+const allowedTags = toSet(`h1 h2 h3 h4 h5 h6 br b i strong em a pre code img tt div ins del sup sub p
+  picture ol ul table thead tbody tfoot blockquote dl dt dd kbd q samp var hr ruby rt rp li tr td th s
+  strike summary details caption figure figcaption abbr bdo cite dfn mark small source span time wbr`);
+
+// allowedAttrs are the attributes that GitHub allows on every element.
+const allowedAttrs = toSet(`abbr accept accept-charset accesskey action align alt aria-describedby
+  aria-hidden aria-label aria-labelledby axis border char charoff charset checked clear cols colspan
+  compact coords datetime dir disabled enctype for frame headers height hreflang hspace id ismap label
+  lang maxlength media method multiple name nohref noshade nowrap open progress prompt readonly rel rev
+  role rows rowspan rules scope selected shape size span start summary tabindex title type usemap
+  valign value width itemprop`);
+
+// tagAttrs are the attributes that GitHub allows on one element.
+const tagAttrs = {
+  a: toSet("href"),
+  img: toSet("src longdesc loading alt"),
+  div: toSet("itemscope itemtype"),
+  blockquote: toSet("cite"),
+  del: toSet("cite"),
+  ins: toSet("cite"),
+  q: toSet("cite"),
+  source: toSet("srcset"),
+};
+
+// dropContents are the elements that the sanitizer drops with their
+// content. It keeps the content of any other element that it drops.
+const dropContents = toSet("script style iframe noscript noembed noframes xmp plaintext");
+
+// The schemes that GitHub allows in the URL of a link, of an image and of
+// a quote. The scheme data of an image stays, as in ivy.
+const linkSchemes = toSet("http https mailto github-windows github-mac");
+const srcSchemes = toSet("http https data");
+const citeSchemes = toSet("http https");
+
+const isSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
+
+// unescapeHTML returns s with its character references decoded.
+function unescapeHTML(s) {
+  const t = document.createElement("textarea");
+  t.innerHTML = s;
+  return t.value;
+}
+
+// urlAllowed returns false if the attribute name of the element tag holds
+// a URL with a scheme that GitHub does not allow. A relative URL stays.
+function urlAllowed(tag, name, value) {
+  let schemes;
+  if (tag === "a" && name === "href") {
+    schemes = linkSchemes;
+  } else if (tag === "img" && (name === "src" || name === "longdesc")) {
+    schemes = srcSchemes;
+  } else if (name === "cite") {
+    schemes = citeSchemes;
+  } else {
+    return true;
+  }
+  const u = [...unescapeHTML(value)].filter((c) => c > " " && c !== "\u007f").join("");
+  const i = u.search(/[:/?#]/);
+  if (i < 0 || u[i] !== ":") {
+    return true;
+  }
+  return schemes.has(u.slice(0, i).toLowerCase());
+}
+
+// parseTag parses the tag of s at start, which is a <, up to end. It
+// returns null if no tag, comment or declaration starts there. n is the
+// length of the tag.
+function parseTag(s, start, end) {
+  const rest = s.slice(start, end);
+  if (rest.startsWith("<!--")) {
+    const j = rest.indexOf("-->", 4);
+    return { comment: true, n: j < 0 ? rest.length : j + 3 };
+  }
+  if (rest.startsWith("<?") || rest.startsWith("<!")) {
+    const j = rest.indexOf(">");
+    return { comment: true, n: j < 0 ? rest.length : j + 1 };
+  }
+  const t = { name: "", attrs: [], closing: false, selfClosing: false, comment: false, n: 0 };
+  let i = 1;
+  if (rest[i] === "/") {
+    t.closing = true;
+    i++;
+  }
+  const m = /^[A-Za-z][A-Za-z0-9:-]*/.exec(rest.slice(i));
+  if (!m) {
+    return null;
+  }
+  t.name = m[0].toLowerCase();
+  i += m[0].length;
+  for (;;) {
+    while (i < rest.length && isSpace(rest[i])) {
+      i++;
+    }
+    if (i >= rest.length) {
+      return null;
+    }
+    if (rest[i] === ">") {
+      t.n = i + 1;
+      return t;
+    }
+    if (rest[i] === "/") {
+      t.selfClosing = true;
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < rest.length && !isSpace(rest[j]) && !"=>/".includes(rest[j])) {
+      j++;
+    }
+    if (j === i) {
+      i++;
+      continue;
+    }
+    const a = { name: rest.slice(i, j).toLowerCase(), value: "", has: false };
+    i = j;
+    while (j < rest.length && isSpace(rest[j])) {
+      j++;
+    }
+    if (rest[j] === "=") {
+      j++;
+      while (j < rest.length && isSpace(rest[j])) {
+        j++;
+      }
+      a.has = true;
+      if (rest[j] === '"' || rest[j] === "'") {
+        const k = rest.indexOf(rest[j], j + 1);
+        if (k < 0) {
+          return null;
+        }
+        a.value = rest.slice(j + 1, k);
+        j = k + 1;
+      } else {
+        const k = j;
+        while (j < rest.length && !isSpace(rest[j]) && rest[j] !== ">") {
+          j++;
+        }
+        a.value = rest.slice(k, j);
+      }
+      i = j;
+    }
+    t.attrs.push(a);
+  }
+}
+
+// tagString returns the tag t with the attributes and the URLs that GitHub
+// allows.
+function tagString(t) {
+  if (t.closing) {
+    return "</" + t.name + ">";
+  }
+  let s = "<" + t.name;
+  for (const a of t.attrs) {
+    if (!allowedAttrs.has(a.name) && !tagAttrs[t.name]?.has(a.name)) {
+      continue;
+    }
+    if (!urlAllowed(t.name, a.name, a.value)) {
+      continue;
+    }
+    s += " " + a.name;
+    if (a.has) {
+      s += '="' + a.value.replaceAll('"', "&quot;") + '"';
+    }
+  }
+  return s + (t.selfClosing ? " />" : ">");
+}
+
+// endsBlock returns true for the closing tag of a block that markdown-it
+// made. It ends the content that an unclosed script or style drops.
+const endsBlock = (tag) => /^<\/(p|li|td|th|dd|dt|blockquote|h[1-6])>$/.test(tag);
+
+// sanitize returns s, the HTML that markdown-it made, without the marks of
+// the raw HTML and with the raw HTML cleaned.
+function sanitize(s) {
+  if (!s.includes(rawMark)) {
+    return s;
+  }
+  let out = "";
+  let skip = "";
+  let raw = false;
+  const text = /[<\u0000]/g;
+  for (let i = 0; i < s.length;) {
+    const c = s[i];
+    if (c === rawMark) {
+      raw = !raw;
+      i++;
+    } else if (c !== "<") {
+      text.lastIndex = i;
+      const m = text.exec(s);
+      const j = m ? m.index : s.length;
+      if (!skip) {
+        out += s.slice(i, j);
+      }
+      i = j;
+    } else if (!raw) {
+      // a tag that markdown-it made
+      let j = s.indexOf(">", i);
+      if (j < 0) {
+        j = s.length - 1;
+      }
+      const tag = s.slice(i, j + 1);
+      i = j + 1;
+      if (skip) {
+        if (endsBlock(tag)) {
+          skip = "";
+        }
+        continue;
+      }
+      out += tag;
+    } else {
+      let end = s.indexOf(rawMark, i);
+      if (end < 0) {
+        end = s.length;
+      }
+      const t = parseTag(s, i, end);
+      if (!t) {
+        // not a tag, so text
+        if (!skip) {
+          out += "&lt;";
+        }
+        i++;
+        continue;
+      }
+      i += t.n;
+      if (skip) {
+        if (t.closing && t.name === skip) {
+          skip = "";
+        }
+        continue;
+      }
+      if (t.comment) {
+        continue;
+      }
+      if (!t.closing && dropContents.has(t.name) && !t.selfClosing) {
+        skip = t.name;
+        continue;
+      }
+      if (allowedTags.has(t.name)) {
+        out += tagString(t);
+      }
+    }
+  }
+  return out;
+}
+
 async function main() {
   // The preview of VS Code hides the front matter of YAML, and ivy drops it.
   const src = JSON.parse(document.getElementById("source").textContent)
@@ -87,9 +343,13 @@ async function main() {
     }
     return fence(tokens, i, opts, env, self);
   };
+  // The marks of the raw HTML, for sanitize.
+  for (const rule of ["html_block", "html_inline"]) {
+    md.renderer.rules[rule] = (tokens, i) => rawMark + tokens[i].content + rawMark;
+  }
 
   const tpl = document.createElement("template");
-  tpl.innerHTML = md.render(src);
+  tpl.innerHTML = sanitize(md.render(src));
   // An image of another site becomes its alternate text, as in ivy, because
   // the review runs without the network.
   for (const img of tpl.content.querySelectorAll("img")) {

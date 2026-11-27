@@ -385,7 +385,7 @@ func getNextLinebox(lc *layoutContext, linebox *Box, positionY, bottomSpace floa
 		if lc.isPageFloat(waitingFloat) {
 			// Port: upstream has no -ivy-float-position, see
 			// inlineOutOfFlowLayout.
-			if newPageFloat := lc.flowPageFloat(waitingFloat, containingBlock, waitingFloatsY, absoluteBoxes, fixedBoxes); newPageFloat != nil {
+			if newPageFloat := lc.flowPageFloat(waitingFloat, containingBlock, line.PositionY, waitingFloatsY, absoluteBoxes, fixedBoxes); newPageFloat != nil {
 				floatChildren = append(floatChildren, newPageFloat)
 			}
 			continue

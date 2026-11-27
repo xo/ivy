@@ -404,11 +404,13 @@ func anchorX(anchor, align string, x, w, colWidth float64, sec *section) float64
 // around floats to the side of the column where it is. A drawing that text
 // does not wrap is placed on the page. A drawing above and below text is a
 // block. A drawing with text around it or above and below it, at a
-// position from the margin or from the page, floats at that position, in a
-// section of one column (D60). A drawing above and below text then has a
-// margin to the right side of the column, so that no line fits beside it.
-// Such a drawing with allowOverlap off moves down below the floats of the
-// page that it covers.
+// position from the margin or from the page, floats at that position, also
+// in a column (D60). A drawing above and below text then has a margin to
+// the right side of the column, so that no line fits beside it. Such a
+// drawing with allowOverlap off moves down below the floats of the page
+// that it covers. In a table cell, a drawing with layoutInCell above its
+// line or its paragraph floats there, but not above the top of the cell,
+// as in Word.
 // The text wraps around a drawing on the sides of its wrapText, so that
 // the text is on both sides of a drawing in the middle of the column (D63).
 func (c *converter) anchorDrawing(n roxmltree.Node) {
@@ -455,8 +457,17 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	distL, distR := emu(n, "distL"), emu(n, "distR")
 	distT, distB := emu(n, "distT"), emu(n, "distB")
 	position := ""
-	if c.margin == "" && sec.cols <= 1 {
+	if c.margin == "" {
 		position = floatPosition(pv.relative, pv.align, pv.offset)
+		if pv.offset < 0 && pv.align == "" && wrap != "wrapNone" && anchoredInCell(n) {
+			switch v := ooxml.Attr(n, "layoutInCell"); {
+			case v != "1" && v != "true":
+			case pv.relative == "line":
+				position = "line " + pt(pv.offset)
+			case pv.relative == "paragraph":
+				position = "block " + pt(pv.offset)
+			}
+		}
 	}
 	overlap := ooxml.Attr(n, "allowOverlap")
 	avoid := position != "" && (overlap == "0" || overlap == "false")
@@ -525,9 +536,27 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		}
 	}
 	s.set("width", pt(w))
+	if data, ok := descendant(g, "graphicData"); ok {
+		if _, ok := child(data, "pic"); ok {
+			// The box of a picture is the picture, as in Word, and not a
+			// line of the font of its paragraph that holds it.
+			s.set("line-height", "0")
+		}
+	}
 	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
 	c.graphic(g, w, h, docAlt(n))
 	c.w.WriteString("</span>")
+}
+
+// anchoredInCell reports whether the paragraph of the drawing n is in a
+// cell of a table.
+func anchoredInCell(n roxmltree.Node) bool {
+	for p, ok := n.ParentElement(); ok; p, ok = p.ParentElement() {
+		if p.TagName().Name() == "p" {
+			return inCell(p)
+		}
+	}
+	return false
 }
 
 // maxWrapPoints is the largest number of points of a wrap polygon that
@@ -571,6 +600,23 @@ func polygonShape(xy []float64, w, h float64) string {
 		x := min(max(xy[i], -1e6), 1e6) * w / 21600
 		y := min(max(xy[i+1], -1e6), 1e6) * h / 21600
 		parts = append(parts, pt(x)+" "+pt(y))
+	}
+	return "polygon(" + strings.Join(parts, ", ") + ")"
+}
+
+// polygonPercent returns the value of -ivy-wrap-shape for the points xy,
+// x and y pairs in a square of 21600 by 21600 over a drawing, as
+// percentages of its box, or "" for fewer than 3 points or more than
+// maxWrapPoints.
+func polygonPercent(xy []float64) string {
+	if len(xy) < 6 || len(xy) > 2*maxWrapPoints {
+		return ""
+	}
+	parts := make([]string, 0, len(xy)/2)
+	for i := 0; i+1 < len(xy); i += 2 {
+		x := min(max(xy[i], -1e6), 1e6) / 216
+		y := min(max(xy[i+1], -1e6), 1e6) / 216
+		parts = append(parts, num(x)+"% "+num(y)+"%")
 	}
 	return "polygon(" + strings.Join(parts, ", ") + ")"
 }

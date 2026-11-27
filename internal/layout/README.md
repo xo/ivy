@@ -765,13 +765,18 @@ style sheet names each one with the prefix `-ivy-`, such as
    baseline of its line. The numbers are text boxes in an anonymous block
    that is the last child of the root box of the page. The state of the
    numbers at the end of a page goes to the next page with the state of
-   the pages. Three keywords can follow the four values, in any order. The
+   the pages. Four keywords can follow the four values, in any order. The
    side is `left`, the default, `right`, `inner` or `outer`. `inner` and
    `outer` take the side of the page. With `no-empty`, an empty line does
    not count. With `reset`, the first line of the box takes the first
-   number. `docx`, `msdoc`, `odf` and `rtf` read the numbering of the lines
-   of their sections. `odf` gives the side, `no-empty` and `reset` from
-   `text:number-position`, `text:count-empty-lines` and `text:line-number`.
+   number. With `object-bottom`, the number of a line that holds no text
+   and one or more atomic boxes, such as pictures, has its baseline at the
+   bottom of the lowest border box of those boxes. `docx`, `msdoc`, `odf`
+   and `rtf` read the numbering of the lines of their sections. `odf`
+   gives the side, `no-empty` and `reset` from `text:number-position`,
+   `text:count-empty-lines` and `text:line-number`. It always gives
+   `object-bottom`, because LibreOffice draws the number of a line that
+   holds only an object at the bottom of the object.
 7. `-ivy-line-multiple` is `none`, the initial value, or a number that is
    not negative: the multiple of a single line that the line height of a
    word processor is (D56). With a number m of 1 or more, the text of a
@@ -803,8 +808,10 @@ style sheet names each one with the prefix `-ivy-`, such as
    top of a page after a break that is not forced. A column break keeps
    the space, as a page break does. A length that is not negative can
    follow `discard`. With a length, a block at the top of the part of a
-   split table cell keeps up to that length of its top margin, as
-   LibreOffice keeps the space above a paragraph there. The property is
+   split table cell takes that length as its top margin, as LibreOffice
+   keeps the space above a paragraph there. The length can be larger than
+   the margin, because LibreOffice keeps that space also when contextual
+   spacing leaves it out. The property is
    inherited. `docx`, `msdoc`, `odf` and `rtf` turn it on, and `odf` gives
    the length.
 9. `-ivy-float-position` is `auto`, the initial value, or `page` or
@@ -812,8 +819,13 @@ style sheet names each one with the prefix `-ivy-`, such as
    as `margin 1in`. It places a float of the flow of the page at a vertical
    position from the top of the page or of the page area, as a word
    processor places a picture or a table at its position (D60). The length
-   can be negative. The property is not inherited. See
-   `layout_page_float.go`.
+   can be negative. `line` or `block` and a length, such as `line -10pt`,
+   place the float from the top of the line of its anchor, or from the top
+   of the part of the block of its anchor in its column. Such a float does
+   not go above the top of its column, of its table cell or of the page
+   area. The property also applies in a column of a row of columns. In a
+   table cell, it applies only with `line` or `block`. The property is not
+   inherited. See `layout_page_float.go`.
 10. `-ivy-float-overlap` is `allow`, the initial value, or `avoid`. With
     `avoid`, a float of `-ivy-float-position` moves down below the page
     floats before it that it covers, as LibreOffice moves a table with
@@ -824,11 +836,15 @@ style sheet names each one with the prefix `-ivy-`, such as
     word processor wraps the text around a picture in the middle of a
     column. The length is the distance between the float and the text, to
     the left and to the right. `start`, `end` and `maximum` put the text on
-    one side (D63). The property is not inherited, and a table gives it to
-    its wrapper. A float in the middle of a line is placed at once, and the
-    line is laid out again next to it. In columns, the lines of the later
-    columns of the same row avoid the float too. See `layout_wrap_flow.go`
-    and `layout_column_float.go`.
+    one side (D63). The keyword `margin` can follow, such as `both 9pt
+    margin`. With `margin`, a line that starts after the float, when the
+    float covers the start of the line, also keeps the margin of its
+    paragraph at the start side, as LibreOffice starts the line at the
+    float, plus the distance, plus the margin. `odf` gives it. The property
+    is not inherited, and a table gives it to its wrapper. A float in the
+    middle of a line is placed at once, and the line is laid out again next
+    to it. In columns, the lines of the later columns of the same row avoid
+    the float too. See `layout_wrap_flow.go` and `layout_column_float.go`.
 12. `-ivy-stroke-adjust` is `none`, the initial value, or `pixels`. With
     `pixels`, a collapsed border of the table of the box is drawn on whole
     pixels, at least one pixel wide, as a viewer draws the hairlines of a
@@ -847,11 +863,21 @@ style sheet names each one with the prefix `-ivy-`, such as
 15. `-ivy-wrap-shape` is `none`, the initial value, or a polygon of at least
     3 points, such as `polygon(0 0, 10pt 0, 10pt 20pt)`. Each point is a
     length from the left and a length from the top of the border box of the
-    float, and a length can be negative. The property applies to a float
+    float, and a length can be negative. A percentage is of the width or of
+    the height of the border box. The property applies to a float
     with `-ivy-wrap-flow`. The text wraps around the polygon in place of
     the border box, as Word wraps the text around the wrap polygon of a
-    picture with tight wrap (D63). `msdoc` and `docx` give it. The property
-    is not inherited.
+    picture with tight wrap (D63). `msdoc`, `docx` and `rtf` give it. The
+    property is not inherited.
+16. `-ivy-float-page` is `auto`, the initial value, or an integer of 1 or
+    more, such as `3`. It applies to a float of `-ivy-float-position`. When
+    the flow meets the float on a page before the page of that number, the
+    float waits, and the page of that number places it before its flow.
+    When the flow ends before that page, blank pages come until that page,
+    as LibreOffice adds pages for a frame anchored to a later page (D60).
+    A number above 1000 is 1000. `odf` gives it from
+    `text:anchor-page-number`. The property is not inherited, and a table
+    gives it to its wrapper. See `layout_page_float.go`.
 
 ## The hooks for the later stages
 

@@ -171,7 +171,8 @@ func TestMarkdownIt(t *testing.T) {
 	src := "---\ntitle: hidden front matter\n---\n\n# Title\n\n> [!NOTE]\n> An alert.\n\n" +
 		"- [x] done task\n- [ ] open task\n\nA footnote[^1] and :smile:.\n\n[^1]: The note text.\n\n" +
 		"```go\nfunc main() {}\n```\n\nInline $x^2$ math.\n\n```math\ny = 2\n```\n\n" +
-		"![local dot](dot.png) ![remote alt](https://example.com/a.png)\n"
+		"![local dot](dot.png) ![remote alt](https://example.com/a.png)\n\n" +
+		"<div style=\"display: none\">A raw div.</div>\n\n<xmp>Raw xmp.</xmp>\n"
 	if err := os.WriteFile(doc, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +203,17 @@ func TestMarkdownIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Title", "Note", "An alert.", "done task", "The note text.", "func main() {}", "remote alt", "😄"} {
+	for _, want := range []string{"Title", "Note", "An alert.", "done task", "The note text.", "func main() {}", "remote alt", "😄", "A raw div."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("expected %q in the text of the PDF file, got:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "hidden front matter") || strings.Contains(text, "$x") || strings.Contains(text, "[!NOTE]") {
 		t.Errorf("expected no front matter, no source of math and no source of an alert, got:\n%s", text)
+	}
+	// the sanitizer of GitHub drops the style of the div, and the xmp with
+	// its content
+	if strings.Contains(text, "Raw xmp.") {
+		t.Errorf("expected no content of the element xmp, got:\n%s", text)
 	}
 }

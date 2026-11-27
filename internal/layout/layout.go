@@ -1468,5 +1468,9 @@ func (lc *layoutContext) updateFootnoteArea() bool {
 	lastChild := footnoteArea.Children[len(footnoteArea.Children)-1]
 	lastChildBottom := lastChild.PositionY + lastChild.MarginHeight() - lastChild.MarginBottom
 	footnoteAreaBottom := footnoteArea.PositionY + footnoteArea.MarginHeight() - footnoteArea.MarginBottom
-	return lastChildBottom > footnoteAreaBottom
+	// Port: upstream compares the two bottoms without the fudge factor of
+	// overflows. The sums of the margins, the borders and the paddings
+	// can then differ in their last bit, and the area overflows by
+	// itself, so that the footnote goes to the next page.
+	return overflows(footnoteAreaBottom, lastChildBottom)
 }

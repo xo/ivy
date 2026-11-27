@@ -37,6 +37,11 @@ type columnFloatState struct {
 	step float64
 	// index is the index of the column that the layout lays out.
 	index int
+	// container is the box of the tree of the row of columns, and group
+	// the index of the first child of the row in it. With index, they
+	// name a column for the page floats of D60, see floatRoot.
+	container *Box
+	group     int
 }
 
 // reset starts a layout of a row of columns of the width width, with the

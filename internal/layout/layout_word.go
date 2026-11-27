@@ -37,15 +37,16 @@ type lineNumbers struct {
 	side string
 	// noEmpty is set when the empty lines do not count, and reset when
 	// the first line of the box takes the number first, in the section
-	// around the box.
-	noEmpty, reset bool
+	// around the box. objectBottom is set when the number of a line that
+	// holds only atomic boxes goes at the bottom of those boxes.
+	noEmpty, reset, objectBottom bool
 }
 
 // lineNumbersOf returns the value of -ivy-line-numbers of a style, and false
 // for 'none'.
 func lineNumbersOf(style *Style) (lineNumbers, bool) {
 	t, ok := style.Get("line_numbers").(Tuple)
-	if !ok || len(t) != 7 {
+	if !ok || len(t) != 8 {
 		return lineNumbers{}, false
 	}
 	distance, ok1 := t[0].(Float)
@@ -55,12 +56,13 @@ func lineNumbersOf(style *Style) (lineNumbers, bool) {
 	side, ok5 := t[4].(String)
 	empty, ok6 := t[5].(String)
 	reset, ok7 := t[6].(String)
-	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || step < 1 {
+	object, ok8 := t[7].(String)
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || step < 1 {
 		return lineNumbers{}, false
 	}
 	return lineNumbers{
 		distance: float64(distance), step: int(step), first: int(first), restart: string(restart),
-		side: string(side), noEmpty: empty != "", reset: reset != "",
+		side: string(side), noEmpty: empty != "", reset: reset != "", objectBottom: object != "",
 	}, true
 }
 
@@ -87,7 +89,9 @@ type lineNumberState struct {
 // count, as LibreOffice does for an empty paragraph. A box with 'reset'
 // gives the first number to its first line, and stays in the section
 // around it. The number of a line whose number is a multiple of the step
-// is drawn, with its baseline at the baseline of the line. On the left, the
+// is drawn, with its baseline at the baseline of the line, or with
+// 'object-bottom', at the bottom of the atomic boxes of a line that holds
+// no text, see objectBottom. On the left, the
 // number ends at the distance before the start of the content of the box
 // that declares the numbers. On the right, it starts at the distance after
 // the end of that content. rightPage is set on a right page, where 'inner'
@@ -169,6 +173,45 @@ func emptyLine(line *Box) bool {
 	return true
 }
 
+// objectBottom returns the bottom of the border boxes of the atomic boxes
+// of the line box line, such as pictures, and false when the line holds
+// text other than spaces or no atomic box. A float or an absolutely
+// positioned box is not in the line. In LibreOffice, a line that holds
+// only an object has no descent, and its baseline is at the bottom of the
+// object, where LibreOffice draws its number. A format can put such an
+// object at the top of its line, so that the line has no descent, which
+// moves the baseline of the line to the top.
+func objectBottom(line *Box) (float64, bool) {
+	bottom, found := 0.0, false
+	var walk func(box *Box) bool
+	walk = func(box *Box) bool {
+		for _, child := range box.Children {
+			switch {
+			case child.IsFloated() || child.IsAbsolutelyPositioned():
+			case child.Kind == KindText:
+				if strings.TrimSpace(child.Text) != "" {
+					return false
+				}
+			case child.Kind == KindInline:
+				if !walk(child) {
+					return false
+				}
+			default:
+				b := child.BorderBoxY() + child.BorderHeight()
+				if !found || b > bottom {
+					bottom = b
+				}
+				found = true
+			}
+		}
+		return true
+	}
+	if !walk(line) || !found {
+		return 0, false
+	}
+	return bottom, true
+}
+
 // numberLine returns a line box with the number n of the line box line,
 // in the style of the box section that declares the numbers, or nil when
 // the number has no text. rightPage is set on a right page.
@@ -188,7 +231,11 @@ func numberLine(line, section *Box, value lineNumbers, n int, rightPage bool) *B
 	} else {
 		textBox.PositionX = section.ContentBoxX() - value.distance - m.Width
 	}
-	textBox.PositionY = line.PositionY + line.Baseline - m.Baseline
+	baseline := line.PositionY + line.Baseline
+	if bottom, ok := objectBottom(line); ok && value.objectBottom {
+		baseline = bottom
+	}
+	textBox.PositionY = baseline - m.Baseline
 	box := anonymousFrom(KindLine, section, []*Box{textBox})
 	box.PositionX, box.PositionY = textBox.PositionX, textBox.PositionY
 	box.Width, box.Height, box.Baseline = m.Width, m.Height, m.Baseline
@@ -342,19 +389,21 @@ func (lc *layoutContext) discardsSpaceBefore(box *Box, pageIsEmpty, inFlow bool)
 	return (lc.columnTopBox == box || inFlow && pageIsEmpty && lc.currentPage > 1 && lc.unforcedBreak) && discard
 }
 
-// spaceBeforeKept returns the top margin margin of box, whose space before
+// spaceBeforeKept returns the top margin of box, whose space before
 // discardsSpaceBefore leaves out: 0, or at the top of the part of a split
-// table cell, up to the length of -ivy-page-top-space. LibreOffice keeps
-// the space above the first paragraph of such a part, without the space
-// below the paragraph before it, which the margin also holds. It keeps
-// that space too when the paragraph goes on from the page before, see
-// blockContainerLayoutShared.
-func (lc *layoutContext) spaceBeforeKept(box *Box, margin float64) float64 {
+// table cell, the length of -ivy-page-top-space. LibreOffice keeps the
+// space above the first paragraph of such a part, without the space below
+// the paragraph before it, which the margin also holds. It keeps that
+// space too when the paragraph goes on from the page before, see
+// blockContainerLayoutShared, and when contextual spacing leaves the space
+// out between two paragraphs of the same style, so the length can be
+// larger than the margin.
+func (lc *layoutContext) spaceBeforeKept(box *Box) float64 {
 	if !lc.cellTop || lc.columnTopBox != box {
 		return 0
 	}
 	_, keep := pageTopSpaceOf(box.Style)
-	return max(min(keep, margin), 0)
+	return max(keep, 0)
 }
 
 // splitCellTop reports whether the first in-flow child of the table cell

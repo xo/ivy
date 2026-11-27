@@ -302,6 +302,7 @@ var InitialValues = map[string]Value{
 	"page_top_space": String("keep"),
 	"float_position": String("auto"),
 	"float_overlap":  String("allow"),
+	"float_page":     String("auto"),
 	"wrap_flow":      String("auto"),
 	"wrap_shape":     String("none"),
 	"stroke_adjust":  String("none"),
@@ -393,8 +394,8 @@ var Inherited = map[string]bool{
 // properties that are not inherited are listed.
 //
 // Port: upstream has no -ivy-float-position, no -ivy-float-overlap, no
-// -ivy-wrap-flow and no -ivy-wrap-shape. They go to the wrapper, which
-// floats (D60, D63).
+// -ivy-float-page, no -ivy-wrap-flow and no -ivy-wrap-shape. They go to
+// the wrapper, which floats (D60, D63).
 var TableWrapperBoxProperties = map[string]bool{
 	"bottom":              true,
 	"break_after":         true,
@@ -406,6 +407,7 @@ var TableWrapperBoxProperties = map[string]bool{
 	"float":               true,
 	"float_position":      true,
 	"float_overlap":       true,
+	"float_page":          true,
 	"left":                true,
 	"margin_block_end":    true,
 	"margin_block_start":  true,

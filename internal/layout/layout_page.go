@@ -167,6 +167,9 @@ type pageMaker struct {
 	// that the pages before placed (D60). The flow of the page skips them.
 	// Upstream has no such property.
 	pageFloats []*Box
+	// waitingFloats are the page floats of -ivy-float-page that wait for
+	// this page or a later one (D60).
+	waitingFloats []pageFloat
 }
 
 // pageGroup is an item of the page groups of upstream, [name, index,
@@ -984,9 +987,12 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			nextPageSide = "left"
 		}
 	}
+	// Port: upstream has no -ivy-float-page. A page after the end of the
+	// flow that a page float waits for is blank (D60).
 	blank := (nextPageSide == "left" && pageData.rightPage) ||
 		(nextPageSide == "right" && !pageData.rightPage) ||
-		(len(lc.reportedFootnotes) > 0 && pageData.resumeAt == nil)
+		(len(lc.reportedFootnotes) > 0 && pageData.resumeAt == nil) ||
+		(index > 0 && len(pageData.waitingFloats) > 0 && pageData.resumeAt == nil)
 	side := "left"
 	if pageData.rightPage {
 		side = "right"
@@ -1314,18 +1320,21 @@ func makePageGrown(index int, lc *layoutContext, rootBox *Box, html *HTML, grow 
 			contentChanged: contentChanged,
 			lineNumbers:    lineNumbers,
 			pageFloats:     pageFloats,
+			waitingFloats:  lc.pageFloats.waiting,
 		}
 		if newPage {
 			lc.pageMaker = append(lc.pageMaker, data)
 		} else {
 			lc.pageMaker[index+1] = data
 		}
-	} else if next := lc.pageMaker[index+1]; next.lineNumbers != lineNumbers || !slices.Equal(next.pageFloats, pageFloats) {
+	} else if next := lc.pageMaker[index+1]; next.lineNumbers != lineNumbers || !slices.Equal(next.pageFloats, pageFloats) ||
+		!samePageFloats(next.waitingFloats, lc.pageFloats.waiting) {
 		// Port: the next page starts at the same place, but with other
 		// numbers of its lines or with other page floats before it, so it
 		// is made again.
 		next.lineNumbers = lineNumbers
 		next.pageFloats = pageFloats
+		next.waitingFloats = lc.pageFloats.waiting
 		next.contentChanged = true
 	}
 
@@ -1394,6 +1403,15 @@ type pageIter struct {
 	done              bool
 }
 
+// floatsWait reports whether page floats of -ivy-float-page wait for the
+// page of index i or a later page. The pages then go on after the end of
+// the flow (D60).
+//
+// Port: upstream has no such property.
+func (lc *layoutContext) floatsWait(i int) bool {
+	return i < len(lc.pageMaker) && len(lc.pageMaker[i].waitingFloats) > 0
+}
+
 // newPageIter starts make_pages. pages are the pages of the previous pass,
 // or nil for the first pass.
 func newPageIter(lc *layoutContext, root *Box, html *HTML, pages []*Box) *pageIter {
@@ -1423,10 +1441,10 @@ func (it *pageIter) next() (*Box, bool) {
 		pageData.contentChanged, pageData.pagesWanted = false, false
 		pageData.anchors, pageData.counters = nil, nil
 		page, it.resumeAt = makePage(it.i, lc, it.root, it.html)
-		it.reportedFootnotes = len(lc.reportedFootnotes) > 0
+		it.reportedFootnotes = len(lc.reportedFootnotes) > 0 || lc.floatsWait(it.i+1)
 	} else {
 		it.resumeAt = lc.pageMaker[it.i+1].resumeAt
-		it.reportedFootnotes = false
+		it.reportedFootnotes = lc.floatsWait(it.i + 1)
 		page = it.pages[it.i]
 	}
 	it.i++

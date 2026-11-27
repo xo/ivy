@@ -134,7 +134,9 @@ func labelText(l labels, seriesName, category string, v, percent float64, format
 // as outEnd, and its offset from its place, as fractions of the size of the
 // chart.
 type tag struct {
-	lines  []string
+	lines []string
+	// spans are the runs of each line, for a label of rich text, or nil.
+	spans  [][]span
 	st     textStyle
 	pos    string
 	dx, dy float64
@@ -155,7 +157,7 @@ func tagOf(l labels, i int, text func(l labels) string) (tag, bool) {
 			t.pos = pt.position
 		}
 		if pt.hasText {
-			t.lines = pt.lines
+			t.lines, t.spans = pt.lines, pt.spans
 			return t, true
 		}
 		src = pt.labels
@@ -179,7 +181,7 @@ func (pl *plane) label(t tag, x, y float64, ha, va int) {
 	}
 	x += t.dx * pl.cv.w
 	y += t.dy * pl.cv.h
-	pl.labels = append(pl.labels, placed{b: block{lines: t.lines, st: t.st}, x: x, y: y, ha: ha, va: va})
+	pl.labels = append(pl.labels, placed{b: block{lines: t.lines, st: t.st, spans: t.spans}, x: x, y: y, ha: ha, va: va})
 }
 
 // bars draws the bars of a plot.

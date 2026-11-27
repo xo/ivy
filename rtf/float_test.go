@@ -42,6 +42,12 @@ func TestFloatFiles(t *testing.T) {
 		{"f-page", []string{"width: 144pt; height: 72pt; float: right; margin: 0pt -72pt 0pt 7.2pt; -ivy-float-position: page 144pt"}, image.Rectangle{}, false, false},
 		{"f-para", []string{`width: 144pt; height: 72pt; float: right; margin: 18pt 0pt 7.2pt 7.2pt"`}, image.Rectangle{}, false, false},
 		{"f-nowrap", []string{"float: left; margin: 0pt 162pt 0pt 162pt; -ivy-float-position: margin 144pt"}, image.Rectangle{}, false, false},
+		{"t-late", []string{`<table style="width: 216pt; float: left; margin: 0pt 9pt 0pt -5.4pt; -ivy-float-position: margin 72pt">`}, image.Rectangle{}, false, false},
+		{"t-bottom", []string{`<table style="width: 216pt; float: left; margin: 7.2pt 9pt 0pt -5.4pt; -ivy-float-position: margin bottom">`}, image.Rectangle{}, false, false},
+		{"t-page", []string{`<table style="width: 144pt; float: right; margin: 0pt -63pt 0pt 9pt; -ivy-float-position: page 144pt">`}, image.Rectangle{}, false, false},
+		{"t-mid", []string{`<table style="width: 144pt; float: left; margin: 0pt 9pt 0pt 138.6pt; -ivy-wrap-flow: both 9pt; -ivy-float-position: margin 72pt">`}, image.Rectangle{}, false, false},
+		{"t-para", []string{`<table style="width: 144pt; float: left; margin: 18pt 9pt 0pt 138.6pt; -ivy-wrap-flow: both 9pt">`}, image.Rectangle{}, false, false},
+		{"s-tight", []string{"-ivy-wrap-flow: both 9pt; -ivy-wrap-shape: polygon(72pt 0pt, 144pt 72pt, 72pt 144pt, 0pt 72pt, 72pt 0pt)"}, image.Rect(234, 113, 378, 257), true, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			buf, err := os.ReadFile(filepath.Join("testdata", "float-"+tt.name+".rtf"))
@@ -251,6 +257,74 @@ func TestFrames(t *testing.T) {
 			}
 			if strings.Count(html, "<div") != strings.Count(html, "</div>") {
 				t.Errorf("expected balanced elements, got:\n%s", html)
+			}
+		})
+	}
+}
+
+// TestTableFloat checks the declarations of a table that floats, for the
+// words of its position (D60, D63). The table is 2 inches wide, in a
+// column of 6.5 inches.
+func TestTableFloat(t *testing.T) {
+	row := func(words string) string {
+		return `\trowd\trgaph108\trleft-108` + words + `\cellx1332\cellx2772\pard\intbl A\cell B\cell\row`
+	}
+	for _, tt := range []struct {
+		name, head, body string
+		want             string
+	}{
+		{"page center", "", row(`\tphpg\tposxc\tpvmrg\tposyc`), "float: left; margin: 0pt 0pt 0pt 162pt; -ivy-wrap-flow: both 0pt; -ivy-float-position: margin center"},
+		{"page left", "", row(`\tphpg\tposxl\tpvpg\tposyb`), "float: left; margin: 0pt 0pt 0pt -72pt; -ivy-float-position: page bottom"},
+		{"margin top", "", row(`\tphmrg\tposxl\tpvpg\tposyt`), "float: left; margin: 0pt 0pt 0pt -5.4pt; -ivy-float-position: page top"},
+		{"margin right", "", row(`\tposxr\tposy720\tdfrmtxtRight360`), "float: right; margin: 0pt 18pt 0pt 0pt; -ivy-float-position: margin 36pt"},
+		{"negative", "", row(`\tposnegx-720\tposnegy-360`), "float: left; margin: 0pt 0pt 0pt -41.4pt; -ivy-float-position: margin -18pt"},
+		{"padding", "", row(`\trpaddl288\trpaddfl3\tposx2880\tposy0`), "margin: 0pt 0pt 0pt 129.6pt"},
+		{"inline", "", row(`\tposx2880\tposyil`), "-ivy-float-position: margin 0pt"},
+		{"overlap", "", row(`\tposy720\tabsnoovrlp1`), "-ivy-float-position: margin 36pt; -ivy-float-overlap: avoid"},
+		{"paragraph", "", row(`\tpvpara\tposy-360\tabsnoovrlp1\tdfrmtxtBottom144`), `<table style="width: 144pt; float: left; margin: 0pt 0pt 7.2pt -5.4pt">`},
+		{"wide", "", `\trowd\trgaph108\trleft-108\tposy720\tdfrmtxtRight180\cellx8892\pard\intbl A\cell\row`, "float: left; margin: 0pt 23.4pt 0pt -5.4pt"},
+		{"flow", "", row(""), `<table style="width: 144pt; margin-left: -5.4pt">`},
+		{"columns", `\cols2`, row(`\tposy720`), `<table style="width: 144pt; margin-left: -5.4pt">`},
+		{"nested", "", `\trowd\cellx2880\pard\intbl\itap2 N\nestcell{\*\nesttableprops\trowd\tposy720\cellx1440\nestrow}{\nonesttables\par}\cell\row`, `<td style="[^"]*"><table style="width: 72pt">`},
+		{"note", "", `\pard A{\footnote ` + row(`\tposy720`) + `\pard B\par}\par`, `<table style="width: 144pt; margin-left: -5.4pt">`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, []byte(`{\rtf1\ansi\paperw12240\paperh15840\margl1440\margr1440\margt1440\margb1440`+tt.head+"\n"+tt.body+`\pard After\par}`))
+			if !strings.Contains(html, tt.want) && !matches(tt.want, html) {
+				t.Errorf("expected %q, got:\n%s", tt.want, html)
+			}
+		})
+	}
+}
+
+// TestWrapPolygon checks the wrap polygon of a shape with tight wrap
+// (D63): a shape with through wrap or square wrap and a property that is
+// not an array of points keep the box of the shape.
+func TestWrapPolygon(t *testing.T) {
+	sp := func(v string) string {
+		return `{\sp{\sn pWrapPolygonVertices}{\sv ` + v + `}}`
+	}
+	for _, tt := range []struct {
+		name, words, props, want string
+	}{
+		{"tight", `\shpwr4`, sp("8;4;(0,0);(21600,0);(10800,21600);(0,0)"), "-ivy-wrap-shape: polygon(0pt 0pt, 144pt 0pt, 72pt 72pt, 0pt 0pt)"},
+		{"negative", `\shpwr4`, sp("8;3;(-2160,0);(21600,-1080);(0,21600)"), "-ivy-wrap-shape: polygon(-14.4pt 0pt, 144pt -3.6pt, 0pt 72pt)"},
+		{"through", `\shpwr5`, sp("8;3;(0,0);(21600,0);(0,21600)"), ""},
+		{"square", `\shpwr2`, sp("8;3;(0,0);(21600,0);(0,21600)"), ""},
+		{"two points", `\shpwr4`, sp("8;2;(0,0);(21600,0)"), ""},
+		{"text", `\shpwr4`, sp("8;3;(0,0);(a,0);(0,21600)"), ""},
+		{"none", `\shpwr4`, "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, shapeFile("", 1440, 0, 0, tt.words, tt.props))
+			if tt.want == "" {
+				if strings.Contains(html, "-ivy-wrap-shape") {
+					t.Errorf("expected no wrap shape, got:\n%s", html)
+				}
+				return
+			}
+			if !strings.Contains(html, tt.want) {
+				t.Errorf("expected %q, got:\n%s", tt.want, html)
 			}
 		})
 	}

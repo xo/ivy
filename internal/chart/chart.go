@@ -54,6 +54,8 @@ const (
 	maxCategories = 1 << 12
 	// maxText is the number of bytes of a title or a label.
 	maxText = 1 << 10
+	// maxLines is the number of lines of a label of rich text.
+	maxLines = 64
 	// maxTicks is the number of the major or the minor ticks of an axis. An
 	// axis whose unit gives more ticks takes an automatic unit.
 	maxTicks = 1000
@@ -345,7 +347,10 @@ type labels struct {
 // text, and its offset from its place.
 type pointLabel struct {
 	labels
-	lines   []string
+	lines []string
+	// spans are the runs of each line of lines, for a label of rich text,
+	// or nil.
+	spans   [][]span
 	hasText bool
 	deleted bool
 	// dx and dy move the label from its place, as fractions of the size of

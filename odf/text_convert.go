@@ -41,7 +41,7 @@ a { color: inherit; text-decoration: none }
 .fnref { padding-right: 0.3em }
 .endnotes { margin-top: 12pt; -ivy-line-numbers: none }
 @page {
-  @footnote { margin-top: 6pt; padding-top: 3pt; border-top: 0.5pt solid black }
+  @footnote { margin-top: 2.85pt; padding-top: 2.85pt; border-top: 0.5pt solid transparent; background: linear-gradient(#000000, #000000) border-box no-repeat; background-size: 25% 0.5pt; background-position: left top }
   @top-center { width: 100%; vertical-align: top; text-align: left }
   @bottom-center { width: 100%; vertical-align: bottom; text-align: left }
 }
@@ -123,6 +123,9 @@ type odtConverter struct {
 	paraW    *strings.Builder
 	paraMark int
 	paraTop  float64
+	// atTop holds the frames that the converter wrote at the top of the
+	// paragraph that it writes, which its text leaves out. See topFrame.
+	atTop []roxmltree.Node
 	// paraLeft and paraRight are the margins at the left and the right of
 	// the paragraph that the converter writes, in points. See floatLeft.
 	paraLeft, paraRight float64
@@ -136,6 +139,11 @@ type odtConverter struct {
 	aloneOK     bool
 	aloneBottom float64
 	alone       string
+	// lineFixed is set when the last paragraph has lines of a fixed
+	// height, and raise holds whether the picture of place goes up from
+	// the baseline without making its line taller. See takeRaise.
+	lineFixed bool
+	raise     bool
 
 	// counters holds the counters of each list style, by level.
 	counters map[string]*[10]int
@@ -510,18 +518,32 @@ func (c *odtConverter) startSection(master string) {
 	if mp != nil && mp.next != "" && mp.next != mp.name {
 		if next, ok := c.st.masters[mp.next]; ok {
 			c.pageRules("@page "+name, next, false)
-			c.pageTop = c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+			if c.pageLayout(next).mirrored {
+				c.pageRules("@page "+name+":left", next, false)
+			}
+			c.firstPageRules(name, mp)
 			return
 		}
 	}
 	c.pageTop = c.pageRules("@page "+name, mp, false)
 	if mp != nil {
-		if _, ok := mp.parts["header-left"]; ok {
+		if _, ok := mp.parts["header-left"]; ok || pl.mirrored {
 			c.pageRules("@page "+name+":left", mp, false)
 		}
 		if _, ok := mp.parts["header-first"]; ok {
-			c.pageTop = c.pageRules("@page "+name+":nth(1 of "+name+")", mp, true)
+			c.firstPageRules(name, mp)
 		}
+	}
+}
+
+// firstPageRules writes the rules of the first page of the pages name of
+// the master page mp. With style:page-usage mirrored, the first page can
+// be a left page, which swaps its margins.
+func (c *odtConverter) firstPageRules(name string, mp *odtMasterPage) {
+	sel := "@page " + name + ":nth(1 of " + name + ")"
+	c.pageTop = c.pageRules(sel, mp, true)
+	if c.pageLayout(mp).mirrored {
+		c.pageRules(sel+":left", mp, true)
 	}
 }
 
@@ -554,15 +576,22 @@ func (c *odtConverter) pageLayout(mp *odtMasterPage) *odtPageLayout {
 // pageRules writes the rule sel of the pages of the master page mp, with
 // its size, its margins, its header and its footer. A rule of :left takes
 // the left header and footer, and first takes the header and the footer of
-// the first page. It returns the top margin of the pages, with the header.
+// the first page. A rule of :left of a mirrored page layout swaps the
+// margins at the left and at the right, as LibreOffice does. It returns
+// the top margin of the pages, with the header.
 func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) float64 {
 	pl := c.pageLayout(mp)
+	left := strings.HasSuffix(sel, ":left")
 	header, footer := "header", "footer"
 	switch {
 	case first:
 		header, footer = "header-first", "footer-first"
-	case strings.HasSuffix(sel, ":left"):
+	case left:
 		header, footer = "header-left", "footer-left"
+	}
+	marginLeft, marginRight := pl.left, pl.right
+	if left && pl.mirrored {
+		marginLeft, marginRight = marginRight, marginLeft
 	}
 	// As in LibreOffice, the min-height or the height of a header or a
 	// footer holds its spacing, and the content of the part takes the
@@ -641,10 +670,11 @@ func (c *odtConverter) pageRules(sel string, mp *odtMasterPage, first bool) floa
 		bottomBox += "; padding-top: " + odtPt(fSpace)
 	}
 	c.sheet.WriteString(sel + " { size: " + odtPt(pl.width) + " " + odtPt(pl.height) +
-		"; margin: " + odtPt(top) + " " + odtPt(pl.right) + " " + odtPt(bottom) + " " + odtPt(pl.left) + "; " +
+		"; margin: " + odtPt(top) + " " + odtPt(marginRight) + " " + odtPt(bottom) + " " + odtPt(marginLeft) + "; " +
 		"-ivy-margin-box-fit: " + fit + "; " +
 		"@top-center { " + topBox + " } " +
-		"@bottom-center { " + bottomBox + " } }\n")
+		"@bottom-center { " + bottomBox + " } " +
+		"@footnote { " + pl.footnoteSep.css() + " } }\n")
 	return top
 }
 

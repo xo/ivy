@@ -60,7 +60,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 	// Port: upstream has no -ivy-wrap-flow. The columns of the box see
 	// only the floats of the columns of the box before them.
 	defer func(state columnFloatState) { lc.columnFloats = state }(lc.columnFloats)
-	lc.columnFloats = columnFloatState{}
+	lc.columnFloats = columnFloatState{container: box}
 
 	if isStr(style.Get("position"), "relative") {
 		// New containing block, use a new absolute list
@@ -202,6 +202,7 @@ func columnsLayout(lc *layoutContext, box *Box, bottomSpace float64, skip skipSt
 	index := 0
 	for _, item := range columnsAndBlocks {
 		index = item.index
+		lc.columnFloats.group = item.index
 		if item.block != nil {
 			// We have a spanning block, we display it like other blocks
 			block := item.block

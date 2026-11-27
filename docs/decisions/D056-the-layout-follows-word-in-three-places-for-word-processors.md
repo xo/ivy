@@ -77,13 +77,15 @@ With these rules, the pages of `landscape-a4-table.odt` hold the same lines
 as in LibreOffice. The row "K bodu 96" on page 19 is as high as in
 LibreOffice.
 
-The spacing above a paragraph that contextual spacing leaves out is not
-kept at the top of a part of a cell. LibreOffice keeps it, so the text of
-page 23 of `landscape-a4-table.odt` starts 12 points lower in LibreOffice
-than in ivy. With that spacing, the pages from 24 to 28 move by 2 lines.
-The cause is the line above the footnotes. In ivy it takes 9.5 points
-with its spacing. The line of style:footnote-sep of LibreOffice takes 6.2
-points.
+LibreOffice also keeps the spacing above a paragraph at the top of a part
+of a cell when contextual spacing leaves it out. So the length of
+`-ivy-page-top-space` can be larger than the top margin of the paragraph,
+and the layout takes the length. `odf` gives fo:margin-top of the
+paragraph, before contextual spacing. With this rule, the text of page 23
+of `landscape-a4-table.odt` starts 12 points lower, as in LibreOffice. The
+pages after it keep their lines, because `odf` reads style:footnote-sep
+for the line above the footnotes since the same day. That line and its
+spacing take 6.2 points, where the line of ivy took 9.5 points.
 
 On the same day, `-ivy-line-numbers` took three keywords after its four
 values, for the line numbering of `odf`. The side is `left`, `right`,
@@ -92,3 +94,9 @@ With `no-empty`, an empty line does not count. With `reset`, the first line
 of the box takes the first number. `odf` gives them from
 `text:number-position`, `text:count-empty-lines` and `text:line-number`.
 LibreOffice writes `inside` and `outside`, and `odf` reads both pairs.
+Later that day, `-ivy-line-numbers` took a fourth keyword,
+`object-bottom`. With it, the number of a line that holds only an object
+has its baseline at the bottom of the object. LibreOffice draws it there,
+because such a line has no descent. `odf` puts the object at the top of
+its line for that reason, which moves the baseline of the line to the
+top. `odf` always gives the keyword.

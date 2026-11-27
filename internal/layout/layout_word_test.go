@@ -136,6 +136,40 @@ func TestLineNumbersPlace(t *testing.T) {
 	}
 }
 
+func TestLineNumbersObjectBottom(t *testing.T) {
+	// The picture of 30px at the top of its line leaves the baseline of the
+	// line near its top. With object-bottom, the number of a line that
+	// holds only the picture has its baseline at the bottom of the
+	// picture, and the number of a line with text stays at the baseline.
+	const img = `<img src="pattern.png" style="vertical-align: top; width: 30px; height: 30px">`
+	for _, tt := range []struct {
+		name   string
+		value  string
+		object bool
+	}{
+		{"baseline", "10px 1 1 page", false},
+		{"object-bottom", "10px 1 1 page object-bottom", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pages := renderPages(t, wordStyle+`<div style="-ivy-line-numbers: `+tt.value+`">`+
+				`<p>`+img+`</p><p>a `+img+`</p></div>`)
+			numbers := pageLineNumbers(t, pages)
+			if len(numbers) != 1 || len(numbers[0]) != 2 {
+				t.Fatalf("got the numbers %v, want 2 numbers on 1 page", numbers)
+			}
+			section := only(t, pages[0].Children[0].Children[0])
+			for i, n := range numbers[0] {
+				line := only(t, section.Children[i])
+				want := line.PositionY + line.Baseline
+				if i == 0 && tt.object {
+					want = line.PositionY + 30
+				}
+				assertApprox(t, "the baseline of the number", n.baseline, want)
+			}
+		})
+	}
+}
+
 func TestLineNumbersSide(t *testing.T) {
 	// The content of a page is 160px wide from x = 40px. A number on the
 	// right starts at the distance after the content, and inner and outer
@@ -485,8 +519,9 @@ func TestPageTopSpaceCellLength(t *testing.T) {
 		{"start", strings.Repeat("<p>a</p>", 4) + `<p style="margin-top: 10px; ` + style + `">b</p>`, "b"},
 		// A paragraph that goes on from the page before keeps it too.
 		{"continued", strings.Repeat("<p>a</p>", 3) + `<p style="margin-top: 10px; ` + style + `">b<br>c</p>`, "c"},
-		// The space is at most the margin.
-		{"margin", strings.Repeat("<p>a</p>", 4) + `<p style="margin-top: 2px; ` + style + `">b</p>`, "b"},
+		// A paragraph without a margin keeps it too, as LibreOffice keeps
+		// the space that contextual spacing leaves out.
+		{"contextual", strings.Repeat("<p>a</p>", 5) + `<p style="margin-top: 0; ` + style + `">b</p>`, "b"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			body := `<div style="-ivy-page-top-space: discard"><table><tr><td>` + tt.body + `</td></tr></table></div>`
@@ -504,11 +539,7 @@ func TestPageTopSpaceCellLength(t *testing.T) {
 			if text == nil {
 				t.Fatalf("no text %s on the second page", tt.text)
 			}
-			want := 4.0
-			if tt.name == "margin" {
-				want = 2
-			}
-			assertApprox(t, "the top of the text", text.PositionY, want)
+			assertApprox(t, "the top of the text", text.PositionY, 4)
 		})
 	}
 }

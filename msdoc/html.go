@@ -286,6 +286,7 @@ html {
   -ivy-tab-stops: auto;
   -ivy-page-overflow: descent;
   -ivy-page-top-space: discard;
+  font-kerning: none;
 }
 p, h1, h2, h3, h4, h5, h6 {
   margin: 0;
@@ -427,6 +428,9 @@ var lineRatios = map[string]float64{
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
 	"verdana": 1.2153, "tahoma": 1.207,
 	"century gothic": 1.2261, "urw gothic": 1.2261,
+	// Word gives a line of Symbol the ascent and the descent of Symbol,
+	// 1.005 em and 0.22 em, whichever font draws its characters.
+	"symbol": 1.225,
 }
 
 // lineRatio returns the height of a single line of the font ftc, as a
@@ -859,6 +863,14 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	if c.spacing != 0 {
 		style = append(style, "letter-spacing: "+pt(c.spacing))
 	}
+	size := c.hps
+	if size == 0 {
+		size = 20
+	}
+	if c.hpsKern > 0 && size >= c.hpsKern {
+		// Word kerns only the text of sprmCHpsKern, from its size up
+		style = append(style, "font-kerning: normal")
+	}
 	if c.hasColor {
 		style = append(style, fmt.Sprintf("color: #%06x", c.color))
 	}
@@ -868,12 +880,12 @@ func (p *parser) writeRun(b *strings.Builder, r run) {
 	if f := p.fontFamily(c.ftc, c.ftcEA); f != "" {
 		style = append(style, "font-family: "+f)
 	}
-	text := html.EscapeString(r.text)
+	text := html.EscapeString(p.symbolText(c.ftc, r.text))
 	if r.noteMark {
 		text = p.mark
 	}
 	text = strings.NewReplacer("\n", "<br>", string(runePage), `<span class="pg"></span>`,
-		string(runePages), `<span class="pgs"></span>`).Replace(text)
+		string(runePages), `<span class="pgs"></span>`, string(notdefRune), notdefBox).Replace(text)
 	// the East Asian language selects the font of the East Asian text,
 	// as in the package docx
 	lang := ""

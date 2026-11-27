@@ -277,7 +277,14 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	mark0 := c.w.Len()
 	if lvl != nil && marker != "" {
 		mr := rpr.over(mark).over(lvl.rpr)
+		line := ""
 		if font := c.font(mr["font"]); isSymbolFont(font) {
+			if strings.EqualFold(font, "symbol") {
+				// Word gives the line of a bullet of Symbol the height of
+				// a line of Symbol, which is higher than a line of most
+				// fonts, as on page 2 of poi/docx/form-footnotes.docx.
+				line = c.lineHeight(ppr, mr)
+			}
 			codes, ok := symbolCodes(lvl.text)
 			if lvl.format == "bullet" && ok && c.drawsAll(font, codes) {
 				// The program has the symbol font, which draws the
@@ -289,7 +296,7 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 				mr["font"] = rpr["font"]
 			}
 		}
-		c.marker(marker, lvl, ppr, mr, rpr)
+		c.marker(marker, lvl, ppr, mr, rpr, line)
 	}
 	c.inlines(p, rpr)
 	for i := len(c.open) - 1; i >= 0; i-- {
@@ -298,6 +305,10 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	switch {
 	case c.w.Len() == mark0:
 		// An empty paragraph takes the height of one line, as in Word.
+		c.w.WriteString("<br/>")
+	case (lvl == nil || marker == "") && floatsOnly(p):
+		// A paragraph of floats has no line in HTML. In Word, its mark
+		// is on a line.
 		c.w.WriteString("<br/>")
 	case endsWithBreak(c.w.String()[mark0:]):
 		// In Word, the mark of a paragraph after a break of a line is on
@@ -466,6 +477,42 @@ func pictureOnly(p roxmltree.Node) bool {
 		}
 	}
 	return pictures
+}
+
+// floatsOnly reports whether the content of the paragraph p is only
+// drawings that float beside the text: anchored drawings with text around
+// them or without wrap. A VML shape, a drawing above and below the text
+// and any other content make it false.
+func floatsOnly(p roxmltree.Node) bool {
+	n := 0
+	var walk func(e roxmltree.Node) bool
+	walk = func(e roxmltree.Node) bool {
+		for d := range e.Children() {
+			if !d.IsElement() {
+				continue
+			}
+			switch name := d.TagName().Name(); {
+			case name == "pPr" || name == "rPr" || name == "Fallback":
+			case name == "drawing":
+				a, ok := child(d, "anchor")
+				if !ok {
+					return false
+				}
+				if _, ok := child(a, "wrapTopAndBottom"); ok {
+					return false
+				}
+				n++
+			case contentNames[name] || name == "pict" || name == "object":
+				return false
+			default:
+				if !walk(d) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return walk(p) && n > 0
 }
 
 // inDrawing reports whether the run r of the paragraph p is in a drawing or
@@ -791,8 +838,9 @@ func (c *converter) linePitch() float64 {
 }
 
 // marker writes the marker of a paragraph of a list, with the properties
-// mr, in a paragraph whose runs have the properties rpr.
-func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props) {
+// mr, in a paragraph whose runs have the properties rpr. A line that is not
+// "" is the line-height of the marker.
+func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props, line string) {
 	var s css
 	hanging := ppr.num("ind.hanging", 0) / 20
 	suffix := ""
@@ -808,6 +856,9 @@ func (c *converter) marker(text string, lvl *level, ppr, mr, rpr props) {
 		} else {
 			suffix = "\t"
 		}
+	}
+	if line != "" {
+		s.set("line-height", line)
 	}
 	style := s.String()
 	if run := c.runStyle(mr, rpr); run != "" {

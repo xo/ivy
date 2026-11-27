@@ -34,3 +34,11 @@ place from the margin. `docx/testdata/README.md` describes the floats.
 | `float-t-loop3.doc` | a table of 12 rows at the top of the margin, anchored before P10 |
 | `float-t-loop2.doc` | the same table, anchored before P12 |
 | `float-t-nofit.doc` | a table of 6 rows 9.5 inches below the top of the page, anchored before P06 |
+
+LibreOffice 26.8 wrote `symbol-notdef.doc` with
+`soffice --headless --convert-to "doc:MS Word 97"`, from a Word file of two
+paragraphs. The first paragraph holds the codes F094 and F061 of the font
+Symbol, as `w:sym`. The second paragraph is an item of a list whose bullet
+is the code F094 of Symbol. Symbol does not have the code F094, and Word
+draws it as an empty box. LibreOffice writes each code as a character of
+the private area in a run of the font Symbol.

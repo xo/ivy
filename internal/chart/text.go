@@ -5,6 +5,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/xo/okage"
@@ -242,18 +243,88 @@ func (t *texter) width(s string, st textStyle) float64 {
 	return w
 }
 
-// block is a text of one or more lines and its style.
+// span is a part of a line of rich text, with the style of its run. The
+// style of its block gives each field that the span does not set.
+type span struct {
+	text string
+	st   textStyle
+}
+
+// block is a text of one or more lines and its style. spans, if not nil,
+// holds the runs of each line of lines, for a text of rich text.
 type block struct {
 	lines []string
 	st    textStyle
+	spans [][]span
+	// center centers each line in the box of the block, whatever the
+	// alignment of the box to its point.
+	center bool
+}
+
+// lineSpans returns the runs of the line i of b, each with its whole
+// style.
+func (b block) lineSpans(i int) []span {
+	if b.spans == nil {
+		return []span{{text: b.lines[i], st: b.st}}
+	}
+	out := make([]span, len(b.spans[i]))
+	for j, sp := range b.spans[i] {
+		out[j] = span{text: sp.text, st: sp.st.merge(b.st)}
+	}
+	return out
+}
+
+// lineSize returns the size of the text of the line i of b: the size of
+// its largest run, or the size of b for a line without runs.
+func (b block) lineSize(i int) float64 {
+	size := 0.0
+	if b.spans != nil {
+		for _, sp := range b.lineSpans(i) {
+			size = max(size, sp.st.size)
+		}
+	}
+	if !(size > 0) {
+		return b.st.size
+	}
+	return size
+}
+
+// spanWidth returns the width of the runs of a line of rich text, whose
+// block has the style base.
+func (t *texter) spanWidth(line []span, base textStyle) float64 {
+	w := 0.0
+	for _, sp := range line {
+		w += t.width(sp.text, sp.st.merge(base))
+	}
+	return w
 }
 
 // size returns the width and the height of a block.
 func (t *texter) size(b block) (w, h float64) {
-	for _, l := range b.lines {
-		w = max(w, t.width(l, b.st))
+	if b.spans == nil {
+		for _, l := range b.lines {
+			w = max(w, t.width(l, b.st))
+		}
+		return w, float64(len(b.lines)) * b.st.size * lineHeight
 	}
-	return w, float64(len(b.lines)) * b.st.size * lineHeight
+	for i := range b.lines {
+		w = max(w, t.spanWidth(b.spans[i], b.st))
+		h += b.lineSize(i) * lineHeight
+	}
+	return w, h
+}
+
+// spanLines returns the text of each line of rich text.
+func spanLines(spans [][]span) []string {
+	lines := make([]string, len(spans))
+	for i, line := range spans {
+		var b strings.Builder
+		for _, sp := range line {
+			b.WriteString(sp.text)
+		}
+		lines[i] = b.String()
+	}
+	return lines
 }
 
 // The alignments of a text to its point.
@@ -267,7 +338,7 @@ const (
 // ha and va align the box to the point, start for its left or its top
 // side. angle turns the box about the point, in degrees counterclockwise.
 func (t *texter) draw(dev display.Device, b block, x, y float64, ha, va int, angle float64) {
-	if len(b.lines) == 0 || !(b.st.size > 0) || b.st.color.A == 0 {
+	if len(b.lines) == 0 || !(b.st.size > 0) || (b.spans == nil && b.st.color.A == 0) {
 		return
 	}
 	w, h := t.size(b)
@@ -280,27 +351,56 @@ func (t *texter) draw(dev display.Device, b block, x, y float64, ha, va int, ang
 		dev.Concat(okage.TransformFromTranslate(float32(x), float32(y)).PreConcat(okage.TransformFromRotate(float32(-angle))))
 		x, y = 0, 0
 	}
-	shader := okage.SolidColor(rgba(b.st.color))
-	for i, line := range b.lines {
-		runs, lw := t.shape(line, b.st)
+	// top is the top of the line, below the lines before it, in a block of
+	// rich text
+	top := 0.0
+	for i := range b.lines {
+		spans := b.lineSpans(i)
+		shaped := make([][]run, len(spans))
+		widths := make([]float64, len(spans))
+		lw := 0.0
+		for j, sp := range spans {
+			shaped[j], widths[j] = t.shape(sp.text, sp.st)
+			lw += widths[j]
+		}
 		lx := x + ox
-		switch ha {
+		la := ha
+		if b.center {
+			la = alignCenter
+		}
+		switch la {
 		case alignCenter:
 			lx += (w - lw) / 2
 		case alignEnd:
 			lx += w - lw
 		}
 		base := y + oy + (float64(i)*lineHeight+ascent)*b.st.size
-		for _, r := range runs {
-			glyphs := make([]display.Glyph, len(r.glyphs))
-			for j, g := range r.glyphs {
-				glyphs[j] = display.Glyph{ID: g.ID, X: g.X + float32(lx), Y: float32(base),
-					Start: g.Start - r.start, End: g.End - r.start}
-			}
-			// the run gives its text to a writer of PDF (D58)
-			dev.FillGlyphs(display.GlyphRun{Face: r.face, Size: float32(b.st.size), Glyphs: glyphs,
-				Transform: okage.IdentityTransform(), Text: line[r.start:r.end]}, shader)
+		if b.spans != nil {
+			size := b.lineSize(i)
+			base = y + oy + top + ascent*size
+			top += size * lineHeight
 		}
+		for j, sp := range spans {
+			if sp.st.size > 0 && sp.st.color.A != 0 {
+				t.drawRuns(dev, shaped[j], sp, lx, base)
+			}
+			lx += widths[j]
+		}
+	}
+}
+
+// drawRuns draws the runs of the text of sp, from x on the baseline y.
+func (t *texter) drawRuns(dev display.Device, runs []run, sp span, x, y float64) {
+	shader := okage.SolidColor(rgba(sp.st.color))
+	for _, r := range runs {
+		glyphs := make([]display.Glyph, len(r.glyphs))
+		for j, g := range r.glyphs {
+			glyphs[j] = display.Glyph{ID: g.ID, X: g.X + float32(x), Y: float32(y),
+				Start: g.Start - r.start, End: g.End - r.start}
+		}
+		// the run gives its text to a writer of PDF (D58)
+		dev.FillGlyphs(display.GlyphRun{Face: r.face, Size: float32(sp.st.size), Glyphs: glyphs,
+			Transform: okage.IdentityTransform(), Text: sp.text[r.start:r.end]}, shader)
 	}
 }
 
@@ -327,6 +427,84 @@ func (t *texter) wrap(s string, st textStyle, maxW float64) []string {
 		if len(out) > 64 {
 			break
 		}
+	}
+	return out
+}
+
+// wrapSpans breaks the lines of rich text into lines no wider than maxW,
+// at the spaces, as wrap does. base is the style of the block.
+func (t *texter) wrapSpans(lines [][]span, base textStyle, maxW float64) [][]span {
+	var out [][]span
+	for _, para := range lines {
+		words := spanWords(para)
+		if len(words) == 0 {
+			out = append(out, nil)
+			continue
+		}
+		line := words[0]
+		for _, w := range words[1:] {
+			next := joinWords(line, w)
+			if t.spanWidth(next, base) <= maxW {
+				line = next
+				continue
+			}
+			out = append(out, line)
+			line = w
+		}
+		out = append(out, line)
+		if len(out) > 64 {
+			break
+		}
+	}
+	return out
+}
+
+// spanWords returns the words of a line of rich text, as strings.Fields
+// splits a text. A word that crosses runs has a part of each run.
+func spanWords(line []span) [][]span {
+	var words [][]span
+	var word []span
+	for _, sp := range line {
+		start := -1
+		for i, r := range sp.text {
+			if !unicode.IsSpace(r) {
+				if start < 0 {
+					start = i
+				}
+				continue
+			}
+			if start >= 0 {
+				word = append(word, span{text: sp.text[start:i], st: sp.st})
+				start = -1
+			}
+			if word != nil {
+				words = append(words, word)
+				word = nil
+			}
+		}
+		if start >= 0 {
+			word = append(word, span{text: sp.text[start:], st: sp.st})
+		}
+	}
+	if word != nil {
+		words = append(words, word)
+	}
+	return words
+}
+
+// joinWords returns a new line of rich text: the line, a space in the
+// style of its last run, and the word.
+func joinWords(line, word []span) []span {
+	out := make([]span, len(line), len(line)+len(word))
+	copy(out, line)
+	last := &out[len(out)-1]
+	last.text += " "
+	for _, sp := range word {
+		if last := &out[len(out)-1]; last.st == sp.st {
+			last.text += sp.text
+			continue
+		}
+		out = append(out, sp)
 	}
 	return out
 }

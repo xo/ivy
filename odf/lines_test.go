@@ -19,13 +19,13 @@ func TestTextLineNumbers(t *testing.T) {
 		{"continuous", `<text:linenumbering-configuration text:style-name="LineNumbering" text:offset="0.5in" text:increment="5" text:number-position="left"/>`, `-ivy-line-numbers: 36pt 5 1 continuous`},
 		{"page", `<text:linenumbering-configuration text:restart-on-page="true"/>`, `-ivy-line-numbers: 14.15pt 1 1 page`},
 		{"off", `<text:linenumbering-configuration text:number-lines="false" text:increment="5"/>`, ""},
-		{"right", `<text:linenumbering-configuration text:number-position="right"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous right;`},
+		{"right", `<text:linenumbering-configuration text:number-position="right"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous right object-bottom;`},
 		// LibreOffice writes inside and outside, and ODF names them inner
 		// and outer.
-		{"inside", `<text:linenumbering-configuration text:number-position="inside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner;`},
-		{"inner", `<text:linenumbering-configuration text:number-position="inner"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner;`},
-		{"outside", `<text:linenumbering-configuration text:number-position="outside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous outer;`},
-		{"empty", `<text:linenumbering-configuration text:count-empty-lines="false"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous left no-empty;`},
+		{"inside", `<text:linenumbering-configuration text:number-position="inside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner object-bottom;`},
+		{"inner", `<text:linenumbering-configuration text:number-position="inner"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous inner object-bottom;`},
+		{"outside", `<text:linenumbering-configuration text:number-position="outside"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous outer object-bottom;`},
+		{"empty", `<text:linenumbering-configuration text:count-empty-lines="false"/>`, `-ivy-line-numbers: 14.15pt 1 1 continuous left object-bottom no-empty;`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			edit := func(s string) string {
@@ -67,7 +67,7 @@ func TestTextLineNumberStart(t *testing.T) {
 	}
 	body := `<text:p text:style-name="PR">Restart</text:p><text:p text:style-name="P0">Zero</text:p>`
 	html, _ := odtHTML(t, odtWith(body, auto, edit))
-	if p := odtParagraph(t, html, "Restart"); !strings.Contains(p, "-ivy-line-numbers: 14.15pt 5 10 continuous left reset;") {
+	if p := odtParagraph(t, html, "Restart"); !strings.Contains(p, "-ivy-line-numbers: 14.15pt 5 10 continuous left object-bottom reset;") {
 		t.Errorf("expected the paragraph to start at 10, got: %s", p)
 	}
 	if p := odtParagraph(t, html, "Zero"); strings.Contains(p, "-ivy-line-numbers") {

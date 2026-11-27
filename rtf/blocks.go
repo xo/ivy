@@ -489,19 +489,23 @@ func (c *converter) closeTables(t *target, lvl int) {
 			continue
 		}
 		out := &t.out
+		float := false
 		if n > 1 {
 			out = &t.level(n - 1).cell
 		} else {
 			c.closeFrame(t)
+			float = t == c.body && c.section.cols <= 1 && !c.inNote()
 		}
-		c.writeTable(out, l)
+		c.writeTable(out, l, float)
 	}
 }
 
 // writeTable closes the table l, and writes its rows to out. Each cell
 // covers the columns between its edges, as in Word, where each row has
-// cells of its own.
-func (c *converter) writeTable(out *strings.Builder, l *tableLevel) {
+// cells of its own. When float is set, a table whose first row has a
+// position floats there, see tableFloatCSS. float is set for a table of
+// the body, out of another table, in a section of one column.
+func (c *converter) writeTable(out *strings.Builder, l *tableLevel, float bool) {
 	l.open = false
 	rows := l.rows
 	l.rows = nil
@@ -531,11 +535,19 @@ func (c *converter) writeTable(out *strings.Builder, l *tableLevel) {
 	if len(grid) > 1 {
 		st.set("width", pt(grid[len(grid)-1]-grid[0]))
 	}
-	switch first.align {
-	case 'c':
+	switch {
+	case float && first.pos.set && len(grid) > 1:
+		pad := first.gap
+		if len(first.cells) > 0 && first.cells[0].pad[0] >= 0 {
+			pad = first.cells[0].pad[0]
+		} else if first.pad[0] >= 0 {
+			pad = first.pad[0]
+		}
+		c.tableFloatCSS(&st, first.pos, grid[len(grid)-1]-grid[0], pad)
+	case first.align == 'c':
 		st.set("margin-left", "auto")
 		st.set("margin-right", "auto")
-	case 'r':
+	case first.align == 'r':
 		st.set("margin-left", "auto")
 	default:
 		if len(grid) > 0 && grid[0] != 0 {

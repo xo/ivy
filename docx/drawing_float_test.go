@@ -179,20 +179,119 @@ func TestColumnFloat(t *testing.T) {
 			`</wp:anchor></w:drawing></w:r><w:r><w:t>Text</w:t></w:r></w:p>` + sect
 	}
 	for _, tt := range []struct {
-		name, body, want string
+		name, body, want, position string
 	}{
-		{"vml across", vml("270pt", "text", "tight"), "float: left; margin-left: 270pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt"},
-		{"vml in its column", vml("-20pt", "text", "square"), "float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt"},
-		{"vml from the margin", vml("270pt", "margin", "square"), "float: left; margin-left: 270pt; margin-right: 9pt; -ivy-wrap-flow: both 9pt"},
-		{"vml above and below", vml("270pt", "text", "topAndBottom"), "position: absolute"},
+		{"vml across", vml("270pt", "text", "tight"), "float: left; margin-left: 270pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt", ""},
+		{"vml in its column", vml("-20pt", "text", "square"), "float: left; margin-left: 0pt; margin-right: 9pt; margin-top: 72pt; -ivy-wrap-flow: both 9pt", ""},
+		// A position from the margin or from the page is kept in a column.
+		{"vml from the margin", vml("270pt", "margin", "square"), "float: left; margin-left: 270pt; margin-right: 9pt; -ivy-float-position: margin 72pt; -ivy-wrap-flow: both 9pt", "margin 72pt"},
+		// A shape above and below the text floats from the top of the part
+		// of its paragraph in the column, with no room beside it.
+		{"vml above and below", vml("20pt", "text", "topAndBottom"), "float: left; margin-left: 20pt; margin-right: 0pt; -ivy-float-position: block 72pt", "block 72pt"},
+		{"vml above and below from the line", vml("20pt", "line", "topAndBottom"), "-ivy-float-position: line 72pt", "line 72pt"},
 		// 50pt wide at 100pt crosses the column, at 60pt it does not
-		{"drawing across", drawing("1270000"), "float: left; margin-left: 100pt; margin-right: 9pt"},
-		{"drawing at the right", drawing("762000"), "float: right; margin-right: 10pt; margin-left: 9pt"},
+		{"drawing across", drawing("1270000"), "float: left; margin-left: 100pt; margin-right: 9pt", ""},
+		{"drawing at the right", drawing("762000"), "float: right; margin-right: 10pt; margin-left: 9pt", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			html, _ := convertHTML(t, fixture.DOCX(tt.body))
-			if !strings.Contains(html, tt.want) || strings.Contains(html, "-ivy-float-position") {
-				t.Errorf("expected %q and no -ivy-float-position in the xhtml:\n%s", tt.want, html)
+			if !strings.Contains(html, tt.want) {
+				t.Errorf("expected %q in the xhtml:\n%s", tt.want, html)
+			}
+			if got := strings.Contains(html, "-ivy-float-position"); got != (tt.position != "") || got && !strings.Contains(html, "-ivy-float-position: "+tt.position) {
+				t.Errorf("expected -ivy-float-position %q in the xhtml:\n%s", tt.position, html)
+			}
+		})
+	}
+}
+
+// TestFitText tests the VML text boxes with mso-wrap-style none, which
+// are as wide as their text in Word.
+func TestFitText(t *testing.T) {
+	shape := func(style, wrap string) string {
+		return `<w:p><w:r><w:pict><v:rect style="position:absolute;margin-left:10pt;margin-top:20pt;width:114pt;height:77pt;` + style +
+			`" fillcolor="red"><v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>Shape</w:t></w:r></w:p></w:txbxContent></v:textbox>` +
+			`<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="` + wrap + `"/></v:rect></w:pict></w:r><w:r><w:t>Text</w:t></w:r></w:p>`
+	}
+	for _, tt := range []struct {
+		name, body string
+		fit        bool
+	}{
+		{"square", shape("mso-wrap-style:none", "square"), true},
+		{"tight", shape("mso-wrap-style:none;mso-position-horizontal:left", "tight"), true},
+		{"no wrap", shape("mso-wrap-style:none", "none"), true},
+		{"wrap style square", shape("mso-wrap-style:square", "square"), false},
+		{"at the right", shape("mso-wrap-style:none;mso-position-horizontal:right", "square"), false},
+		// A block keeps the width of its shape.
+		{"above and below", shape("mso-wrap-style:none", "topAndBottom"), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, fixture.DOCX(tt.body))
+			fit := strings.Contains(html, `<span class="fit"`)
+			if fit != tt.fit || fit == strings.Contains(html, "width: 114pt") {
+				t.Errorf("fit = %t, want %t, in the xhtml:\n%s", fit, tt.fit, html)
+			}
+		})
+	}
+}
+
+// TestCellDrawingAbove tests a drawing in a table cell with layoutInCell
+// above its line or its paragraph, which floats there in Word, but not
+// above the top of the cell.
+func TestCellDrawingAbove(t *testing.T) {
+	drawing := func(relative, offset, inCell string) string {
+		return `<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" layoutInCell="` + inCell + `">` +
+			`<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>` +
+			`<wp:positionV relativeFrom="` + relative + `"><wp:posOffset>` + offset + `</wp:posOffset></wp:positionV>` +
+			`<wp:extent cx="63500" cy="63500"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Picture 1"/>` +
+			`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"/></a:graphic>` +
+			`</wp:anchor></w:drawing></w:r></w:p>`
+	}
+	cell := func(p string) string {
+		return `<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Head</w:t></w:r></w:p>` + p + `</w:tc></w:tr></w:tbl><w:p/>`
+	}
+	for _, tt := range []struct {
+		name, body, position string
+	}{
+		{"line", cell(drawing("line", "-1270000", "1")), "line -100pt"},
+		{"paragraph", cell(drawing("paragraph", "-1270000", "1")), "block -100pt"},
+		{"below", cell(drawing("line", "1270000", "1")), ""},
+		{"not in cell", cell(drawing("line", "-1270000", "0")), ""},
+		{"body", drawing("line", "-1270000", "1"), ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, fixture.DOCX(tt.body))
+			if got := strings.Contains(html, "-ivy-float-position"); got != (tt.position != "") || got && !strings.Contains(html, "-ivy-float-position: "+tt.position) {
+				t.Errorf("expected -ivy-float-position %q in the xhtml:\n%s", tt.position, html)
+			}
+		})
+	}
+}
+
+// TestFloatsOnly tests a paragraph that holds only a picture that floats.
+// Its mark is on a line, as in Word, and the box of the picture is the
+// picture.
+func TestFloatsOnly(t *testing.T) {
+	anchor := `<w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0">` +
+		`<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>` +
+		`<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>` +
+		`<wp:extent cx="63500" cy="63500"/><wp:wrapSquare wrapText="bothSides"/><wp:docPr id="1" name="Picture 1"/>` +
+		`<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg"/></pic:blipFill></pic:pic></a:graphicData></a:graphic>` +
+		`</wp:anchor></w:drawing></w:r>`
+	for _, tt := range []struct {
+		name, body string
+		br         bool
+	}{
+		{"float", `<w:p>` + anchor + `</w:p>`, true},
+		{"float and text", `<w:p>` + anchor + `<w:r><w:t>Text</w:t></w:r></w:p>`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := convertHTML(t, fixture.DOCX(tt.body))
+			if got := strings.Contains(html, "</span><br/></p>"); got != tt.br {
+				t.Errorf("break = %t, want %t, in the xhtml:\n%s", got, tt.br, html)
+			}
+			if !strings.Contains(html, "width: 5pt; line-height: 0") {
+				t.Errorf("expected a picture without a line in the xhtml:\n%s", html)
 			}
 		})
 	}

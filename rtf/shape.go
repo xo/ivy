@@ -504,7 +504,52 @@ func (c *converter) floatCSS(s *css, w, h float64, pic bool) {
 		}
 		s.set("margin-bottom", num(distB)+"pt")
 		s.set("-ivy-wrap-flow", wrapSide(sh.wrk)+" "+num(max(distL, distR))+"pt")
+		if sh.wr == wrTight {
+			s.set("-ivy-wrap-shape", wrapPolygon(sh.props["pWrapPolygonVertices"], w, h))
+		}
 	}
+}
+
+// wrTight is the \shpwr of a shape with tight wrap, whose text wraps
+// around its wrap polygon.
+const wrTight = 4
+
+// maxWrapPoints is the largest number of points of a wrap polygon that
+// the layout takes.
+const maxWrapPoints = 1024
+
+// wrapPolygon returns the value of -ivy-wrap-shape for the property
+// pWrapPolygonVertices v of a shape of w by h points, or "" for none
+// (D63). The value is an array of RTF 1.9.1: the size of an element, the
+// number of the elements, and each point as (x,y), all apart by
+// semicolons. The points are in a square of 21600 by 21600 over the box of
+// the shape, as in the package msdoc. LibreOffice 26.8 wraps the text of a
+// tight wrap around them, and the text of a through wrap around the box of
+// the shape.
+func wrapPolygon(v string, w, h float64) string {
+	fields := strings.Split(v, ";")
+	if len(fields) < 5 || len(fields) > maxWrapPoints+2 {
+		return ""
+	}
+	parts := make([]string, 0, len(fields)-2)
+	for _, f := range fields[2:] {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		xs, ys, ok := strings.Cut(strings.Trim(f, "()"), ",")
+		x, errX := strconv.Atoi(strings.TrimSpace(xs))
+		y, errY := strconv.Atoi(strings.TrimSpace(ys))
+		if !ok || errX != nil || errY != nil {
+			return ""
+		}
+		x, y = min(max(x, -1e6), 1e6), min(max(y, -1e6), 1e6)
+		parts = append(parts, num(float64(x)*w/21600)+"pt "+num(float64(y)*h/21600)+"pt")
+	}
+	if len(parts) < 3 {
+		return ""
+	}
+	return "polygon(" + strings.Join(parts, ", ") + ")"
 }
 
 // wrapSide returns the keyword of -ivy-wrap-flow for the \shpwrk of a

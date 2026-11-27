@@ -187,6 +187,8 @@ type rowDef struct {
 	// side is the side of the border of a cell that the next border word
 	// sets, or 0.
 	side byte
+	// pos is the position of a table that floats.
+	pos tablePos
 }
 
 // field is a field of RTF, \field.

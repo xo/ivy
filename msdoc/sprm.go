@@ -15,6 +15,7 @@ const (
 	sprmCFData        = 0x0806
 	sprmCFSpec        = 0x0855
 	sprmCPicLocation  = 0x6A03
+	sprmCSymbol       = 0x6A09
 	sprmCFBold        = 0x0835
 	sprmCFItalic      = 0x0836
 	sprmCFStrike      = 0x0837
@@ -28,6 +29,7 @@ const (
 	sprmCFDStrike     = 0x2A53
 	sprmCIstd         = 0x4A30
 	sprmCHps          = 0x4A43
+	sprmCHpsKern      = 0x484B
 	sprmCRgFtc0       = 0x4A4F
 	sprmCRgFtc1       = 0x4A50
 	sprmCRgLid1_80    = 0x486E
@@ -184,8 +186,9 @@ type chp struct {
 	hidden, deleted                 bool
 	// iss is 1 for superscript and 2 for subscript.
 	iss byte
-	// hps is the size in half points, or 0.
-	hps int
+	// hps is the size in half points, or 0. hpsKern is the least size in
+	// half points of the text that Word kerns, or 0 for no kerning.
+	hps, hpsKern int
 	// spacing is the space that the characters add after them, in twips.
 	// A negative value condenses them.
 	spacing int
@@ -206,6 +209,11 @@ type chp struct {
 	// stream Data.
 	special, data bool
 	picLocation   uint32
+	// symbol is set for a special character that stands for the code
+	// symbolCode of the font symbolFtc, from sprmCSymbol.
+	symbol     bool
+	symbolFtc  int
+	symbolCode rune
 	// border is the border of the characters, from sprmCBrc80 or
 	// sprmCBrc.
 	border brc
@@ -390,6 +398,10 @@ func applyChp(c *chp, s sprm, base *chp) {
 		if hps := int(s.value()); hps >= 2 && hps <= 3276 {
 			c.hps = hps
 		}
+	case sprmCHpsKern:
+		if hps := int(s.value()); hps >= 0 && hps <= 3276 {
+			c.hpsKern = hps
+		}
 	case sprmCDxaSpace:
 		// Word takes up to 1584 points, 31680 twips
 		if v := int(int16(s.value())); abs(v) <= 31680 {
@@ -423,6 +435,13 @@ func applyChp(c *chp, s sprm, base *chp) {
 		c.data = v != 0
 	case sprmCPicLocation:
 		c.picLocation = uint32(s.value())
+	case sprmCSymbol:
+		// a CSymbolOperand: the index of the font and the character
+		if len(s.operand) == 4 {
+			c.symbol = true
+			c.symbolFtc = int(uint16(s.operand[0]) | uint16(s.operand[1])<<8)
+			c.symbolCode = rune(uint16(s.operand[2]) | uint16(s.operand[3])<<8)
+		}
 	case sprmCBrc80:
 		c.border = brc80(s.operand)
 	case sprmCBrc:

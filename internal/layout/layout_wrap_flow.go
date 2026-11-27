@@ -42,15 +42,25 @@ type room struct {
 // float, or "" for auto.
 func wrapFlow(box *Box) (string, float64) {
 	t, ok := box.Style.Get("wrap_flow").(Tuple)
-	if !ok || len(t) != 2 {
+	if !ok || len(t) < 2 {
 		return "", 0
 	}
 	return str(t[0]), num(t[1])
 }
 
+// wrapMargin reports whether a float of -ivy-wrap-flow has the keyword
+// margin: a line that starts after the float, when the float covers the
+// start of the line, starts after the float, its distance and the margin
+// of its paragraph at the start side, as LibreOffice 26.8 starts it (D63).
+func wrapMargin(box *Box) bool {
+	t, ok := box.Style.Get("wrap_flow").(Tuple)
+	return ok && len(t) == 3 && isStr(t[2], "margin")
+}
+
 // wrapShape returns the points of the polygon of -ivy-wrap-shape of a
 // float, x and y in pixels from the top left corner of its border box, or
-// nil for none.
+// nil for none. A percentage is of the width or of the height of the
+// border box.
 func wrapShape(box *Box) []float64 {
 	t, ok := box.Style.Get("wrap_shape").(Tuple)
 	if !ok || len(t) < 6 || len(t)%2 != 0 {
@@ -58,11 +68,21 @@ func wrapShape(box *Box) []float64 {
 	}
 	points := make([]float64, len(t))
 	for i, v := range t {
-		f, ok := v.(Float)
-		if !ok {
+		switch v := v.(type) {
+		case Float:
+			points[i] = float64(v)
+		case Dimension:
+			if v.Unit != "%" {
+				return nil
+			}
+			size := box.BorderWidth()
+			if i%2 == 1 {
+				size = box.BorderHeight()
+			}
+			points[i] = v.Value * size / 100
+		default:
 			return nil
 		}
-		points[i] = float64(f)
 	}
 	return points
 }
@@ -142,6 +162,7 @@ func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (roo
 	type cut struct {
 		side       string
 		start, end float64
+		margin     bool
 	}
 	var cuts []cut
 	for _, shape := range lc.excludedShapes() {
@@ -171,7 +192,7 @@ func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (roo
 			continue
 		}
 		bottoms = append(bottoms, bottom)
-		cuts = append(cuts, cut{side, start - distance, end + distance})
+		cuts = append(cuts, cut{side, start - distance, end + distance, wrapMargin(shape)})
 	}
 	bounds = room{left, right}
 	if len(cuts) == 0 {
@@ -179,6 +200,17 @@ func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (roo
 	}
 	free := []room{bounds}
 	for _, c := range cuts {
+		// A float of the keyword margin that covers the start of the
+		// line moves the text after it by the margin of the paragraph at
+		// the start side.
+		if c.margin {
+			marginLeft, marginRight := paragraphMargins(containingBlock)
+			if ltr && c.start <= left && c.end > left {
+				c.end += max(marginLeft, 0)
+			} else if !ltr && c.end >= right && c.start < right {
+				c.start -= max(marginRight, 0)
+			}
+		}
 		// start and end keep the text on one side of the float: the side
 		// of the start or of the end of the line
 		switch {
@@ -220,6 +252,19 @@ func (lc *layoutContext) lineRooms(box, containingBlock *Box, y, h float64) (roo
 		return cmp.Compare(b.start, a.start)
 	})
 	return rooms, bottoms, bounds
+}
+
+// paragraphMargins returns the margins at the left and at the right of the
+// block of the lines of containingBlock: its own margins, or the margins of
+// its parent when it is an anonymous block, such as the block of the lines
+// of a paragraph that starts with a float.
+func paragraphMargins(containingBlock *Box) (left, right float64) {
+	s := containingBlock.Style
+	if s.kind != kindAnonymous || s.ParentStyle == nil {
+		return containingBlock.MarginLeft, containingBlock.MarginRight
+	}
+	p := s.ParentStyle
+	return usedPercentage(p.Get("margin_left"), p, containingBlock.Width), usedPercentage(p.Get("margin_right"), p, containingBlock.Width)
 }
 
 // after reports whether the room r is after the room of the last line of

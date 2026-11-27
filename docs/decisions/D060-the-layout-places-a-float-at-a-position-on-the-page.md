@@ -444,6 +444,67 @@ The build of 2026-11-19 differs from the proposal in these places:
     says. LibreOffice draws it 140 points wide, and ivy places the text
     around it as LibreOffice does.
 
+13. On 2026-11-27 the layout gets the property `-ivy-float-page`. `odf`
+    gives it from `text:anchor-page-number` to a frame that is a page float.
+    This replaces the last sentence of point 10. When the flow meets the
+    frame on a page before its page, the frame waits, and its page places
+    it before the flow. LibreOffice 26.8 adds blank pages when the text
+    ends before the page of a frame, and the layout does the same, up to
+    the page 1000. A frame anchored to the page without wrap, or with the
+    wrap run-through, stays an absolute box on the page where its element
+    is in the text. On the test file `float-page2.odt` of `odf`, ivy places
+    the frame and the words of the text of page 2 within 0.5 point of
+    LibreOffice 26.8.
+14. On 2026-11-27 `rtf` floats a table whose first row has the words of the
+    position of a table of RTF 1.9.1, such as `\tphmrg`, `\tposx`,
+    `\tpvpg` and `\tposyb`. A table at a position from the margin or from
+    the page gets the property, as a table of `docx` does. A row without
+    `\tpvmrg`, `\tpvpg` or `\tpvpara` has its position from the margin, as
+    in LibreOffice 26.8. A table with `\tpvpara` floats at the top of the
+    next paragraph, and its position is a margin above it.
+    `\tdfrmtxtLeft`, `\tdfrmtxtRight`, `\tdfrmtxtTop` and
+    `\tdfrmtxtBottom` give the distances of the text. LibreOffice 26.8
+    puts the text of the first cell at `\tposx` and at the left alignment,
+    and ignores `\trleft`. So the edge of the table is the padding of the
+    first cell to the left of it, but not to the left of the page. The
+    right alignment keeps the distance at the right from the side of the
+    area. `\tabsnoovrlp1` gives `-ivy-float-overlap: avoid`, as
+    `w:tblOverlap` never does in `docx`. LibreOffice 26.8 ignores it in an
+    RTF file, and it also ignores `\tposnegx` and `\tposnegy`, which ivy
+    reads as RTF 1.9.1 says. A table of a header, a footer, a note, a
+    table or a section with columns stays a block. On the test
+    files `float-t-*.rtf` of `rtf`, ivy places the tables within 0.5 point
+    of LibreOffice 26.8, and the words of the text beside them within 1
+    point. LibreOffice makes each row higher by the width of its border, so
+    the lower rows of a table of 4 rows are up to 2 points apart.
+15. On 2026-11-27 a float of `-ivy-float-position` in a column of a row of
+    columns is a page float in the formatting context of its column. This
+    replaces point 6 and the last two sentences of point 12. When the float
+    covers lines of its column, the page is made again, and the column
+    places the float before its flow, at the same place in the column. The
+    property gets the areas `line` and `block` with a length. They place
+    the float from the top of the line of its anchor, or from the top of
+    the part of the block of its anchor in its column, and not above the
+    top of the column, of the table cell or of the page area. In a table
+    cell, a float with `line` or `block` is a page float of the cell, and
+    the cell places it before its flow in the same way. `docx` gives
+    `block` to a VML shape with the wrap top and bottom in a section with
+    columns, as Word places it from the top of the part of its paragraph in
+    the column. It also gives a position from the margin or from the page
+    in a section with columns. In a table cell, `docx` gives `line` or
+    `block` to a drawing with `layoutInCell` and a negative offset from its
+    line or from its paragraph, as Word keeps such a drawing in the cell.
+    `msdoc` already gives the property in a section with columns, so its
+    floats at a position from the margin or from the page go there too. A
+    paragraph of `docx` that holds only drawings that float gets the line
+    of its mark, as in Word, and the box of a floating picture is the
+    picture. On page 2 of `libreoffice/docx/mixed-orientation.docx`, the
+    text of the column goes above and below the rectangle, and the mean
+    difference from Word goes from 11.63 to 6.84. On page 9 of
+    `poi/docx/drawing.docx`, the picture "aux-bullet" is at the top left
+    corner of its cell, and the mean difference from Word goes from 14.84
+    to 10.20.
+
 The restore of the saved state of a page also no longer keeps the name of
 a running element that the page added. The page lost the rest of a float
 that the page before cut, and `-ivy-margin-box-fit` had the same fault.

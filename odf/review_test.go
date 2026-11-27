@@ -361,8 +361,9 @@ func TestTextFooterSpacing(t *testing.T) {
 // TestTextFrameSpacing checks three rules of LibreOffice for frames
 // (libreoffice/odt/ooo96040-2.odt, libreoffice/odt/tdf146272.odt): a text
 // box leaves out the spacing below its last paragraph, a frame at the top
-// of its paragraph moves up into the spacing above the paragraph, and an
-// object alone in its paragraph sets the height of its line.
+// of its paragraph moves up into the spacing above the paragraph, also
+// when text comes before it, and an object alone in its paragraph sets the
+// height of its line.
 func TestTextFrameSpacing(t *testing.T) {
 	const auto = `<style:style style:name="Top" style:family="paragraph" style:parent-style-name="Body"><style:paragraph-properties fo:margin-top="12pt"/></style:style>` +
 		`<style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:wrap="none" style:vertical-pos="top" style:vertical-rel="paragraph"/></style:style>`
@@ -383,9 +384,9 @@ func TestTextFrameSpacing(t *testing.T) {
 		!strings.Contains(p, `style="display: block; width: 72pt; height: 36pt"`) {
 		t.Errorf("expected the frame in the spacing above its paragraph, got: %s", p)
 	}
-	// A frame after text stays where it is.
-	if !strings.Contains(html, `Before<span style="display: block; width: 72pt">`) {
-		t.Errorf("expected the frame after the text in place, got:\n%s", html)
+	// A frame after text goes at the top of its paragraph too.
+	if p := odtParagraph(t, html, "Before"); !strings.Contains(p, `<span style="display: block; margin-top: -12pt; width: 72pt">`) {
+		t.Errorf("expected the frame after the text at the top of its paragraph, got: %s", p)
 	}
 	// The line of Body is 115% of 13.8pt, 15.86pt, which adds 2.06pt
 	// below the picture.

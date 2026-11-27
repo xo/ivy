@@ -220,7 +220,9 @@ func (p *parser) marker(ilfo, ilvl int, base chp) (string, chp, bool) {
 				n = l.levels[k].start
 			}
 			b.WriteString(formatNumber(n, nfc))
-		case u >= 0xF000 && u <= 0xF0FF && !keep:
+		case u >= 0xF000 && u <= 0xF0FF && !keep && !p.isSymbolFont(c.ftc):
+			// symbolText gives the codes of the font Symbol their
+			// characters when it writes the run of the marker.
 			b.WriteRune(symbolRune(u - 0xF000))
 		default:
 			b.WriteRune(u)

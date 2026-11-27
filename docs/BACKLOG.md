@@ -126,12 +126,15 @@ found these faults. Each item names a file of the corpus.
     word. No Word page of the corpus has a part narrower than 0.25 inch, so
     the layout leaves such a part empty. Source: the layout and D63,
     2026-11-27.
-17. Find why `idpf/epub/linear-algebra.epub` gives more pages than calibre
-    since its MathML draws as math: 555 pages against 498 on US Letter, and
-    525 against 457 on A4. Before, ivy gave fewer pages than calibre. An
-    inline formula with scripts makes its line higher. Compare the height of
-    such lines with calibre. Source: `internal/formula` and the layout,
-    2026-11-25.
+17. Decide whether an ebook makes the text of a spine file smaller when its
+    content is wider than the page, as calibre does. calibre lays out such a
+    file up to 1.5 times wider and scales it down, so 346 of the 498 Letter
+    pages of `idpf/epub/linear-algebra.epub` show text at 1/1.5 of its size.
+    ivy gives 563 pages on US Letter and 533 on A4, against 498 and 457. On
+    the files that calibre does not shrink, ivy gives 77 pages against 79 on
+    US Letter, and 65 against 65 on A4. The lines that hold an inline formula
+    with scripts are not higher than in calibre. Source: the layout and
+    `internal/formula`, 2026-11-27.
 18. Measure the Arabic fields of `datasets/csv/country-codes.csv` as
     LibreOffice does. LibreOffice shapes them in its fallback font, DejaVu
     Sans on the machine of the review, and makes columns 31, 33 and 44 225.7
@@ -147,122 +150,127 @@ found these faults. Each item names a file of the corpus.
     has its own left and right margins. In CSS a change of the named page
     forces a page break, so the layout needs a property that names the page of
     the later pages without a break. Source: `docx`, 2026-11-27.
-21. Give a rich label of a chart the style of each of its runs.
-    `internal/chart` takes the style of the first run. Source:
-    `internal/chart`, 2026-11-25.
-22. Measure whether Word adds the top and bottom margins and the borders of
+21. Measure whether Word adds the top and bottom margins and the borders of
     the cells to a row of exact height. No file of the corpus with a Word page
     has such a row with cell margins: no `.docx` has `hRule="exact"`, and the
     exact rows of `libreoffice/doc/landscape-letter-form.doc` have no top or
     bottom margins. Source: `docx` and `msdoc`, 2026-11-27.
-23. Sanitize the reference page `test/review/markdownit.html` as GitHub does.
-    It keeps the `style` and `class` attributes and the `script` elements, so
-    the review compares ivy, which drops them, with a page that keeps them.
-    Source: the review, 2026-11-25.
-24. Color the code of the review as Shiki does where transit does not tell the
+22. Color the code of the review as Shiki does where transit does not tell the
     tokens apart: the names of functions in Go, `*` in SQL, the references to
     classes in Python and JavaScript, and `$` in bash. Shiki colors them by
     their context. It needs work on the grammars of transit. Source:
     `test/review`, 2026-11-25.
-25. Read more of the metroBlob (property 0x03A9) of a shape that PowerPoint
+23. Read more of the metroBlob (property 0x03A9) of a shape that PowerPoint
     2007 or later wrote into a .ppt file. `msppt` takes only `marL` and
     `indent` of its paragraphs, when the number of paragraphs matches.
     PowerPoint draws the whole DrawingML shape when the checksums of
     `drs/downrev.xml` (shapeCheckSum and textCheckSum) match the binary shape.
     Source: `msppt`, 2026-11-25.
-26. Give the text of `-ivy-text-outline` to a writer of PDF. The stroked
+24. Give the text of `-ivy-text-outline` to a writer of PDF. The stroked
     outlines have no text that a reader can search or copy. Source: the
     layout, 2026-11-25.
-27. Measure the line ratio of Century Gothic, 1.2261, which `docx` and `msdoc`
+25. Measure the line ratio of Century Gothic, 1.2261, which `docx` and `msdoc`
     give to Century Gothic and to URW Gothic. It is not read from the font.
     Page 1 of `poi/doc/floating-pictures.doc` matches Word with it. Source:
     `docx` and `msdoc`, 2026-11-25.
-28. Draw the table styles of `xlsx`, such as TableStyleMedium2 of
+26. Draw the table styles of `xlsx`, such as TableStyleMedium2 of
     `tableStyleInfo`, and the fills and the borders of the pivot styles. It
     needs the preset styles of ECMA-376. See `poi/xlsx/pivot-table.xlsx`.
-    Source: `xlsx`, 2026-11-25.
-29. Measure the step of the indent of Excel with more fonts.
+    Source: `xlsx`, 2026-11-25. It needs `presetTableStyles.xml` of the
+    SpreadsheetML styles of ECMA-376 Part 1, which is not on the machine of
+    the agents. A maintainer must put it in `upstream/` or in
+    `xlsx/testdata/ecma` first.
+27. Measure the step of the indent of Excel with more fonts.
     `sheet.IndentStep` is 8.25 points, which fits Arial 10, and Excel does not
     scale it with the page. Century Gothic 9 gives about 9 points. Source:
     `internal/sheet`, 2026-11-25.
-30. Put the boxes of a footnote of an ebook from right to left when the
+28. Put the boxes of a footnote of an ebook from right to left when the
     document is from right to left. On page 17 of
     `idpf/epub/regime-anticancer-arabic.epub`, the root has `dir="rtl"`, and
     the text of the page is from right to left. The footnote puts "[1]" at the
     left and the year at the right, as a line from left to right does. Source:
     the layout, 2026-11-26.
-31. Put a frame of `odf` that a paragraph anchors with wrap none at the top of
-    its paragraph, also when text comes before it in the paragraph, as
-    LibreOffice does. ivy keeps the frame after the text. Source: `odf`,
+29. Place a frame of `odf` that is anchored to the page without `style:wrap`,
+    or with the wrap run-through, on the page that `text:anchor-page-number`
+    names. Since 2026-11-27 a frame with wrap goes on that page. A frame
+    without wrap stays an absolute box on page 1. Source: `odf` and D60,
     2026-11-27.
-32. Keep a line of `odf` with a fixed `fo:line-height` at that height when a
-    picture as a character is taller, as LibreOffice does. ivy makes the line
-    grow. Source: `odf`, 2026-11-27.
-33. Draw the number of a line of `odf` that holds only an object at the bottom
-    of the object, as LibreOffice does. ivy draws it at the top. Source:
-    `odf`, 2026-11-27.
-34. Swap the margins of the left pages of `odf` with
-    `style:page-usage="mirrored"`, as LibreOffice does. Source: `odf`,
-    2026-11-27.
-35. Use `style:footnote-sep` of `odf` for the spacing and the line above the
-    footnotes. ivy uses 6pt, 0.5pt and 3pt, and LibreOffice uses 2.86pt,
-    0.51pt and 2.86pt. Then keep at the top of a part of a cell the spacing
-    that contextual spacing leaves out, as LibreOffice does. When ivy read
-    `style:footnote-sep`, the footnotes of page 23 of
-    `libreoffice/odt/landscape-a4-table.odt` moved to page 24, so the
-    footnotes in table cells need a look first. Source: `odf`,
-    `internal/layout` and D56, 2026-11-27.
-36. Start the text after a frame that covers the start of a line at the left
-    margin of the paragraph, as LibreOffice 26.8 does: at the frame, plus its
-    distance, plus the margin. The layout starts it at the frame plus the
-    distance. Source: `odf` and the layout, D63, 2026-11-27.
-37. Draw the background of a text frame of `odf` from `draw:fill` solid and
-    `draw:fill-color`. LibreOffice 26.8 writes the background that way, and
-    `odtBox` reads only `fo:background-color`. Source: `odf`, 2026-11-27.
-38. Place a frame of `odf` that is anchored to the page on the page that
-    `text:anchor-page-number` names. Today it goes on the page where its
-    element is in the text. Source: `odf` and D60, 2026-11-27.
-39. Place a frame of `odf` that floats in a table cell, a frame, a header, a
-    footer or a section with columns at its `svg:x`. The converter does not
-    know the width of the column there. Source: `odf` and D63, 2026-11-27.
-40. Read the tables of `rtf` that float (`\tposx`, `\tposy`, `\tphmrg`,
-    `\tpvpg` and the others) with `-ivy-float-position`, and the wrap polygon
-    (pWrapPolygonVertices) of a shape with tight wrap. Source: `rtf`, D60 and
-    D63, 2026-11-27.
-41. Measure the files `float-*.rtf` of `rtf/testdata` in Word, with a picture
+30. Place a frame of `odf` that floats at the center, or in an area of the
+    page, in a table cell, a frame, a header, a footer or a section with
+    columns. Since 2026-11-27 a frame at the left or the right floats there
+    from the content of its paragraph. Source: `odf` and D63, 2026-11-27.
+31. Measure the files `float-*.rtf` of `rtf/testdata` in Word, with a picture
     that has `\shpbymargin`, `posh`, `posv` or `\shpwr1`, which LibreOffice
     26.8 ignores. A frame without `\pvmrg`, `\pvpg` or `\pvpara` takes its
     place from the margin, as in LibreOffice, and a frame without a wrap word
     wraps around, as the default of sprmPWr of MS-DOC says. LibreOffice puts
     the text above and below such a frame. Source: `rtf`, D60 and D63,
     2026-11-27.
-42. Wrap the text of a column above and below a VML shape with top and bottom
-    wrap in a section with columns, and place a float with a position from the
-    margin or from the page in a section with columns at that position. Today
-    the first is an absolute box, and the second floats at its paragraph. On
-    page 2 of `libreoffice/docx/mixed-orientation.docx` a rectangle covers a
-    word. Source: `docx`, `msdoc` and D60, 2026-11-27.
-43. Place the VML ellipse of page 1 of
-    `libreoffice/docx/mixed-orientation.docx` as Word does. Word draws it 102
-    points wide, not the 140 points of the file, and about 26 points more to
-    the left than ivy. Source: `docx`, 2026-11-27.
-44. Give a line with a bullet of the font Symbol the ascent and the descent of
-    Symbol, as Word does. The bullet lines of the table INSTRUCTIONS of
-    `poi/docx/form-footnotes.docx` are 11.03 points apart in Word and 10.65 in
-    ivy, so Word moves the table to page 3. It changes many documents. Source:
-    `docx`, 2026-11-27.
-45. Keep the anchored picture "aux-bullet" on page 9 of
-    `poi/docx/drawing.docx` in its cell, at the first line. It is relative to
-    the line, with negative offsets and `layoutInCell`. ivy puts it on a line
-    of its own. The heading below the banner is also 2.9 points low. Source:
-    `docx`, 2026-11-27.
-46. Draw a code of Symbol that the font does not have (0x7F to 0xA0, 0xF0,
-    0xFF) as the empty box of Symbol in `msdoc`, as `docx` does. `msdoc` does
-    not read sprmCSymbol, and no `.doc` of the corpus uses those codes.
+32. Draw the text of a VML text box with `mso-wrap-style` none with the insets
+    of its drawn width, as Word does. In the ellipse of page 1 of
+    `libreoffice/docx/mixed-orientation.docx`, Word puts the text 5.7 points
+    more to the left than ivy. ivy also makes such a box 0.75 point wider than
+    Word, because CSS draws the line on both sides. Source: `docx` and D63,
+    2026-11-27.
+33. Put a frame of `odf` with wrap none and `vertical-pos` from-top at its
+    `svg:y` below the top of its paragraph, with the lines that fit above it,
+    as LibreOffice does. Source: `odf`, 2026-11-27.
+34. Keep a float at the start of a paragraph with `fo:text-indent` at its
+    place. The layout moves the frame by the indent, and the text box inherits
+    the indent, 18 points on the test file. Source: the layout, 2026-11-27.
+35. Give the columns of an `odf` table with only `style:rel-column-width` and
+    the margins of `table:align` their relative widths. ivy makes them
+    unequal. Source: `odf`, 2026-11-27.
+36. Add the line of an empty paragraph that holds a frame with wrap none below
+    the frame. LibreOffice adds 12 points there. Source: `odf`, 2026-11-27.
+37. Draw the gradient `draw:fill` of a text frame of `odf`, as in
+    `libreoffice/odt/textframe-gradient.odt`, whose worst score is 10.36.
+    Source: `odf`, 2026-11-27.
+38. Place a frame of `odf` that is anchored to the page on a left page of a
+    mirrored page layout from the margins of that page. `place` takes
+    `c.layout.left` of the right pages. Source: `odf`, 2026-11-27.
+39. Break the last paragraph of a page of `rtf` as LibreOffice 26.8 does.
+    LibreOffice keeps 2 lines of a paragraph of 3 lines at the bottom of page
+    1 of the files `float-t-*.rtf` of `rtf/testdata`, without `\widctlpar`.
+    ivy moves the whole paragraph to page 2. Source: `rtf`, 2026-11-27.
+40. Read `wp:effectExtent` of an anchored drawing of `docx`. On page 9 of
+    `poi/docx/drawing.docx`, Word starts the text beside "aux-bullet" 1.5
+    points further right. Source: `docx`, 2026-11-27.
+41. Place a shape of `msdoc` with the wrap top and bottom from its paragraph
+    in a section with columns from the top of the part of its paragraph in the
+    column, as `docx` does. Source: `msdoc` and D60, 2026-11-27.
+42. Measure in Word a drawing of `wp:wrapTopAndBottom` from its paragraph in a
+    section with columns. It is still a block at its anchor. Source: `docx`
+    and D60, 2026-11-27.
+43. Give a line with a bullet of Courier New the height of a line of its text,
+    as Word does. On page 3 of `aspose/docx/rendering.docx`, Word puts the "o"
+    lines 13.8 points apart. ivy makes each line about 1 point taller, because
+    the inline-block of the marker in Liberation Mono adds its descent.
+    Source: `docx`, 2026-11-27.
+44. Turn off kerning in `docx` and `rtf` unless `w:kern` or `\kerning` asks
+    for it, as `msdoc` does since 2026-11-27. Word kerns no text by default.
     Source: `msdoc`, 2026-11-27.
-47. End the first line of the paragraph "Tight" on page 6 of
-    `poi/doc/floating-pictures.doc` before "close", as Word does. ivy fits the
-    word with 0.1 point to spare. Source: the layout, 2026-11-27.
+45. Read sprmCSymbol of Word 6 (sprm 73, 3 bytes) and sprmCFSpec of Word 6.
+    Source: `msdoc`, 2026-11-27.
+46. Measure in Word why it puts the table INSTRUCTIONS of
+    `poi/docx/form-footnotes.docx` on page 3. By its size it fits on page 2:
+    the table ends at about 733.5 points, and the body ends at 737.3 points.
+    The only row of the table holds a paragraph "Heading 5" with keepNext.
+    Word can keep such a row with the paragraph after the table. Source:
+    `docx`, 2026-11-27.
+47. Give the title of a chart and the title of an axis the style of each run
+    of their rich text, as a label of rich text has. `internal/chart` gives
+    the whole title the style of the first run that has properties. Source:
+    `internal/chart`, 2026-11-27.
+48. Keep the labels outside a pie inside the chart, as Word does. On page 2 of
+    `libreoffice/docx/pie-chart-data-labels.docx`, ivy cuts "Business Return
+    Services" and "Submission Processing" at the left side of the chart.
+    Source: `internal/chart`, 2026-11-27.
+49. Decide the size of the math of MathML next to the text. MathJax in calibre
+    scales a formula so that its x-height matches the x-height of the text, so
+    the math of `idpf/epub/linear-algebra.epub` is about 1.2 times larger in
+    calibre than in ivy. ivy sets the math at the font size of the text.
+    Source: `internal/formula` and the layout, 2026-11-27.
 
 ## Left by the package icc
 

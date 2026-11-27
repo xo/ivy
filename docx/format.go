@@ -43,6 +43,9 @@ var lineRatios = map[string]float64{
 	"courier new": 1.1328, "liberation mono": 1.1328, "courier": 1.1328,
 	"aptos": 1.2, "verdana": 1.2153, "tahoma": 1.207,
 	"century gothic": 1.2261, "urw gothic": 1.2261,
+	// Word gives a line of Symbol the ascent and the descent of Symbol,
+	// 1.005 em and 0.22 em, whichever font draws its characters.
+	"symbol": 1.225,
 }
 
 // defaultLineRatio is the height of a single line of a font that is not in

@@ -621,7 +621,7 @@ func (c *converter) tableWord(t token) bool {
 	case "trpaddl", "trpaddr", "trpaddt", "trpaddb":
 		r.pad[strings.IndexByte("lrtb", t.word[6])] = min(max(t.param, 0), 14400)
 	default:
-		return false
+		return r.pos.word(t)
 	}
 	return true
 }

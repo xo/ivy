@@ -95,6 +95,8 @@ func TestFloatPositionValidation(t *testing.T) {
 		{"bottom margin", Tuple{String("margin"), String("bottom")}},
 		{"page center", Tuple{String("page"), String("center")}},
 		{"margin top", Tuple{String("margin"), String("top")}},
+		{"line -10px", Tuple{String("line"), Float(-10)}},
+		{"10px block", Tuple{String("block"), Float(10)}},
 		// The values that are not valid keep the initial value.
 		{"margin", String("auto")},
 		{"10px", String("auto")},
@@ -103,6 +105,8 @@ func TestFloatPositionValidation(t *testing.T) {
 		{"margin top 10px", String("auto")},
 		{"column 10px", String("auto")},
 		{"top bottom", String("auto")},
+		{"line top", String("auto")},
+		{"block center", String("auto")},
 	} {
 		t.Run(tt.value, func(t *testing.T) {
 			page := renderPages(t, `<style>@page { size: 100px } div { -ivy-float-position: `+tt.value+` }</style><div></div>`)[0]
@@ -149,6 +153,44 @@ func TestFloatOverlapValidation(t *testing.T) {
 		if !Equal(got, String(tt.want)) {
 			t.Errorf("-ivy-float-overlap: %s = %v, want %s", tt.value, got, tt.want)
 		}
+	}
+}
+
+func TestFloatPageValidation(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		want  Value
+	}{
+		{"auto", String("auto")},
+		{"2", Int(2)},
+		{"5000", Int(maxFloatPage)},
+		// The values that are not valid keep the initial value.
+		{"0", String("auto")},
+		{"-1", String("auto")},
+		{"1.5", String("auto")},
+		{"2 3", String("auto")},
+	} {
+		page := renderPages(t, `<style>@page { size: 100px } div { -ivy-float-page: `+tt.value+` }</style><div></div>`)[0]
+		var got Value
+		page.Descendants(func(d *Box) bool {
+			if d.ElementTag == "div" {
+				got = d.Style.Get("float_page")
+			}
+			return got == nil
+		})
+		if !Equal(got, tt.want) {
+			t.Errorf("-ivy-float-page: %s = %v, want %v", tt.value, got, tt.want)
+		}
+	}
+}
+
+func TestFloatPagePasses(t *testing.T) {
+	// counter(pages) makes the pages in two passes. The second pass keeps
+	// the blank page and the page of the float after the flow.
+	pages, _ := renderPageFloats(t, pageFloatStyle+`<style>@page { @bottom-center { content: counter(pages) } }</style>`+
+		pageFloatDiv("a", "margin 20px", "-ivy-float-page: 3")+paragraphs(1, 2))
+	if got, want := describePages(pages), "P1@50,50 P2@50,70 |  | Fa@50,70"; got != want {
+		t.Errorf("pages =\n%s\nwant\n%s", got, want)
 	}
 }
 
@@ -228,6 +270,29 @@ func TestPageFloat(t *testing.T) {
 		// The float is on the page of its anchor.
 		"next page",
 		paragraphs(1, 15) + pageFloatDiv("a", "margin 20px", "") + paragraphs(16, 2),
+		"P1@50,50 P2@50,70 P3@50,90 P4@50,110 P5@50,130 P6@50,150 P7@50,170 P8@50,190 P9@50,210 P10@50,230 | " +
+			"Fa@50,70 P11@50,50 P12@150,70 P13@150,90 P14@150,110 P15@50,130 P16@50,150 P17@50,170",
+		3,
+	}, {
+		// The float of -ivy-float-page waits for the page 2, which places
+		// it before its flow.
+		"float page",
+		pageFloatDiv("a", "margin 20px", "-ivy-float-page: 2") + paragraphs(1, 15),
+		"P1@50,50 P2@50,70 P3@50,90 P4@50,110 P5@50,130 P6@50,150 P7@50,170 P8@50,190 P9@50,210 P10@50,230 | " +
+			"Fa@50,70 P11@50,50 P12@150,70 P13@150,90 P14@150,110 P15@50,130",
+		2,
+	}, {
+		// The flow ends before the page of the float, so a blank page
+		// comes before the page 3 of the float.
+		"float page after the flow",
+		pageFloatDiv("a", "margin 20px", "-ivy-float-page: 3") + paragraphs(1, 2),
+		"P1@50,50 P2@50,70 |  | Fa@50,70",
+		3,
+	}, {
+		// The flow meets the float of the page 1 on the page 2, so the
+		// float is on the page 2.
+		"float page before",
+		paragraphs(1, 15) + pageFloatDiv("a", "margin 20px", "-ivy-float-page: 1") + paragraphs(16, 2),
 		"P1@50,50 P2@50,70 P3@50,90 P4@50,110 P5@50,130 P6@50,150 P7@50,170 P8@50,190 P9@50,210 P10@50,230 | " +
 			"Fa@50,70 P11@50,50 P12@150,70 P13@150,90 P14@150,110 P15@50,130 P16@50,150 P17@50,170",
 		3,
@@ -326,13 +391,52 @@ func TestPageFloat(t *testing.T) {
 		"P1@50,50 Fa@50,70 P2@150,70",
 		1,
 	}, {
-		// In a column, the property does nothing. The columns balance, so
-		// the float and P2 are at the top of the second column.
+		// In a table cell, a float from its line goes up, but not above
+		// the top of the cell. The cell is laid out again with the float
+		// placed before its flow, so P2 wraps around it.
+		"table cell line",
+		paragraphs(1, 1) + `<table style="width: 200px; border-spacing: 0"><tr><td style="padding: 0">` +
+			paragraphs(2, 2) + `<p>P4<span class=f id=a style="-ivy-float-position: line -100px; width: 50px; height: 20px"></span></p></td></tr></table>`,
+		"P1@50,50 P2@100,70 P3@50,90 P4@50,110 Fa@50,70",
+		2,
+	}, {
+		// In a table cell, a float from its block below the flow covers no
+		// line.
+		"table cell block",
+		paragraphs(1, 1) + `<table style="width: 200px; border-spacing: 0"><tr><td style="padding: 0">` +
+			pageFloatDiv("a", "block 40px", "") + `P2</td></tr></table>`,
+		"P1@50,50 Fa@50,110 P2@50,70",
+		1,
+	}, {
+		// In a column, the float is at its position in its column. The
+		// columns balance, so P2 is at the top of the second column.
 		"column",
 		`<div style="columns: 2; column-gap: 0">` + paragraphs(1, 1) + pageFloatDiv("a", "margin 100px", "width: 50px") +
 			paragraphs(2, 1) + `</div>`,
-		"P1@50,50 Fa@150,50 P2@200,50",
+		"P1@50,50 Fa@50,150 P2@150,50",
 		1,
+	}, {
+		// In a column, a float above the flow covers lines of its column.
+		// The page is made again, and the column places the float before
+		// its flow, so the lines before the anchor go below it.
+		"column above",
+		`<div style="columns: 2; column-gap: 0; column-fill: auto">` + paragraphs(1, 3) +
+			`<p>P4<span class=f id=a style="-ivy-float-position: margin 20px; width: 100px; height: 40px"></span></p>` +
+			paragraphs(5, 14) + `</div>`,
+		"P1@50,50 P2@50,110 P3@50,130 P4@50,150 P5@50,170 P6@50,190 P7@50,210 P8@50,230 Fa@50,70 " +
+			"P9@150,50 P10@150,70 P11@150,90 P12@150,110 P13@150,130 P14@150,150 P15@150,170 P16@150,190 P17@150,210 P18@150,230",
+		2,
+	}, {
+		// The float of the second column covers a line of that column.
+		// The layout of that column places it before its flow, and the
+		// first column is not changed.
+		"second column above",
+		`<div style="columns: 2; column-gap: 0; column-fill: auto">` + paragraphs(1, 12) +
+			`<p>P13<span class=f id=a style="-ivy-float-position: margin 20px; width: 100px; height: 40px"></span></p>` +
+			paragraphs(14, 3) + `</div>`,
+		"P1@50,50 P2@50,70 P3@50,90 P4@50,110 P5@50,130 P6@50,150 P7@50,170 P8@50,190 P9@50,210 P10@50,230 " +
+			"P11@150,50 P12@150,110 P13@150,130 P14@150,150 P15@150,170 P16@150,190 Fa@150,70",
+		2,
 	}, {
 		// In a float, the property does nothing.
 		"float",

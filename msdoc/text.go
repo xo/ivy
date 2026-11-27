@@ -680,13 +680,19 @@ func (p *parser) paragraphsIn(ctx context.Context, from, to uint32) ([]paragraph
 				}
 				continue
 			}
-			s, ok := visible(c.r)
+			rc, r := cp, c.r
+			if cp.special && cp.symbol {
+				// a symbol that the character stands for, which the font
+				// of sprmCSymbol draws
+				rc.ftc, r = cp.symbolFtc, p.symbolChar(cp.symbolFtc, cp.symbolCode)
+			}
+			s, ok := visible(r)
 			if !ok {
 				continue
 			}
-			if !haveRun || cp != runChp {
+			if !haveRun || rc != runChp {
 				flushRun()
-				runChp, haveRun = cp, true
+				runChp, haveRun = rc, true
 			}
 			text.WriteString(s)
 		}

@@ -328,6 +328,27 @@ func FuzzText(f *testing.F) {
 		`<text:h text:outline-level="1">H</text:h><text:p text:style-name="T">a<text:tab/>1<draw:rect text:anchor-type="as-char" svg:width="9pt" svg:height="9pt"><text:p>r</text:p></draw:rect></text:p>`+
 			`<draw:custom-shape text:anchor-type="paragraph" svg:width="72pt" svg:height="72pt"><text:p><draw:frame svg:width="9pt" svg:height="9pt"><draw:image xlink:href="Pictures/red.png"/></draw:frame></text:p></draw:custom-shape>`,
 		fixture.Entry{Name: "Pictures/red.png", Data: fixture.PNG(4, 4, color.Black)}))
+	// The frames of D60 and D63: a frame anchored to a later page, a frame
+	// at the top of its paragraph after its text, and a frame in a cell.
+	f.Add(odtStyledFile(`<style:style style:name="pg" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:vertical-rel="page" draw:fill="solid" draw:fill-color="#c0e0ff"/></style:style>`+
+		`<style:style style:name="top" style:family="graphic"><style:graphic-properties style:wrap="none" style:vertical-pos="top" style:vertical-rel="paragraph"/></style:style>`+
+		`<style:style style:name="par" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="from-left" style:horizontal-rel="paragraph"/></style:style>`+
+		`<style:style style:name="ind" style:family="paragraph"><style:paragraph-properties fo:margin-left="9pt"/></style:style>`,
+		`<draw:frame draw:style-name="pg" text:anchor-type="page" text:anchor-page-number="9" svg:x="9pt" svg:y="9pt" svg:width="9pt" svg:height="9pt"><draw:text-box><text:p>f</text:p></draw:text-box></draw:frame>`+
+			`<text:p text:style-name="ind">a <draw:frame draw:style-name="top" text:anchor-type="paragraph" svg:width="9pt" svg:height="9pt"><draw:text-box><text:p>t</text:p></draw:text-box></draw:frame>b</text:p>`+
+			`<table:table><table:table-column/><table:table-row><table:table-cell><text:p><draw:frame draw:style-name="par" text:anchor-type="paragraph" svg:x="9pt" svg:width="9pt" svg:height="9pt"><draw:text-box><text:p>c</text:p></draw:text-box></draw:frame>d</text:p></table:table-cell></table:table-row></table:table>`))
+	// A mirrored page layout with the line above the footnotes, the
+	// numbers of the lines and a picture as a character in a line of a
+	// fixed height.
+	f.Add(odtWith(`<text:p text:style-name="fix">a <draw:frame text:anchor-type="as-char" svg:width="9pt" svg:height="9pt"><draw:image xlink:href="Pictures/red.png"/></draw:frame>`+
+		`<text:note text:note-class="footnote"><text:note-body><text:p>n</text:p></text:note-body></text:note></text:p>`,
+		`<style:style style:name="fix" style:family="paragraph"><style:paragraph-properties fo:line-height="4pt"/></style:style>`,
+		func(s string) string {
+			s = strings.Replace(s, `<style:page-layout style:name="pm1">`, `<style:page-layout style:name="pm1" style:page-usage="mirrored">`, 1)
+			s = strings.Replace(s, `fo:margin-right="0.5in"/>`, `fo:margin-right="0.5in"><style:footnote-sep style:width="1pt" style:rel-width="50%" style:adjustment="center"/></style:page-layout-properties>`, 1)
+			return strings.Replace(s, "</office:styles>", `<text:linenumbering-configuration text:increment="1"/></office:styles>`, 1)
+		},
+		fixture.Entry{Name: "Pictures/red.png", Data: fixture.PNG(4, 4, color.Black)}))
 	cfg := ivy.Config{Limits: ivy.Limits{MaxMemory: 1 << 20, MaxPixels: 1 << 16, MaxObjects: 1 << 14, MaxDepth: 32}}
 	f.Fuzz(func(t *testing.T, buf []byte) {
 		d, err := Open(t.Context(), bytes.NewReader(buf), WithConfig(cfg))

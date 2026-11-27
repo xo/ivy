@@ -531,3 +531,31 @@ func TestHeaderFit(t *testing.T) {
 		}
 	}
 }
+
+// TestKerning checks that Word kerns no text, as on page 6 of
+// poi/doc/floating-pictures.doc, where the first line of the paragraph
+// "Tight" ends before "close". sprmCHpsKern kerns the text from its size up.
+func TestKerning(t *testing.T) {
+	p := testParser(nil, nil)
+	if css := p.css(letter); !strings.Contains(css, "font-kerning: none;") {
+		t.Errorf("expected no kerning in the style sheet:\n%s", css)
+	}
+	kern := defaultChp()
+	applyChp(&kern, sprm{op: sprmCHpsKern, operand: u16s(24)}, &kern)
+	small, large := kern, kern
+	small.hps, large.hps = 20, 24
+	for _, tt := range []struct {
+		c    chp
+		want bool
+	}{
+		{defaultChp(), false},
+		{small, false},
+		{large, true},
+	} {
+		var b strings.Builder
+		p.writeRun(&b, run{text: "AV", chp: tt.c})
+		if got := strings.Contains(b.String(), "font-kerning: normal"); got != tt.want {
+			t.Errorf("expected the kerning %t at %d half points, got: %s", tt.want, tt.c.hps, b.String())
+		}
+	}
+}

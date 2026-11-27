@@ -223,3 +223,50 @@ The build of 2026-11-25 differs from the proposal in these places:
     points. The pages of Word of the corpus have no room narrower than 0.25
     inch next to a picture, so the width of Word is not measured. The layout
     keeps the rule of point 3.
+16. On 2026-11-27 `-ivy-wrap-flow` gets the keyword `margin`, which `odf`
+    gives. A line that starts after a float that covers the start of the
+    line keeps the margin of its paragraph at the start side. LibreOffice
+    26.8 starts such a line at the frame, plus the distance, plus the left
+    margin of the paragraph. This answers the last sentence of point 8.
+    LibreOffice does not keep the right margin of a paragraph before a
+    frame at the end of a line. Word is not measured, so `msdoc`, `docx` and
+    `rtf` do not give the keyword. On the test file `float-margin.odt` of
+    `odf`, ivy starts the lines within 0.2 point of LibreOffice 26.8.
+17. On 2026-11-27 `odf` places a frame that floats in a table cell, a
+    frame, a header, a footer or a section with columns at its `svg:x`.
+    This replaces the last sentence of point 6. Without the width of the
+    column, the frame floats to the left, and a margin from the left edge
+    of the content of its paragraph gives its place. A frame at the right
+    floats to the right with a margin from the right edge. A frame at the
+    center, or in an area of the page, still floats at the edge of the
+    column. On the test files `float-cell.odt` and `float-section.odt` of
+    `odf`, ivy places the frames within 0.5 point of LibreOffice 26.8. In a
+    header, LibreOffice 26.8 places such a frame at its `svg:x` too, but
+    does not wrap the text of the header around it.
+18. On 2026-11-27 `rtf` gives a shape with tight wrap, `\shpwr4`, its wrap
+    polygon, the property `pWrapPolygonVertices`. The points are in a
+    square of 21600 by 21600 over the box of the shape, as in `msdoc`.
+    LibreOffice 26.8 wraps the text of an RTF file with through wrap,
+    `\shpwr5`, around the box of the shape, and not around the polygon. So
+    `rtf` gives the polygon only for tight wrap. `rtf` does not turn or flip
+    a shape that floats, so the polygon does not turn. On the test file
+    `float-s-tight.rtf` of `rtf`, ivy places the words next to a diamond
+    within 0.3 point of LibreOffice 26.8. `rtf` also gives `-ivy-wrap-flow:
+    both` to a table that floats with half an inch of the column on each
+    side of it (D60), as LibreOffice 26.8 puts the text on both sides of
+    such a table. The lines then avoid only the border box of the table
+    above and below it, as for a picture.
+19. On 2026-11-27 a point of `-ivy-wrap-shape` can be in percentages of
+    the width and of the height of the border box. `docx` gives them for
+    the `wrapcoords` of a VML text box with `mso-wrap-style` none. Word
+    draws such a text box as wide as its longest line of text, plus the
+    insets of its text box and its line, and not at the width of its style.
+    It keeps the left side and the height of the shape. For an ellipse,
+    the width counts the insets of the width of its style. So `docx` gives
+    such a shape no width, and the layout gives it the width of its text,
+    which does not wrap. On page 1 of
+    `libreoffice/docx/mixed-orientation.docx`, Word draws the ellipse 102.3
+    points wide, and ivy 103.2 points. The mean difference from Word goes
+    from 8.30 to 7.29. Word draws the text of the ellipse with the insets
+    of the drawn width, so its text is 5.7 points more to the left than in
+    ivy.
