@@ -92,13 +92,14 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			}
 		}
 	}
-	fill, stroke := vmlFill(shape), vmlStroke(shape)
+	fill := vmlFill(shape)
+	stroke, weight := vmlStroke(shape)
 	if src != "" {
 		// A picture covers its fill. Its shape type has no line, so it has
 		// a line only when the shape asks for one.
 		fill = ""
 		if _, ok := child(shape, "stroke"); !ok && ooxml.Attr(shape, "stroked") == "" && ooxml.Attr(shape, "strokecolor") == "" {
-			stroke = ""
+			stroke, weight = "", 0
 		}
 	}
 	if !hasText && src == "" && fill == "" && stroke == "" {
@@ -253,6 +254,18 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 			for i, v := range [...]float64{h, w, h, w} {
 				inset[i] += v * 0.146
 			}
+			if fit {
+				// Word makes the ellipse as wide as its text, the insets,
+				// the insets of the width of the style and its line, but it
+				// puts the text at the inset of the width that it draws.
+				// The box keeps its width, and the text moves by the part
+				// of the inset that depends on the width of the text, see
+				// fitShift.
+				extra := inset[1] + inset[3] + weight
+				left := inset[3] - w*0.146 + extra*0.146
+				inset[1] = max(inset[1]+inset[3]-left, 0)
+				inset[3] = left
+			}
 		}
 		s.set("padding", pt(inset[0])+" "+pt(inset[1])+" "+pt(inset[2])+" "+pt(inset[3]))
 		switch st["v-text-anchor"] {
@@ -283,11 +296,26 @@ func (c *converter) vmlBox(shape roxmltree.Node) bool {
 		c.w.WriteString(`<img src="` + attrText(src) + `" alt="" style="` + attrText(is.String()) + `"/>`)
 	}
 	if hasText {
+		shift := fit && shape.TagName().Name() == "oval"
+		if shift {
+			c.w.WriteString(`<div style="position: relative; left: ` + fitShift + `">`)
+		}
 		c.nestedBlocks(txbx, c.part, c.w)
+		if shift {
+			c.w.WriteString("</div>")
+		}
 	}
 	c.w.WriteString("</span>")
 	return true
 }
+
+// fitShift moves the text of an ellipse that is as wide as its text, see
+// fitsText, by the part of the inset of its drawn width that depends on the
+// width of the text. The text is as wide as the box that holds it. On page
+// 1 of libreoffice/docx/mixed-orientation.docx, Word draws an ellipse of 140
+// points 102.3 points wide, and puts its text at 15.4 points from its left
+// side, not at 20.4 points.
+const fitShift = "14.6%"
 
 // fitsText reports whether a VML shape with the style st is as wide as
 // the longest line of its text box, plus the insets of the text box and
@@ -364,15 +392,16 @@ func vmlFill(shape roxmltree.Node) string {
 	return "#ffffff"
 }
 
-// vmlStroke returns the border of CSS of the line of a VML shape, or ""
-// for a shape without a line. A line is black and 0.75 points wide when
-// the shape gives no color and no weight.
-func vmlStroke(shape roxmltree.Node) string {
+// vmlStroke returns the border of CSS of the line of a VML shape and the
+// width of the line in points, or "" and 0 for a shape without a line. A
+// line is black and 0.75 points wide when the shape gives no color and no
+// weight.
+func vmlStroke(shape roxmltree.Node) (string, float64) {
 	if vmlOff(ooxml.Attr(shape, "stroked")) {
-		return ""
+		return "", 0
 	}
 	if f, ok := child(shape, "stroke"); ok && vmlOff(ooxml.Attr(f, "on")) {
-		return ""
+		return "", 0
 	}
 	color := vmlColor(ooxml.Attr(shape, "strokecolor"))
 	if color == "" {
@@ -382,7 +411,7 @@ func vmlStroke(shape roxmltree.Node) string {
 	if v := vmlLength(ooxml.Attr(shape, "strokeweight")); v > 0 {
 		weight = min(v, 12)
 	}
-	return pt(weight) + " solid " + color
+	return pt(weight) + " solid " + color, weight
 }
 
 // vmlInset returns the padding of the text box of a VML shape, from the

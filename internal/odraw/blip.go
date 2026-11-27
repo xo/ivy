@@ -159,8 +159,8 @@ func metafileData(b []byte, maxMemory int64) []byte {
 	return out
 }
 
-// pictFile returns the PICT picture data as a PNG file, with the bitmaps
-// and the images that internal/pict draws, or nil.
+// pictFile returns the PICT picture data as a PNG file, as internal/pict
+// draws it, or nil.
 func pictFile(data []byte, maxMemory int64) []byte {
 	if data == nil {
 		return nil

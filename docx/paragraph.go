@@ -277,13 +277,13 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 	mark0 := c.w.Len()
 	if lvl != nil && marker != "" {
 		mr := rpr.over(mark).over(lvl.rpr)
-		line := ""
+		height := ""
 		if font := c.font(mr["font"]); isSymbolFont(font) {
 			if strings.EqualFold(font, "symbol") {
 				// Word gives the line of a bullet of Symbol the height of
 				// a line of Symbol, which is higher than a line of most
 				// fonts, as on page 2 of poi/docx/form-footnotes.docx.
-				line = c.lineHeight(ppr, mr)
+				height = c.lineHeight(ppr, mr)
 			}
 			codes, ok := symbolCodes(lvl.text)
 			if lvl.format == "bullet" && ok && c.drawsAll(font, codes) {
@@ -295,8 +295,14 @@ func (c *converter) paragraph(p roxmltree.Node, tc *cellStyle) {
 				// the text draws.
 				mr["font"] = rpr["font"]
 			}
+		} else if font != c.font(line["font"]) && c.lineRatio(mr)*fontSize(mr) <= c.lineRatio(line)*fontSize(line) {
+			// Word gives a line the height of the highest line of its
+			// fonts. A marker of a font with a lower line, such as Courier
+			// New, does not make the line higher, as on page 3 of
+			// aspose/docx/rendering.docx. In CSS, its descent can.
+			height = "0"
 		}
-		c.marker(marker, lvl, ppr, mr, rpr, line)
+		c.marker(marker, lvl, ppr, mr, rpr, height)
 	}
 	c.inlines(p, rpr)
 	for i := len(c.open) - 1; i >= 0; i-- {

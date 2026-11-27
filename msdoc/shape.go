@@ -178,6 +178,9 @@ type floating struct {
 	// the left side, 2 the right side and 3 the largest side.
 	wrk    int
 	behind bool
+	// line is set for a place from the line of the anchor, which by gives
+	// as the paragraph.
+	line bool
 }
 
 // anchors returns the shapes of the main document, or of the headers when
@@ -277,7 +280,7 @@ func (p *parser) drawnAt(ctx context.Context, cp uint32, header bool) (*drawn, e
 		d.bx = [...]int{0, 1, 2, 2}[v]
 	}
 	if v, ok := c.Get(propPosRelV); ok && v <= 3 {
-		d.by = [...]int{0, 1, 2, 2}[v]
+		d.by, d.line = [...]int{0, 1, 2, 2}[v], v == 3
 	}
 	wp, hp := float64(w)/20, float64(h)/20
 	if pic := p.plainPicture(ctx, s, p.drawing.pics, wp, hp); pic != nil {
@@ -381,7 +384,7 @@ func (p *parser) shapeObject(ctx context.Context, top *odraw.Shape, w, h float64
 	st := p.style(ctx, pics)
 	pad := 0.0
 	odraw.Boxes(top, odraw.Rect{Right: w, Bottom: h}, func(sh *odraw.Shape, r odraw.Rect) {
-		pad = max(pad, st.Bleed(odraw.Chain{&sh.Props}, r))
+		pad = max(pad, st.Bleed(sh, odraw.Chain{&sh.Props}, r))
 	})
 	pad = math.Ceil(min(pad, 1000))
 	scene := drawingml.NewScene(p.cfg)

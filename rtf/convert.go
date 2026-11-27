@@ -23,9 +23,9 @@ const documentName = "index.xhtml"
 // styleSheet is the style sheet of the format. The conversion writes the
 // formatting of each element in its style attribute, and the rules of each
 // section after this style sheet.
-const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15; -ivy-page-overflow: descent; -ivy-page-top-space: discard }
+const styleSheet = `html { font-family: serif; font-size: 12pt; line-height: 1.15; -ivy-page-overflow: descent; -ivy-page-top-space: discard; font-kerning: none }
 body { margin: 0; counter-reset: note }
-p { margin: 0; white-space: pre-wrap; orphans: 2; widows: 2; tab-size: 36pt }
+p { margin: 0; white-space: pre-wrap; orphans: 1; widows: 1; tab-size: 36pt }
 table { border-collapse: collapse; border-spacing: 0; table-layout: fixed }
 td { padding: 0 5.4pt; vertical-align: top; border: none }
 a { color: inherit; text-decoration: none }
@@ -80,6 +80,9 @@ type charProps struct {
 	vertical                int
 	spacing                 int
 	highlight               int
+	// kerning is the size in half points from which the text kerns, from
+	// \kerning, or 0 for no kerning.
+	kerning int
 	// fontEA is the font of the double-byte characters, which \dbch\af
 	// sets, or -1, and langEA the language of the East Asian text, an LCID
 	// from \langfe, or 0.
@@ -94,7 +97,11 @@ type paraProps struct {
 	line                         int
 	lineMultiple                 bool
 	keepNext, keepLines, pageBrk bool
-	inTable                      bool
+	// widow is set for a paragraph with the widow and orphan control of
+	// \widctlpar, which keeps 2 lines of the paragraph together at the
+	// break of a page.
+	widow   bool
+	inTable bool
 	// itap is the level of the table of the paragraph, from 1, for a
 	// table that nests in a cell.
 	itap                    int
@@ -304,6 +311,10 @@ type converter struct {
 	// spacing after a paragraph and the spacing before the next one
 	// between them, where it else adds the two.
 	htmlSpacing bool
+	// widowCtl is set by \widowctrl, which turns on the widow and orphan
+	// control of every paragraph, and normalWidow by \widctlpar in the
+	// style Normal, the style 0, which a paragraph without \s has.
+	widowCtl, normalWidow bool
 
 	stack []*state
 	// skipped counts the groups past the limit of depth, which the
@@ -377,9 +388,11 @@ func (c *converter) defaultChar() charProps {
 	return charProps{font: c.docFont, size: 24, fontEA: -1}
 }
 
-// defaultPara returns the properties of \pard.
-func defaultPara() paraProps {
-	return paraProps{align: 'l'}
+// defaultPara returns the properties of \pard. LibreOffice turns on the
+// widow and orphan control of a paragraph only with \widctlpar, in the
+// paragraph, in its style or in the style Normal, or with \widowctrl.
+func (c *converter) defaultPara() paraProps {
+	return paraProps{align: 'l', widow: c.widowCtl || c.normalWidow}
 }
 
 // top returns the state of the current group.
@@ -389,7 +402,7 @@ func (c *converter) top() *state {
 
 // convert converts the file into a layout.Source.
 func (c *converter) convert() (layout.Source, error) {
-	c.stack = []*state{{dest: destText, chr: c.defaultChar(), par: defaultPara(), uc: 1, target: c.body}}
+	c.stack = []*state{{dest: destText, chr: c.defaultChar(), par: c.defaultPara(), uc: 1, target: c.body}}
 	work := 0
 	for {
 		t := c.lex.next()
@@ -772,6 +785,13 @@ func (c *converter) closeGroup() {
 		parent.target.para.WriteString("</a>")
 	case s.dest == destFontTable && s.font != nil && s.font != parent.font:
 		// A font entry in a group of its own ends here.
+	case s.dest == destStyleSheet && parent.dest != destStyleSheet:
+		// A paragraph without \s has the widow and orphan control of the
+		// style Normal.
+		normal := &state{chr: c.defaultChar(), par: c.defaultPara()}
+		c.applyStyle(normal, 'p', 0, 0)
+		c.normalWidow = normal.par.widow
+		parent.par.widow = parent.par.widow || c.normalWidow
 	}
 	if s.dest == destColorTable && parent.dest != destColorTable && len(c.colors) > 1 && c.colors[len(c.colors)-1] == "" {
 		c.colors = c.colors[:len(c.colors)-1]

@@ -57,6 +57,45 @@ Each holds text frames of the color `#c0e0ff`, from `draw:fill` solid:
   programs write it. LibreOffice 26.8 puts the frame at the same place in
   both files.
 
+LibreOffice 26.8 wrote the files `float-page2-run.odt`, `float-below.odt`,
+`float-empty.odt`, `float-mirrored.odt` and `float-center.odt` in the same
+way. Each holds text frames of the color `#c0e0ff`, with a distance of 0.1
+inch at their left and at their right:
+
+- `float-page2-run.odt`: a frame with `style:wrap` run-through anchored
+  to the page 2 by `text:anchor-page-number`.
+- `float-below.odt`: a frame with `style:wrap` none 0.5 inch below the top
+  of its paragraph. LibreOffice puts 2 lines of the paragraph above it.
+- `float-empty.odt`: a frame with `style:wrap` none at the top of an empty
+  paragraph. LibreOffice puts the line of the paragraph below it.
+- `float-mirrored.odt`: frames anchored to the pages 1 and 2 of a page
+  layout with `style:page-usage="mirrored"`, a margin of 2 inches at the
+  left and of 0.5 inch at the right. The frames are at 1 inch from the left
+  of the page area, at the left of the page area, and at 3 inches from the
+  left of the page.
+- `float-center.odt`: frames at the center of their paragraphs in the
+  header, in two table cells of 3.25 inches, and in a section of two
+  columns.
+- `float-indent.odt`: a frame of 2 inches with `style:wrap` right at the
+  start of a paragraph with `fo:text-indent` 0.25 inch, and the same frame
+  in a paragraph that also has a margin of 0.5 inch at its left.
+  LibreOffice puts each frame at 0.1 inch from the left of the page area,
+  and does not indent its text.
+
+LibreOffice 26.8 wrote the files `table-relative.odt` and
+`frame-gradient.odt` from flat files in the same way:
+
+- `table-relative.odt`: six tables of two columns with
+  `style:rel-column-width` of 1 to 3, as in the flat file. LibreOffice
+  writes a table without `style:width` with `table:align` margins and only
+  the relative widths, and it gives the table the width between its
+  margins. The second table has margins of 0.5 inch and 1 inch. The
+  fourth table has a width of 4 inches and `table:align` left, and
+  LibreOffice writes its columns with `style:column-width`.
+- `frame-gradient.odt`: a text frame of 2 by 1 inches at 2 inches from the
+  top and the left of the page, with a `draw:gradient` linear from red at
+  the top to blue at the bottom.
+
 LibreOffice 26.8 wrote the files `line-fixed.odt`, `line-number-object.odt`,
 `page-mirrored.odt` and `footnote-sep.odt` in the same way. Each page is
 Letter paper, and the text is Liberation Serif of 12 points. The pictures

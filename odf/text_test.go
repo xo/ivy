@@ -132,7 +132,7 @@ func TestTextConvert(t *testing.T) {
 		`<thead><tr style=""><td colspan="2" style="border: 0.5pt solid #000000; padding: 2pt; background-color: #d9e2f3">`,
 		`rowspan="2"`,
 		`<col style="width: 72pt"/><col style="width: 72pt"/><col style="width: 72pt"/>`,
-		`display: block; margin-left: auto; margin-right: auto; width: 72pt`,
+		`display: block; margin-left: auto; margin-right: auto; text-indent: 0; width: 72pt`,
 		`<img src="media/1.png" alt="" style="display: block; width: 72pt; height: 36pt"/>`,
 		`<a href="https://example.com/">link</a><br/>next` + "\t" + `tab`,
 		`Page <span class="pg"></span> of <span class="pgs"></span>`,
@@ -446,7 +446,7 @@ func odtColorBox(img image.Image, c color.NRGBA) (image.Rectangle, int) {
 func TestTextShapes(t *testing.T) {
 	const styles = `<style:style style:name="red" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#ff0000" draw:stroke="none"/></style:style>` +
 		`<style:style style:name="blue" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#0000ff" draw:stroke="none" style:wrap="none"/></style:style>` +
-		`<style:style style:name="green" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#00ff00" svg:stroke-width="4pt"/></style:style>`
+		`<style:style style:name="green" style:family="graphic"><style:graphic-properties draw:stroke="solid" svg:stroke-color="#00ff00" svg:stroke-width="4pt" style:wrap="run-through"/></style:style>`
 	body := `<text:p>Box <draw:rect text:anchor-type="as-char" draw:style-name="red" svg:width="36pt" svg:height="18pt"><text:p/></draw:rect> after</text:p>` +
 		`<text:p><draw:g text:anchor-type="paragraph" draw:style-name="blue">` +
 		`<draw:ellipse draw:style-name="blue" svg:x="36pt" svg:y="0pt" svg:width="36pt" svg:height="36pt"/>` +
@@ -456,10 +456,10 @@ func TestTextShapes(t *testing.T) {
 	html, _ := odtHTML(t, buf)
 	for _, want := range []string{
 		`Box <span><img src="ivy-object:shape1" alt="" style="width: 36pt; height: 18pt"/></span> after`,
-		`<span style="display: block; margin-left: 36pt; width: 108pt"><img src="ivy-object:shape2" alt="" style="display: block; width: 108pt; height: 36pt"/></span>`,
+		`<span style="display: block; margin-left: 36pt; text-indent: 0; width: 108pt"><img src="ivy-object:shape2" alt="" style="display: block; width: 108pt; height: 36pt"/></span>`,
 		// the box of the line takes the half of its width of 4 points
 		// around it, and the body starts 36.9 points down the page
-		`<span style="position: absolute; top: 211.1pt; left: -2pt; width: 292pt"><img src="ivy-object:shape3" alt="" style="display: block; width: 292pt; height: 4pt"/></span>`,
+		`<span style="position: absolute; top: 211.1pt; left: -2pt; text-indent: 0; width: 292pt"><img src="ivy-object:shape3" alt="" style="display: block; width: 292pt; height: 4pt"/></span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("expected the xhtml to hold %q", want)

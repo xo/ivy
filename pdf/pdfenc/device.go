@@ -89,6 +89,7 @@ var (
 	_ display.Device         = (*device)(nil)
 	_ display.TextFiller     = (*device)(nil)
 	_ display.StrokeAdjuster = (*device)(nil)
+	_ display.GlyphStroker   = (*device)(nil)
 )
 
 // newDevice returns a device that draws onto s, the surface of page, the
@@ -430,6 +431,22 @@ func (d *device) StrokeAdjusted(p *okage.Path, stroke okage.Stroke, shader okage
 		return
 	}
 	d.stroke(p, stroke, shader, true)
+}
+
+// StrokeGlyphs satisfies the display.GlyphStroker interface. It strokes
+// the outlines of the run as a path. A run with a text also goes into the
+// file as invisible text over the outlines, where its font allows it, so
+// that a reader can search and copy it (D58).
+func (d *device) StrokeGlyphs(run display.GlyphRun, stroke okage.Stroke, shader okage.Shader) {
+	if d.rec != nil {
+		d.rec.StrokeGlyphs(run, stroke, shader)
+		return
+	}
+	if d.skip() || run.Face == nil || shader == nil {
+		return
+	}
+	d.stroke(run.Path(), stroke, shader, false)
+	d.text(run, nil)
 }
 
 // stroke strokes p with the shader, and with the stroke adjustment when

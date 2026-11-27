@@ -50,7 +50,8 @@ func (p *dmlParser) chartEx(root, chart roxmltree.Node) {
 	for e := range elements(chart) {
 		switch e.TagName().Name() {
 		case "title":
-			c.title, c.titleText = p.title(e)
+			t := p.title(e)
+			c.title, c.titleText, c.titleSpans = t.lines, t.st, t.spans
 		case "legend":
 			c.legend = legendPositions[ooxml.Attr(e, "pos")]
 			if c.legend == "" {
@@ -350,9 +351,7 @@ func (p *dmlParser) axisEx(n roxmltree.Node) axis {
 				a.major = v
 			}
 		case "title":
-			lines, style := p.title(e)
-			a.title = strings.Join(lines, " ")
-			a.titleText = style
+			a.setTitle(p.title(e))
 		case "majorGridlines":
 			a.grid = true
 		case "minorGridlines":

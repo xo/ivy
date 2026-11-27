@@ -391,6 +391,43 @@ func TestPageFloatShape(t *testing.T) {
 	}
 }
 
+// TestColumnFloatShape checks that in a section with columns an object
+// above and below the text from its paragraph or its line floats from the
+// top of the part of its paragraph in the column, or of its line, with a
+// margin to the right side of its column, as docx does (D60). The section
+// has 3 columns of 120pt, with 36pt between them.
+func TestColumnFloatShape(t *testing.T) {
+	p := testParser(nil, nil)
+	p.page = page{width: 12240, height: 15840, left: 1800, right: 1800, top: 1440, bottom: 1440}
+	p.columns, p.columnGap = 3, 720
+	for _, tt := range []struct {
+		name string
+		f    floating
+		want string
+	}{
+		{"paragraph", floating{wr: 1, by: 2, left: 400, top: 1440},
+			"float: left; margin-left: 20pt; margin-right: 10pt; -ivy-float-position: block 72pt; width: 90pt; height: 20pt"},
+		{"line", floating{wr: 1, by: 2, line: true, left: 400, top: -200},
+			"float: left; margin-left: 20pt; margin-right: 10pt; -ivy-float-position: line -10pt; width: 90pt; height: 20pt"},
+		// an object from the margin keeps its position
+		{"margin", floating{wr: 1, by: 0, left: 400, top: 1440},
+			"float: left; margin-left: 20pt; margin-right: 10pt; -ivy-float-position: margin 72pt; width: 90pt; height: 20pt"},
+		// an object with text around it floats in its column
+		{"square", floating{wr: 2, by: 2, left: 1200, top: 200},
+			"float: right; margin-right: 0pt; margin-left: 9pt; margin-top: 10pt; -ivy-wrap-flow: both 9pt; width: 60pt; height: 20pt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := 90.0
+			if tt.f.wr != 1 {
+				w = 60
+			}
+			if got := strings.Join(p.floatStyle(&tt.f, w, 20), "; "); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestWrapSide checks that the text wraps around an object on the sides of
 // the wrk of its FSPA, 9 points from it, and that the text above and below
 // an object and no wrap give no side (D63).

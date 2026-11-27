@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,5 +164,79 @@ func TestContextualCellTop(t *testing.T) {
 	p := odtParagraph(t, html, "Second")
 	if strings.Contains(p, "margin-top") || !strings.Contains(p, "-ivy-page-top-space: discard 12pt") {
 		t.Errorf("expected no margin above the paragraph, and the spacing at the top of the part of a cell, got: %s", p)
+	}
+}
+
+// TestTableRelativeFile checks the tables of table-relative.odt, which
+// LibreOffice 26.8 wrote with table:align margins and only
+// style:rel-column-width, of 1 to 3. LibreOffice gives the first table the
+// width between the margins of the page, from 72 to 540 points, and its
+// first column a quarter of it, to 189 points. The second table has the
+// margins of 36 and 72 points, from 108 to 468 points. ivy gave the
+// columns the widths of their text.
+func TestTableRelativeFile(t *testing.T) {
+	cell := color.NRGBA{R: 0xc0, G: 0xe0, B: 0xff, A: 255}
+	img := odtFilePage(t, "table-relative.odt", 0)
+	for _, tt := range []struct {
+		region image.Rectangle
+		want   image.Rectangle
+	}{
+		{image.Rect(0, 84, 612, 116), image.Rect(73, 87, 540, 114)},
+		{image.Rect(0, 126, 612, 172), image.Rect(109, 129, 468, 170)},
+	} {
+		box, _ := odtColorBox(odtRegion{img, tt.region}, cell)
+		if d := box.Min.Sub(tt.want.Min); d.X < -2 || d.X > 2 || d.Y < -2 || d.Y > 2 || box.Max.X < tt.want.Max.X-2 || box.Max.X > tt.want.Max.X+2 {
+			t.Errorf("expected the table at %v, got %v", tt.want, box)
+		}
+	}
+	buf, err := os.ReadFile(filepath.Join("testdata", "table-relative.odt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, _ := odtHTML(t, buf)
+	for _, want := range []string{
+		`<table style="width: 100%; table-layout: fixed"><colgroup><col style="width: 25%"/><col style="width: 75%"/></colgroup>`,
+		`<table style="width: calc(100% - 108pt); table-layout: fixed; margin-left: 36pt"><colgroup><col style="width: 25%"/>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected the xhtml to hold %q, got:\n%s", want, html)
+		}
+	}
+	for _, tt := range []struct {
+		columns []odtColumn
+		want    []float64
+		rel     bool
+	}{
+		{[]odtColumn{{0, 1000}, {0, 3000}}, []float64{25, 75}, true},
+		{[]odtColumn{{72, 1000}, {0, 3000}}, []float64{25, 75}, true},
+		{[]odtColumn{{72, 1000}, {216, 3000}}, []float64{72, 216}, false},
+		{[]odtColumn{{0, 1000}, {0, 0}}, []float64{0, 0}, false},
+		{nil, []float64{}, false},
+	} {
+		got, rel := odtColumnWidths(tt.columns)
+		if rel != tt.rel || !slices.Equal(got, tt.want) {
+			t.Errorf("odtColumnWidths(%v) = %v, %v, want %v, %v", tt.columns, got, rel, tt.want, tt.rel)
+		}
+	}
+}
+
+// TestFrameGradientFile checks the text frame of frame-gradient.odt, from
+// 144 to 216 points down the page, with a linear gradient from red at the
+// top to blue at the bottom. ivy drew no fill.
+func TestFrameGradientFile(t *testing.T) {
+	img := odtFilePage(t, "frame-gradient.odt", 0)
+	for _, tt := range []struct {
+		y    int
+		want color.NRGBA
+	}{
+		{146, color.NRGBA{R: 247, B: 8, A: 255}},
+		{180, color.NRGBA{R: 126, B: 129, A: 255}},
+		{214, color.NRGBA{R: 4, B: 251, A: 255}},
+	} {
+		c := color.NRGBAModel.Convert(img.At(216, tt.y)).(color.NRGBA)
+		near := func(a, b uint8) bool { return int(a) >= int(b)-8 && int(a) <= int(b)+8 }
+		if !near(c.R, tt.want.R) || !near(c.G, tt.want.G) || !near(c.B, tt.want.B) {
+			t.Errorf("expected %v at %d points down the page, got %v", tt.want, tt.y, c)
+		}
 	}
 }

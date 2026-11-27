@@ -78,6 +78,9 @@ func (c *converter) word(s *state, t token) {
 	}
 	switch t.word {
 	case "s":
+		// A style that is not based on the style Normal does not take its
+		// widow and orphan control, as in LibreOffice.
+		s.par.widow = c.widowCtl
 		c.applyStyle(s, 'p', t.param, 0)
 		return
 	case "cs":
@@ -142,7 +145,7 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 			outer := c.shape
 			s.kind, s.outer = "shptxt", &outer
 			s.target = &target{}
-			s.par = defaultPara()
+			s.par = c.defaultPara()
 		}
 	case w == "listtext" || w == "pntext":
 		if s.dest != destText {
@@ -183,7 +186,7 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		c.flushBytes(s)
 		s.kind = w
 		s.target = &target{}
-		s.par = defaultPara()
+		s.par = c.defaultPara()
 	case w == "footnote":
 		if s.dest != destText || s.target != c.body && s.kind == "" && len(c.stack) > 1 && c.inNote() {
 			s.dest = destSkip
@@ -192,7 +195,7 @@ func (c *converter) destination(s *state, t token, starred bool) bool {
 		c.flushBytes(s)
 		s.kind = "footnote"
 		s.target = &target{}
-		s.par = defaultPara()
+		s.par = c.defaultPara()
 	case skipped[w]:
 		s.dest = destSkip
 	case s.dest == destStyleSheet:
@@ -438,6 +441,8 @@ func (c *converter) charWord(s *state, t token) bool {
 		ch.spacing = t.param * 5
 	case "expndtw":
 		ch.spacing = t.param
+	case "kerning":
+		ch.kerning = max(t.param, 0)
 	case "dbch":
 		s.dbch = true
 	case "loch", "hich":
@@ -464,7 +469,7 @@ func (c *converter) paraWord(s *state, t token) bool {
 	p := &s.par
 	switch t.word {
 	case "pard":
-		*p = defaultPara()
+		*p = c.defaultPara()
 	case "ql":
 		p.align = 'l'
 	case "qc":
@@ -489,6 +494,12 @@ func (c *converter) paraWord(s *state, t token) bool {
 		p.lineMultiple = t.param != 0
 	case "noline":
 		p.noLine = true
+	case "widctlpar":
+		p.widow = true
+	case "nowidctlpar":
+		p.widow = false
+	case "widowctrl":
+		c.widowCtl, p.widow = true, true
 	case "keepn":
 		p.keepNext = true
 	case "keep":

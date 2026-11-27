@@ -219,7 +219,7 @@ func (d *drawing) add(top *odraw.Shape) {
 	// it, since the layout clips an object to its box.
 	pad := 0.0
 	odraw.Boxes(top, odraw.Rect{Right: img.Width, Bottom: img.Height}, func(sh *odraw.Shape, r odraw.Rect) {
-		pad = max(pad, d.style.Bleed(odraw.Chain{&sh.Props}, r))
+		pad = max(pad, d.style.Bleed(sh, odraw.Chain{&sh.Props}, r))
 	})
 	pad = math.Ceil(min(pad, 1000))
 	obj := &shapeObject{scene: drawingml.NewScene(d.cfg)}

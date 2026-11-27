@@ -480,3 +480,35 @@ func TestBreakBeforeMark(t *testing.T) {
 		t.Errorf("expected no break after a break that clears a float:\n%s", html)
 	}
 }
+
+// TestKerning checks that Word kerns only the text of w:kern, from its size
+// in half points up.
+func TestKerning(t *testing.T) {
+	body := `<w:p><w:r><w:t>Plain</w:t></w:r><w:r><w:rPr><w:kern w:val="28"/><w:sz w:val="32"/></w:rPr><w:t>Kerned</w:t></w:r>` +
+		`<w:r><w:rPr><w:kern w:val="28"/><w:sz w:val="24"/></w:rPr><w:t>Small</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	if !strings.Contains(html, "font-kerning: none") {
+		t.Errorf("expected no kerning by default:\n%s", html)
+	}
+	if n := strings.Count(html, "font-kerning: normal"); n != 1 {
+		t.Errorf("expected 1 kerned run, got %d:\n%s", n, html)
+	}
+}
+
+// TestEffectExtent checks that the effects of an anchored drawing are part
+// of the box that the text wraps around, and that the box stays in its
+// column (page 9 of poi/docx/drawing.docx).
+func TestEffectExtent(t *testing.T) {
+	body := `<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" layoutInCell="1">` +
+		`<wp:positionH relativeFrom="column"><wp:posOffset>-1080135</wp:posOffset></wp:positionH>` +
+		`<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>` +
+		`<wp:extent cx="66675" cy="85725"/><wp:effectExtent l="19050" t="0" r="12700" b="25400"/><wp:wrapSquare wrapText="bothSides"/>` +
+		`<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"/></a:graphic>` +
+		`</wp:anchor></w:drawing></w:r><w:r><w:t>Text</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	for _, want := range []string{"float: left", "margin-left: 1.5pt", "margin-right: 1pt", "margin-bottom: 2pt"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+}

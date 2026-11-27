@@ -20,6 +20,11 @@ const (
 	word6StdBaseSize  = 8
 	word6SprmVariable = -1
 	word6SprmTable    = -2
+	// word6SprmCSymbol is sprmCSymbol of Word 6. Its operand is its size,
+	// 3, then the index of the font in 2 bytes and the character in 1
+	// byte, where the CSymbolOperand of Word 97 has the character in 2
+	// bytes. Sprm 73 before it is sprmCChse, of 3 bytes.
+	word6SprmCSymbol = 74
 )
 
 // word6Sprms97 maps the codes of the modifiers of Word 6 that the package
@@ -28,9 +33,9 @@ var word6Sprms97 = map[byte]uint16{
 	2: sprmPIstd, 5: sprmPJc, 9: sprmPFPageBreak, 14: sprmPFNoLineNumb, 15: sprmPChgTabsPapx, 16: sprmPDxaRight, 17: sprmPDxaLeft,
 	19: sprmPDxaLeft1, 20: sprmPDyaLine, 21: sprmPDyaBefore, 22: sprmPDyaAfter, 23: sprmPChgTabs,
 	24: sprmPFInTable, 25: sprmPFTtp,
-	71: sprmCFData, 80: sprmCIstd, 85: sprmCFBold, 86: sprmCFItalic, 87: sprmCFStrike,
+	71: sprmCFData, word6SprmCSymbol: sprmCSymbol, 80: sprmCIstd, 85: sprmCFBold, 86: sprmCFItalic, 87: sprmCFStrike,
 	90: sprmCFSmallCaps, 91: sprmCFCaps, 92: sprmCFVanish, 93: sprmCRgFtc0, 94: sprmCKul,
-	96: sprmCDxaSpace, 98: sprmCIco, 99: sprmCHps, 104: sprmCIss,
+	96: sprmCDxaSpace, 98: sprmCIco, 99: sprmCHps, 104: sprmCIss, 117: sprmCFSpec,
 }
 
 // word6SprmSizes holds the sizes of the operands of the modifiers of the
@@ -84,7 +89,14 @@ func word6Sprms(grpprl []byte) iter.Seq[sprm] {
 			if n > len(rest) {
 				return
 			}
-			if !yield(sprm{op: word6Sprms97[code], operand: rest[:n]}) {
+			s := sprm{op: word6Sprms97[code], operand: rest[:n]}
+			if code == word6SprmCSymbol {
+				s.operand = nil
+				if n == 4 {
+					s.operand = []byte{rest[1], rest[2], rest[3], 0}
+				}
+			}
+			if !yield(s) {
 				return
 			}
 			grpprl = rest[n:]

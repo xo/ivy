@@ -230,6 +230,10 @@ func (c *converter) runStyle(p charProps) string {
 	if p.spacing != 0 {
 		s.set("letter-spacing", pt(p.spacing))
 	}
+	if p.kerning > 0 && p.size >= p.kerning {
+		// Word kerns only the text of \kerning, from its size up.
+		s.set("font-kerning", "normal")
+	}
 	return s.String()
 }
 
@@ -320,6 +324,10 @@ func (c *converter) paraStyle(p paraProps, ch charProps, brk string) string {
 	}
 	if p.keepLines {
 		s.set("break-inside", "avoid")
+	}
+	if p.widow {
+		s.set("orphans", "2")
+		s.set("widows", "2")
 	}
 	if p.noLine {
 		s.set("-ivy-line-numbers", "none")
@@ -732,7 +740,7 @@ func (c *converter) writeRow(out *strings.Builder, rows []tableRow, k int, colum
 func (c *converter) endTarget(t *target) {
 	c.flushRun(t)
 	if t.para.Len() > 0 {
-		s := &state{dest: destText, chr: t.runProps, par: defaultPara(), target: t}
+		s := &state{dest: destText, chr: t.runProps, par: c.defaultPara(), target: t}
 		if t == c.body {
 			c.openSection()
 		}

@@ -2,6 +2,7 @@ package chart
 
 import (
 	"image/color"
+	"math"
 	"testing"
 
 	"github.com/xo/okage/svg"
@@ -118,5 +119,29 @@ func TestFamily(t *testing.T) {
 	pm := render(t, c, 300, 200)
 	if n := ink(pm, 75, 0, 225, 30); n < 30 {
 		t.Errorf("expected the ink of the title in the font Go, got %d pixels", n)
+	}
+}
+
+// TestKeepInside checks that a label of a pie that its place puts out of
+// the chart moves into the chart, as Word does, with the gap of
+// pieLabelMargin, and that a label inside the chart keeps its place.
+func TestKeepInside(t *testing.T) {
+	labels := []pieLabel{
+		// at the left of the pie, aligned by its right side
+		{w: 60, h: 20, mid: -math.Pi / 2, x: 40, y: 100},
+		// at the right of the pie, aligned by its left side
+		{w: 60, h: 20, mid: math.Pi / 2, x: 280, y: 195},
+		// in a slice, centered
+		{w: 30, h: 10, inside: true, x: 150, y: 100},
+	}
+	keepInside(labels, 300, 200)
+	if x0 := labels[0].x - labels[0].w; x0 != pieLabelMargin || labels[0].y != 100 {
+		t.Errorf("expected the left label at the margin, got the left side %g and y %g", x0, labels[0].y)
+	}
+	if x1, y1 := labels[1].x+labels[1].w, labels[1].y+labels[1].h/2; x1 != 300-pieLabelMargin || y1 != 200-pieLabelMargin {
+		t.Errorf("expected the right label at the margins, got the right side %g and the bottom %g", x1, y1)
+	}
+	if labels[2].x != 150 || labels[2].y != 100 {
+		t.Errorf("expected the label in its slice to keep its place, got (%g, %g)", labels[2].x, labels[2].y)
 	}
 }

@@ -165,6 +165,29 @@ func StrokeAdjusted(d Device, p *okage.Path, stroke okage.Stroke, shader okage.S
 	d.StrokePath(p, stroke, shader)
 }
 
+// GlyphStroker is a device that strokes the outlines of a run of glyphs and
+// keeps the text of the run (D58). A List and the PDF device of pdfenc are
+// glyph strokers.
+type GlyphStroker interface {
+	// StrokeGlyphs strokes the outlines of the glyphs of run with the
+	// shader, as StrokePath strokes the path of run.Path, and does not fill
+	// them.
+	StrokeGlyphs(run GlyphRun, stroke okage.Stroke, shader okage.Shader)
+}
+
+// StrokeGlyphs strokes the outlines of the glyphs of run with the shader. It
+// calls StrokeGlyphs of d when d is a GlyphStroker, and StrokePath of d with
+// the path of run otherwise.
+func StrokeGlyphs(d Device, run GlyphRun, stroke okage.Stroke, shader okage.Shader) {
+	if gs, ok := d.(GlyphStroker); ok {
+		gs.StrokeGlyphs(run, stroke, shader)
+		return
+	}
+	if p := run.Path(); p != nil {
+		d.StrokePath(p, stroke, shader)
+	}
+}
+
 // ClipAdjuster is a device that can clip to a rectangle on the grid of the
 // pixels. An OkageDevice and a List are clip adjusters.
 type ClipAdjuster interface {
@@ -370,6 +393,7 @@ var (
 	_ Device         = (*List)(nil)
 	_ TextFiller     = (*List)(nil)
 	_ StrokeAdjuster = (*List)(nil)
+	_ GlyphStroker   = (*List)(nil)
 	_ Linker         = (*List)(nil)
 	_ Bookmarker     = (*List)(nil)
 )
@@ -459,6 +483,13 @@ func (l *List) FillGlyphs(run GlyphRun, shader okage.Shader) {
 // of this package with the device of the replay.
 func (l *List) FillText(p *okage.Path, rule okage.FillRule, shader okage.Shader) {
 	l.record(func() string { return fmt.Sprintf("fill text %v %v", bounds(p), rule) }, func(d Device) { FillText(d, p, rule, shader) })
+}
+
+// StrokeGlyphs satisfies the GlyphStroker interface. The replay calls
+// StrokeGlyphs of this package with the device of the replay.
+func (l *List) StrokeGlyphs(run GlyphRun, stroke okage.Stroke, shader okage.Shader) {
+	l.record(func() string { return fmt.Sprintf("stroke glyphs %d %g %g", len(run.Glyphs), run.Size, stroke.Width) },
+		func(d Device) { StrokeGlyphs(d, run, stroke, shader) })
 }
 
 // BeginGroup satisfies the Device interface. It records the content of the

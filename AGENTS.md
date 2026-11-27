@@ -196,7 +196,7 @@ On 2026-11-25 the repository holds these files:
 | `pub/` | Publisher: the thumbnail and the properties |
 | `internal/odraw/` | the shapes, the properties and the pictures of Office Drawing (MS-ODRAW), which `msppt` and `msxls` share |
 | `internal/msole/` | the code that the binary Office formats share: the Compound File within the limits, the summary information, the thumbnails in WMF, EMF, DIB, PNG or JPEG, and the password |
-| `internal/pict/` | the pictures of QuickDraw (PICT) in the store of Office Drawing: their bitmaps and their images of QuickTime, without their lines, shapes and text |
+| `internal/pict/` | the pictures of QuickDraw (PICT) in the store of Office Drawing: their lines, shapes, regions, text, bitmaps and images of QuickTime on the display list |
 | `csv/` | CSV, TSV and TAB files, as one table on pages |
 | `internal/sheet/`, `internal/numfmt/` | the sheets of a spreadsheet as HTML tables on pages, for `xlsx`, `odf`, `csv` and `msxls`, the sizes of the papers, the widths of the columns and the headers and footers that they share, and the number formats of Excel |
 | `internal/fontdb/` | the font database of a program, from `ivy.Config.Fonts`, the Go fonts and the fonts of the system, which the layout, the metafiles and the charts share (D23, D24) |

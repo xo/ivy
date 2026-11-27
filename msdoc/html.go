@@ -971,8 +971,11 @@ func joinsBorder(a, b run) bool {
 // object that text does not wrap is placed on the page, as the package
 // docx does. An object at a position from the margin or from the page,
 // with text around it or above and below it, floats at that position
-// (D60). An object above and below text then has a margin to the right
-// side of the column, so that no line fits beside it. The text wraps
+// (D60). In a section with columns, an object above and below text from
+// its paragraph or its line floats from the top of the part of its
+// paragraph in the column, or from the top of its line, as docx places
+// it. An object above and below text that floats has a margin to the
+// right side of its column, so that no line fits beside it. The text wraps
 // around an object on the sides of its wrk, 9 points from it, so that the
 // text is on both sides of an object in the middle of the column (D63).
 func (p *parser) floatStyle(f *floating, w, h float64) []string {
@@ -981,6 +984,9 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 		pg = letter
 	}
 	col := float64(pg.width-pg.left-pg.right) / 20
+	if p.columns > 1 {
+		col = max((col-float64(p.columnGap)/20*float64(p.columns-1))/float64(p.columns), 0)
+	}
 	x := float64(f.left) / 20
 	if f.bx == 1 {
 		x -= float64(pg.left) / 20
@@ -1001,6 +1007,14 @@ func (p *parser) floatStyle(f *floating, w, h float64) []string {
 		position = "-ivy-float-position: margin " + num(y) + "pt"
 	case 1:
 		position = "-ivy-float-position: page " + num(float64(f.top)/20) + "pt"
+	case 2:
+		if wr == 1 && p.columns > 1 {
+			area := "block "
+			if f.line {
+				area = "line "
+			}
+			position = "-ivy-float-position: " + area + num(y) + "pt"
+		}
 	}
 	var style []string
 	switch {

@@ -103,7 +103,7 @@ func parseRPr(n roxmltree.Node) props {
 				p["lang.ea"] = v
 			}
 		case name == "sz" || name == "szCs" || name == "u" || name == "highlight" || name == "vertAlign" ||
-			name == "spacing" || name == "position" || name == "rStyle":
+			name == "spacing" || name == "position" || name == "rStyle" || name == "kern":
 			p[name] = ooxml.Attr(c, "val")
 		case name == "color":
 			p["color"] = ooxml.Attr(c, "val")

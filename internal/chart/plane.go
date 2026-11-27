@@ -525,7 +525,7 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 		}
 	}
 	if c.val.title != "" && !c.val.deleted {
-		valDepth += c.val.titleText.size*lineHeight + gapLabel
+		valDepth += c.val.titleBlock().lineSize(0)*lineHeight + gapLabel
 	}
 	// The axis of categories, or of x.
 	var catDepth, catHalf float64
@@ -543,7 +543,7 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 		}
 	}
 	if c.cat.title != "" && !c.cat.deleted {
-		catDepth += c.cat.titleText.size*lineHeight + gapLabel
+		catDepth += c.cat.titleBlock().lineSize(0)*lineHeight + gapLabel
 	}
 	// The secondary axis of values.
 	var depth2 float64
@@ -556,7 +556,7 @@ func (pl *plane) margins() (left, top, right, bottom float64) {
 			depth2 = pl.widest(texts, st) + gapLabel + pl.tickOut(c.val2)
 		}
 		if c.val2.title != "" {
-			depth2 += c.val2.titleText.size*lineHeight + gapLabel
+			depth2 += c.val2.titleBlock().lineSize(0)*lineHeight + gapLabel
 		}
 	}
 	valRight := pl.valueEnd()
@@ -948,7 +948,7 @@ func (pl *plane) axes() {
 	}
 	// The titles of the axes.
 	if c.cat.title != "" && !c.cat.deleted {
-		b := block{lines: []string{c.cat.title}, st: c.cat.titleText}
+		b := c.cat.titleBlock()
 		if pl.horizontal {
 			t.draw(cv.dev, b, pl.out.x0, (in.y0+in.y1)/2, alignCenter, alignStart, 90)
 		} else {
@@ -956,7 +956,7 @@ func (pl *plane) axes() {
 		}
 	}
 	if c.val.title != "" && !c.val.deleted {
-		b := block{lines: []string{c.val.title}, st: c.val.titleText}
+		b := c.val.titleBlock()
 		if pl.horizontal {
 			t.draw(cv.dev, b, (in.x0+in.x1)/2, pl.out.y1, alignCenter, alignEnd, 0)
 		} else {
@@ -964,7 +964,7 @@ func (pl *plane) axes() {
 		}
 	}
 	if pl.has2 && c.val2.title != "" && !c.val2.deleted && !pl.horizontal {
-		b := block{lines: []string{c.val2.title}, st: c.val2.titleText}
+		b := c.val2.titleBlock()
 		t.draw(cv.dev, b, pl.out.x1, (in.y0+in.y1)/2, alignCenter, alignStart, -90)
 	}
 }

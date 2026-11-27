@@ -7,15 +7,15 @@ import (
 )
 
 // This file bends the text of WordArt onto the shape of its type of text
-// effect (MS-ODRAW 2.4.24, the types 137 to 175). The types have the same
-// shapes as the text warps of ECMA-376, such as textArchUp and textWave1.
-// The package draws each one with its default adjust values, and it draws
-// the types that it does not know as plain text: the rings, the buttons,
-// the curves, the cascades, the stop and the two mixes of inflate and
-// deflate.
+// effect (MS-ODRAW 2.4.24, the types 137 to 175). The types have the shapes
+// of the text warps of ECMA-376, such as textArchUp and textWave1, and the
+// adjust values of the shape change them, as LibreOffice draws them. The
+// package draws the types that it does not know as plain text: the rings,
+// the buttons, the curves and the two mixes of inflate and deflate.
 
 // The types of text effects of MS-ODRAW 2.4.24 that the package bends.
 const (
+	sptTextStop             = 137
 	sptTextTriangle         = 138
 	sptTextTriangleInverted = 139
 	sptTextChevron          = 140
@@ -26,6 +26,8 @@ const (
 	sptTextArchUpPour       = 148
 	sptTextArchDownPour     = 149
 	sptTextCirclePour       = 150
+	sptTextCascadeUp        = 154
+	sptTextCascadeDown      = 155
 	sptTextWave1            = 156
 	sptTextWave2            = 157
 	sptTextWave3            = 158
@@ -45,6 +47,73 @@ const (
 	sptTextCanUp            = 174
 	sptTextCanDown          = 175
 )
+
+// warpDefaults holds the defaults of the adjust values of the types of
+// text effects that the package bends. Most of them are a y of the
+// geometry, from 0 to 21600. The first value of an arch is an angle in
+// 16.16 bits, and the second value of a pour is the inner radius of its
+// band, from 0 to 10800. The second value of a wave, its shift, is left out.
+var warpDefaults = map[int][]float64{
+	sptTextStop:             {2700},
+	sptTextTriangle:         {10800},
+	sptTextTriangleInverted: {10800},
+	sptTextChevron:          {5400},
+	sptTextChevronInverted:  {16200},
+	sptTextArchUpCurve:      {180 * fixedDegree},
+	sptTextArchDownCurve:    {0},
+	sptTextCircleCurve:      {-179 * fixedDegree},
+	sptTextArchUpPour:       {180 * fixedDegree, 5400},
+	sptTextArchDownPour:     {0, 5400},
+	sptTextCirclePour:       {-179 * fixedDegree, 5400},
+	sptTextCascadeUp:        {9600},
+	sptTextCascadeDown:      {9600},
+	sptTextWave1:            {1404},
+	sptTextWave2:            {1404},
+	sptTextWave3:            {1404},
+	sptTextWave4:            {1404},
+	sptTextInflate:          {2945},
+	sptTextDeflate:          {8100},
+	sptTextInflateBottom:    {14941},
+	sptTextDeflateBottom:    {11475},
+	sptTextInflateTop:       {6556},
+	sptTextDeflateTop:       {10125},
+	sptTextFadeRight:        {7200},
+	sptTextFadeLeft:         {7200},
+	sptTextFadeUp:           {7200},
+	sptTextFadeDown:         {7200},
+	sptTextSlantUp:          {12000},
+	sptTextSlantDown:        {12000},
+	sptTextCanUp:            {18514},
+	sptTextCanDown:          {3086},
+}
+
+// warpValues returns the adjust values of the type of text effect typ with
+// the properties c, or nil for a type that the package does not bend. A
+// value that is not an angle is a share of the side of the geometry, and
+// it is between 0 and 1.
+func warpValues(typ int, c Chain) []float64 {
+	defs, ok := warpDefaults[typ]
+	if !ok {
+		return nil
+	}
+	a := make([]float64, len(defs))
+	for i, def := range defs {
+		a[i] = def
+		if v, ok := c.Get(PropAdjust1 + uint16(i)); ok {
+			a[i] = float64(int32(v))
+		}
+		if i > 0 || !isArch(typ) {
+			a[i] = min(max(a[i]/geoSize, 0), 1)
+		}
+	}
+	return a
+}
+
+// isArch reports whether the type of text effect typ puts its text along
+// an arc, whose first adjust value is an angle.
+func isArch(typ int) bool {
+	return typ >= sptTextArchUpCurve && typ <= sptTextCirclePour && typ != 147
+}
 
 // warp maps a point of the text, u from the left and v from the top of its
 // box, each from 0 to 1, onto the box of the shape, x from the left and y
@@ -71,6 +140,12 @@ func peak(y, a float64) func(float64) float64 {
 	return func(u float64) float64 { return y + a*math.Abs(2*u-1) }
 }
 
+// stop returns the curve from y+a at the ends to y from a third to two
+// thirds of the width, in straight lines, as the side of an octagon.
+func stop(y, a float64) func(float64) float64 {
+	return func(u float64) float64 { return y + a*max(1-3*u, 3*u-2, 0) }
+}
+
 // bulge returns the curve from y+a at the ends to y in the middle, along a
 // parabola.
 func bulge(y, a float64) func(float64) float64 {
@@ -89,39 +164,56 @@ func slope(y0, y1 float64) func(float64) float64 {
 }
 
 // fade returns the warp that narrows the text toward the top, or toward
-// the bottom when down is set, to 1-a of its width.
+// the bottom when down is set, by a of the width on each side.
 func fade(a float64, down bool) warp {
 	return func(u, v float64) (float64, float64) {
 		f := 1 - v
 		if down {
 			f = v
 		}
-		return 0.5 + (u-0.5)*(1-a*f), v
+		return 0.5 + (u-0.5)*(1-2*a*f), v
 	}
 }
 
 // arc returns the warp that puts the text along the ellipse of the box,
-// over span radians from the left, clockwise over the top when up is set,
-// and counterclockwise under the bottom when it is not. The top of the
-// glyphs points out of the ellipse over the top, and into it under the
-// bottom. The text takes the band of the share t of the radius at the
-// edge of the ellipse.
-func arc(span, t float64, up bool) warp {
+// over span radians about the direction mid, which is counterclockwise
+// from the right. The text goes clockwise over the top when up is set, and
+// counterclockwise under the bottom when it is not. The top of the glyphs
+// points out of the ellipse over the top, and into it under the bottom.
+// The text takes the band of the share t of the radius at the edge of the
+// ellipse.
+func arc(mid, span, t float64, up bool) warp {
 	return func(u, v float64) (float64, float64) {
-		theta, rho := math.Pi-span*u, 1-t*v
+		theta, rho := mid+span/2-span*u, 1-t*v
 		if !up {
-			theta, rho = math.Pi+span*u, 1-t*(1-v)
+			theta, rho = mid-span/2+span*u, 1-t*(1-v)
 		}
 		return 0.5 + 0.5*rho*math.Cos(theta), 0.5 - 0.5*rho*math.Sin(theta)
 	}
 }
 
+// arcSweep returns the span in radians of an arc whose text is symmetric
+// about the direction mid, in degrees clockwise from the right with y
+// down, and starts at the angle a in 16.16 bits.
+func arcSweep(mid, a float64) float64 {
+	d := math.Mod(a/fixedDegree-mid, 360)
+	switch {
+	case d > 180:
+		d -= 360
+	case d <= -180:
+		d += 360
+	}
+	if math.IsNaN(d) {
+		return math.Pi
+	}
+	return min(2*math.Abs(d), 360) * math.Pi / 180
+}
+
 // The bands of the text along an arc: at most maxBand of the radius, and
-// pourBand for the types that pour the text into the band.
+// at least minBand.
 const (
-	maxBand  = 0.6
-	minBand  = 0.05
-	pourBand = 0.5
+	maxBand = 0.6
+	minBand = 0.05
 )
 
 // curveBand returns the band of a line of text along an arc of span
@@ -141,67 +233,88 @@ func curveBand(span, aspect, w, h float64) float64 {
 	return min(max(t, minBand), maxBand)
 }
 
-// warpOf returns the warp of the type of text effect typ in a box of w by
-// h points, for a text whose height is aspect times its width, or nil for
-// a type that draws its text plain.
-func warpOf(typ int, aspect, w, h float64) warp {
+// pourBand returns the band of a type that pours its text into the ring
+// between the edge of the ellipse and the inner radius a, as a share of the
+// side of the geometry.
+func pourBand(a float64) float64 {
+	return min(max(1-2*a, minBand), 1)
+}
+
+// warpOf returns the warp of the type of text effect typ with the
+// properties c, in a box of w by h points, for a text whose height is
+// aspect times its width, or nil for a type that draws its text plain.
+func warpOf(typ int, c Chain, aspect, w, h float64) warp {
+	v := warpValues(typ, c)
+	if v == nil {
+		return nil
+	}
+	a := v[0]
 	switch typ {
+	case sptTextStop:
+		return envelope(stop(0, a), stop(1, -a))
 	case sptTextTriangle:
-		return envelope(peak(0, 0.5), flat(1))
+		return envelope(peak(0, a), flat(1))
 	case sptTextTriangleInverted:
-		return envelope(flat(0), peak(1, -0.5))
+		return envelope(flat(0), peak(1, a-1))
 	case sptTextChevron:
-		return envelope(peak(0, 0.25), peak(0.75, 0.25))
+		return envelope(peak(0, a), peak(1-a, a))
 	case sptTextChevronInverted:
-		return envelope(peak(0.25, -0.25), peak(1, -0.25))
+		return envelope(peak(1-a, a-1), peak(1, a-1))
 	case sptTextArchUpCurve:
-		return arc(math.Pi, curveBand(math.Pi, aspect, w, h), true)
+		span := arcSweep(270, a)
+		return arc(math.Pi/2, span, curveBand(span, aspect, w, h), true)
 	case sptTextArchDownCurve:
-		return arc(math.Pi, curveBand(math.Pi, aspect, w, h), false)
+		span := arcSweep(90, a)
+		return arc(-math.Pi/2, span, curveBand(span, aspect, w, h), false)
 	case sptTextCircleCurve:
-		return arc(2*math.Pi, curveBand(2*math.Pi, aspect, w, h), true)
+		span := arcSweep(0, a)
+		return arc(0, span, curveBand(span, aspect, w, h), true)
 	case sptTextArchUpPour:
-		return arc(math.Pi, pourBand, true)
+		return arc(math.Pi/2, arcSweep(270, a), pourBand(v[1]), true)
 	case sptTextArchDownPour:
-		return arc(math.Pi, pourBand, false)
+		return arc(-math.Pi/2, arcSweep(90, a), pourBand(v[1]), false)
 	case sptTextCirclePour:
-		return arc(2*math.Pi, pourBand, true)
+		return arc(0, arcSweep(0, a), pourBand(v[1]), true)
+	case sptTextCascadeUp:
+		return envelope(slope((1-a)/4, 0), slope(1, a))
+	case sptTextCascadeDown:
+		return envelope(slope(0, (1-a)/4), slope(a, 1))
 	case sptTextWave1:
-		return envelope(wave(0.125, 0.125, 1), wave(0.875, 0.125, 1))
+		return envelope(wave(a, a, 1), wave(1-a, a, 1))
 	case sptTextWave2:
-		return envelope(wave(0.125, -0.125, 1), wave(0.875, -0.125, 1))
+		return envelope(wave(a, -a, 1), wave(1-a, -a, 1))
 	case sptTextWave3:
-		return envelope(wave(0.0625, 0.0625, 2), wave(0.9375, 0.0625, 2))
+		return envelope(wave(a, a, 2), wave(1-a, a, 2))
 	case sptTextWave4:
-		return envelope(wave(0.0625, -0.0625, 2), wave(0.9375, -0.0625, 2))
+		return envelope(wave(a, -a, 2), wave(1-a, -a, 2))
 	case sptTextInflate:
-		return envelope(bulge(0, 0.1875), bulge(1, -0.1875))
+		return envelope(bulge(0, a), bulge(1, -a))
 	case sptTextDeflate:
-		return envelope(bulge(0.1875, -0.1875), bulge(0.8125, 0.1875))
+		return envelope(bulge(a, -a), bulge(1-a, a))
 	case sptTextInflateBottom:
-		return envelope(flat(0), bulge(1, -0.4))
+		return envelope(flat(0), bulge(1, a-1))
 	case sptTextDeflateBottom:
-		return envelope(flat(0), bulge(0.5, 0.5))
+		return envelope(flat(0), bulge(a, 1-a))
 	case sptTextInflateTop:
-		return envelope(bulge(0, 0.4), flat(1))
+		return envelope(bulge(0, a), flat(1))
 	case sptTextDeflateTop:
-		return envelope(bulge(0.5, -0.5), flat(1))
+		return envelope(bulge(a, -a), flat(1))
 	case sptTextFadeRight:
-		return envelope(slope(0, 1.0/3), slope(1, 2.0/3))
+		return envelope(slope(0, a), slope(1, 1-a))
 	case sptTextFadeLeft:
-		return envelope(slope(1.0/3, 0), slope(2.0/3, 1))
+		return envelope(slope(a, 0), slope(1-a, 1))
 	case sptTextFadeUp:
-		return fade(1.0/3, false)
+		return fade(a, false)
 	case sptTextFadeDown:
-		return fade(1.0/3, true)
+		return fade(a, true)
 	case sptTextSlantUp:
-		return envelope(slope(0.556, 0), slope(1, 0.444))
+		return envelope(slope(a, 0), slope(1, 1-a))
 	case sptTextSlantDown:
-		return envelope(slope(0, 0.556), slope(0.444, 1))
+		return envelope(slope(0, 1-a), slope(a, 1))
 	case sptTextCanUp:
-		return envelope(bulge(0.15, -0.15), bulge(1, -0.15))
+		return envelope(bulge(0, 1-a), bulge(a, 1-a))
 	case sptTextCanDown:
-		return envelope(bulge(0, 0.15), bulge(0.85, 0.15))
+		return envelope(bulge(a, -a), bulge(1, -a))
 	}
 	return nil
 }

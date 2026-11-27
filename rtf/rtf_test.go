@@ -485,3 +485,13 @@ func TestWatermark(t *testing.T) {
 		}
 	}
 }
+
+// TestKerning checks that Word kerns only the text of \kerning, from its
+// size in half points up, and that \plain ends it.
+func TestKerning(t *testing.T) {
+	doc := `{\rtf1\ansi Plain {\fs32\kerning28 Kerned} {\fs24\kerning28 Small} {\kerning28\plain Reset}}`
+	html, _ := convertHTML(t, []byte(doc))
+	if n := strings.Count(html, "font-kerning: normal"); n != 1 {
+		t.Errorf("expected 1 kerned run, got %d:\n%s", n, html)
+	}
+}

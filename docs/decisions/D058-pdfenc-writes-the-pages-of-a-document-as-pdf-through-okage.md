@@ -700,3 +700,16 @@ annotations. The written pages of 282 documents hold 162 links to a URI in
 entries of the outline in 37 documents. Each oracle finds them, and `qpdf
 --check` finds no error and no warning. The pixels of `ivy.RenderImage` of
 the 292 documents do not change.
+
+## The text of outlined text
+
+The build of 2026-11-27 gives the text of `-ivy-text-outline` to the PDF
+device. The layout strokes the outlines of such a run with
+`display.StrokeGlyphs`, which keeps the run and its text. A device that
+implements `display.GlyphStroker`, such as a `List` and the PDF device,
+takes the run. Any other device strokes the path of the run, so the pixels
+do not change. The PDF device strokes the outlines as a path, as before.
+It then writes the run as text of the embedded font, over the outlines, so
+that a reader can search and copy it. The writer of okage has no public
+text rendering mode 3, so the text fills with an opacity of 0. A run whose
+text or font cannot go into the file gives only the outlines.

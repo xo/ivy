@@ -307,6 +307,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add(indexedPict(3, 2))
 	f.Add(bitMapPict(8, 2))
 	f.Add(quickTimePict(f, 8, 8, color.NRGBA{0, 255, 0, 255}))
+	f.Add(vectorPict())
 	f.Fuzz(func(t *testing.T, data []byte) {
 		img, err := Decode(data, ivy.Limits{MaxPixels: 1 << 20, MaxMemory: 16 << 20, MaxObjects: 1 << 12})
 		if err == nil && img.Bounds().Empty() {

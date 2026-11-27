@@ -133,6 +133,9 @@ type Chart struct {
 	// title is the title, one line for each paragraph, or nil.
 	title     []string
 	titleText textStyle
+	// titleSpans holds the runs of each line of title, each with the style
+	// of its own properties, or is nil for a title without rich text.
+	titleSpans [][]span
 	// titleAt is the top left corner of the title, as fractions of the
 	// size of the chart, or NaN for the automatic place.
 	titleAt [2]float64
@@ -424,6 +427,18 @@ type axis struct {
 	text textStyle
 	// titleText is the style of the title of the axis.
 	titleText textStyle
+	// titleSpans holds the runs of the title, each with the style of its
+	// own properties, or is nil for a title without rich text.
+	titleSpans []span
+}
+
+// titleBlock returns the title of a as a block of one line.
+func (a *axis) titleBlock() block {
+	b := block{lines: []string{a.title}, st: a.titleText}
+	if a.titleSpans != nil {
+		b.spans = [][]span{a.titleSpans}
+	}
+	return b
 }
 
 // newAxis returns an axis without limits.

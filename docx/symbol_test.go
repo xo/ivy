@@ -77,3 +77,20 @@ func TestSymbolBulletLine(t *testing.T) {
 		t.Errorf("expected %q:\n%s", want, html)
 	}
 }
+
+// TestCourierBulletLine checks that a bullet of Courier New, whose line is
+// lower than the line of its text, does not make the line higher, as in
+// Word: the "o" lines of page 3 of aspose/docx/rendering.docx are 13.8
+// points apart, the line of Times New Roman at 12 points.
+func TestCourierBulletLine(t *testing.T) {
+	numbering := fixture.WordPart{ID: "rIdN", Type: "numbering", Name: "word/numbering.xml", Data: fixture.WordXML("w:numbering",
+		`<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="o"/>`+
+			`<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/></w:rPr></w:lvl></w:abstractNum>`+
+			`<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>`)}
+	body := `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>` +
+		`<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr><w:t>Item</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body, numbering))
+	if want := "text-indent: 0; line-height: 0;"; !strings.Contains(html, want) {
+		t.Errorf("expected %q:\n%s", want, html)
+	}
+}

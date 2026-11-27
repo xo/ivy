@@ -1,6 +1,8 @@
 package odraw
 
 import (
+	"strings"
+
 	"github.com/xo/okage"
 
 	"github.com/xo/ivy/internal/drawingml"
@@ -48,8 +50,8 @@ var presets = map[int]string{
 	41: "callout1", 42: "callout2", 43: "callout3", 44: "accentCallout1",
 	45: "accentCallout2", 46: "accentCallout3", 47: "borderCallout1",
 	48: "borderCallout2", 49: "borderCallout3", 50: "accentBorderCallout1",
-	51: "accentBorderCallout2", 52: "accentBorderCallout3", 53: "ribbon2",
-	54: "ribbon", 55: "chevron", 56: "pentagon", 57: "noSmoking",
+	51: "accentBorderCallout2", 52: "accentBorderCallout3", 53: "ribbon",
+	54: "ribbon2", 55: "chevron", 56: "pentagon", 57: "noSmoking",
 	58: "star8", 59: "star16", 60: "star32", 61: "wedgeRectCallout",
 	62: "wedgeRoundRectCallout", 63: "wedgeEllipseCallout", 64: "wave",
 	65: "foldedCorner", 66: "leftArrow", 67: "downArrow", 68: "upArrow",
@@ -79,6 +81,8 @@ var presets = map[int]string{
 	132: "flowChartMagneticDisk", 133: "flowChartMagneticDrum",
 	134: "flowChartDisplay", 135: "flowChartDelay",
 	176: "flowChartAlternateProcess", 177: "flowChartOffpageConnector",
+	178: "callout1", 179: "accentCallout1", 180: "borderCallout1",
+	181: "accentBorderCallout1",
 	182: "leftRightUpArrow", 183: "sun", 184: "moon", 185: "bracketPair",
 	186: "bracePair", 187: "star4", 188: "doubleWave",
 	189: "actionButtonBlank", 190: "actionButtonHome",
@@ -121,11 +125,20 @@ func (s *Style) Geometry(sh *Shape, c Chain, w, h float64) ([]drawingml.Path, bo
 	if !ok {
 		return rectPath, true
 	}
-	paths, _ := drawingml.Evaluated(g, adjustOf(sh.Type, c, g.AdjustNames(), w, h), w, h, s.log())
+	f := frameOf(sh.Type, c, w, h)
+	paths, _ := drawingml.Evaluated(g, adjustOf(sh.Type, c, g.AdjustNames(), w, h), f.w, f.h, s.log())
 	if len(paths) == 0 {
 		return rectPath, true
 	}
-	open := name == "arc" || name[:min(len(name), 4)] == "bent" || name[:min(len(name), 6)] == "curved"
+	if f != (frame{w: w, h: h}) {
+		t := f.transform()
+		for i := range paths {
+			if p, ok := paths[i].Path.Transform(t); ok {
+				paths[i].Path = p
+			}
+		}
+	}
+	open := name == "arc" || strings.HasPrefix(name, "bentConnector") || strings.HasPrefix(name, "curvedConnector")
 	return paths, !open
 }
 
@@ -146,8 +159,18 @@ func (s *Style) TextRect(sh *Shape, c Chain, w, h float64) okage.Rect {
 	if !ok {
 		return box
 	}
-	_, text := drawingml.Evaluated(g, adjustOf(sh.Type, c, g.AdjustNames(), w, h), w, h, s.log())
-	return text
+	f := frameOf(sh.Type, c, w, h)
+	_, text := drawingml.Evaluated(g, adjustOf(sh.Type, c, g.AdjustNames(), w, h), f.w, f.h, s.log())
+	if f == (frame{w: w, h: h}) {
+		return text
+	}
+	x0, y0 := f.point(text.Left(), text.Top())
+	x1, y1 := f.point(text.Right(), text.Bottom())
+	r, ok := okage.RectFromLTRB(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+	if !ok {
+		return box
+	}
+	return r
 }
 
 // The types of the segments of a path of MS-ODRAW 2.4.30.

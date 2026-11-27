@@ -192,11 +192,17 @@ func (cv *canvas) title(area box) box {
 		return area
 	}
 	st := c.titleText
-	var lines []string
-	for _, l := range c.title {
-		lines = append(lines, cv.t.wrap(l, st, cv.w*0.8)...)
+	var b block
+	if c.titleSpans != nil {
+		spans := cv.t.wrapSpans(c.titleSpans, st, cv.w*0.8)
+		b = block{lines: spanLines(spans), st: st, spans: spans}
+	} else {
+		var lines []string
+		for _, l := range c.title {
+			lines = append(lines, cv.t.wrap(l, st, cv.w*0.8)...)
+		}
+		b = block{lines: lines, st: st}
 	}
-	b := block{lines: lines, st: st}
 	_, h := cv.t.size(b)
 	if at := c.titleAt; !math.IsNaN(at[0]) && !math.IsNaN(at[1]) {
 		cv.t.draw(cv.dev, b, at[0]*cv.w, at[1]*cv.h, alignStart, alignStart, 0)

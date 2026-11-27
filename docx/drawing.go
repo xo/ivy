@@ -456,6 +456,7 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	}
 	distL, distR := emu(n, "distL"), emu(n, "distR")
 	distT, distB := emu(n, "distT"), emu(n, "distB")
+	effL, effR, effB := effectExtent(n)
 	position := ""
 	if c.margin == "" {
 		position = floatPosition(pv.relative, pv.align, pv.offset)
@@ -485,16 +486,18 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 		}
 	case wrap == "wrapSquare" || wrap == "wrapTight" || wrap == "wrapThrough":
 		c.floatSeq = c.paraSeq
+		// The effects of the drawing, such as a shadow, are part of the
+		// box that the text wraps around, and the box stays in the column.
 		if x+w/2 > colWidth/2 && !crossesColumn(sec, x, w) {
 			s.set("float", "right")
-			s.set("margin-right", pt(max(colWidth-x-w, 0)))
-			s.set("margin-left", pt(distL))
+			s.set("margin-right", pt(max(colWidth-x-w-effR, 0)+effR))
+			s.set("margin-left", pt(distL+effL))
 		} else {
 			s.set("float", "left")
-			s.set("margin-left", pt(max(x, 0)))
-			s.set("margin-right", pt(distR))
+			s.set("margin-left", pt(max(x-effL, 0)+effL))
+			s.set("margin-right", pt(distR+effR))
 		}
-		s.set("margin-bottom", pt(distB))
+		s.set("margin-bottom", pt(distB+effB))
 		switch {
 		case position != "":
 			s.set("margin-top", pt(distT))
@@ -546,6 +549,20 @@ func (c *converter) anchorDrawing(n roxmltree.Node) {
 	c.w.WriteString(`<span style="` + attrText(s.String()) + `">`)
 	c.graphic(g, w, h, docAlt(n))
 	c.w.WriteString("</span>")
+}
+
+// effectExtent returns the space that wp:effectExtent of the wp:anchor
+// element n adds to the left, the right and the bottom of a drawing for its
+// effects, such as a shadow, in points. On page 9 of poi/docx/drawing.docx,
+// a picture has 1.5 points of effects on its left. Word draws it 1.5 points
+// from the left of its column, and the text beside it starts 1.5 points
+// further right.
+func effectExtent(n roxmltree.Node) (left, right, bottom float64) {
+	e, ok := child(n, "effectExtent")
+	if !ok {
+		return 0, 0, 0
+	}
+	return max(emu(e, "l"), 0), max(emu(e, "r"), 0), max(emu(e, "b"), 0)
 }
 
 // anchoredInCell reports whether the paragraph of the drawing n is in a

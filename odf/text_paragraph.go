@@ -492,7 +492,11 @@ func (c *odtConverter) paragraph(n roxmltree.Node) {
 	} else {
 		c.inlines(n, p)
 	}
-	if c.w.Len() == mark {
+	// A paragraph without text has the height of one line, also when it
+	// holds frames anchored to it or to a character, as in LibreOffice:
+	// frames that float, that are at the top of the paragraph or that have
+	// the wrap run-through. The line goes below a frame at the top.
+	if only, lined := c.floatsOnly(n, 0); c.w.Len() == mark || only && lined {
 		c.w.WriteString("<br/>")
 	}
 	c.w.WriteString("</p>")
@@ -535,8 +539,8 @@ func (c *odtConverter) topFrame(n roxmltree.Node) bool {
 	if odtAttr(n, "anchor-type") != "paragraph" {
 		return false
 	}
-	g := c.st.props("graphic", c.styleName(n))
-	if g["wrap"] != "none" && g["wrap"] != "" {
+	g := c.graphic(n)
+	if g["wrap"] != "none" {
 		return false
 	}
 	if rel := g["vertical-rel"]; rel != "paragraph" && rel != "paragraph-content" {
@@ -544,6 +548,41 @@ func (c *odtConverter) topFrame(n roxmltree.Node) bool {
 	}
 	y, _ := odtLength(odtAttr(n, "y"))
 	return g["vertical-pos"] == "top" || g["vertical-pos"] == "from-top" && y == 0
+}
+
+// floatsOnly reports whether the paragraph n, or its span or link n,
+// holds no text and no object as a character, at most 64 levels deep.
+// lined is set when it holds a frame or a shape anchored to the paragraph
+// or to a character.
+func (c *odtConverter) floatsOnly(n roxmltree.Node, depth int) (only, lined bool) {
+	if depth > 64 {
+		return false, false
+	}
+	for e := range n.Children() {
+		switch {
+		case e.IsText():
+			if t, _ := e.Text(); strings.TrimSpace(t) != "" {
+				return false, false
+			}
+		case !e.IsElement() || odtAloneElements[e.TagName().Name()]:
+		case e.TagName().Name() == "span" || e.TagName().Name() == "a":
+			ok, l := c.floatsOnly(e, depth+1)
+			if !ok {
+				return false, false
+			}
+			lined = lined || l
+		case e.TagName().Name() == "frame" || odtIsShape(e):
+			switch odtAttr(e, "anchor-type") {
+			case "as-char":
+				return false, false
+			case "paragraph", "char":
+				lined = true
+			}
+		default:
+			return false, false
+		}
+	}
+	return true, lined
 }
 
 // odtParagraphNear returns the paragraph after the paragraph n, or before
@@ -1071,21 +1110,32 @@ func (c *odtConverter) table(n roxmltree.Node) {
 	c.list = nil
 	defer func() { c.list = list }()
 	p := c.st.props("table", c.styleName(n))
-	var widths []float64
+	var columns []odtColumn
 	var rows []roxmltree.Node
 	var headerRows int
-	c.tableParts(n, &widths, &rows, &headerRows, 0)
+	c.tableParts(n, &columns, &rows, &headerRows, 0)
 	if len(rows) == 0 {
 		return
 	}
 	var s odtCSS
+	// widths are the widths of the columns, in points, or in percentages of
+	// the width of the table when rel is set.
+	widths, rel := odtColumnWidths(columns)
 	total := 0.0
 	for _, w := range widths {
 		total += w
 	}
-	if w, ok := odtLength(p["width"]); ok && w > 0 {
+	switch w, ok := odtLength(p["width"]); {
+	case ok && w > 0:
 		s.set("width", odtPt(w))
-	} else if total > 0 {
+	case rel:
+		// LibreOffice gives a table without a width and with relative
+		// columns the width between its margins, whatever its
+		// table:align.
+		left, _ := odtLength(p["margin-left"])
+		right, _ := odtLength(p["margin-right"])
+		s.set("width", odtCalc(100, -min(max(left+right, -14400), 14400)))
+	case total > 0:
 		s.set("width", odtPt(total))
 	}
 	if total > 0 {
@@ -1126,7 +1176,11 @@ func (c *odtConverter) table(n roxmltree.Node) {
 	if total > 0 {
 		c.w.WriteString("<colgroup>")
 		for _, w := range widths {
-			c.w.WriteString(`<col style="width: ` + odtPt(w) + `"/>`)
+			v := odtPt(w)
+			if rel {
+				v = odtNum(w) + "%"
+			}
+			c.w.WriteString(`<col style="width: ` + v + `"/>`)
 		}
 		c.w.WriteString("</colgroup>")
 	}
@@ -1150,9 +1204,38 @@ func (c *odtConverter) table(n roxmltree.Node) {
 // maxTableColumns bounds the columns of a table, since a column can repeat.
 const maxTableColumns = 1024
 
+// odtColumn is a column of a table: its style:column-width in points and
+// its style:rel-column-width, or 0 when it has none.
+type odtColumn struct {
+	width, rel float64
+}
+
+// odtColumnWidths returns the widths of the columns of a table in points,
+// from their style:column-width. When a column has no style:column-width
+// and each column has a style:rel-column-width, as LibreOffice writes a
+// table with table:align margins, it returns the relative widths as
+// percentages of the width of the table, and rel is set.
+func odtColumnWidths(columns []odtColumn) (widths []float64, rel bool) {
+	widths = make([]float64, len(columns))
+	absolute, relative, sum := true, true, 0.0
+	for i, col := range columns {
+		widths[i] = col.width
+		absolute = absolute && col.width > 0
+		relative = relative && col.rel > 0
+		sum += col.rel
+	}
+	if absolute || !relative || len(columns) == 0 {
+		return widths, false
+	}
+	for i, col := range columns {
+		widths[i] = col.rel / sum * 100
+	}
+	return widths, true
+}
+
 // tableParts reads the columns and the rows of a table, with those in
 // groups.
-func (c *odtConverter) tableParts(n roxmltree.Node, widths *[]float64, rows *[]roxmltree.Node, headerRows *int, depth int) {
+func (c *odtConverter) tableParts(n roxmltree.Node, columns *[]odtColumn, rows *[]roxmltree.Node, headerRows *int, depth int) {
 	if depth > 4 {
 		return
 	}
@@ -1166,20 +1249,25 @@ func (c *odtConverter) tableParts(n roxmltree.Node, widths *[]float64, rows *[]r
 			if v, err := strconv.Atoi(odtAttr(e, "number-columns-repeated")); err == nil && v > 1 {
 				repeat = v
 			}
-			w, _ := odtLength(c.st.props("table-column", c.styleName(e))["column-width"])
-			for range min(repeat, maxTableColumns-len(*widths)) {
-				*widths = append(*widths, max(w, 0))
+			p := c.st.props("table-column", c.styleName(e))
+			w, _ := odtLength(p["column-width"])
+			col := odtColumn{width: max(w, 0)}
+			if v, err := strconv.ParseFloat(strings.TrimSuffix(p["rel-column-width"], "*"), 64); err == nil && v > 0 && v < 1e9 {
+				col.rel = v
+			}
+			for range min(repeat, maxTableColumns-len(*columns)) {
+				*columns = append(*columns, col)
 			}
 		case "table-columns", "table-column-group", "table-header-columns":
-			c.tableParts(e, widths, rows, headerRows, depth+1)
+			c.tableParts(e, columns, rows, headerRows, depth+1)
 		case "table-header-rows":
 			before := len(*rows)
-			c.tableParts(e, widths, rows, headerRows, depth+1)
+			c.tableParts(e, columns, rows, headerRows, depth+1)
 			if before == 0 {
 				*headerRows = len(*rows)
 			}
 		case "table-rows", "table-row-group":
-			c.tableParts(e, widths, rows, headerRows, depth+1)
+			c.tableParts(e, columns, rows, headerRows, depth+1)
 		case "table-row":
 			repeat := 1
 			if v, err := strconv.Atoi(odtAttr(e, "number-rows-repeated")); err == nil && v > 1 {
@@ -1261,8 +1349,19 @@ func (c *odtConverter) frame(n roxmltree.Node) {
 	w, h = min(max(w, 0), 14400), min(max(h, 0), 14400)
 	x, _ := odtLength(odtAttr(n, "x"))
 	y, _ := odtLength(odtAttr(n, "y"))
-	g := c.st.props("graphic", c.styleName(n))
+	g := c.graphic(n)
 	c.place(n, x, y, w, g, func() { c.frameContent(n, w, h, g) })
+}
+
+// graphic returns the graphic properties of the frame or the shape n. A
+// frame or a shape without style:wrap has the wrap parallel, as in
+// LibreOffice 26.8.
+func (c *odtConverter) graphic(n roxmltree.Node) odtProps {
+	g := c.st.props("graphic", c.styleName(n))
+	if g["wrap"] == "" {
+		g = g.over(odtProps{"wrap": "parallel"})
+	}
+	return g
 }
 
 // odtFloatPosition returns the value of -ivy-float-position of a frame with
@@ -1421,8 +1520,8 @@ func (c *odtConverter) floatEdge(anchor string, g odtProps, x float64) (side str
 // anchored to the page at y points from the top of its area, with the
 // graphic properties g, or "" when the frame stays an absolute box: in a
 // section with columns (D60), or when its style:vertical-rel is not the
-// page or the page area. The caller keeps a frame without style:wrap or
-// with the wrap run-through absolute too.
+// page or the page area. The caller keeps a frame with the wrap
+// run-through absolute too.
 func (c *odtConverter) pageFloatPosition(g odtProps, y float64) string {
 	if _, _, ok := c.floatLeft("page", g, 0, 0); !ok {
 		return ""
@@ -1436,34 +1535,141 @@ func (c *odtConverter) pageFloatPosition(g odtProps, y float64) string {
 // pageFloat sets the style s of a frame or a shape of the width w that is
 // anchored to the page, at svg:x x, with the graphic properties g. The
 // frame floats at its position on the page (D60). The text wraps around it
-// on the sides of style:wrap (D63). A frame without wrap has a margin to
-// the other side of the column, so that no line fits beside it.
+// on the sides of style:wrap (D63). See floatSide for a frame with the
+// wrap none.
 func (c *odtConverter) pageFloat(s *odtCSS, g odtProps, x, w float64, position string) {
-	left, width, _ := c.floatLeft("page", g, x, w)
-	switch {
-	case g["wrap"] == "none":
-		s.set("float", "left")
-		s.set("margin-left", odtPt(left))
-		s.set("margin-right", odtPt(min(max(width-left-w, 0), 14400)))
-	case left+w/2 > width/2:
-		s.set("float", "right")
-		s.set("margin-right", odtPt(width-left-w))
-	default:
-		s.set("float", "left")
-		s.set("margin-left", odtPt(left))
+	c.floatSide(s, "page", g, x, w)
+	odtFloatMargins(s, g)
+	s.set("-ivy-float-position", position)
+	if g["wrap"] != "none" {
+		s.set("-ivy-wrap-flow", odtWrapFlow(g))
 	}
-	// fo:margin-top and fo:margin-bottom are the distances of the text
-	// above and below the frame.
+}
+
+// odtFloatMargins sets the margins at the top and at the bottom of the
+// style s of a frame that floats at a position, with the graphic
+// properties g: fo:margin-top and fo:margin-bottom are the distances of
+// the text above and below the frame.
+func odtFloatMargins(s *odtCSS, g odtProps) {
 	if v, ok := odtLength(g["margin-top"]); ok && v > 0 {
 		s.set("margin-top", odtPt(min(v, 14400)))
 	}
 	if v, ok := odtLength(g["margin-bottom"]); ok && v > 0 {
 		s.set("margin-bottom", odtPt(min(v, 14400)))
 	}
-	s.set("-ivy-float-position", position)
-	if g["wrap"] != "none" {
-		s.set("-ivy-wrap-flow", odtWrapFlow(g))
+}
+
+// floatSide sets the side and the margins at the left and at the right of
+// the style s of a frame or a shape of the width w that floats, anchored
+// by anchor at svg:x x, with the graphic properties g. The frame floats to
+// the side of the column where its center is, and its margin gives its
+// place, so that the text can go on both sides of it (D63). A frame with
+// the wrap none has a margin to the other side of its containing block,
+// so that no line fits beside it.
+func (c *odtConverter) floatSide(s *odtCSS, anchor string, g odtProps, x, w float64) {
+	none := g["wrap"] == "none"
+	if left, width, ok := c.floatLeft(anchor, g, x, w); ok {
+		switch {
+		case none:
+			s.set("float", "left")
+			s.set("margin-left", odtPt(left))
+			s.set("margin-right", odtPt(min(max(width-left-w, 0), 14400)))
+		case left+w/2 > width/2:
+			s.set("float", "right")
+			if v := width - left - w; v != 0 {
+				s.set("margin-right", odtPt(v))
+			}
+		default:
+			s.set("float", "left")
+			if left != 0 {
+				s.set("margin-left", odtPt(left))
+			}
+		}
+		return
 	}
+	// Without the width of the column, the margin is a percentage of the
+	// width of the containing block, pct, plus a length, pt.
+	side := "left"
+	var pct, pt float64
+	if sd, m, ok := c.floatEdge(anchor, g, x); ok {
+		side, pt = sd, m
+	} else if m, ok := c.floatCenter(anchor, g, w); ok {
+		pct, pt = 50, m
+	} else if g["horizontal-pos"] == "right" || g["wrap"] == "left" {
+		side = "right"
+	}
+	s.set("float", side)
+	if pct != 0 || pt != 0 {
+		s.set("margin-"+side, odtCalc(pct, pt))
+	}
+	if none {
+		other := "right"
+		if side == "right" {
+			other = "left"
+		}
+		s.set("margin-"+other, odtCalc(100-pct, -pt-w))
+	}
+}
+
+// odtCalc returns the CSS of pct percent plus pt points.
+func odtCalc(pct, pt float64) string {
+	switch {
+	case pct == 0:
+		return odtPt(pt)
+	case pt == 0:
+		return odtNum(pct) + "%"
+	case pt < 0:
+		return "calc(" + odtNum(pct) + "% - " + odtPt(-pt) + ")"
+	}
+	return "calc(" + odtNum(pct) + "% + " + odtPt(pt) + ")"
+}
+
+// floatCenter returns the margin at the left of a frame or a shape of the
+// width w at the center of an area of its paragraph, with the graphic
+// properties g, when the converter does not know the width of the column.
+// See floatLeft. The margin is 50% of the width of the content of the
+// paragraph plus the returned length. ok is false for a frame at another
+// place, in another area, or anchored to the page.
+func (c *odtConverter) floatCenter(anchor string, g odtProps, w float64) (pt float64, ok bool) {
+	if anchor == "page" || g["horizontal-pos"] != "center" {
+		return 0, false
+	}
+	// The widths of the area of style:horizontal-rel outside the content
+	// of the paragraph, at the left and at the right.
+	var areaLeft, areaRight float64
+	switch g["horizontal-rel"] {
+	case "paragraph-content", "char":
+	case "paragraph", "":
+		areaLeft, areaRight = c.paraLeft, c.paraRight
+	default:
+		return 0, false
+	}
+	marginLeft, _ := odtLength(g["margin-left"])
+	marginRight, _ := odtLength(g["margin-right"])
+	marginLeft, marginRight = min(max(marginLeft, 0), 14400), min(max(marginRight, 0), 14400)
+	return min(max((areaRight-areaLeft+marginLeft-marginRight-w)/2, -14400), 14400), true
+}
+
+// floatCarrier reports whether a frame anchored to the page number page
+// that stays an absolute box can wait for its page. The layout places
+// only a float on a later page (D60), so a float of no size carries the
+// absolute box there. It can when the frame is in the flow of the page:
+// not in a table cell, a frame, a header, a footer or a section with
+// columns.
+func (c *odtConverter) floatCarrier(page int) bool {
+	_, _, ok := c.floatLeft("page", odtProps{}, 0, 0)
+	return ok && page > 1
+}
+
+// belowTop reports whether a frame or a shape anchored by anchor, with the
+// graphic properties g, is at svg:y y below the top of its paragraph or of
+// the content of its paragraph.
+func (c *odtConverter) belowTop(anchor string, g odtProps, y float64) bool {
+	if anchor != "paragraph" && anchor != "char" || g["vertical-pos"] != "from-top" || y <= 0 {
+		return false
+	}
+	rel := g["vertical-rel"]
+	return rel == "paragraph" || rel == "paragraph-content"
 }
 
 // place writes the box of a frame or a shape n, of the width w, at the
@@ -1473,20 +1679,37 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 	anchor := odtAttr(n, "anchor-type")
 	var s odtCSS
 	inline := anchor == "as-char"
+	// LibreOffice puts a frame anchored to the page on the page of
+	// text:anchor-page-number, and not on the page where its element is
+	// in the text.
+	page := 1
+	if v, err := strconv.Atoi(odtAttr(n, "anchor-page-number")); err == nil && v > 1 && anchor == "page" {
+		page = min(v, 1000)
+	}
+	if pl := c.layout; anchor == "page" && pl != nil && pl.mirrored && page%2 == 0 {
+		// A left page of a mirrored page layout swaps the margins at the
+		// left and at the right, and LibreOffice places the frame from the
+		// margins of that page.
+		left := *pl
+		left.left, left.right = pl.right, pl.left
+		c.layout = &left
+		defer func() { c.layout = pl }()
+	}
 	position := ""
-	if anchor == "page" && g["wrap"] != "" && g["wrap"] != "run-through" {
+	if anchor == "page" && g["wrap"] != "run-through" {
 		position = c.pageFloatPosition(g, y)
 	}
+	// carrier is set for a frame anchored to a later page with the wrap
+	// run-through. See floatCarrier.
+	carrier := false
 	switch {
 	case inline:
 	case position != "":
 		c.pageFloat(&s, g, x, w, position)
-		// LibreOffice puts the frame on the page of
-		// text:anchor-page-number, and not on the page where its element
-		// is in the text. It adds blank pages when the text ends before
-		// that page.
-		if page, err := strconv.Atoi(odtAttr(n, "anchor-page-number")); err == nil && page > 1 {
-			s.set("-ivy-float-page", strconv.Itoa(min(page, 1000)))
+		// LibreOffice adds blank pages when the text ends before the page
+		// of the frame.
+		if page > 1 {
+			s.set("-ivy-float-page", strconv.Itoa(page))
 		}
 	case anchor == "page" || anchor == "frame" || g["wrap"] == "run-through":
 		s.set("position", "absolute")
@@ -1494,11 +1717,25 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 			x -= c.layout.left
 			y -= c.pageTop
 			s.set("top", odtPt(y))
+			carrier = c.floatCarrier(page)
 		} else if y != 0 {
 			s.set("margin-top", odtPt(y))
 		}
 		s.set("left", odtPt(x))
-	case g["wrap"] == "none" || g["wrap"] == "":
+	case g["wrap"] == "none" && c.belowTop(anchor, g, y):
+		// LibreOffice puts a frame with the wrap none below the top of
+		// its paragraph at its svg:y, with the lines of the paragraph that
+		// fit above it, and the other lines below it.
+		c.floatSide(&s, anchor, g, x, w)
+		top := y
+		if g["vertical-rel"] == "paragraph" {
+			// The paragraph area holds the spacing above the paragraph,
+			// and the position of the layout is from below that spacing.
+			top -= c.paraTop
+		}
+		s.set("-ivy-float-position", "block "+odtPt(min(max(top, -14400), 14400)))
+		odtFloatMargins(&s, g)
+	case g["wrap"] == "none":
 		s.set("display", "block")
 		// LibreOffice puts a frame at the top of its paragraph at the top
 		// of the spacing above the paragraph, and the text of the
@@ -1520,39 +1757,24 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 			}
 		}
 	default:
-		if left, width, ok := c.floatLeft(anchor, g, x, w); ok {
-			// The frame floats to the side of the column where its
-			// center is, and its margin gives its place, so that the
-			// text can go on both sides of it (D63).
-			if left+w/2 > width/2 {
-				s.set("float", "right")
-				if v := width - left - w; v != 0 {
-					s.set("margin-right", odtPt(v))
-				}
-			} else {
-				s.set("float", "left")
-				if left != 0 {
-					s.set("margin-left", odtPt(left))
-				}
-			}
-		} else if side, margin, ok := c.floatEdge(anchor, g, x); ok {
-			s.set("float", side)
-			if margin != 0 {
-				s.set("margin-"+side, odtPt(margin))
-			}
-		} else {
-			side := "left"
-			if g["horizontal-pos"] == "right" || g["wrap"] == "left" {
-				side = "right"
-			}
-			s.set("float", side)
-		}
+		c.floatSide(&s, anchor, g, x, w)
 		if p := odtFloatPosition(g, y); p != "" {
 			s.set("-ivy-float-position", p)
 		}
 		s.set("-ivy-wrap-flow", odtWrapFlow(g))
 	}
+	if carrier {
+		// The box of the layout that waits for the page is a float of no
+		// size at the top left corner of the page area, which holds the
+		// absolute box of the frame.
+		c.w.WriteString(`<span style="float: left; width: 0; height: 0; -ivy-float-position: margin 0pt; -ivy-float-page: ` +
+			strconv.Itoa(page) + `">`)
+	}
 	if !inline {
+		// The first line of the box of the frame holds its content, and
+		// CSS gives that line the inherited text-indent of the paragraph.
+		// LibreOffice does not indent the content of a frame.
+		s.set("text-indent", "0")
 		s.set("width", odtPt(w))
 	}
 	if inline {
@@ -1576,6 +1798,9 @@ func (c *odtConverter) place(n roxmltree.Node, x, y, w float64, g odtProps, cont
 	content()
 	c.alone, c.raise = "", false
 	c.w.WriteString("</span>")
+	if carrier {
+		c.w.WriteString("</span>")
+	}
 	c.space = false
 }
 
@@ -1649,24 +1874,19 @@ func odtIsShape(n roxmltree.Node) bool {
 // picture with its caption, goes through the layout over the shape, since
 // drawpage draws only the paragraphs of a text.
 func (c *odtConverter) shape(n roxmltree.Node) {
-	if c.shapes == nil {
-		cfg := c.d.cfg
-		cfg.Limits = c.lim
-		c.shapes = drawpage.NewShapes(drawpage.Options{Config: cfg, Read: c.d.readEntry}, c.content, c.styles)
-	}
 	c.objects++
 	if c.objects > c.lim.MaxObjects {
 		c.log.Warn("odf: too many objects, shape left out", "element", n.TagName().Name())
 		return
 	}
 	over := odtRichText(n)
-	sh, ok := c.shapes.Shape(c.ctx, n, !over)
+	sh, ok := c.drawShapes().Shape(c.ctx, n, !over)
 	if !ok {
 		return
 	}
 	id := "shape" + strconv.Itoa(len(c.charts)+1)
 	c.charts[id] = sh
-	g := c.st.props("graphic", c.styleName(n))
+	g := c.graphic(n)
 	src := odtAttrText(layout.ObjectURL(id))
 	inline := odtAttr(n, "anchor-type") == "as-char"
 	c.place(n, sh.X, sh.Y, sh.W, g, func() {
@@ -1796,7 +2016,13 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			s.set("box-sizing", "border-box")
 			s.set("width", odtPt(w))
 			s.set("min-height", odtPt(h))
+			if odtAttr(n, "anchor-type") == "as-char" {
+				// The paragraphs of the frame do not take the indent of
+				// the paragraph of the frame. See place.
+				s.set("text-indent", "0")
+			}
 			odtBox(&s, odtFrameFill(g))
+			c.frameGradient(&s, n, w, h, g)
 			c.w.WriteString(`<span style="` + odtAttrText(s.String()) + `">`)
 			list, last := c.list, c.lastBottom
 			c.list = nil
@@ -1814,6 +2040,40 @@ func (c *odtConverter) frameContent(n roxmltree.Node, w, h float64, g odtProps) 
 			}
 		}
 	}
+}
+
+// drawShapes returns the shapes of the text, which draw the shapes and
+// the gradients of the frames.
+func (c *odtConverter) drawShapes() *drawpage.Shapes {
+	if c.shapes == nil {
+		cfg := c.d.cfg
+		cfg.Limits = c.lim
+		c.shapes = drawpage.NewShapes(drawpage.Options{Config: cfg, Read: c.d.readEntry}, c.content, c.styles)
+	}
+	return c.shapes
+}
+
+// frameGradient sets the background of the style s of the text box of the
+// frame n, of w by h points, with the graphic properties g, to the
+// gradient of its draw:fill. The layout draws the gradient as an object,
+// stretched over the box, which can grow with its text. It does nothing
+// for another fill.
+func (c *odtConverter) frameGradient(s *odtCSS, n roxmltree.Node, w, h float64, g odtProps) {
+	if g["fill"] != "gradient" || c.objects >= c.lim.MaxObjects {
+		return
+	}
+	// A frame without a height grows with its text. The object stretches
+	// to the box, so its own height only sets the shape of the gradient.
+	sh, ok := c.drawShapes().Gradient(c.ctx, n, w, max(h, 1))
+	if !ok {
+		return
+	}
+	c.objects++
+	id := "fill" + strconv.Itoa(len(c.charts)+1)
+	c.charts[id] = sh
+	s.set("background-image", `url("`+layout.ObjectURL(id)+`")`)
+	s.set("background-size", "100% 100%")
+	s.set("background-repeat", "no-repeat")
 }
 
 // odtFrameFill returns the graphic properties g of a frame with the

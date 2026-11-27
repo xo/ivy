@@ -363,12 +363,23 @@ func scenes() []scene {
 			run.Glyphs[0].End = 1
 			d.FillGlyphs(run, solid(0, 0, 0, 255))
 		}, diff: 2, notWant: []string{"/FontFile2"}},
+		{name: "text outline", draw: drawOutline, diff: 2, want: []string{"/FontFile2", "/ToUnicode"}},
 		{name: "text restricted", draw: func(t *testing.T, d display.Device) {
 			data := bytes.Clone(goregular.TTF)
 			setFSType(t, data, 0x0002)
 			d.FillGlyphs(textRun(t, data, "Restricted", 10, 100, okage.IdentityTransform()), solid(0, 0, 0, 255))
 		}, diff: 2, notWant: []string{"/FontFile2"}},
 	}
+}
+
+// drawOutline fills the word "Filled", and strokes the outlines of the
+// word "Outlined", as the layout draws -ivy-text-outline.
+func drawOutline(t *testing.T, d display.Device) {
+	d.FillGlyphs(textRun(t, goregular.TTF, "Filled", 10, 60, okage.IdentityTransform()), solid(0, 0, 0, 255))
+	st := okage.DefaultStroke()
+	st.Width = 1
+	st.LineJoin = okage.LineJoinRound
+	display.StrokeGlyphs(d, textRun(t, goregular.TTF, "Outlined", 10, 120, okage.IdentityTransform()), st, solid(200, 0, 0, 255))
 }
 
 // textRun returns a run of the glyphs of s in the font data, at 24 points,

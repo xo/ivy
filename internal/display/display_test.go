@@ -613,3 +613,34 @@ func TestStrokeAdjusted(t *testing.T) {
 		t.Errorf("expected the adjusted stroke in the list, got: %q", got)
 	}
 }
+
+// TestStrokeGlyphs checks that StrokeGlyphs strokes the path of a run on a
+// device that is not a GlyphStroker, with the same pixels as StrokePath,
+// and that a List records the run and replays it so.
+func TestStrokeGlyphs(t *testing.T) {
+	face, err := font.Load(goregular.TTF, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, _ := face.Glyph('O')
+	run := GlyphRun{Face: face, Size: 40, Glyphs: []Glyph{{ID: gid, X: 10, Y: 40}}, Transform: okage.IdentityTransform(), Text: "O"}
+	stroke := okage.DefaultStroke()
+	stroke.Width = 2
+	want, d := newDevice(t, 50, 50, okage.IdentityTransform())
+	d.StrokePath(run.Path(), stroke, solid(0, 0, 0, 255))
+	got, d := newDevice(t, 50, 50, okage.IdentityTransform())
+	StrokeGlyphs(d, run, stroke, solid(0, 0, 0, 255))
+	if !slices.Equal(got.Data(), want.Data()) {
+		t.Error("expected the pixels of StrokePath")
+	}
+	var l List
+	StrokeGlyphs(&l, run, stroke, solid(0, 0, 0, 255))
+	if s := l.String(); s != "stroke glyphs 1 40 2" {
+		t.Errorf("expected the stroked glyphs in the list, got: %q", s)
+	}
+	replay, d := newDevice(t, 50, 50, okage.IdentityTransform())
+	l.Replay(d)
+	if !slices.Equal(replay.Data(), want.Data()) {
+		t.Error("expected the replay to give the pixels of StrokePath")
+	}
+}

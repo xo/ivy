@@ -187,6 +187,29 @@ func TestKnownPoints(t *testing.T) {
 	}
 }
 
+// TestCircularArrow checks the circular arrow of a box of 100 points in
+// EMU, whose guides multiply the squares of two lengths. Its ring goes
+// over the top from the left to the head at 341 degrees, and it stays
+// above the middle of the box but for the head.
+func TestCircularArrow(t *testing.T) {
+	g, ok := Preset("circularArrow")
+	if !ok {
+		t.Fatal("no preset circularArrow")
+	}
+	const size = 100 * 12700
+	s, err := g.Evaluate(size, size, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, ok := s.Paths[0].Path.ComputeTightBounds()
+	if !ok {
+		t.Fatal("expected the bounds of the arrow")
+	}
+	if b.Left() < 0.06*size || b.Right() > 1.001*size || b.Top() < 0.06*size || b.Bottom() > 0.7*size {
+		t.Errorf("expected the ring over the top and the head on the right, got %v", b)
+	}
+}
+
 // TestArc checks the arc of pie, whose guides compute the end of the arc. The
 // arc must end there, and its center must be the center of the box, for an
 // ellipse that is not a circle.
@@ -327,7 +350,7 @@ func TestFormulas(t *testing.T) {
 		{"val -Inf", 0},
 		{"val 1e300", maxValue},
 		{"*/ 1e300 1e300 1", maxValue},
-		{"tan 1 5400000", maxValue},
+		{"tan 1e50 5400000", maxValue},
 	}
 	e := &evaluator{w: 400, h: 200, vars: map[string]float64{}}
 	for _, tt := range tests {

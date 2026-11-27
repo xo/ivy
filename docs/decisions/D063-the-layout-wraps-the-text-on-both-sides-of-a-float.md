@@ -270,3 +270,13 @@ The build of 2026-11-25 differs from the proposal in these places:
     from 8.30 to 7.29. Word draws the text of the ellipse with the insets
     of the drawn width, so its text is 5.7 points more to the left than in
     ivy.
+20. On 2026-11-27 `odf` places a frame at the center of an area of its
+    paragraph in a table cell, a frame, a header, a footer or a section
+    with columns. This replaces the last sentence but two of point 17.
+    The margin at the left of the frame is 50% of the width of the content
+    of the paragraph plus a length, with `calc()`. A frame with the wrap
+    none there has a margin to the other side of its containing block, in
+    the same way. A frame in an area of the page still floats at the edge
+    of the column, because the place of the column on the page is not
+    known before the layout. On the test file `float-center.odt` of `odf`,
+    ivy places the frames within 1 point of LibreOffice 26.8.

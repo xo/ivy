@@ -216,17 +216,52 @@ func (cv *canvas) pie(b box, inner bool) {
 		if l.moved {
 			cv.line(l.ex, l.ey, l.x, l.y, c.defaultTextColor(), 0.5)
 		}
-		ha := alignCenter
-		if !l.inside {
-			ha = alignStart
-			if math.Sin(l.mid) < 0 {
-				ha = alignEnd
-			}
-		}
 		// Office and LibreOffice center the lines of a label
 		b := l.b
 		b.center = true
-		cv.t.draw(cv.dev, b, l.x, l.y, ha, alignCenter, 0)
+		cv.t.draw(cv.dev, b, l.x, l.y, l.align(), alignCenter, 0)
+	}
+}
+
+// align returns the alignment of the label to its point: the center of a
+// label in its slice, else the side next to the pie.
+func (l pieLabel) align() int {
+	switch {
+	case l.inside:
+		return alignCenter
+	case math.Sin(l.mid) < 0:
+		return alignEnd
+	}
+	return alignStart
+}
+
+// pieLabelMargin is the gap in points that Word keeps between a label of a
+// pie and the side of the chart. It is 5 pixels at 96 dpi on page 2 of
+// libreoffice/docx/pie-chart-data-labels.docx of the corpus of the review.
+const pieLabelMargin = 3.75
+
+// keepInside moves each label of a pie into the chart of the width w and
+// the height h, as Word does with a label that its place in the file puts
+// out of the chart.
+func keepInside(labels []pieLabel, w, h float64) {
+	for i := range labels {
+		l := &labels[i]
+		x0 := l.x - l.w*float64(l.align())/2
+		if over := x0 + l.w - (w - pieLabelMargin); over > 0 {
+			l.x -= over
+			x0 -= over
+		}
+		if under := pieLabelMargin - x0; under > 0 {
+			l.x += under
+		}
+		y0 := l.y - l.h/2
+		if over := y0 + l.h - (h - pieLabelMargin); over > 0 {
+			l.y -= over
+			y0 -= over
+		}
+		if under := pieLabelMargin - y0; under > 0 {
+			l.y += under
+		}
 	}
 }
 
@@ -338,6 +373,7 @@ func (cv *canvas) pieLabels(p *plot, s *series, cx, cy, r, start, dir, k float64
 		out = append(out, l)
 	}
 	spread(out, cv.h-pad)
+	keepInside(out, cv.w, cv.h)
 	return out
 }
 

@@ -282,6 +282,15 @@ func TestPageFloat(t *testing.T) {
 			"Fa@50,70 P11@50,50 P12@150,70 P13@150,90 P14@150,110 P15@50,130",
 		2,
 	}, {
+		// The page 2 is a left page with other margins. The float that
+		// waits for it keeps its place in the page area of that page.
+		"float page left",
+		`<style>@page :left { margin-left: 20px; margin-right: 80px }</style>` +
+			pageFloatDiv("a", "margin 20px", "-ivy-float-page: 2; margin-left: 30px") + paragraphs(1, 15),
+		"P1@50,50 P2@50,70 P3@50,90 P4@50,110 P5@50,130 P6@50,150 P7@50,170 P8@50,190 P9@50,210 P10@50,230 | " +
+			"Fa@50,70 P11@20,50 P12@150,70 P13@150,90 P14@150,110 P15@20,130",
+		2,
+	}, {
 		// The flow ends before the page of the float, so a blank page
 		// comes before the page 3 of the float.
 		"float page after the flow",

@@ -17,8 +17,10 @@ const (
 	// value of ST_PositiveCoordinate, in EMU.
 	maxSize = 27273042316900
 	// maxValue is the largest magnitude of a guide. A larger result becomes
-	// maxValue, so that a product of two guides is finite.
-	maxValue = 1e15
+	// maxValue, so that a product of two guides is finite. It is larger
+	// than the product of the squares of two lengths of the largest shape,
+	// which the circular arrow computes.
+	maxValue = 1e60
 	// boxes is how far a point can be from the box of the shape, in units of
 	// the larger side of the box. A point farther away moves to that limit.
 	// A callout can point outside its box.

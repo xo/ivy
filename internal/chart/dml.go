@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"iter"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -120,7 +121,8 @@ func (p *dmlParser) chart(n roxmltree.Node) {
 		}
 	}
 	if hasTitle {
-		c.title, c.titleText = p.title(title)
+		t := p.title(title)
+		c.title, c.titleText, c.titleSpans = t.lines, t.st, t.spans
 		if o, ok := child(title, "overlay"); ok {
 			c.titleOver = boolVal(o)
 		}
@@ -232,10 +234,51 @@ func (p *dmlParser) manualLayout(n roxmltree.Node) (box [4]float64, inner, ok bo
 }
 
 // title reads the text of c:title, from rich text or from the cache of a
-// reference, and its style. It returns nil for a title without text.
-func (p *dmlParser) title(n roxmltree.Node) ([]string, textStyle) {
+// reference, and its style. Its lines are nil for a title without text.
+// Each run of rich text keeps its own style, as a label does, and the
+// style of the title is then the style of its text body.
+func (p *dmlParser) title(n roxmltree.Node) richTitle {
 	rt := p.richText(n)
-	return rt.lines, rt.style
+	if rt.spans != nil {
+		return richTitle{lines: spanLines(rt.spans), st: rt.body, spans: rt.spans}
+	}
+	return richTitle{lines: rt.lines, st: rt.style}
+}
+
+// richTitle is the text of a title of a chart or of an axis.
+type richTitle struct {
+	lines []string
+	st    textStyle
+	// spans holds the runs of each line of lines, or is nil for a title
+	// without rich text.
+	spans [][]span
+}
+
+// setTitle gives a the title t, as one line. The lines of the title join
+// with a space.
+func (a *axis) setTitle(t richTitle) {
+	a.titleText = t.st
+	a.titleSpans = nil
+	if t.spans == nil {
+		a.title = strings.Join(t.lines, " ")
+		return
+	}
+	var line []span
+	for _, l := range t.spans {
+		switch {
+		case len(l) == 0:
+		case len(line) == 0:
+			line = slices.Clone(l)
+		default:
+			line = joinWords(line, l)
+		}
+	}
+	if len(line) == 0 {
+		a.title = ""
+		return
+	}
+	a.title = spanLines([][]span{line})[0]
+	a.titleSpans = line
 }
 
 // richText is the text of a title or of a label.
@@ -549,9 +592,7 @@ func (p *dmlParser) axis(n roxmltree.Node) axis {
 		case "axPos":
 			a.position = v
 		case "title":
-			lines, style := p.title(e)
-			a.title = strings.Join(lines, " ")
-			a.titleText = style
+			a.setTitle(p.title(e))
 		case "numFmt":
 			if ooxml.Attr(e, "sourceLinked") != "1" && ooxml.Attr(e, "sourceLinked") != "true" {
 				a.format = ooxml.Attr(e, "formatCode")

@@ -385,7 +385,7 @@ func TestTextFrameSpacing(t *testing.T) {
 		t.Errorf("expected the frame in the spacing above its paragraph, got: %s", p)
 	}
 	// A frame after text goes at the top of its paragraph too.
-	if p := odtParagraph(t, html, "Before"); !strings.Contains(p, `<span style="display: block; margin-top: -12pt; width: 72pt">`) {
+	if p := odtParagraph(t, html, "Before"); !strings.Contains(p, `<span style="display: block; margin-top: -12pt; text-indent: 0; width: 72pt">`) {
 		t.Errorf("expected the frame after the text at the top of its paragraph, got: %s", p)
 	}
 	// The line of Body is 115% of 13.8pt, 15.86pt, which adds 2.06pt

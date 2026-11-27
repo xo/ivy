@@ -170,7 +170,7 @@ func (s *Style) wordArt(sh *Shape, c Chain, w, h float64) ([]drawingml.Path, boo
 		return nil, false
 	}
 	// the warp of an arch keeps the shape of the text along the arc
-	if wp := warpOf(sh.Type, float64(total/widest), w, h); wp != nil {
+	if wp := warpOf(sh.Type, c, float64(total/widest), w, h); wp != nil {
 		for i := range paths {
 			if q, ok := warpPath(paths[i].Path, wp, w, h); ok {
 				paths[i].Path = q

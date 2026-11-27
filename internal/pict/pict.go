@@ -3,10 +3,12 @@
 // them. The store of pictures of Office Drawing holds such pictures, from
 // Office for the Macintosh.
 //
-// The package draws the bitmaps of a picture and the images of QuickTime in
-// it, such as JPEG, on a transparent image of the frame of the picture. It
-// reads the other opcodes only to skip them: it does not draw the lines,
-// the shapes, the regions or the text.
+// The package draws the opcodes of a picture onto the display list of D10:
+// the lines, the rectangles, the rounded rectangles, the ovals, the arcs,
+// the polygons and the regions, with the pen, the patterns, the transfer
+// modes and the colors, the text with the fonts of internal/fontdb, the
+// bitmaps, and the images of QuickTime, such as JPEG. Decode draws the list
+// on a transparent image of the frame of the picture.
 package pict
 
 import (
@@ -16,10 +18,14 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"math"
 
+	"github.com/xo/okage"
+	"github.com/xo/okage/svg"
+
 	"github.com/xo/ivy"
+	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/font"
 	"github.com/xo/ivy/internal/raster"
 )
 
@@ -34,21 +40,76 @@ const headerSize = 512
 // frame of the picture.
 const maxScale = 16
 
-// Decode returns the image of the picture in data. data can start with the
-// header of 512 bytes of a PICT file. The image has the size of the frame
-// of the picture, times the resolution of its finest bitmap. It returns an
-// error that wraps ivy.ErrFormat for data that is not a picture or holds
-// no bitmap and no image, and one that wraps ivy.ErrLimit for a picture
-// past the limits.
-func Decode(data []byte, lim ivy.Limits) (image.Image, error) {
-	lim = lim.WithDefaults()
-	img, err := decode(data, lim)
+// The resolution of the image of a picture with lines, shapes or text:
+// vectorScale pixels for each point of the frame, with at most maxSide
+// pixels on its longest side.
+const (
+	vectorScale = 4
+	maxSide     = 2048
+)
+
+// Picture is a picture that Open read: the drawing of its opcodes, as a
+// display list in the coordinates of its frame. It is safe for concurrent
+// use.
+type Picture struct {
+	frame rect
+	list  *display.List
+	// scale is the number of the pixels of the finest bitmap for each unit
+	// of the frame, and vector is set for a picture that draws lines,
+	// shapes or text.
+	scale  float64
+	vector bool
+	// area is the sum of the areas that the commands of the list cover, in
+	// the units of the frame.
+	area float64
+}
+
+// Open reads the picture in data, and draws its opcodes onto a display
+// list. data can start with the header of 512 bytes of a PICT file. The
+// text takes the fonts of cfg. It returns an error that wraps ivy.ErrFormat
+// for data that is not a picture or draws nothing, and one that wraps
+// ivy.ErrLimit for a picture past the limits.
+func Open(data []byte, cfg ivy.Config) (*Picture, error) {
+	lim := cfg.Limits.WithDefaults()
+	p, err := open(data, cfg, lim)
 	if err != nil && len(data) > headerSize+10 {
-		if img2, err2 := decode(data[headerSize:], lim); err2 == nil {
-			return img2, nil
+		if p2, err2 := open(data[headerSize:], cfg, lim); err2 == nil {
+			return p2, nil
 		}
 	}
-	return img, err
+	return p, err
+}
+
+// Decode returns the image of the picture in data, as Open reads it, with
+// the fonts that internal/fontdb gives without a font of the program. The
+// image has the size of the frame of the picture, times the resolution of
+// its finest bitmap, or times vectorScale for a picture with lines, shapes
+// or text.
+func Decode(data []byte, lim ivy.Limits) (image.Image, error) {
+	p, err := Open(data, ivy.Config{Limits: lim})
+	if err != nil {
+		return nil, err
+	}
+	return p.Image(lim)
+}
+
+// Size returns the size of the frame of the picture, in its units: points
+// for a picture of 72 dots per inch.
+func (p *Picture) Size() (width, height float64) {
+	return float64(p.frame.dx()), float64(p.frame.dy())
+}
+
+// Draw replays the drawing of the picture onto d, into the rectangle dst of
+// the user space of d. It changes no state of d that outlives the call.
+func (p *Picture) Draw(d display.Device, dst okage.Rect) {
+	d.Save()
+	defer d.Restore()
+	d.ClipPath(okage.PathFromRect(dst), okage.FillRuleWinding)
+	t := okage.TransformFromTranslate(dst.X(), dst.Y()).
+		PreScale(dst.Width()/float32(p.frame.dx()), dst.Height()/float32(p.frame.dy())).
+		PreTranslate(-float32(p.frame.left), -float32(p.frame.top))
+	d.Concat(t)
+	p.list.Replay(d)
 }
 
 // rect is a rectangle of QuickDraw: top, left, bottom and right.
@@ -65,36 +126,48 @@ func (r rect) empty() bool {
 func (r rect) dx() int { return r.right - r.left }
 func (r rect) dy() int { return r.bottom - r.top }
 
-// bitmap is a bitmap of the picture, or an image of QuickTime, with the
-// rectangle of its pixels that it draws and the rectangle of the frame
-// that it draws them in.
-type bitmap struct {
-	img      image.Image
-	src, dst rect
-}
-
-// reader reads the opcodes of a picture.
+// reader reads the opcodes of a picture, and draws them onto list.
 type reader struct {
 	b   []byte
 	pos int
 	v2  bool
+	cfg ivy.Config
 	lim ivy.Limits
 	// count counts the pixels of the bitmaps that the picture holds.
-	count   int64
-	bitmaps []bitmap
+	count int64
+
+	list  *display.List
+	frame rect
+	st    state
+	// drew is set once the picture draws a command, and vector once it
+	// draws a line, a shape or text. scale and area are those of Picture.
+	drew, vector bool
+	scale        float64
+	area         float64
+
+	// db is the database of the fonts, which the first text loads, faces
+	// the faces that the text took, and tiles the shaders of the patterns.
+	db    *svg.FontDatabase
+	faces map[faceKey]*font.Face
+	tiles map[tileKey]okage.Shader
 }
 
 // errShort is the error of a picture that ends in an opcode.
 var errShort = errors.New("pict: picture cut short")
 
-// decode decodes the picture at the start of data.
-func decode(data []byte, lim ivy.Limits) (image.Image, error) {
+// open reads the picture at the start of data.
+func open(data []byte, cfg ivy.Config, lim ivy.Limits) (p *Picture, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p, err = nil, fmt.Errorf("reading pict: panic: %v: %w", r, ivy.ErrFormat)
+		}
+	}()
 	if len(data) < 12 {
 		return nil, fmt.Errorf("pict of %d bytes: %w", len(data), ivy.ErrFormat)
 	}
-	r := &reader{b: data, pos: 2, lim: lim}
-	frame := r.rect()
-	if frame.empty() {
+	r := &reader{b: data, pos: 2, cfg: cfg, lim: lim, list: display.NewRecording(), st: newState(), scale: 1}
+	r.frame = r.rect()
+	if r.frame.empty() {
 		return nil, fmt.Errorf("pict with an empty frame: %w", ivy.ErrFormat)
 	}
 	// the version opcode: 0x11 0x01 for version 1, and 0x0011 0x02FF for
@@ -107,19 +180,19 @@ func decode(data []byte, lim ivy.Limits) (image.Image, error) {
 	default:
 		return nil, fmt.Errorf("pict without a version opcode: %w", ivy.ErrFormat)
 	}
-	if err := r.run(&frame); err != nil {
+	if err := r.run(); err != nil {
 		return nil, err
 	}
-	if len(r.bitmaps) == 0 {
-		return nil, fmt.Errorf("pict without a bitmap: %w", ivy.ErrFormat)
+	if !r.drew {
+		return nil, fmt.Errorf("pict that draws nothing: %w", ivy.ErrFormat)
 	}
-	return r.compose(frame)
+	return &Picture{frame: r.frame, list: r.list, scale: r.scale, vector: r.vector, area: r.area}, nil
 }
 
 // run reads the opcodes up to the end of the picture. An extended header
 // of version 2 sets the frame to its own rectangle, whose coordinates the
 // opcodes use.
-func (r *reader) run(frame *rect) error {
+func (r *reader) run() error {
 	for n := 0; ; n++ {
 		if n >= r.lim.MaxObjects {
 			return fmt.Errorf("pict of more than %d opcodes: %w", r.lim.MaxObjects, ivy.ErrLimit)
@@ -134,7 +207,7 @@ func (r *reader) run(frame *rect) error {
 			op = r.u8()
 		}
 		if r.pos > len(r.b) {
-			// a picture that ends without OpEndPic keeps its bitmaps
+			// a picture that ends without OpEndPic keeps its drawing
 			return nil
 		}
 		if op == 0x00FF {
@@ -147,7 +220,7 @@ func (r *reader) run(frame *rect) error {
 			if int16(be.Uint16(h)) == -2 {
 				src := rect{int(int16(be.Uint16(h[12:]))), int(int16(be.Uint16(h[14:]))), int(int16(be.Uint16(h[16:]))), int(int16(be.Uint16(h[18:])))}
 				if !src.empty() {
-					*frame = src
+					r.frame = src
 				}
 			}
 		}
@@ -160,13 +233,49 @@ func (r *reader) run(frame *rect) error {
 	}
 }
 
-// op reads the data of the opcode op.
+// op reads the data of the opcode op, and draws it.
 func (r *reader) op(op int) error {
+	if op >= 0x0020 && op <= 0x00FE && op != 0x00A0 && op != 0x00A1 {
+		// the opcodes of the lines, the text, the shapes and the bitmaps
+		return r.drawOp(op)
+	}
+	st := &r.st
 	switch op {
-	case 0x0090, 0x0091, 0x0098, 0x0099:
-		return r.bits(op&1 == 1, op >= 0x0098)
-	case 0x009A, 0x009B:
-		return r.directBits(op == 0x009B)
+	case 0x0001:
+		g, ok := r.region()
+		if !ok {
+			return errShort
+		}
+		r.setClip(g)
+		return nil
+	case 0x0002, 0x0009, 0x000A:
+		if !r.has(8) {
+			return errShort
+		}
+		pat := r.pattern()
+		switch op {
+		case 0x0002:
+			st.bkPat = pat
+		case 0x0009:
+			st.penPat = pat
+		default:
+			st.fillPat = pat
+		}
+		return nil
+	case 0x0012, 0x0013, 0x0014:
+		pat, ok := r.pixPat()
+		if !ok {
+			return errShort
+		}
+		switch op {
+		case 0x0012:
+			st.bkPat = pat
+		case 0x0013:
+			st.penPat = pat
+		default:
+			st.fillPat = pat
+		}
+		return nil
 	case 0x8200, 0x8201:
 		n := r.u32()
 		if n < 0 || r.pos+n > len(r.b) {
@@ -175,6 +284,139 @@ func (r *reader) op(op int) error {
 		data := r.b[r.pos : r.pos+n]
 		r.pos += n
 		return r.quickTime(data)
+	}
+	n, ok := r.size(op)
+	if !ok {
+		return fmt.Errorf("pict opcode %#04x: %w", op, ivy.ErrFormat)
+	}
+	if n < 0 || r.pos+n > len(r.b) {
+		return errShort
+	}
+	at := r.pos
+	r.state(op)
+	r.pos = at + n
+	return nil
+}
+
+// state reads the data of an opcode of the state of the drawing, of a size
+// that the caller checked.
+func (r *reader) state(op int) {
+	st := &r.st
+	switch op {
+	case 0x0003:
+		st.txFont = r.s16()
+	case 0x0004:
+		st.txFace = r.u8()
+	case 0x0005:
+		st.txMode = r.u16()
+	case 0x0006:
+		st.spExtra = float32(r.u32()) / 65536
+	case 0x0007:
+		st.penSize = r.size2()
+	case 0x0008:
+		st.penMode = r.u16()
+	case 0x000B:
+		st.ovSize = r.size2()
+	case 0x000C:
+		dh, dv := r.s16(), r.s16()
+		st.origin.h += dh
+		st.origin.v += dv
+	case 0x000D:
+		st.txSize = r.s16()
+	case 0x000E:
+		st.fg = oldColor(r.u32())
+	case 0x000F:
+		st.bg = oldColor(r.u32())
+	case 0x0010:
+		numer, denom := r.size2(), r.size2()
+		st.ratio = [2]float32{ratio(numer.h, denom.h), ratio(numer.v, denom.v)}
+	case 0x001A:
+		st.fg = r.rgb()
+	case 0x001B:
+		st.bg = r.rgb()
+	}
+}
+
+// drawOp reads and draws an opcode from 0x0020 to 0x00FE.
+func (r *reader) drawOp(op int) error {
+	st := &r.st
+	switch {
+	case op >= 0x0020 && op <= 0x0023:
+		sizes := [4]int{8, 4, 6, 2}
+		if !r.has(sizes[op-0x0020]) {
+			return errShort
+		}
+		var from, to point
+		switch op {
+		case 0x0020:
+			from = r.point()
+			to = r.point()
+		case 0x0021:
+			from, to = st.pen, r.point()
+		case 0x0022:
+			from = r.point()
+			to = point{from.h + int(int8(r.u8())), from.v + int(int8(r.u8()))}
+		default:
+			from = st.pen
+			to = point{from.h + int(int8(r.u8())), from.v + int(int8(r.u8()))}
+		}
+		r.line(from, to)
+		return nil
+	case op >= 0x0028 && op <= 0x002B:
+		return r.textOp(op)
+	case op == 0x002C:
+		return r.fontName()
+	case op >= 0x0030 && op <= 0x0034, op >= 0x0040 && op <= 0x0044, op >= 0x0050 && op <= 0x0054:
+		if !r.has(8) {
+			return errShort
+		}
+		st.last = r.prect()
+		r.shape(op, 0, 0)
+		return nil
+	case op >= 0x0038 && op <= 0x003C, op >= 0x0048 && op <= 0x004C, op >= 0x0058 && op <= 0x005C:
+		r.shape(op, 0, 0)
+		return nil
+	case op >= 0x0060 && op <= 0x0064:
+		if !r.has(12) {
+			return errShort
+		}
+		st.last = r.prect()
+		start, arc := r.s16(), r.s16()
+		r.shape(op, start, arc)
+		return nil
+	case op >= 0x0068 && op <= 0x006C:
+		if !r.has(4) {
+			return errShort
+		}
+		start, arc := r.s16(), r.s16()
+		r.shape(op, start, arc)
+		return nil
+	case op >= 0x0070 && op <= 0x0074:
+		pts, ok := r.polygon()
+		if !ok {
+			return errShort
+		}
+		st.lastPoly = pts
+		r.poly(op&7, pts)
+		return nil
+	case op >= 0x0078 && op <= 0x007C:
+		r.poly(op&7, st.lastPoly)
+		return nil
+	case op >= 0x0080 && op <= 0x0084:
+		g, ok := r.region()
+		if !ok {
+			return errShort
+		}
+		st.lastRgn = g
+		r.regionOp(op&7, g)
+		return nil
+	case op >= 0x0088 && op <= 0x008C:
+		r.regionOp(op&7, st.lastRgn)
+		return nil
+	case op == 0x0090, op == 0x0091, op == 0x0098, op == 0x0099:
+		return r.bits(op&1 == 1, op >= 0x0098)
+	case op == 0x009A, op == 0x009B:
+		return r.directBits(op == 0x009B)
 	}
 	n, ok := r.size(op)
 	if !ok {
@@ -213,8 +455,6 @@ func (r *reader) size(op int) (int, bool) {
 		return 6, true
 	case op >= 0x0060 && op <= 0x0067:
 		return 12, true
-	case op == 0x0012, op == 0x0013, op == 0x0014:
-		return r.pixPat()
 	case op == 0x0028:
 		r.pos += 4
 		return r.u8(), true
@@ -238,27 +478,44 @@ func (r *reader) size(op int) (int, bool) {
 	return 0, false
 }
 
-// pixPat skips a pattern of pixels (PixPat), and returns 0: the size of
-// the data after it.
-func (r *reader) pixPat() (int, bool) {
+// pixPat reads a pattern of pixels (PixPat): an old pattern, then a color
+// for a dithered pattern, or a PixMap with its colors and its pixels. A
+// PixMap of more than maxTile pixels on a side keeps its old pattern.
+func (r *reader) pixPat() (pattern, bool) {
+	if !r.has(10) {
+		return pattern{}, false
+	}
 	typ := r.u16()
-	r.pos += 8 // the old pattern
+	pat := r.pattern()
 	if typ != 1 {
 		// a dithered RGB pattern
-		r.pos += 6
-		return 0, true
+		if !r.has(6) {
+			return pattern{}, false
+		}
+		return pattern{rgb: true, c: r.rgb()}, true
 	}
 	pm, ok := r.pixMap(false)
 	if !ok {
-		return 0, false
+		return pattern{}, false
 	}
-	if _, ok := r.colorTable(); !ok {
-		return 0, false
+	pal, ok := r.colorTable()
+	if !ok {
+		return pattern{}, false
 	}
-	if _, ok := r.pixels(pm, pm.bounds); !ok {
-		return 0, false
+	rows, ok := r.pixels(pm, pm.bounds)
+	if !ok {
+		return pattern{}, false
 	}
-	return 0, true
+	w, h := pm.bounds.dx(), pm.bounds.dy()
+	if w > maxTile || h > maxTile || (pm.pixelSize <= 8 && pal == nil) {
+		return pat, true
+	}
+	tile := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := range h {
+		convert(tile.Pix[y*tile.Stride:(y+1)*tile.Stride], rows[y], pm, pal)
+	}
+	pat.tile = tile
+	return pat, true
 }
 
 // pixMap is a PixMap, or a BitMap of one bit for each pixel.
@@ -336,13 +593,14 @@ func (r *reader) colorTable() ([]color.NRGBA, bool) {
 	return pal, true
 }
 
-// bits reads a BitsRect, BitsRgn, PackBitsRect or PackBitsRgn opcode.
-func (r *reader) bits(region, packed bool) error {
+// bits reads a BitsRect, BitsRgn, PackBitsRect or PackBitsRgn opcode. A
+// BitMap takes the colors of the foreground and the background.
+func (r *reader) bits(masked, packed bool) error {
 	pm, ok := r.pixMap(false)
 	if !ok {
 		return errShort
 	}
-	pal := []color.NRGBA{{255, 255, 255, 255}, {0, 0, 0, 255}}
+	pal := []color.NRGBA{r.st.bg, r.st.fg}
 	if !pm.bitMap {
 		if pm.pixelSize > 8 {
 			return fmt.Errorf("pict indexed pixmap of %d bits: %w", pm.pixelSize, ivy.ErrFormat)
@@ -352,11 +610,11 @@ func (r *reader) bits(region, packed bool) error {
 		}
 	}
 	// BitsRect does not pack its rows
-	return r.place(pm, pal, region, !packed)
+	return r.place(pm, pal, masked, !packed)
 }
 
 // directBits reads a DirectBitsRect or DirectBitsRgn opcode.
-func (r *reader) directBits(region bool) error {
+func (r *reader) directBits(masked bool) error {
 	r.pos += 4 // baseAddr
 	pm, ok := r.pixMap(true)
 	if !ok {
@@ -365,24 +623,25 @@ func (r *reader) directBits(region bool) error {
 	if pm.pixelSize != 16 && pm.pixelSize != 32 {
 		return fmt.Errorf("pict direct pixmap of %d bits: %w", pm.pixelSize, ivy.ErrFormat)
 	}
-	return r.place(pm, nil, region, false)
+	return r.place(pm, nil, masked, false)
 }
 
 // place reads the rectangles, the mode, the region and the pixels of a
-// bitmap opcode, and keeps the bitmap. raw is set for the rows that are
-// not packed.
-func (r *reader) place(pm pixMap, pal []color.NRGBA, region, raw bool) error {
-	src, dst := r.rect(), r.rect()
-	r.pos += 2 // the mode
-	if region {
-		n := r.u16()
-		if n < 2 {
+// bitmap opcode, and draws the bitmap. masked is set for an opcode with a
+// region, and raw for the rows that are not packed.
+func (r *reader) place(pm pixMap, pal []color.NRGBA, masked, raw bool) error {
+	if !r.has(18) {
+		return errShort
+	}
+	src, dst := r.rect(), r.prect()
+	mode := r.u16()
+	var clip *region
+	if masked {
+		g, ok := r.region()
+		if !ok {
 			return errShort
 		}
-		r.pos += n - 2
-	}
-	if r.pos > len(r.b) {
-		return errShort
+		clip = &g
 	}
 	w, h := pm.bounds.dx(), pm.bounds.dy()
 	if w <= 0 || h <= 0 {
@@ -398,6 +657,9 @@ func (r *reader) place(pm pixMap, pal []color.NRGBA, region, raw bool) error {
 	if raw {
 		pm.packType = 1
 	}
+	if pm.bitMap {
+		pal = bitMapColors(pal, mode)
+	}
 	rows, ok := r.pixels(pm, pm.bounds)
 	if !ok {
 		return errShort
@@ -406,15 +668,61 @@ func (r *reader) place(pm pixMap, pal []color.NRGBA, region, raw bool) error {
 	for y := range h {
 		convert(img.Pix[y*img.Stride:(y+1)*img.Stride], rows[y], pm, pal)
 	}
-	if len(r.bitmaps) < r.lim.MaxObjects && !src.empty() && !dst.empty() {
-		// src is in the coordinates of the bounds of the pixmap
-		src.left -= pm.bounds.left
-		src.right -= pm.bounds.left
-		src.top -= pm.bounds.top
-		src.bottom -= pm.bounds.top
-		r.bitmaps = append(r.bitmaps, bitmap{img: img, src: src, dst: dst})
+	if src.empty() || dst.empty() {
+		return nil
 	}
+	// src is in the coordinates of the bounds of the pixmap
+	src.left -= pm.bounds.left
+	src.right -= pm.bounds.left
+	src.top -= pm.bounds.top
+	src.bottom -= pm.bounds.top
+	r.image(img, src, dst, clip)
 	return nil
+}
+
+// bitMapColors returns the colors of the bits 0 and 1 of a BitMap in the
+// transfer mode: pal for srcCopy, and no color for the bits that srcOr,
+// srcBic and transparent leave as they are.
+func bitMapColors(pal []color.NRGBA, mode int) []color.NRGBA {
+	bg, fg := pal[0], pal[1]
+	switch mode &^ 64 {
+	case 1, 36:
+		return []color.NRGBA{{}, fg}
+	case 3:
+		return []color.NRGBA{{}, bg}
+	case 4:
+		return []color.NRGBA{fg, bg}
+	case 5:
+		return []color.NRGBA{fg, {}}
+	case 7:
+		return []color.NRGBA{bg, {}}
+	}
+	return pal
+}
+
+// image draws the pixels src of img into the rectangle dst of the
+// picture, within the region clip when it is not nil.
+func (r *reader) image(img image.Image, src, dst rect, clip *region) {
+	d, ok := dst.okage()
+	if !ok || !r.cover(d) {
+		return
+	}
+	r.scale = max(r.scale, float64(src.dx())/float64(dst.dx()), float64(src.dy())/float64(dst.dy()))
+	t := okage.TransformFromTranslate(float32(dst.left), float32(dst.top)).
+		PreScale(float32(dst.dx())/float32(src.dx()), float32(dst.dy())/float32(src.dy())).
+		PreTranslate(-float32(src.left), -float32(src.top))
+	r.begin()
+	r.list.Save()
+	r.list.ClipPath(okage.PathFromRect(d), okage.FillRuleWinding)
+	if clip != nil {
+		if p := clip.path(); p != nil {
+			r.list.ClipPath(p, okage.FillRuleWinding)
+		}
+	}
+	r.list.DrawImage(img, t, display.ImageOptions{Opacity: 1})
+	r.list.Restore()
+	r.end()
+	r.drew = true
 }
 
 // pixels reads the rows of the pixels of pm in the rectangle bounds. Each
@@ -564,9 +872,7 @@ func (r *reader) quickTime(data []byte) error {
 	if r.count > r.lim.MaxPixels {
 		return fmt.Errorf("pict of more than %d pixels: %w", r.lim.MaxPixels, ivy.ErrLimit)
 	}
-	if len(r.bitmaps) < r.lim.MaxObjects {
-		r.bitmaps = append(r.bitmaps, bitmap{img: img, src: rect{0, 0, b.Dy(), b.Dx()}, dst: dst})
-	}
+	r.image(img, rect{b.Min.Y, b.Min.X, b.Max.Y, b.Max.X}, dst, nil)
 	return nil
 }
 
@@ -620,80 +926,47 @@ func decodeImage(enc []byte, lim ivy.Limits) (image.Image, bool) {
 	return img, err == nil
 }
 
-// compose draws the bitmaps on a transparent image of the frame, at the
-// resolution of the finest bitmap.
-func (r *reader) compose(frame rect) (image.Image, error) {
-	scale := 1.0
-	for _, bm := range r.bitmaps {
-		scale = max(scale, float64(bm.src.dx())/float64(bm.dst.dx()), float64(bm.src.dy())/float64(bm.dst.dy()))
+// Image draws the picture on a transparent image of its frame, at the
+// resolution of its finest bitmap, or at vectorScale for a picture with
+// lines, shapes or text. The image has fewer pixels than lim.MaxPixels, and
+// the commands draw at most 4 times as many pixels.
+func (p *Picture) Image(lim ivy.Limits) (img image.Image, err error) {
+	lim = lim.WithDefaults()
+	dx, dy := float64(p.frame.dx()), float64(p.frame.dy())
+	scale := min(p.scale, maxScale)
+	if p.vector {
+		scale = max(scale, min(vectorScale, maxSide/max(dx, dy)))
 	}
-	scale = min(scale, maxScale)
-	w := int(math.Ceil(float64(frame.dx()) * scale))
-	h := int(math.Ceil(float64(frame.dy()) * scale))
-	for int64(w)*int64(h) > r.lim.MaxPixels && scale > 1 {
+	budget := 4 * float64(lim.MaxPixels)
+	size := func() (int, int) {
+		return int(math.Ceil(dx * scale)), int(math.Ceil(dy * scale))
+	}
+	w, h := size()
+	for (int64(w)*int64(h) > lim.MaxPixels || p.area*scale*scale > budget) && scale > 1 {
 		scale = max(1, scale/2)
-		w = int(math.Ceil(float64(frame.dx()) * scale))
-		h = int(math.Ceil(float64(frame.dy()) * scale))
+		w, h = size()
 	}
-	if err := raster.CheckPixels(image.Pt(w, h), r.lim); err != nil {
+	if err := raster.CheckPixels(image.Pt(w, h), lim); err != nil {
 		return nil, err
 	}
-	out := image.NewNRGBA(image.Rect(0, 0, w, h))
-	if len(r.bitmaps) == 1 {
-		bm := r.bitmaps[0]
-		b := bm.img.Bounds()
-		if bm.dst == frame && bm.src == (rect{0, 0, b.Dy(), b.Dx()}) && b.Dx() == w && b.Dy() == h {
-			// one bitmap that fills the frame
-			draw.Draw(out, out.Rect, bm.img, b.Min, draw.Src)
-			return out, nil
+	if p.area*scale*scale > budget {
+		return nil, fmt.Errorf("pict that draws more than %d pixels: %w", 4*lim.MaxPixels, ivy.ErrLimit)
+	}
+	pm, ok := okage.NewPixmap(uint32(w), uint32(h))
+	if !ok {
+		return nil, fmt.Errorf("pict image of %dx%d: %w", w, h, ivy.ErrLimit)
+	}
+	dst, ok := okage.RectFromXYWH(0, 0, float32(w), float32(h))
+	if !ok {
+		return nil, fmt.Errorf("pict image of %dx%d: %w", w, h, ivy.ErrFormat)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			img, err = nil, fmt.Errorf("drawing pict: panic: %v: %w", r, ivy.ErrFormat)
 		}
-	}
-	// each bitmap can cover the whole image, so the pixels that the
-	// bitmaps draw have a bound too
-	budget := 4 * r.lim.MaxPixels
-	for _, bm := range r.bitmaps {
-		if budget -= stretch(out, bm, frame, scale); budget < 0 {
-			return nil, fmt.Errorf("pict that draws more than %d pixels: %w", 4*r.lim.MaxPixels, ivy.ErrLimit)
-		}
-	}
-	return out, nil
-}
-
-// stretch draws the bitmap bm on out, which shows the frame at the scale,
-// with the nearest pixels of its source rectangle. It returns the number of
-// the pixels of out that it covers.
-func stretch(out *image.NRGBA, bm bitmap, frame rect, scale float64) int64 {
-	b := bm.img.Bounds()
-	x0 := int(math.Round(float64(bm.dst.left-frame.left) * scale))
-	y0 := int(math.Round(float64(bm.dst.top-frame.top) * scale))
-	x1 := int(math.Round(float64(bm.dst.right-frame.left) * scale))
-	y1 := int(math.Round(float64(bm.dst.bottom-frame.top) * scale))
-	xa, xb := max(0, x0), min(x1, out.Rect.Dx())
-	ya, yb := max(0, y0), min(y1, out.Rect.Dy())
-	if xb <= xa || yb <= ya {
-		return 0
-	}
-	// the products of the coordinates need 64 bits on a computer of 32
-	// bits
-	at := func(v, v0, v1, s0, n int) int {
-		return s0 + int(int64(v-v0)*int64(n)/int64(v1-v0))
-	}
-	for y := ya; y < yb; y++ {
-		sy := at(y, y0, y1, bm.src.top, bm.src.dy())
-		if sy < 0 || sy >= b.Dy() {
-			continue
-		}
-		for x := xa; x < xb; x++ {
-			sx := at(x, x0, x1, bm.src.left, bm.src.dx())
-			if sx < 0 || sx >= b.Dx() {
-				continue
-			}
-			c := color.NRGBAModel.Convert(bm.img.At(b.Min.X+sx, b.Min.Y+sy)).(color.NRGBA)
-			i := y*out.Stride + 4*x
-			out.Pix[i], out.Pix[i+1], out.Pix[i+2], out.Pix[i+3] = c.R, c.G, c.B, c.A
-		}
-	}
-	return int64(xb-xa) * int64(yb-ya)
+	}()
+	p.Draw(display.NewOkage(pm, okage.IdentityTransform()), dst)
+	return pm, nil
 }
 
 // u8, u16 and u32 read a number, and move past it. At the end of the
@@ -722,9 +995,44 @@ func (r *reader) u32() int {
 	return int(int32(be.Uint32(r.b[r.pos-4:])))
 }
 
+// s16 reads a signed number of 16 bits.
+func (r *reader) s16() int {
+	return int(int16(r.u16()))
+}
+
+// has reports whether the picture holds n more bytes.
+func (r *reader) has(n int) bool {
+	return r.pos+n <= len(r.b)
+}
+
 // rect reads a rectangle.
 func (r *reader) rect() rect {
-	top, left := int(int16(r.u16())), int(int16(r.u16()))
-	bottom, right := int(int16(r.u16())), int(int16(r.u16()))
+	top, left := r.s16(), r.s16()
+	bottom, right := r.s16(), r.s16()
 	return rect{top, left, bottom, right}
+}
+
+// prect reads a rectangle of the picture, in the coordinates of the frame.
+func (r *reader) prect() rect {
+	o := r.st.origin
+	b := r.rect()
+	return rect{b.top - o.v, b.left - o.h, b.bottom - o.v, b.right - o.h}
+}
+
+// point reads a point of the picture, in the coordinates of the frame.
+func (r *reader) point() point {
+	v, h := r.s16(), r.s16()
+	return point{h - r.st.origin.h, v - r.st.origin.v}
+}
+
+// size2 reads a point that is a size, such as the size of the pen.
+func (r *reader) size2() point {
+	v, h := r.s16(), r.s16()
+	return point{h, v}
+}
+
+// rgb reads an RGBColor.
+func (r *reader) rgb() color.NRGBA {
+	red, green, blue := r.u16(), r.u16(), r.u16()
+	return color.NRGBA{uint8(red >> 8), uint8(green >> 8), uint8(blue >> 8), 255}
 }

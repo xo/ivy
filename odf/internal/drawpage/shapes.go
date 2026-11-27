@@ -99,6 +99,40 @@ func (s *Shapes) Shape(ctx context.Context, n roxmltree.Node, text bool) (sh *Sh
 	return &Shape{scene: b.scene, X: box.x0, Y: box.y0, W: b.w, H: b.h}, true
 }
 
+// Gradient returns the fill of the frame n of the text, of w by h points,
+// when its graphic style fills it with a gradient. CSS does not have the
+// gradients of OpenDocument, so the caller draws the shape behind the
+// content of the frame. It returns false for another fill.
+func (s *Shapes) Gradient(ctx context.Context, n roxmltree.Node, w, h float64) (sh *Shape, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.d.log.Warn("odf: fill of a frame left out", "err", fmt.Errorf("panic: %v: %w", r, ivy.ErrFormat))
+			sh, ok = nil, false
+		}
+	}()
+	if !(w > 0) || !(h > 0) || math.IsInf(w, 0) || math.IsInf(h, 0) {
+		return nil, false
+	}
+	b := &builder{
+		d:     s.d,
+		ctx:   ctx,
+		st:    s.d.st,
+		scene: drawingml.NewScene(s.d.opts.Config),
+		log:   s.d.log,
+		w:     w,
+		h:     h,
+	}
+	gp := b.st.props(b.shapeStyle(n), "graphic-properties", nil)
+	if gp.get("draw:fill") != "gradient" {
+		return nil, false
+	}
+	b.background(gp)
+	if b.scene.Len() == 0 {
+		return nil, false
+	}
+	return &Shape{scene: b.scene, W: w, H: h}, true
+}
+
 // Size satisfies the interface Object of the layout.
 func (sh *Shape) Size() (float64, float64) {
 	return sh.W, sh.H

@@ -495,7 +495,12 @@ The build of 2026-11-19 differs from the proposal in these places:
     `block` to a drawing with `layoutInCell` and a negative offset from its
     line or from its paragraph, as Word keeps such a drawing in the cell.
     `msdoc` already gives the property in a section with columns, so its
-    floats at a position from the margin or from the page go there too. A
+    floats at a position from the margin or from the page go there too.
+    Since 2026-11-27, `msdoc` also gives `block` or `line` to a shape with
+    the wrap top and bottom from its paragraph or from its line in a
+    section with columns, as `docx` does. It places a shape in the width of
+    its column there. On test files that LibreOffice 26.8 saves as `.doc`
+    from RTF, ivy then places such a shape as LibreOffice does. A
     paragraph of `docx` that holds only drawings that float gets the line
     of its mark, as in Word, and the box of a floating picture is the
     picture. On page 2 of `libreoffice/docx/mixed-orientation.docx`, the
@@ -504,6 +509,25 @@ The build of 2026-11-19 differs from the proposal in these places:
     `poi/docx/drawing.docx`, the picture "aux-bullet" is at the top left
     corner of its cell, and the mean difference from Word goes from 14.84
     to 10.20.
+16. On 2026-11-27 a frame or a shape of `odf` without `style:wrap` has the
+    wrap parallel, as in LibreOffice 26.8. So such a frame anchored to the
+    page floats at its position on the page of `text:anchor-page-number`.
+    This replaces the last sentence but one of point 13. A frame with the
+    wrap run-through anchored to a later page stays an absolute box, and
+    a float of no size with `-ivy-float-page` carries it to its page. A
+    frame anchored to a left page of a mirrored page layout takes its
+    place from the margins of that page. The layout places a float that
+    waited for its page in the page area of that page. That page area can
+    have other margins than the page where the flow met the float. A frame
+    of `odf` with the wrap none can have `style:vertical-pos` from-top
+    below the top of its paragraph. It then gets `-ivy-float-position:
+    block` and a margin to each side of its containing block. So the lines
+    of the paragraph that fit above it stay there, as in LibreOffice. A
+    paragraph without text keeps its line when it holds a frame that
+    floats or a frame at its top. The line goes below a frame at its top.
+    On the test files `float-page2-run.odt`, `float-mirrored.odt`,
+    `float-below.odt` and `float-empty.odt` of `odf`, ivy places the
+    frames and the lines of the text within 1 point of LibreOffice 26.8.
 
 The restore of the saved state of a page also no longer keeps the name of
 a running element that the page added. The page lost the rest of a float

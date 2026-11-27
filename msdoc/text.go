@@ -108,10 +108,12 @@ type parser struct {
 	objects  map[string]layout.Object
 	// lists holds the lists of a document of Word 97, or nil.
 	lists *lists
-	// page is the page of the section that the conversion writes, and
-	// columns the number of its columns.
-	page    page
-	columns int
+	// page is the page of the section that the conversion writes,
+	// columns the number of its columns, and columnGap the space between
+	// them in twips.
+	page      page
+	columns   int
+	columnGap int
 	// notes holds the ranges of the text of the footnotes and of the
 	// endnotes by the characters of their references, once read.
 	notes []map[uint32][2]uint32

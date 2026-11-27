@@ -53,6 +53,11 @@ type pageFloat struct {
 	// the content box of a column or of a cell.
 	root   floatRoot
 	dx, dy float64
+	// waited is set for a float that waits for a later page, and pageX is
+	// then the left edge of the content box of the page where the flow met
+	// it.
+	waited bool
+	pageX  float64
 }
 
 // floatRoot names the formatting context of a page float: the page, a
@@ -213,7 +218,11 @@ func (lc *layoutContext) flowPageFloat(box, containingBlock *Box, lineTop, flowY
 	if floatPage(box) > lc.currentPage && rootBox == nil {
 		// The float waits for its page.
 		if !slices.ContainsFunc(s.waiting, func(f pageFloat) bool { return f.box == box }) {
-			s.waiting = append(s.waiting, pageFloat{box: box, containingBlock: containingBlock.Copy()})
+			f := pageFloat{box: box, containingBlock: containingBlock.Copy()}
+			if s.page != nil {
+				f.waited, f.pageX = true, s.page.ContentBoxX()
+			}
+			s.waiting = append(s.waiting, f)
 		}
 		return nil
 	}
@@ -292,7 +301,16 @@ func (lc *layoutContext) placePageFloatsBefore(absoluteBoxes, fixedBoxes *[]*Box
 		}
 		lc.spend(1)
 		f.box.PositionY = s.page.ContentBoxY()
-		newBox := pageFloatLayout(lc, f.box, f.containingBlock, f.at, absoluteBoxes, fixedBoxes)
+		containingBlock := f.containingBlock
+		if dx := s.page.ContentBoxX() - f.pageX; f.waited && dx != 0 {
+			// The float waited for this page, whose page area can have
+			// other margins than the page where the flow met the float,
+			// such as a left page. The float keeps its place in the page
+			// area.
+			containingBlock = containingBlock.Copy()
+			containingBlock.PositionX += dx
+		}
+		newBox := pageFloatLayout(lc, f.box, containingBlock, f.at, absoluteBoxes, fixedBoxes)
 		if f.newBox != nil && isStr(newBox.Style.Get("float_overlap"), "avoid") {
 			newBox.Translate(0, f.newBox.BorderBoxY()-newBox.BorderBoxY(), false)
 		}

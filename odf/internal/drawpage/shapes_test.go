@@ -99,6 +99,55 @@ func TestShapes(t *testing.T) {
 	}
 }
 
+// TestGradient checks the fill of the frames of a text: a frame with a
+// gradient fills its box, and a frame with a solid fill or without a size
+// gives no shape.
+func TestGradient(t *testing.T) {
+	const content = `<office:document-content xmlns:office="` + nsOffice + `" xmlns:style="` + nsStyle + `" xmlns:draw="` + nsDraw + `" xmlns:svg="` + nsSVG + `" xmlns:text="` + nsText + `">
+<office:styles><draw:gradient draw:name="g1" draw:style="axial" draw:start-color="#ff0000" draw:end-color="#0000ff" draw:angle="1800"/></office:styles>
+<office:automatic-styles>
+<style:style style:name="fr1" style:family="graphic"><style:graphic-properties draw:fill="gradient" draw:fill-gradient-name="g1"/></style:style>
+<style:style style:name="fr2" style:family="graphic"><style:graphic-properties draw:fill="solid" draw:fill-color="#ff0000"/></style:style>
+</office:automatic-styles>
+<office:body><office:text><text:p>
+<draw:frame draw:style-name="fr1" svg:width="100pt" svg:height="50pt"><draw:text-box/></draw:frame>
+<draw:frame draw:style-name="fr2" svg:width="100pt" svg:height="50pt"><draw:text-box/></draw:frame>
+</text:p></office:text></office:body></office:document-content>`
+	doc, err := roxmltree.Parse(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(context.Context, string) ([]byte, error) { return nil, errors.New("no entry") }
+	s := NewShapes(Options{Config: ivy.Config{}, Read: read}, doc, nil)
+	var frames []roxmltree.Node
+	for n := range doc.Descendants() {
+		if n.IsElement() && n.TagName().Name() == "frame" {
+			frames = append(frames, n)
+		}
+	}
+	sh, ok := s.Gradient(t.Context(), frames[0], 100, 50)
+	if !ok {
+		t.Fatal("expected the gradient of the frame")
+	}
+	if w, h := sh.Size(); w != 100 || h != 50 {
+		t.Errorf("expected the size 100 by 50, got: %v by %v", w, h)
+	}
+	r := &recorder{}
+	rect, _ := okage.RectFromXYWH(0, 0, 100, 80)
+	if err := sh.Draw(t.Context(), r, rect); err != nil {
+		t.Fatal(err)
+	}
+	if r.fills != 1 {
+		t.Errorf("expected the gradient to fill 1 path, got: %d", r.fills)
+	}
+	if _, ok := s.Gradient(t.Context(), frames[1], 100, 50); ok {
+		t.Error("expected no shape for a solid fill")
+	}
+	if _, ok := s.Gradient(t.Context(), frames[0], 0, 50); ok {
+		t.Error("expected no shape for a frame without a width")
+	}
+}
+
 func TestRunStyleEastAsian(t *testing.T) {
 	b := &builder{st: newStyles()}
 	b.st.fonts["Mincho"] = "MS Mincho"

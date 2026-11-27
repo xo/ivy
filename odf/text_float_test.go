@@ -183,7 +183,7 @@ func TestFloatLeft(t *testing.T) {
 }
 
 // TestFramePlaceFiles checks the frames of the files float-*.odt of the
-// items 31, 36, 37, 38 and 39 of the backlog of 2026-11-27, which
+// items 31, 34, 36, 37, 38 and 39 of the backlog of 2026-11-27, which
 // LibreOffice wrote from flat files. The places come from the pages of
 // LibreOffice 26.8 at 72 dpi. The fonts of the test are not those of
 // LibreOffice, so the test checks the places on the page that do not
@@ -216,6 +216,15 @@ func TestFramePlaceFiles(t *testing.T) {
 			{0, whole, false, 0, 0},
 			{1, whole, false, 234, 216},
 		}},
+		// A frame at the start of a paragraph with fo:text-indent of 18
+		// points is at its place, at the left of the paragraph plus its
+		// distance, and its text has no indent. The paragraph of the
+		// second frame has a margin of 36 points.
+		{"indent", []check{
+			{0, image.Rect(72, 60, 230, 150), false, 79, 72},
+			{0, image.Rect(72, 72, 225, 90), true, 80, noY},
+			{0, image.Rect(72, 150, 230, 300), false, 79, noY},
+		}},
 		// A frame in a table cell or in a section with columns is at
 		// its svg:x.
 		{"cell", []check{
@@ -225,6 +234,44 @@ func TestFramePlaceFiles(t *testing.T) {
 		{"section", []check{
 			{0, image.Rect(72, 72, 306, 400), false, 144, noY},
 			{0, image.Rect(306, 72, 540, 400), false, 360, noY},
+		}},
+		// A frame with the wrap run-through anchored to the page 2 is
+		// on the page 2.
+		{"page2-run", []check{
+			{0, whole, false, 0, 0},
+			{1, whole, false, 234, 216},
+		}},
+		// A frame with the wrap none 0.5 inch below the top of its
+		// paragraph is there, below 2 lines of the paragraph, and no text
+		// is beside it.
+		{"below", []check{
+			{0, whole, false, 144, 150},
+			{0, image.Rect(296, 152, 540, 220), true, 0, 0},
+		}},
+		// The line of an empty paragraph with a frame with the wrap none
+		// at its top is below the frame.
+		{"empty", []check{
+			{0, whole, false, 144, 114},
+			{0, image.Rect(72, 188, 540, 197), true, 0, 0},
+		}},
+		// The frames anchored to the left page 2 of a mirrored page
+		// layout take their places from the margins of that page: 0.5
+		// inch at the left and 2 inches at the right.
+		{"mirrored", []check{
+			{0, image.Rect(0, 200, 612, 300), false, 216, 216},
+			{0, image.Rect(0, 350, 612, 440), false, 151, 360},
+			{0, image.Rect(0, 530, 612, 620), false, 216, 540},
+			{1, image.Rect(0, 200, 612, 300), false, 108, 216},
+			{1, image.Rect(0, 350, 612, 440), false, 43, 360},
+			{1, image.Rect(0, 530, 612, 620), false, 216, 540},
+		}},
+		// A frame at the center of its paragraph is there in a header,
+		// in a table cell and in a section with columns.
+		{"center", []check{
+			{0, image.Rect(0, 60, 612, 115), false, 270, 72},
+			{0, image.Rect(72, 115, 306, 200), false, 153, noY},
+			{0, image.Rect(306, 115, 540, 200), false, 387, noY},
+			{0, image.Rect(72, 200, 306, 300), false, 144, noY},
 		}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -301,5 +348,90 @@ func TestTopFrameFile(t *testing.T) {
 	frame, text := strings.Index(html, ">FRAME<"), strings.Index(html, ">P02 ")
 	if frame < 0 || text < 0 || frame > text || strings.Count(html, ">FRAME<") != 1 {
 		t.Errorf("expected the frame once, before the text of its paragraph, got:\n%s", html)
+	}
+}
+
+// TestFramePlaceHTML checks the HTML of the frames that float: a frame
+// without style:wrap, which has the wrap parallel as in LibreOffice 26.8,
+// a frame with the wrap run-through anchored to a later page, a frame with
+// the wrap none below the top of its paragraph, frames in a table cell,
+// where the converter does not know the width of the column, frames in
+// paragraphs without text, and a frame in a paragraph with an indent.
+func TestFramePlaceHTML(t *testing.T) {
+	const styles = `<style:style style:name="plain" style:family="graphic"><style:graphic-properties style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style>` +
+		`<style:style style:name="run" style:family="graphic"><style:graphic-properties style:wrap="run-through"/></style:style>` +
+		`<style:style style:name="none" style:family="graphic"><style:graphic-properties style:wrap="none" style:vertical-pos="from-top" style:vertical-rel="paragraph"/></style:style>` +
+		`<style:style style:name="center" style:family="graphic"><style:graphic-properties style:wrap="parallel" style:horizontal-pos="center" style:horizontal-rel="paragraph"/></style:style>` +
+		`<style:style style:name="indent" style:family="paragraph"><style:paragraph-properties fo:text-indent="18pt"/></style:style>`
+	frame := func(style, anchor, x, y string) string {
+		return `<draw:frame draw:style-name="` + style + `" text:anchor-type="` + anchor + `" svg:x="` + x + `" svg:y="` + y +
+			`" svg:width="72pt" svg:height="36pt"><draw:text-box><text:p>F</text:p></draw:text-box></draw:frame>`
+	}
+	for _, tt := range []struct {
+		name, body, want string
+	}{
+		{"no wrap", `<text:p>A` + frame("plain", "paragraph", "0pt", "0pt") + `</text:p>`, `<span style="float: left; -ivy-wrap-flow: both 0pt margin; text-indent: 0; width: 72pt">`},
+		{"run-through", strings.Replace(frame("run", "page", "100pt", "200pt"), "<draw:frame ", `<draw:frame text:anchor-page-number="3" `, 1) + `<text:p>A</text:p>`,
+			`<span style="float: left; width: 0; height: 0; -ivy-float-position: margin 0pt; -ivy-float-page: 3"><span style="position: absolute; top: `},
+		{"below", `<text:p>A` + frame("none", "paragraph", "10pt", "24pt") + `</text:p>`, `-ivy-float-position: block 24pt`},
+		{"below in a cell", `<table:table><table:table-column/><table:table-row><table:table-cell><text:p>A` + frame("none", "paragraph", "10pt", "24pt") +
+			`</text:p></table:table-cell></table:table-row></table:table>`, `<span style="float: left; margin-left: 10pt; margin-right: calc(100% - 82pt); -ivy-float-position: block 24pt; text-indent: 0; width: 72pt">`},
+		{"center in a cell", `<table:table><table:table-column/><table:table-row><table:table-cell><text:p>A` + frame("center", "paragraph", "0pt", "0pt") +
+			`</text:p></table:table-cell></table:table-row></table:table>`, `<span style="float: left; margin-left: calc(50% - 36pt); -ivy-wrap-flow: both 0pt margin; text-indent: 0; width: 72pt">`},
+		// A paragraph without text has the line of its paragraph mark.
+		{"empty", `<text:p>` + frame("plain", "paragraph", "0pt", "0pt") + `</text:p>`, `</span><br/></p>`},
+		{"empty run-through", `<text:p>` + frame("run", "paragraph", "0pt", "0pt") + `</text:p>`, `</span><br/></p>`},
+		// The box of a frame resets the indent of the first line, which
+		// it inherits from its paragraph.
+		{"indent", `<text:p text:style-name="indent">` + frame("plain", "paragraph", "0pt", "0pt") + `A</text:p>`, `-ivy-wrap-flow: both 0pt margin; text-indent: 0; width: 72pt`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			html, _ := odtHTML(t, odtStyledFile(styles, tt.body))
+			if !strings.Contains(html, tt.want) {
+				t.Errorf("expected the xhtml to hold %q, got:\n%s", tt.want, html)
+			}
+		})
+	}
+}
+
+// TestFloatCenter checks the margin of a frame at the center of its
+// paragraph without the width of the column, in a paragraph with margins
+// of 36 and 54 points. The frame is 100 points wide, with margins of 10
+// and 20 points.
+func TestFloatCenter(t *testing.T) {
+	c := &odtConverter{paraLeft: 36, paraRight: 54}
+	for _, tt := range []struct {
+		pos, rel string
+		want     float64
+		ok       bool
+	}{
+		{"center", "paragraph", -46, true},
+		{"center", "", -46, true},
+		{"center", "paragraph-content", -55, true},
+		{"center", "page", 0, false},
+		{"left", "paragraph", 0, false},
+	} {
+		g := odtProps{"horizontal-pos": tt.pos, "horizontal-rel": tt.rel, "margin-left": "10pt", "margin-right": "20pt"}
+		got, ok := c.floatCenter("paragraph", g, 100)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("floatCenter(%q, %q) = %g, %v, want %g, %v", tt.pos, tt.rel, got, ok, tt.want, tt.ok)
+		}
+	}
+	if _, ok := c.floatCenter("page", odtProps{"horizontal-pos": "center"}, 100); ok {
+		t.Error("expected no margin for a frame anchored to the page")
+	}
+	for _, tt := range []struct {
+		pct, pt float64
+		want    string
+	}{
+		{0, 12, "12pt"},
+		{50, 12, "calc(50% + 12pt)"},
+		{50, -12, "calc(50% - 12pt)"},
+		{100, -82, "calc(100% - 82pt)"},
+		{100, 0, "100%"},
+	} {
+		if got := odtCalc(tt.pct, tt.pt); got != tt.want {
+			t.Errorf("odtCalc(%g, %g) = %q, want %q", tt.pct, tt.pt, got, tt.want)
+		}
 	}
 }

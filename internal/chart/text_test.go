@@ -1,13 +1,16 @@
 package chart
 
 import (
+	"context"
 	"image/color"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xo/okage"
 
 	"github.com/xo/ivy/internal/display"
+	"github.com/xo/ivy/internal/font"
 	"github.com/xo/ivy/internal/fontdb"
 )
 
@@ -50,5 +53,45 @@ func TestTextRuns(t *testing.T) {
 	}
 	if rec.runs[1].Text != "Total" {
 		t.Errorf("expected the text of the second line, got %q", rec.runs[1].Text)
+	}
+}
+
+// TestRichTitle checks that each run of the rich text of the title of a
+// chart and of the title of an axis keeps its own style, as a label of
+// rich text does. The lines of the title of an axis join with a space.
+func TestRichTitle(t *testing.T) {
+	axes := strings.Replace(categoryAxes, `<c:axPos val="b"/>`, `<c:axPos val="b"/><c:title><c:tx><c:rich><a:bodyPr/>`+
+		`<a:p><a:r><a:rPr b="0"/><a:t>Age</a:t></a:r></a:p><a:p><a:r><a:rPr b="1"/><a:t>in years</a:t></a:r></a:p>`+
+		`</c:rich></c:tx></c:title>`, 1)
+	xml := chartXML(`Audit </a:t></a:r><a:r><a:t>Areas`, `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>`+
+		ser(0, "S", "", strCache("A", "x", "y"), "3", "5")+axisRefs+`</c:barChart>`, axes, "")
+	xml = []byte(strings.Replace(string(xml), `<a:r><a:t>Audit `, `<a:r><a:rPr b="0"/><a:t>Audit `, 1))
+	c, err := Parse(xml, Options{Fonts: fontdb.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.titleSpans) != 1 || len(c.titleSpans[0]) != 2 || !slices.Equal(c.title, []string{"Audit Areas"}) {
+		t.Fatalf("expected a title of two runs, got %q %+v", c.title, c.titleSpans)
+	}
+	if !c.titleText.bold {
+		t.Errorf("expected the bold of the body as the style of the title, got %+v", c.titleText)
+	}
+	if c.cat.title != "Age in years" || len(c.cat.titleSpans) != 2 {
+		t.Fatalf("expected an axis title of two runs on one line, got %q %+v", c.cat.title, c.cat.titleSpans)
+	}
+	rec := &runRecorder{}
+	r, _ := okage.RectFromXYWH(0, 0, 400, 300)
+	if err := c.Draw(context.Background(), rec, r); err != nil {
+		t.Fatal(err)
+	}
+	faces := map[string]*font.Face{}
+	for _, run := range rec.runs {
+		faces[run.Text] = run.Face
+	}
+	for _, pair := range [][2]string{{"Audit ", "Areas"}, {"Age ", "in years"}} {
+		a, b := faces[pair[0]], faces[pair[1]]
+		if a == nil || b == nil || a == b {
+			t.Errorf("expected %q and %q in two faces, got the faces %p and %p", pair[0], pair[1], a, b)
+		}
 	}
 }

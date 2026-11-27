@@ -235,6 +235,24 @@ func TestFitText(t *testing.T) {
 	}
 }
 
+// TestFitEllipse tests that the text of a VML ellipse with mso-wrap-style
+// none starts at the inset of the width that Word draws, and not at the
+// inset of the width of its style (libreoffice/docx/mixed-orientation.docx).
+func TestFitEllipse(t *testing.T) {
+	body := `<w:p><w:r><w:pict><v:oval style="position:absolute;margin-left:10pt;margin-top:20pt;width:140pt;height:92pt;mso-wrap-style:none" fillcolor="aqua">` +
+		`<v:textbox inset="0,0,0,0"><w:txbxContent><w:p><w:r><w:t>Shape: Ellipse</w:t></w:r></w:p></w:txbxContent></v:textbox>` +
+		`<w10:wrap xmlns:w10="urn:schemas-microsoft-com:office:word" type="tight"/></v:oval></w:pict></w:r><w:r><w:t>Text</w:t></w:r></w:p>`
+	html, _ := convertHTML(t, fixture.DOCX(body))
+	// The insets of 140 points, 2 times 20.44 points, are 6.08 points on
+	// the left and 34.8 points on the right, and the text moves by 14.6
+	// percent of its width.
+	for _, want := range []string{`class="fit"`, "padding: 13.43pt 34.8pt 13.43pt 6.08pt", `<div style="position: relative; left: 14.6%">`} {
+		if !strings.Contains(html, want) {
+			t.Errorf("expected %q in the xhtml:\n%s", want, html)
+		}
+	}
+}
+
 // TestCellDrawingAbove tests a drawing in a table cell with layoutInCell
 // above its line or its paragraph, which floats there in Word, but not
 // above the top of the cell.

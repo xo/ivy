@@ -92,7 +92,9 @@ func newFont(src font.Source) (f *pdf.Font, err error) {
 // text fills the run with the shader as text of an embedded font, which a
 // reader can search and copy (D58). It returns false when the run must
 // fill as paths: it has no valid text, its face cannot be embedded, or the
-// writer cannot hold its glyphs or its paint.
+// writer cannot hold its glyphs or its paint. A nil shader writes the run
+// as invisible text, which a reader can search and copy, and which the
+// caller draws in another way, such as the outlines of -ivy-text-outline.
 //
 // The glyphs of the writer take a start and an advance for each glyph. The
 // device pushes the transform T of the run, and puts each glyph at the
@@ -150,14 +152,20 @@ func (d *device) text(run display.GlyphRun, shader okage.Shader) bool {
 	if emb == nil {
 		return false
 	}
-	paint, opacity, ok := d.paint(shader.Transform(inv))
-	if !ok {
-		return false
+	// The writer of okage has no text rendering mode 3, so invisible text
+	// fills with an opacity of 0.
+	fill := pdf.Fill{Paint: pdf.ColorLumaBlack(), Opacity: pdf.NormalizedF32Zero, Rule: pdf.FillRuleNonZero}
+	if shader != nil {
+		paint, opacity, ok := d.paint(shader.Transform(inv))
+		if !ok {
+			return false
+		}
+		fill.Paint, fill.Opacity = paint, opacity
 	}
 	if !d.enc.charge(int64(len(run.Glyphs))*glyphBytes + int64(len(run.Text)) + commandBytes) {
 		return true
 	}
-	if opacity == 0 {
+	if shader != nil && fill.Opacity == 0 {
 		return true
 	}
 	glyphs := make([]pdf.Glyph, len(run.Glyphs))
@@ -181,7 +189,7 @@ func (d *device) text(run display.GlyphRun, shader okage.Shader) bool {
 		d.s.PushTransform(t)
 	}
 	d.s.SetStroke(nil)
-	d.s.SetFill(&pdf.Fill{Paint: paint, Opacity: opacity, Rule: pdf.FillRuleNonZero})
+	d.s.SetFill(&fill)
 	d.s.DrawGlyphs(path.PointFromXY(pts[0].X, pts[0].Y), glyphs, emb.font, run.Text, size, false)
 	d.s.SetFill(nil)
 	if pushed {

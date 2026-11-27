@@ -246,6 +246,7 @@ func (d *Document) convert(ctx context.Context) (layout.Source, error) {
 		cur = i
 		d.parser.page = secs[i].page.page
 		d.parser.columns = secs[i].page.columns
+		d.parser.columnGap = secs[i].page.columnGap
 		style := "page: " + secs[i].name
 		if v := secs[i].page.lines.css(); v != "" {
 			style += "; -ivy-line-numbers: " + v + d.parser.lineNumberFont()

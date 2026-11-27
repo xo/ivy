@@ -1028,7 +1028,8 @@ func (s *stream) fillBoldGlyphs(run display.GlyphRun, width float64) {
 
 // strokeGlyphs strokes the outlines of a run of glyphs with the color of the
 // filling and a line of width points, and does not fill them, for
-// -ivy-text-outline.
+// -ivy-text-outline. The run keeps its text, so a writer of PDF gives the
+// text to a reader that searches or copies it (D58).
 //
 // Port: upstream has no -ivy-text-outline.
 func (s *stream) strokeGlyphs(run display.GlyphRun, width float64) {
@@ -1036,16 +1037,12 @@ func (s *stream) strokeGlyphs(run display.GlyphRun, width float64) {
 	if shader == nil || run.Face == nil || len(run.Glyphs) == 0 {
 		return
 	}
-	p := run.Path()
-	if p == nil {
-		return
-	}
 	s.record(func(d display.Device) {
 		if sh := shader(); sh != nil {
 			st := okage.DefaultStroke()
 			st.Width = float32(width)
 			st.LineJoin = okage.LineJoinRound
-			d.StrokePath(p, st, sh)
+			display.StrokeGlyphs(d, run, st, sh)
 		}
 	})
 }

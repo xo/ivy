@@ -276,16 +276,17 @@ func (s *Style) Shadow(c Chain) *drawingml.Shadow {
 	}
 }
 
-// Bleed returns the width that a shape with the properties c, in the box
-// r, draws outside the box: its corners when it turns, half its line,
-// its arrowheads and its shadow, and one point more. A format that clips a
-// shape to a box makes the box larger by the bleed on each side.
-func (s *Style) Bleed(c Chain, r Rect) float64 {
+// Bleed returns the width that the shape sh with the properties c, in the
+// box r, draws outside the box: its geometry, such as the line of a
+// callout, its corners when it turns, half its line, its arrowheads and
+// its shadow, and one point more. A format that clips a shape to a box
+// makes the box larger by the bleed on each side.
+func (s *Style) Bleed(sh *Shape, c Chain, r Rect) float64 {
 	l := s.Line(c, true)
+	w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
+	ww, hh := w, h
 	pad := 0.0
 	if rot := Fixed(c.Value(PropRotation, 0)); rot != 0 && !math.IsNaN(rot) {
-		w, h := math.Abs(r.Right-r.Left), math.Abs(r.Bottom-r.Top)
-		ww, hh := w, h
 		if a := math.Mod(math.Abs(rot), 180); a >= 45 && a < 135 {
 			// the shape turns with its sides swapped, as Figure draws it
 			ww, hh = h, w
@@ -293,6 +294,7 @@ func (s *Style) Bleed(c Chain, r Rect) float64 {
 		sin, cos := math.Abs(math.Sin(rot*math.Pi/180)), math.Abs(math.Cos(rot*math.Pi/180))
 		pad = max((ww*cos+hh*sin-w)/2, (ww*sin+hh*cos-h)/2, 0)
 	}
+	pad += s.overflow(sh, c, ww, hh)
 	if l.Visible() {
 		pad += l.Width / 2
 		if l.Head.Type != "" || l.Tail.Type != "" {
@@ -303,6 +305,30 @@ func (s *Style) Bleed(c Chain, r Rect) float64 {
 		pad += max(math.Abs(sh.DX), math.Abs(sh.DY))
 	}
 	return pad + 1
+}
+
+// minOverflow is the least overflow of a geometry, in points. A smaller
+// one comes from the rounding of the bounds of a path in the box.
+const minOverflow = 0.01
+
+// overflow returns how far the geometry of the shape sh with the
+// properties c draws outside its box of w by h points, such as the line of
+// a callout or the head of a circular arrow.
+func (s *Style) overflow(sh *Shape, c Chain, w, h float64) float64 {
+	if sh == nil || !(w > 0) || !(h > 0) {
+		return 0
+	}
+	paths, _ := s.Geometry(sh, c, w, h)
+	out := 0.0
+	for _, p := range paths {
+		if b, ok := p.Path.ComputeTightBounds(); ok {
+			out = max(out, float64(-b.Left()), float64(-b.Top()), float64(b.Right())-w, float64(b.Bottom())-h)
+		}
+	}
+	if out < minOverflow {
+		return 0
+	}
+	return out
 }
 
 // wrapPolygonSize is the size of the square of the coordinates of a wrap

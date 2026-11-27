@@ -257,6 +257,12 @@ func (c *converter) inherited(p props) []decl {
 	} else {
 		out = append(out, decl{"letter-spacing", "normal"})
 	}
+	// Word kerns only the text of w:kern, from its size in half points up.
+	if kern := p.num("kern", 0); kern > 0 && fontSize(p)*2 >= kern {
+		out = append(out, decl{"font-kerning", "normal"})
+	} else {
+		out = append(out, decl{"font-kerning", "none"})
+	}
 	return out
 }
 
