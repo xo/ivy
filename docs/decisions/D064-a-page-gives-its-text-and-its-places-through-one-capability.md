@@ -252,7 +252,9 @@ scan. This is what OCR programs write.
 The surface of okage has no invisible text. Its internal writer knows the
 mode 3, and `Surface.DrawGlyphs` writes only fill, stroke or both. okage
 gives a way to draw glyphs with the mode 3, such as `DrawGlyphs` without a
-fill and without a stroke. This is work for okage (D8).
+fill and without a stroke. This is work for okage (D8). okage v0.24.0
+gives `Surface.DrawInvisibleGlyphs`, which draws a run in the mode 3 (okage
+D106).
 
 The choices for the font of invisible text:
 

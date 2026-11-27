@@ -3,10 +3,12 @@
 // (D62). The engine is a copy, and its file font.go imports this package in
 // place of go-opentype, so that a new commit of the engine still applies.
 //
-// okage gives no helper for the kerning of a pair of characters or for the
-// ligature of a sequence. This package shapes the pair or the sequence with
-// the shaper of okage, with only the one feature on, and reads the result.
-// Item 1 of "Work for okage" in docs/BACKLOG.md asks okage for the helpers.
+// The kerning of a pair of characters comes from KernPair of okage, and the
+// ligature of a pair from LigaturePair. okage gives no helper for the
+// ligature of a longer sequence, such as "ffl". This package shapes such a
+// sequence with the shaper of okage, with only the one feature on, and reads
+// the result. Item 1 of "Work for okage" in docs/BACKLOG.md asks okage for
+// the helper.
 package opentype
 
 import (
@@ -21,6 +23,7 @@ import (
 	"github.com/xo/okage/typesetting/di"
 	gofont "github.com/xo/okage/typesetting/font"
 	ot "github.com/xo/okage/typesetting/font/opentype"
+	"github.com/xo/okage/typesetting/font/opentype/tables"
 	"github.com/xo/okage/typesetting/language"
 	"github.com/xo/okage/typesetting/shaping"
 	"golang.org/x/image/math/fixed"
@@ -43,6 +46,9 @@ type Font struct {
 	// and ligatures the glyph of each sequence, or 0 when the font has none.
 	kerns     map[[2]rune]float64
 	ligatures map[string][]GlyphIndex
+	// contextual reports whether the feature kern of GPOS holds a
+	// contextual lookup, which KernPair does not apply.
+	contextual bool
 }
 
 // Parse reads a TrueType or OpenType font. It returns an error that wraps
@@ -67,12 +73,36 @@ func Parse(data []byte) (f *Font, err error) {
 		upem = 1000
 	}
 	return &Font{
-		face:      face,
-		upem:      upem,
-		draw:      draw,
-		kerns:     make(map[[2]rune]float64),
-		ligatures: make(map[string][]GlyphIndex),
+		face:       face,
+		upem:       upem,
+		draw:       draw,
+		kerns:      make(map[[2]rune]float64),
+		ligatures:  make(map[string][]GlyphIndex),
+		contextual: contextualKerning(face),
 	}, nil
+}
+
+// contextualKerning reports whether a lookup of the feature kern of the GPOS
+// of face is a contextual or a chained contextual positioning.
+func contextualKerning(face *gofont.Face) bool {
+	kern := ot.MustNewTag("kern")
+	for _, feature := range face.GPOS.Features {
+		if feature.Tag != kern {
+			continue
+		}
+		for _, index := range feature.LookupListIndices {
+			if int(index) >= len(face.GPOS.Lookups) {
+				continue
+			}
+			for _, subtable := range face.GPOS.Lookups[index].Subtables {
+				switch subtable.(type) {
+				case tables.ContextualPos, tables.ChainedContextualPos:
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // DrawFace returns the face that draws the glyphs of the font.
@@ -178,10 +208,17 @@ func (fc *Face) AdvanceUnits(r rune) float64 {
 	return fc.AdvanceIndexUnits(gid) * fc.Scale()
 }
 
-// KernUnits returns the kerning of the pair of characters, in font units.
-// It shapes the pair with the feature kern only, and returns the change of
-// the advance of the pair.
+// KernUnits returns the kerning of the pair of characters, in font units:
+// the change of the advance of prev, from KernPair of okage.
 func (fc *Face) KernUnits(prev, cur rune) float64 {
+	left, ok := fc.f.GlyphIndex(prev)
+	if !ok {
+		return 0
+	}
+	right, ok := fc.f.GlyphIndex(cur)
+	if !ok {
+		return 0
+	}
 	f := fc.f
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -189,30 +226,42 @@ func (fc *Face) KernUnits(prev, cur rune) float64 {
 	if k, ok := f.kerns[key]; ok {
 		return k
 	}
-	var k float64
-	out, ok := f.shape([]rune{prev, cur}, "kern")
-	if ok && len(out.Glyphs) == 2 {
-		var nominal, shaped float64
-		for _, g := range out.Glyphs {
-			nominal += f.advance(GlyphIndex(g.GlyphID))
-			shaped += float64(g.Advance) / 64
-		}
-		shaped += float64(out.Glyphs[1].XOffset) / 64
-		k = shaped - nominal
-	}
+	k := f.kernPair(left, right)
 	f.kerns[key] = k
 	return k
 }
 
-// KerningIsContextual reports whether the kerning of the font holds rules
-// that a pair cannot evaluate. The pairs here are shaped, so it reports
-// false.
-func (fc *Face) KerningIsContextual() bool {
-	return false
+// kernPair returns the kerning of the pair of glyphs, in font units. The
+// caller holds the lock.
+func (f *Font) kernPair(left, right GlyphIndex) (k float64) {
+	defer func() {
+		if recover() != nil {
+			k = 0
+		}
+	}()
+	return float64(f.face.KernPair(gofont.GID(left), gofont.GID(right)))
 }
 
-// Shape returns the glyphs of s with the feature on, such as "liga".
+// KerningIsContextual reports whether the kerning of the font holds rules
+// that a pair cannot evaluate: a contextual lookup of the feature kern,
+// which KernPair does not apply.
+func (fc *Face) KerningIsContextual() bool {
+	return fc.f.contextual
+}
+
+// Shape returns the glyphs of s with the feature on, such as "liga". It
+// reads the ligature of a pair with LigaturePair of okage, and shapes a
+// longer sequence.
 func (fc *Face) Shape(s, feature string) []GlyphIndex {
+	text := []rune(s)
+	pair := feature == "liga" && len(text) == 2
+	var left, right GlyphIndex
+	if pair {
+		// a character without a glyph gives the glyph 0, which has no
+		// ligature, as the shaper gives .notdef
+		left, _ = fc.f.GlyphIndex(text[0])
+		right, _ = fc.f.GlyphIndex(text[1])
+	}
 	f := fc.f
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -221,7 +270,9 @@ func (fc *Face) Shape(s, feature string) []GlyphIndex {
 		return gids
 	}
 	var gids []GlyphIndex
-	if out, ok := f.shape([]rune(s), feature); ok {
+	if pair {
+		gids = f.ligaturePair(left, right)
+	} else if out, ok := f.shape(text, feature); ok {
 		gids = make([]GlyphIndex, len(out.Glyphs))
 		for i, g := range out.Glyphs {
 			gids[i] = GlyphIndex(g.GlyphID)
@@ -229,6 +280,20 @@ func (fc *Face) Shape(s, feature string) []GlyphIndex {
 	}
 	f.ligatures[key] = gids
 	return gids
+}
+
+// ligaturePair returns the ligature of the pair of glyphs, or the pair when
+// the font has none. The caller holds the lock.
+func (f *Font) ligaturePair(left, right GlyphIndex) (gids []GlyphIndex) {
+	defer func() {
+		if recover() != nil {
+			gids = []GlyphIndex{left, right}
+		}
+	}()
+	if lig, ok := f.face.LigaturePair(gofont.GID(left), gofont.GID(right)); ok {
+		return []GlyphIndex{GlyphIndex(lig)}
+	}
+	return []GlyphIndex{left, right}
 }
 
 // Point is a point of an outline, in font units, with y up.

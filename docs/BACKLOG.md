@@ -787,15 +787,13 @@ time is for a page at 96 dpi.
 
 Each item is a request to okage (D8). Ask a maintainer, as `AGENTS.md` says.
 
-1. Give the kerning and the ligature of a pair of glyphs in `typesetting`, for
-   the engine of D62. Today `latex/internal/opentype` shapes the pair to find
-   them. The layout of math that ivy asked for here came with `texmath` (okage
-   D78), which `latex` and `internal/formula` use. Source: D62, 2026-11-20.
-2. Give `pdf.Surface` a way to draw glyphs as invisible text, with the text
-   rendering mode 3, as the fallback of okage D80 for a subset does inside the
-   writer. `pdf/pdfenc` writes the text of `-ivy-text-outline` as a fill with
-   an opacity of 0, which adds an ExtGState with `/ca 0`. Source:
-   `pdf/pdfenc`, 2026-11-27.
+1. Give the ligature of a sequence of more than two glyphs in `typesetting`,
+   for the engine of D62. `Font.LigaturePair` finds only a ligature of two
+   glyphs, and Latin Modern sets "ffl" as one ligature of three glyphs. Today
+   `latex/internal/opentype` shapes such a sequence to find it. The kerning
+   and the ligature of a pair come from `Face.KernPair` and
+   `Font.LigaturePair` (okage D95). Source: D62, 2026-11-20, and
+   `latex/internal/opentype`, 2026-11-28.
 
 ## Work for magic
 

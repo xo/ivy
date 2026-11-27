@@ -58,9 +58,9 @@ func pageText(t *testing.T, data []byte, n int) string {
 
 // TestOutlineText checks that the text of a run whose outlines the page
 // strokes, as -ivy-text-outline draws it, goes into the file as invisible
-// text, which a reader can search and copy, and that the file embeds one
-// font for it and for the filled text. TestScenes checks that the page
-// looks the same.
+// text in the text rendering mode 3, which a reader can search and copy,
+// without a graphics state, and that the file embeds one font for it and
+// for the filled text. TestScenes checks that the page looks the same.
 func TestOutlineText(t *testing.T) {
 	data, _ := encodeScene(t, scene{draw: drawOutline})
 	if got := strings.Fields(pageText(t, data, 0)); strings.Join(got, " ") != "Filled Outlined" {
@@ -68,6 +68,13 @@ func TestOutlineText(t *testing.T) {
 	}
 	if n := strings.Count(string(data), "/FontFile2"); n != 1 {
 		t.Errorf("expected one embedded font, got: %d", n)
+	}
+	all := string(inflated(t, data))
+	if n := strings.Count(all, "3 Tr"); n != 1 {
+		t.Errorf("expected one run in the text rendering mode 3, got: %d", n)
+	}
+	if strings.Contains(all, "/ca 0") {
+		t.Error("expected no graphics state with an opacity of 0")
 	}
 }
 

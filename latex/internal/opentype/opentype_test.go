@@ -70,6 +70,9 @@ func TestKerning(t *testing.T) {
 	if k := fc.KernUnits('a', 'b'); k != 0 {
 		t.Errorf("expected no kerning for ab, got: %g", k)
 	}
+	if k := fc.KernUnits('A', '\U0010FFFF'); k != 0 {
+		t.Errorf("expected no kerning for a character without a glyph, got: %g", k)
+	}
 	if fc.KerningIsContextual() {
 		t.Error("expected a kerning that is not a floor")
 	}
@@ -85,6 +88,9 @@ func TestLigature(t *testing.T) {
 	}
 	if gids := fc.Shape("ab", "liga"); len(gids) != 2 {
 		t.Errorf("expected two glyphs for ab, got: %v", gids)
+	}
+	if gids := fc.Shape("f\U0010FFFF", "liga"); len(gids) != 2 {
+		t.Errorf("expected two glyphs for a character without a glyph, got: %v", gids)
 	}
 	// the Go font has no ligature, and Shape returns the components
 	g, err := Parse(goregular.TTF)

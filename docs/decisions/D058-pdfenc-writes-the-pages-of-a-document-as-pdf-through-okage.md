@@ -710,6 +710,7 @@ implements `display.GlyphStroker`, such as a `List` and the PDF device,
 takes the run. Any other device strokes the path of the run, so the pixels
 do not change. The PDF device strokes the outlines as a path, as before.
 It then writes the run as text of the embedded font, over the outlines, so
-that a reader can search and copy it. The writer of okage has no public
-text rendering mode 3, so the text fills with an opacity of 0. A run whose
-text or font cannot go into the file gives only the outlines.
+that a reader can search and copy it. The text takes the text rendering
+mode 3, through `Surface.DrawInvisibleGlyphs` of okage v0.24.0 (okage
+D106), so it paints nothing and adds no graphics state. A run whose text or
+font cannot go into the file gives only the outlines.
